@@ -1,0 +1,19 @@
+{
+  "name": "dev-roadmaps",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.6.0"
+  },
+  "scripts": {
+    "build:artifacts": "node --experimental-strip-types scripts/build-content-artifacts.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "gray-matter": "^4.0.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.19.17",
+    "typescript": "^6.0.3"
+  }
+}
