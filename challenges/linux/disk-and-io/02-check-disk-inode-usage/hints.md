@@ -1,0 +1,1 @@
+Run `df -h` first to see space usage, then `df -i` to see inode usage. Look for a mount with very high inode percentage. Then drill into that mount with `du -sh /data/*` to see which subdirectory takes the most space. Use `find /data/cache -type f` to list individual files in that directory.

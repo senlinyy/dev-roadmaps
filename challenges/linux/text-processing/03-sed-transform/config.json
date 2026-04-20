@@ -1,0 +1,23 @@
+{
+  "cwd": "/home/dev",
+  "env": { "USER": "dev", "HOME": "/home/dev" },
+  "fs": {
+    "/home/dev": { "type": "dir" },
+    "/home/dev/config.txt": {
+      "type": "file",
+      "content": "# Database settings\nhost=localhost\nport=5432\n# Cache settings\ncache_host=localhost\ncache_port=6379\n# Timeout in seconds\ntimeout=30\n"
+    }
+  },
+  "grader": {
+    "strategy": "final-fs-state",
+    "expectedFs": [
+      {
+        "path": "/home/dev/config.txt",
+        "exists": true,
+        "type": "file",
+        "contentContains": ["host=0.0.0.0", "cache_host=0.0.0.0"]
+      }
+    ],
+    "requireCommands": ["sed"]
+  }
+}

@@ -1,0 +1,31 @@
+{
+  "cwd": "/home/dev",
+  "env": { "USER": "dev", "HOME": "/home/dev" },
+  "fs": {
+    "/home/dev": { "type": "dir" },
+    "/home/dev/report.txt": {
+      "type": "file",
+      "content": "Permission Report\n=================\npasswd:   readable by everyone, writable only by root\nshadow:   readable only by root, no access for anyone else\ndeploy.sh: owner can read/write/execute, group can read/execute, others have no access\nconfig:   owner and group can read/write, others can only read\n"
+    },
+    "/etc": { "type": "dir" },
+    "/etc/passwd": { "type": "file", "content": "root:x:0:0:root:/root:/bin/bash\ndev:x:1000:1000:dev:/home/dev:/bin/bash\n", "mode": 420 },
+    "/etc/shadow": { "type": "file", "content": "root:$6$abc:19000:0:99999:7:::\ndev:$6$xyz:19000:0:99999:7:::\n", "mode": 384 },
+    "/etc/hostname": { "type": "file", "content": "webserver01\n", "mode": 420 },
+    "/opt": { "type": "dir" },
+    "/opt/deploy": { "type": "dir", "mode": 493 },
+    "/opt/deploy/deploy.sh": { "type": "file", "content": "#!/bin/bash\necho 'deploying...'\n", "mode": 488 },
+    "/opt/deploy/config.yaml": { "type": "file", "content": "db_host: localhost\ndb_port: 5432\n", "mode": 436 }
+  },
+  "grader": {
+    "strategy": "contains",
+    "source": "all-stdout",
+    "loose": true,
+    "expected": [
+      "rw-r--r--",
+      "rw-------",
+      "rwxr-x---",
+      "Permission Report"
+    ],
+    "requireCommands": ["ls", "cat"]
+  }
+}

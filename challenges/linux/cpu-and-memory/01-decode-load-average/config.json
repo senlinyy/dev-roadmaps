@@ -1,0 +1,17 @@
+{
+  "cwd": "/home/dev",
+  "env": { "USER": "dev", "HOME": "/home/dev" },
+  "fs": {
+    "/home/dev": { "type": "dir" },
+    "/proc/loadavg": { "type": "file", "content": "4.82 3.15 1.97 5/312 8847\n" },
+    "/proc/cpuinfo": { "type": "file", "content": "processor\t: 0\nmodel name\t: Intel(R) Xeon(R) CPU E5-2686 v4 @ 2.30GHz\ncpu MHz\t\t: 2300.000\ncache size\t: 46080 KB\n\nprocessor\t: 1\nmodel name\t: Intel(R) Xeon(R) CPU E5-2686 v4 @ 2.30GHz\ncpu MHz\t\t: 2300.000\ncache size\t: 46080 KB\n" },
+    "/proc/uptime": { "type": "file", "content": "86412.53 170219.88\n" }
+  },
+  "grader": {
+    "strategy": "contains",
+    "source": "all-stdout",
+    "loose": true,
+    "expected": ["4.82", "3.15", "1.97", "2", "86412"],
+    "requireCommands": ["cat", "grep"]
+  }
+}

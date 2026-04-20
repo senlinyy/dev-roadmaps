@@ -1,0 +1,27 @@
+{
+  "cwd": "/home/dev",
+  "env": { "USER": "dev", "HOME": "/home/dev" },
+  "fs": {
+    "/home/dev": { "type": "dir" },
+    "/opt": { "type": "dir" },
+    "/opt/app": { "type": "dir" },
+    "/opt/app/run.sh": { "type": "file", "content": "#!/bin/bash\necho running\n", "mode": 488 },
+    "/opt/app/config.yml": { "type": "file", "content": "port: 3000\n", "mode": 420 },
+    "/opt/data": { "type": "dir" },
+    "/opt/data/public.txt": { "type": "file", "content": "public data here\n", "mode": 438 },
+    "/opt/data/private.dat": { "type": "file", "content": "private\n", "mode": 384 },
+    "/usr": { "type": "dir" },
+    "/usr/local": { "type": "dir" },
+    "/usr/local/bin": { "type": "dir" },
+    "/usr/local/bin/tool1": { "type": "file", "content": "#!/bin/bash\necho tool1\n", "mode": 493 },
+    "/usr/local/bin/tool2": { "type": "file", "content": "#!/bin/bash\necho tool2\n", "mode": 493 },
+    "/usr/local/bin/readme.txt": { "type": "file", "content": "docs\n", "mode": 420 }
+  },
+  "grader": {
+    "strategy": "final-fs-state",
+    "expectedFs": {
+      "/opt/data/public.txt": { "type": "file", "modeEquals": 420 }
+    },
+    "requireCommands": ["find", "chmod"]
+  }
+}

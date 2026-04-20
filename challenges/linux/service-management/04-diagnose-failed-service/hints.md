@@ -1,0 +1,1 @@
+Start by reading the journal log with `cat /var/log/broken-journal.log` to see the error. Look for the status code (203 means the binary was not found). Then read the unit file to find the `ExecStart` path and notice that `After=` is set without a matching `Requires=` directive.

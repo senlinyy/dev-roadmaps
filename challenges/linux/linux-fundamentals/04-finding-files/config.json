@@ -1,0 +1,48 @@
+{
+  "cwd": "/home/dev",
+  "env": { "USER": "dev", "HOME": "/home/dev" },
+  "fs": {
+    "/home/dev": { "type": "dir" },
+    "/etc": { "type": "dir" },
+    "/etc/hostname": { "type": "file", "content": "polaris-server\n" },
+    "/etc/nginx": { "type": "dir" },
+    "/etc/nginx/nginx.conf": { "type": "file", "content": "worker_processes auto;\nevents { worker_connections 1024; }\n" },
+    "/etc/nginx/sites-enabled": { "type": "dir" },
+    "/etc/nginx/sites-enabled/default.conf": { "type": "file", "content": "server { listen 80; root /var/www/html; }\n" },
+    "/etc/ssh": { "type": "dir" },
+    "/etc/ssh/sshd_config": { "type": "file", "content": "Port 22\nPermitRootLogin no\n" },
+    "/etc/ssh/ssh_config": { "type": "file", "content": "Host *\n  SendEnv LANG LC_*\n" },
+    "/etc/apt": { "type": "dir" },
+    "/etc/apt/sources.list": { "type": "file", "content": "deb http://archive.ubuntu.com/ubuntu jammy main\n" },
+    "/etc/resolv.conf": { "type": "file", "content": "nameserver 8.8.8.8\nnameserver 8.8.4.4\n" },
+    "/etc/fstab": { "type": "file", "content": "UUID=abc123  /  ext4  defaults  0  1\n" },
+    "/etc/cron.d": { "type": "dir" },
+    "/etc/systemd": { "type": "dir" },
+    "/etc/systemd/system": { "type": "dir" },
+    "/var": { "type": "dir" },
+    "/var/log": { "type": "dir" },
+    "/var/log/syslog": { "type": "file", "content": "Jan 20 10:00:01 polaris systemd[1]: Started cron.\n" },
+    "/var/log/auth.log": { "type": "file", "content": "Jan 20 10:01:22 polaris sshd[1842]: Accepted publickey for dev\n" },
+    "/var/log/nginx": { "type": "dir" },
+    "/var/log/nginx/access.log": { "type": "file", "content": "10.0.0.1 - - [20/Jan] \"GET / HTTP/1.1\" 200 612\n" },
+    "/var/log/nginx/error.log": { "type": "file", "content": "2024/01/20 10:05:00 [error] upstream timed out\n" },
+    "/var/cache": { "type": "dir" },
+    "/var/cache/apt": { "type": "dir" },
+    "/var/cache/apt/archives": { "type": "dir" },
+    "/var/cache/apt/archives/nginx_1.24.0.deb": { "type": "file", "content": "[binary]", "size": 2516582 },
+    "/var/tmp": { "type": "dir" }
+  },
+  "customCommands": {
+    "locate": {
+      "stdout": "locate: command not available in this environment. Use find instead.\n",
+      "exitCode": 1
+    }
+  },
+  "grader": {
+    "strategy": "contains",
+    "source": "all-stdout",
+    "loose": true,
+    "expected": ["nginx.conf", "sshd_config", "access.log", "error.log", "nginx_1.24.0.deb"],
+    "requireCommands": ["find", "tree"]
+  }
+}

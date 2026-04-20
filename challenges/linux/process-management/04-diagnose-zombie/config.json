@@ -1,0 +1,21 @@
+{
+  "cwd": "/home/dev",
+  "env": { "USER": "dev", "HOME": "/home/dev" },
+  "fs": {
+    "/home/dev": { "type": "dir" },
+    "/proc/999/status": { "type": "file", "content": "Name:\tdefunct-worker\nState:\tZ (zombie)\nPid:\t999\nPPid:\t500\nUid:\t1000\nThreads:\t0\n" },
+    "/proc/500/status": { "type": "file", "content": "Name:\tapp-server\nState:\tS (sleeping)\nPid:\t500\nPPid:\t1\nUid:\t1000\nThreads:\t2\n" },
+    "/proc/300/status": { "type": "file", "content": "Name:\tcron\nState:\tS (sleeping)\nPid:\t300\nPPid:\t1\nUid:\t0\nThreads:\t1\n" },
+    "/proc/301/status": { "type": "file", "content": "Name:\trsyslogd\nState:\tS (sleeping)\nPid:\t301\nPPid:\t1\nUid:\t0\nThreads:\t1\n" }
+  },
+  "customCommands": {
+    "ps": { "stdout": "  PID STAT COMMAND\n  300 S    cron\n  301 S    rsyslogd\n  500 S    app-server\n  999 Z    [defunct-worker] <defunct>\n", "exitCode": 0 }
+  },
+  "grader": {
+    "strategy": "contains",
+    "source": "all-stdout",
+    "loose": true,
+    "expected": ["zombie", "defunct-worker", "500", "app-server"],
+    "requireCommands": ["grep", "cat", "ps"]
+  }
+}

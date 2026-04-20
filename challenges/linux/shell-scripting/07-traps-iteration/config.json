@@ -1,0 +1,24 @@
+{
+  "cwd": "/home/dev",
+  "env": { "USER": "dev", "HOME": "/home/dev" },
+  "fs": {
+    "/home/dev": { "type": "dir" },
+    "/var/log/syslog.log": { "type": "file", "content": "system log\n" },
+    "/var/log/auth.log": { "type": "file", "content": "auth log\n" },
+    "/var/log/myapp/server.log": { "type": "file", "content": "server log\n" }
+  },
+  "grader": {
+    "strategy": "final-fs-state",
+    "expectedFs": {
+      "/home/dev/cleanup-demo.sh": {
+        "type": "file",
+        "contentContains": "trap cleanup EXIT"
+      },
+      "/home/dev/process-logs.sh": {
+        "type": "file",
+        "contentContains": "-print0"
+      }
+    },
+    "requireCommands": ["chmod"]
+  }
+}

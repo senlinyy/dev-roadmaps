@@ -1,0 +1,25 @@
+{
+  "cwd": "/home/dev",
+  "env": { "USER": "dev", "HOME": "/home/dev" },
+  "fs": {
+    "/home/dev": { "type": "dir" },
+    "/var": { "type": "dir" },
+    "/var/www": { "type": "dir" },
+    "/var/www/index.html": { "type": "file", "content": "<html><body>Hello</body></html>\n", "mode": 511 },
+    "/var/www/uploads": { "type": "dir", "mode": 511 },
+    "/var/www/config": { "type": "dir" },
+    "/var/www/config/db.conf": { "type": "file", "content": "host=localhost\nport=5432\npassword=secret\n", "mode": 511 },
+    "/var/www/scripts": { "type": "dir" },
+    "/var/www/scripts/backup.sh": { "type": "file", "content": "#!/bin/bash\ntar czf /tmp/backup.tar.gz /var/www\n", "mode": 511 }
+  },
+  "grader": {
+    "strategy": "final-fs-state",
+    "expectedFs": {
+      "/var/www/index.html": { "type": "file", "modeEquals": 420 },
+      "/var/www/uploads": { "type": "dir", "modeEquals": 493 },
+      "/var/www/config/db.conf": { "type": "file", "modeEquals": 416 },
+      "/var/www/scripts/backup.sh": { "type": "file", "modeEquals": 488 }
+    },
+    "requireCommands": ["chmod", "ls"]
+  }
+}

@@ -1,0 +1,1 @@
+`find /etc -name "*.conf"` searches for files whose name ends in `.conf`. For log files, swap the path and pattern: `find /var/log -name "*.log"`. `tree -L 2 /etc` limits the display to two levels. For large files, use `find /var -type f -size +1M`.

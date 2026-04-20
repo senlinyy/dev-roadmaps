@@ -1,0 +1,24 @@
+{
+  "cwd": "/home/dev",
+  "env": { "USER": "dev", "HOME": "/home/dev" },
+  "fs": {
+    "/home/dev": { "type": "dir" },
+    "/var/log/systemd-status.txt": {
+      "type": "file",
+      "content": "nginx.service          active (running)   since Mon 2025-01-15 10:03:12 UTC\npostgresql.service     active (running)   since Mon 2025-01-15 10:03:08 UTC\nredis.service          inactive (dead)    since Mon 2025-01-15 09:55:00 UTC\nmyapp.service          failed (Result: exit-code) since Mon 2025-01-15 10:05:33 UTC\n"
+    }
+  },
+  "customCommands": {
+    "systemctl": {
+      "stdout": "● nginx.service - A high performance web server\n     Loaded: loaded (/etc/systemd/system/nginx.service; enabled)\n     Active: active (running) since Mon 2025-01-15 10:03:12 UTC; 3h ago\n   Main PID: 1234 (nginx)\n      Tasks: 5 (limit: 4915)\n     Memory: 12.4M\n        CPU: 320ms\n   CGroup: /system.slice/nginx.service\n           ├─1234 nginx: master process /usr/sbin/nginx\n           └─1235 nginx: worker process\n\nJan 15 10:03:12 polaris systemd[1]: Starting A high performance web server...\nJan 15 10:03:12 polaris systemd[1]: Started A high performance web server.\n",
+      "exitCode": 0
+    }
+  },
+  "grader": {
+    "strategy": "contains",
+    "source": "all-stdout",
+    "loose": true,
+    "expected": ["active (running)", "myapp", "failed", "redis", "inactive"],
+    "requireCommands": ["systemctl", "grep"]
+  }
+}

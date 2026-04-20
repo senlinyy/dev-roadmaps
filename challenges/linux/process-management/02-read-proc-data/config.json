@@ -1,0 +1,20 @@
+{
+  "cwd": "/home/dev",
+  "env": { "USER": "dev", "HOME": "/home/dev" },
+  "fs": {
+    "/home/dev": { "type": "dir" },
+    "/proc/501/status": { "type": "file", "content": "Name:\tnginx\nState:\tS (sleeping)\nPid:\t501\nPPid:\t499\nUid:\t33\nVmRSS:\t24000 kB\nThreads:\t4\n" },
+    "/proc/501/cmdline": { "type": "file", "content": "nginx: worker process\n" },
+    "/proc/501/limits": { "type": "file", "content": "Limit                     Soft Limit  Hard Limit  Units\nMax open files            1024        4096        files\nMax processes             3795        3795        processes\n" },
+    "/proc/501/environ": { "type": "file", "content": "PATH=/usr/bin\nHOME=/var/www\n" },
+    "/proc/uptime": { "type": "file", "content": "54321.50 48000.20\n" },
+    "/proc/loadavg": { "type": "file", "content": "2.15 1.89 1.42 3/215 501\n" }
+  },
+  "grader": {
+    "strategy": "contains",
+    "source": "all-stdout",
+    "loose": true,
+    "expected": ["24000", "nginx", "worker", "2.15", "1.89", "1.42", "4"],
+    "requireCommands": ["cat", "grep"]
+  }
+}

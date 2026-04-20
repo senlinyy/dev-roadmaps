@@ -1,0 +1,1 @@
+Read the full kernel log with `cat /var/log/dmesg` first. Then use `grep -i "out of memory"` to find OOM events and `grep -i error` to find disk errors. The kernel prepends timestamps in brackets to every line.

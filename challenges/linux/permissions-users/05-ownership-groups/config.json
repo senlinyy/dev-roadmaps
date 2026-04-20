@@ -1,0 +1,29 @@
+{
+  "cwd": "/home/dev",
+  "env": { "USER": "dev", "HOME": "/home/dev" },
+  "fs": {
+    "/home/dev": { "type": "dir" },
+    "/opt": { "type": "dir" },
+    "/opt/project": { "type": "dir" },
+    "/opt/project/app.py": { "type": "file", "content": "print('hello world')\n" },
+    "/opt/project/README.md": { "type": "file", "content": "# Project\nA sample project.\n" },
+    "/opt/project/tests": { "type": "dir" },
+    "/opt/project/tests/test_app.py": { "type": "file", "content": "assert True\n" }
+  },
+  "customCommands": {
+    "id": { "stdout": "uid=1000(dev) gid=1000(dev) groups=1000(dev),1001(devs)\n" },
+    "chown": { "stdout": "" },
+    "chgrp": { "stdout": "" }
+  },
+  "grader": {
+    "strategy": "contains",
+    "source": "all-stdout",
+    "loose": true,
+    "expected": [
+      "uid=1000(dev)",
+      "gid=1000(dev)",
+      "groups=1000(dev),1001(devs)"
+    ],
+    "requireCommands": ["id", "ls", "chown", "chgrp"]
+  }
+}

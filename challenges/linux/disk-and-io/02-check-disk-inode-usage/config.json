@@ -1,0 +1,35 @@
+{
+  "cwd": "/home/dev",
+  "env": { "USER": "dev", "HOME": "/home/dev" },
+  "fs": {
+    "/home/dev": { "type": "dir" },
+    "/proc/mounts-info": {
+      "type": "file",
+      "content": "/dev/sda1 ext4 49G 22G 25G 51380224 23068672 26214400 47% / 3276800 185342 3091458 6%\ntmpfs tmpfs 3.9G 0 3.9G 4088320 0 4088320 0% /dev/shm 999282 2 999280 1%\n/dev/sdb1 xfs 100G 78G 22G 104857600 81788928 23068672 78% /data 524288 498073 26215 95%\ntmpfs tmpfs 786M 1.2M 785M 804864 1228 803636 1% /run 999282 18 999264 1%\n"
+    },
+    "/data": { "type": "dir" },
+    "/data/cache": { "type": "dir" },
+    "/data/cache/session_001.tmp": { "type": "file", "content": "sid=a01\n", "size": 4096 },
+    "/data/cache/session_002.tmp": { "type": "file", "content": "sid=a02\n", "size": 4096 },
+    "/data/cache/session_003.tmp": { "type": "file", "content": "sid=a03\n", "size": 4096 },
+    "/data/cache/session_004.tmp": { "type": "file", "content": "sid=a04\n", "size": 4096 },
+    "/data/cache/session_005.tmp": { "type": "file", "content": "sid=a05\n", "size": 4096 },
+    "/data/cache/session_006.tmp": { "type": "file", "content": "sid=a06\n", "size": 4096 },
+    "/data/cache/session_007.tmp": { "type": "file", "content": "sid=a07\n", "size": 4096 },
+    "/data/cache/session_008.tmp": { "type": "file", "content": "sid=a08\n", "size": 4096 },
+    "/data/cache/session_009.tmp": { "type": "file", "content": "sid=a09\n", "size": 4096 },
+    "/data/cache/session_010.tmp": { "type": "file", "content": "sid=a10\n", "size": 4096 },
+    "/data/logs": { "type": "dir" },
+    "/data/logs/app.log": { "type": "file", "content": "2025-01-20 10:00:00 INFO Application started\n2025-01-20 10:01:12 WARN High memory usage detected\n", "size": 52428800 },
+    "/data/uploads": { "type": "dir" },
+    "/data/uploads/report-q4.pdf": { "type": "file", "content": "PDF content placeholder\n", "size": 2097152 },
+    "/data/uploads/backup.tar.gz": { "type": "file", "content": "archive content placeholder\n", "size": 10485760 }
+  },
+  "grader": {
+    "strategy": "contains",
+    "source": "all-stdout",
+    "loose": true,
+    "expected": ["78%", "95%", "/data", "cache", "logs"],
+    "requireCommands": ["df", "du"]
+  }
+}

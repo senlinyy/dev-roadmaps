@@ -1,0 +1,1 @@
+Start by listing what is inside `/var/log/` with `ls` or `find`. Then use `grep -r "sshd" /var/log/` to find which files mention SSH. Read `/var/log/syslog` with `cat` or `tail` to see the services that wrote to it.

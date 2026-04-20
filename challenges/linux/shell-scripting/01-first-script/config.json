@@ -1,0 +1,15 @@
+{
+  "cwd": "/home/dev",
+  "env": { "USER": "dev", "HOME": "/home/dev" },
+  "fs": {
+    "/home/dev": { "type": "dir" },
+    "/home/dev/notes.txt": { "type": "file", "content": "Remember: scripts need execute permission!\n" }
+  },
+  "grader": {
+    "strategy": "contains",
+    "source": "all-stdout",
+    "loose": true,
+    "expected": ["Hello from DevPolaris!"],
+    "requireCommands": ["chmod"]
+  }
+}

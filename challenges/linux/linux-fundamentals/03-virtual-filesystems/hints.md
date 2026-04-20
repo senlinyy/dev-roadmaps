@@ -1,0 +1,1 @@
+Use `cat /proc/cpuinfo` to read virtual files just like regular ones. `wc -l /proc/cpuinfo` counts lines. The grader checks that your **last** command's output contains the load values, so finish with `cat /proc/loadavg`.

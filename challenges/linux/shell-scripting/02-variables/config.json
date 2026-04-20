@@ -1,0 +1,15 @@
+{
+  "cwd": "/home/dev",
+  "env": { "USER": "dev", "HOME": "/home/dev" },
+  "fs": {
+    "/home/dev": { "type": "dir" },
+    "/var/log": { "type": "dir" }
+  },
+  "grader": {
+    "strategy": "contains",
+    "source": "all-stdout",
+    "loose": true,
+    "expected": ["Deploying devpolaris", "/var/log/devpolaris_deploy.log"],
+    "requireCommands": ["bash"]
+  }
+}

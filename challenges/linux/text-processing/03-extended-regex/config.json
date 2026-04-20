@@ -1,0 +1,27 @@
+{
+  "cwd": "/home/dev",
+  "env": { "USER": "dev", "HOME": "/home/dev" },
+  "fs": {
+    "/home/dev": { "type": "dir" },
+    "/var": { "type": "dir" },
+    "/var/log": { "type": "dir" },
+    "/var/log/app.log": {
+      "type": "file",
+      "content": "2024-01-15 08:01:12 INFO  Server started on port 8080\n2024-01-15 08:05:01 WARN  Slow query detected (1.2s)\n2024-01-15 08:10:22 INFO  Health check passed\n2024-01-15 08:15:44 ERROR Connection refused: upstream timeout\n2024-01-15 08:20:11 INFO  Retry succeeded\n2024-01-15 08:25:03 WARN  Memory usage at 78%\n2024-01-15 08:30:55 INFO  Cache cleared\n2024-01-15 08:35:19 ERROR Disk write failed: permission denied\n2024-01-15 08:40:02 INFO  Backup completed\n2024-01-15 08:45:31 INFO  Session cleanup done\n2024-01-15 08:50:17 WARN  Certificate expires in 7 days\n"
+    }
+  },
+  "grader": {
+    "strategy": "contains",
+    "source": "all-stdout",
+    "loose": true,
+    "expected": [
+      "WARN  Slow query",
+      "ERROR Connection refused",
+      "WARN  Memory usage",
+      "ERROR Disk write",
+      "WARN  Certificate expires",
+      "5"
+    ],
+    "requireCommands": ["grep"]
+  }
+}

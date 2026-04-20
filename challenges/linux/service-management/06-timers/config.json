@@ -1,0 +1,19 @@
+{
+  "cwd": "/home/dev",
+  "env": { "USER": "dev", "HOME": "/home/dev" },
+  "fs": {
+    "/home/dev": { "type": "dir" },
+    "/etc/systemd/system/backup.timer": { "type": "file", "content": "[Unit]\nDescription=Daily database backup\n\n[Timer]\nOnCalendar=daily\nPersistent=true\n\n[Install]\nWantedBy=timers.target\n" },
+    "/etc/systemd/system/backup.service": { "type": "file", "content": "[Unit]\nDescription=Run database backup script\n\n[Service]\nType=oneshot\nExecStart=/opt/scripts/backup.sh\nUser=backup\n" },
+    "/etc/systemd/system/cleanup.timer": { "type": "file", "content": "[Unit]\nDescription=Post-boot temp cleanup\n\n[Timer]\nOnBootSec=5min\nOnUnitActiveSec=6h\n\n[Install]\nWantedBy=timers.target\n" },
+    "/etc/systemd/system/cleanup.service": { "type": "file", "content": "[Unit]\nDescription=Clean temporary files\n\n[Service]\nType=oneshot\nExecStart=/usr/local/bin/cleanup-tmp\n" },
+    "/etc/systemd/system/api.service": { "type": "file", "content": "[Unit]\nDescription=API Server\n\n[Service]\nType=notify\nExecStart=/usr/local/bin/api-server\n\n[Install]\nWantedBy=multi-user.target\n" }
+  },
+  "grader": {
+    "strategy": "contains",
+    "source": "all-stdout",
+    "loose": true,
+    "expected": ["OnCalendar", "daily", "OnBootSec", "backup.sh"],
+    "requireCommands": ["cat", "ls", "grep"]
+  }
+}

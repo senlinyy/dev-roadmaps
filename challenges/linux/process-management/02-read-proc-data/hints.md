@@ -1,0 +1,1 @@
+The `status` file contains many fields. Use `grep VmRSS /proc/501/status` to extract just the memory line. The `cmdline` file shows the actual command. System-wide stats like load averages live in `/proc/loadavg`, not inside any PID directory.

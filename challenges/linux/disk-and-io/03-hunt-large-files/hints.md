@@ -1,0 +1,1 @@
+Start with `df -h` to see which filesystem is nearly full. Then use `du --max-depth=1 -h /` to see which top-level directories hold the most data. Finally, `find / -type f -size +100M` searches for individual files over 100MB. The `-size +100M` syntax means "strictly larger than 100 megabytes."

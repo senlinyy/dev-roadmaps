@@ -1,0 +1,50 @@
+{
+  "cwd": "/home/dev",
+  "env": { "USER": "dev", "HOME": "/home/dev" },
+  "fs": {
+    "/home/dev": { "type": "dir" },
+    "/etc/logrotate.d": { "type": "dir" },
+    "/etc/logrotate.d/nginx": {
+      "type": "file",
+      "content": "/var/log/nginx/*.log {\n    daily\n    rotate 14\n    compress\n    delaycompress\n    missingok\n    notifempty\n    create 0640 www-data adm\n    sharedscripts\n    postrotate\n        /usr/sbin/nginx -s reopen\n    endscript\n}\n"
+    },
+    "/etc/logrotate.d/myapp": {
+      "type": "file",
+      "content": "/var/log/myapp/*.log {\n    rotate 3\n    size 1G\n    missingok\n    notifempty\n    create 0644 myapp myapp\n}\n"
+    },
+    "/var/log/nginx": { "type": "dir" },
+    "/var/log/nginx/access.log": {
+      "type": "file",
+      "content": "10.0.0.1 - - [15/Jan/2025:12:00:00 +0000] \"GET / HTTP/1.1\" 200 612\n"
+    },
+    "/var/log/nginx/access.log.1": {
+      "type": "file",
+      "content": "10.0.0.1 - - [14/Jan/2025:08:15:00 +0000] \"GET / HTTP/1.1\" 200 612\n10.0.0.2 - - [14/Jan/2025:09:30:00 +0000] \"GET /about HTTP/1.1\" 200 1420\n"
+    },
+    "/var/log/nginx/access.log.2.gz": {
+      "type": "file",
+      "content": "[compressed binary data]\n",
+      "size": 4096
+    },
+    "/var/log/nginx/error.log": {
+      "type": "file",
+      "content": "2025/01/15 11:05:02 [error] 980#980: *14 open() failed (2: No such file or directory)\n"
+    },
+    "/var/log/nginx/error.log.1": {
+      "type": "file",
+      "content": "2025/01/14 09:22:11 [error] 980#980: *8 upstream timed out\n"
+    },
+    "/var/log/nginx/error.log.2.gz": {
+      "type": "file",
+      "content": "[compressed binary data]\n",
+      "size": 2048
+    }
+  },
+  "grader": {
+    "strategy": "contains",
+    "source": "all-stdout",
+    "loose": true,
+    "expected": ["daily", "14", "compress", "rotate 3", "1G", "access.log.1"],
+    "requireCommands": ["cat", "ls"]
+  }
+}

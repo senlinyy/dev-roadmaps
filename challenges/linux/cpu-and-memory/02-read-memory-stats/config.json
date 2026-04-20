@@ -1,0 +1,21 @@
+{
+  "cwd": "/home/dev",
+  "env": { "USER": "dev", "HOME": "/home/dev" },
+  "fs": {
+    "/home/dev": { "type": "dir" },
+    "/proc/meminfo": { "type": "file", "content": "MemTotal:        8167396 kB\nMemFree:          524288 kB\nMemAvailable:    5242880 kB\nBuffers:          204800 kB\nCached:          4096000 kB\nSwapTotal:       2097152 kB\nSwapFree:        1048576 kB\nActive:          3145728 kB\nInactive:        2097152 kB\nDirty:              1024 kB\nSlab:             409600 kB\n" }
+  },
+  "customCommands": {
+    "free": {
+      "stdout": "              total        used        free      shared  buff/cache   available\nMem:        8167396     3342308      524288       32768     4300800     5242880\nSwap:       2097152     1048576     1048576\n",
+      "exitCode": 0
+    }
+  },
+  "grader": {
+    "strategy": "contains",
+    "source": "all-stdout",
+    "loose": true,
+    "expected": ["5242880", "MemAvailable", "524288", "4096000", "1048576"],
+    "requireCommands": ["cat", "grep", "free"]
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "cwd": "/home/dev",
+  "env": { "USER": "dev", "HOME": "/home/dev" },
+  "fs": {
+    "/home/dev": { "type": "dir" },
+    "/home/dev/cleanup.sh": { "type": "file", "content": "#!/bin/bash\ntrap 'echo cleaning up; exit' SIGTERM SIGINT\n\necho \"Running...\"\nwhile true; do\n  sleep 1\ndone\n" },
+    "/home/dev/signal-table.txt": { "type": "file", "content": "1  SIGHUP   Reload config\n2  SIGINT   Ctrl+C interrupt\n9  SIGKILL  Force kill (cannot trap)\n15 SIGTERM  Default kill signal\n18 SIGCONT  Resume stopped process\n19 SIGSTOP  Pause process (cannot trap)\n" }
+  },
+  "customCommands": {
+    "kill": { "stdout": "kill: sending signal to process\n", "exitCode": 0 }
+  },
+  "grader": {
+    "strategy": "contains",
+    "source": "all-stdout",
+    "loose": true,
+    "expected": ["SIGKILL", "SIGSTOP", "SIGTERM", "SIGINT", "15"],
+    "requireCommands": ["cat", "grep"]
+  }
+}

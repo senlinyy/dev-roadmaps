@@ -1,0 +1,1 @@
+Use `grep "myapp" /var/log/journal-export.log` to filter by service name. Add `-i` for case-insensitive matching when searching for "error". The `-c` flag counts matches instead of printing them. For the 502 lines, just `grep "502"` works.

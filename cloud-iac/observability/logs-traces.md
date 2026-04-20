@@ -1,0 +1,6 @@
+---
+title: "Logs & Traces"
+description: "Correlate events across systems to debug distributed failures and latency issues."
+tags: ["OpenTelemetry", "Logs", "Tracing"]
+order: 2
+---

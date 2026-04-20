@@ -1,0 +1,17 @@
+{
+  "cwd": "/home/dev",
+  "env": { "USER": "dev", "HOME": "/home/dev" },
+  "fs": {
+    "/home/dev": { "type": "dir" },
+    "/var/log/kern.log": { "type": "file", "content": "Jan 15 03:40:12 prod-web-1 kernel: TCP: request_sock_TCP: Possible SYN flooding on port 443.\nJan 15 03:41:45 prod-web-1 kernel: eth0: link up, 1000Mbps, full-duplex\nJan 15 03:42:01 prod-web-1 kernel: node invoked oom-killer: gfp_mask=0x24200ca, order=0\nJan 15 03:42:01 prod-web-1 kernel: Out of memory: Kill process 4521 (node) score 892 or sacrifice child\nJan 15 03:42:01 prod-web-1 kernel: Killed process 4521 (node) total-vm:4856789kB, anon-rss:7845123kB\nJan 15 03:42:02 prod-web-1 kernel: oom_reaper: reaped process 4521 (node), now anon-rss:0kB\nJan 15 03:43:15 prod-web-1 kernel: TCP: request_sock_TCP: Possible SYN flooding on port 443.\n" },
+    "/proc/4521/oom_score_adj": { "type": "file", "content": "0\n" },
+    "/proc/4521/status": { "type": "file", "content": "Name:\tnode\nState:\tZ (zombie)\nPid:\t4521\nPPid:\t1089\nUid:\t1000\nVmRSS:\t7845123 kB\nThreads:\t8\n" }
+  },
+  "grader": {
+    "strategy": "contains",
+    "source": "all-stdout",
+    "loose": true,
+    "expected": ["oom-killer", "4521", "node", "7845123", "892"],
+    "requireCommands": ["grep", "cat"]
+  }
+}

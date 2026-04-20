@@ -1,0 +1,1 @@
+Start with `systemctl status nginx` to see the standard output format. Then use `cat` or `grep` on `/var/log/systemd-status.txt` to find which service shows `failed` and which shows `inactive (dead)`.

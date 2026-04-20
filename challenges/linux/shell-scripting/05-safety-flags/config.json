@@ -1,0 +1,17 @@
+{
+  "cwd": "/home/dev",
+  "env": { "USER": "dev", "HOME": "/home/dev" },
+  "fs": {
+    "/home/dev": { "type": "dir" }
+  },
+  "grader": {
+    "strategy": "final-fs-state",
+    "expectedFs": {
+      "/home/dev/safe-deploy.sh": {
+        "type": "file",
+        "contentContains": "set -euo pipefail"
+      }
+    },
+    "requireCommands": ["chmod"]
+  }
+}

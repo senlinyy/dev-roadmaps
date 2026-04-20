@@ -1,0 +1,30 @@
+{
+  "cwd": "/home/dev",
+  "env": { "USER": "dev", "HOME": "/home/dev" },
+  "fs": {
+    "/home/dev": { "type": "dir" },
+    "/home/dev/severity-reference.txt": {
+      "type": "file",
+      "content": "Syslog Severity Levels\n======================\n0  Emergency     System is unusable\n1  Alert         Immediate action required\n2  Critical      Critical conditions\n3  Error         Error conditions\n4  Warning       Warning conditions\n5  Notice        Normal but significant\n6  Informational Informational messages\n7  Debug         Debug-level messages\n"
+    },
+    "/var/log/app": { "type": "dir" },
+    "/var/log/app/application.log": {
+      "type": "file",
+      "content": "2025-01-15 08:00:12 INFO  [web.server] Server started on port 8080\n2025-01-15 08:00:13 INFO  [db.pool] Connection pool initialized: 10 connections\n2025-01-15 08:05:30 INFO  [web.router] GET /api/users 200 (12ms)\n2025-01-15 08:12:44 WARNING [db.pool] Connection pool usage at 80% (8/10)\n2025-01-15 08:15:02 INFO  [web.router] POST /api/auth 200 (45ms)\n2025-01-15 08:30:18 ERROR [db.query] Query timeout after 30s: SELECT * FROM analytics WHERE date > '2025-01-01'\n2025-01-15 08:30:19 WARNING [db.pool] Connection pool usage at 90% (9/10)\n2025-01-15 09:00:01 INFO  [scheduler] Running daily cleanup task\n2025-01-15 09:15:33 WARNING [disk.monitor] Disk usage on /var/data reached 75%\n2025-01-15 09:45:10 ERROR [auth.service] Failed login attempt for user admin from 192.168.1.55\n2025-01-15 10:00:05 INFO  [web.router] GET /api/health 200 (2ms)\n2025-01-15 10:22:41 CRITICAL [db.pool] All database connections exhausted, requests queuing\n2025-01-15 10:22:42 ERROR [web.server] Request timeout: 5 requests dropped\n2025-01-15 10:30:00 WARNING [disk.monitor] Disk usage on /var/data reached 85%\n2025-01-15 10:35:12 CRITICAL [system.watchdog] Service health check failed 3 consecutive times\n"
+    }
+  },
+  "grader": {
+    "strategy": "contains",
+    "source": "all-stdout",
+    "loose": true,
+    "expected": [
+      "Query timeout after 30s",
+      "Failed login attempt for user admin",
+      "Request timeout: 5 requests dropped",
+      "All database connections exhausted",
+      "Service health check failed 3 consecutive times",
+      "4"
+    ],
+    "requireCommands": ["grep", "cat"]
+  }
+}

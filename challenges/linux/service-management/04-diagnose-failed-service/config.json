@@ -1,0 +1,22 @@
+{
+  "cwd": "/home/dev",
+  "env": { "USER": "dev", "HOME": "/home/dev" },
+  "fs": {
+    "/home/dev": { "type": "dir" },
+    "/etc/systemd/system/broken.service": {
+      "type": "file",
+      "content": "[Unit]\nDescription=Broken Application Service\nAfter=postgresql.service\n\n[Service]\nExecStart=/usr/bin/myapp --config /etc/myapp/config.yml\nRestart=on-failure\nRestartSec=3\nUser=appuser\n\n[Install]\nWantedBy=multi-user.target\n"
+    },
+    "/var/log/broken-journal.log": {
+      "type": "file",
+      "content": "Jan 15 10:05:30 polaris systemd[1]: Starting Broken Application Service...\nJan 15 10:05:30 polaris systemd[1]: broken.service: Failed to execute /usr/bin/myapp: No such file or directory\nJan 15 10:05:30 polaris systemd[1]: broken.service: Main process exited, code=exited, status=203/EXEC\nJan 15 10:05:30 polaris systemd[1]: broken.service: Failed with result 'exit-code'.\nJan 15 10:05:30 polaris systemd[1]: Failed to start Broken Application Service.\n"
+    }
+  },
+  "grader": {
+    "strategy": "contains",
+    "source": "all-stdout",
+    "loose": true,
+    "expected": ["No such file or directory", "203", "/usr/bin/myapp", "After=postgresql"],
+    "requireCommands": ["cat", "grep"]
+  }
+}

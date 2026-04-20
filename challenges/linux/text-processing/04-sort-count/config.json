@@ -1,0 +1,24 @@
+{
+  "cwd": "/home/dev",
+  "env": { "USER": "dev", "HOME": "/home/dev" },
+  "fs": {
+    "/home/dev": { "type": "dir" },
+    "/var": { "type": "dir" },
+    "/var/log": { "type": "dir" },
+    "/var/log/access.log": {
+      "type": "file",
+      "content": "192.168.1.10 GET /index.html 200\n10.0.0.5 GET /api/users 200\n192.168.1.10 POST /api/login 200\n172.16.0.3 GET /style.css 200\n10.0.0.5 GET /api/users 200\n192.168.1.10 GET /dashboard 200\n192.168.1.10 GET /favicon.ico 200\n10.0.0.5 POST /api/data 201\n172.16.0.3 GET /script.js 200\n192.168.1.22 GET /index.html 200\n192.168.1.10 GET /api/status 200\n10.0.0.5 GET /api/health 200\n172.16.0.3 GET /api/config 200\n192.168.1.22 POST /api/login 200\n192.168.1.10 GET /about 200\n"
+    }
+  },
+  "grader": {
+    "strategy": "contains",
+    "source": "all-stdout",
+    "loose": true,
+    "expected": [
+      "6 192.168.1.10",
+      "4 10.0.0.5",
+      "3 172.16.0.3"
+    ],
+    "requireCommands": ["sort", "uniq", "head"]
+  }
+}

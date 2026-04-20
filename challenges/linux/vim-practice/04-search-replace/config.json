@@ -1,0 +1,20 @@
+{
+  "cwd": "/home/dev",
+  "env": { "USER": "dev", "HOME": "/home/dev" },
+  "fs": {
+    "/home/dev": { "type": "dir" },
+    "/home/dev/deployment.yml": {
+      "type": "file",
+      "content": "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: web-app-staging\n  namespace: staging\n  labels:\n    app: web-app\n    environment: staging\n    team: platform\nspec:\n  replicas: 2\n  selector:\n    matchLabels:\n      app: web-app\n      environment: staging\n  template:\n    metadata:\n      labels:\n        app: web-app\n        environment: staging\n    spec:\n      containers:\n        - name: nginx\n          image: nginx:1.25-alpine\n          ports:\n            - containerPort: 80\n          resources:\n            requests:\n              memory: \"64Mi\"\n              cpu: \"100m\"\n            limits:\n              memory: \"128Mi\"\n              cpu: \"250m\"\n        - name: app\n          image: registry.devpolaris.dev/web-app:staging-latest\n          ports:\n            - containerPort: 3000\n          env:\n            - name: NODE_ENV\n              value: staging\n            - name: DATABASE_URL\n              value: postgres://db-staging.internal:5432/webapp\n            - name: REDIS_URL\n              value: redis://cache-staging.internal:6379\n          resources:\n            requests:\n              memory: \"128Mi\"\n              cpu: \"200m\"\n            limits:\n              memory: \"256Mi\"\n              cpu: \"500m\"\n"
+    }
+  },
+  "grader": {
+    "strategy": "final-fs-state",
+    "expectedFs": {
+      "/home/dev/deployment.yml": {
+        "type": "file",
+        "exists": true
+      }
+    }
+  }
+}

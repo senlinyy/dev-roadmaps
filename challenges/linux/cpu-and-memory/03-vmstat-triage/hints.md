@@ -1,0 +1,1 @@
+Run `vmstat` with no arguments to get the snapshot. The first data column `r` shows processes in the run queue. Look at the far right of the cpu section for `wa` (I/O wait). Read `vmstat-reference.txt` to decode each column name.

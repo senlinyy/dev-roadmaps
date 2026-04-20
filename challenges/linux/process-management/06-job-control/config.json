@@ -1,0 +1,19 @@
+{
+  "cwd": "/home/dev",
+  "env": { "USER": "dev", "HOME": "/home/dev" },
+  "fs": {
+    "/home/dev": { "type": "dir" },
+    "/proc/1/status": { "type": "file", "content": "Name:\tinit\nState:\tS (sleeping)\nPid:\t1\nPPid:\t0\nUid:\t0\nThreads:\t1\n" },
+    "/proc/88/status": { "type": "file", "content": "Name:\tbash\nState:\tS (sleeping)\nPid:\t88\nPPid:\t1\nUid:\t1000\nThreads:\t1\n" },
+    "/proc/310/status": { "type": "file", "content": "Name:\tpython3\nState:\tT (stopped)\nPid:\t310\nPPid:\t88\nUid:\t1000\nVmRSS:\t15360 kB\nThreads:\t1\n" },
+    "/proc/310/environ": { "type": "file", "content": "HOME=/home/dev\nUSER=dev\nSTOP_SIGNAL=SIGTSTP\nPATH=/usr/local/bin:/usr/bin:/bin\n" },
+    "/proc/400/status": { "type": "file", "content": "Name:\tnginx\nState:\tS (sleeping)\nPid:\t400\nPPid:\t1\nUid:\t33\nThreads:\t2\n" }
+  },
+  "grader": {
+    "strategy": "contains",
+    "source": "all-stdout",
+    "loose": true,
+    "expected": ["python3", "T (stopped)", "SIGTSTP"],
+    "requireCommands": ["cat", "grep"]
+  }
+}

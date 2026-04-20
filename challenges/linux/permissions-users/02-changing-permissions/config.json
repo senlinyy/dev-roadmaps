@@ -1,0 +1,22 @@
+{
+  "cwd": "/home/dev",
+  "env": { "USER": "dev", "HOME": "/home/dev" },
+  "fs": {
+    "/home/dev": { "type": "dir" },
+    "/opt": { "type": "dir" },
+    "/opt/app": { "type": "dir" },
+    "/opt/app/start.sh": { "type": "file", "content": "#!/bin/bash\necho 'starting app...'\n", "mode": 420 },
+    "/opt/app/secrets.env": { "type": "file", "content": "DB_PASS=hunter2\nAPI_KEY=abc123\n", "mode": 420 },
+    "/opt/app/logs": { "type": "dir", "mode": 448 },
+    "/opt/app/logs/app.log": { "type": "file", "content": "server started\n", "mode": 420 }
+  },
+  "grader": {
+    "strategy": "final-fs-state",
+    "expectedFs": {
+      "/opt/app/start.sh": { "type": "file", "modeEquals": 484 },
+      "/opt/app/secrets.env": { "type": "file", "modeEquals": 384 },
+      "/opt/app/logs": { "type": "dir", "modeEquals": 493 }
+    },
+    "requireCommands": ["chmod", "ls"]
+  }
+}

@@ -1,0 +1,1 @@
+`df -hT` shows all mounted filesystems. The `-h` flag makes sizes human-readable and `-T` adds the type column. `du -sh /var/log` summarizes one directory. For inode info, swap `-hT` for `-i`. You can scope `df -i` to a single mount point by adding the path: `df -i /`.

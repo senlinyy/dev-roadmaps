@@ -1,0 +1,24 @@
+{
+  "cwd": "/home/dev",
+  "env": { "USER": "dev", "HOME": "/home/dev" },
+  "fs": {
+    "/home/dev/notes.txt": { "type": "file", "content": "remember to ship\n" },
+    "/home/dev/todo.md": { "type": "file", "content": "- [ ] master pwd\n- [ ] master ls\n- [ ] master cd\n" },
+    "/home/dev/projects": { "type": "dir" },
+    "/home/dev/projects/hello.sh": { "type": "file", "content": "#!/bin/sh\necho hello\n" },
+    "/home/dev/.bashrc": { "type": "file", "content": "export PS1='$ '\n" },
+    "/home/dev/.config": { "type": "dir" },
+    "/etc": { "type": "dir" },
+    "/etc/hostname": { "type": "file", "content": "polaris\n" },
+    "/etc/hosts": { "type": "file", "content": "127.0.0.1 localhost\n" },
+    "/etc/os-release": { "type": "file", "content": "NAME=Polaris\n" }
+  },
+  "grader": {
+    "strategy": "contains",
+    "source": "all-stdout",
+    "loose": true,
+    "expected": [".bashrc", ".config", "notes.txt", "todo.md", "projects"],
+    "requireCommands": ["pwd", "ls", "cd"],
+    "requireCwd": "/home/dev"
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "cwd": "/home/dev",
+  "env": { "USER": "dev", "HOME": "/home/dev" },
+  "fs": {
+    "/home/dev": { "type": "dir" },
+    "/etc/systemd/system": { "type": "dir" },
+    "/etc/systemd/system/myapp.service": {
+      "type": "file",
+      "content": "[Unit]\nDescription=MyApp Node.js Application\nAfter=network.target\n\n[Service]\nType=simple\nExecStart=/usr/bin/node /opt/myapp/server.js\nRestart=on-failure\nRestartSec=5\nUser=www-data\nEnvironment=NODE_ENV=production PORT=3000\n\n[Install]\nWantedBy=multi-user.target\n"
+    },
+    "/etc/systemd/system/nginx.service": {
+      "type": "file",
+      "content": "[Unit]\nDescription=The NGINX HTTP and reverse proxy server\nAfter=syslog.target network-online.target remote-fs.target nss-lookup.target\nWants=network-online.target\n\n[Service]\nType=forking\nPIDFile=/run/nginx.pid\nExecStartPre=/usr/sbin/nginx -t\nExecStart=/usr/sbin/nginx\nExecReload=/bin/kill -s HUP $MAINPID\nExecStop=/bin/kill -s QUIT $MAINPID\n\n[Install]\nWantedBy=multi-user.target\n"
+    }
+  },
+  "grader": {
+    "strategy": "contains",
+    "source": "all-stdout",
+    "loose": true,
+    "expected": ["/usr/bin/node", "server.js", "www-data", "on-failure", "forking"],
+    "requireCommands": ["cat", "grep"]
+  }
+}

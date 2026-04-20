@@ -1,0 +1,30 @@
+{
+  "cwd": "/home/dev",
+  "env": { "USER": "dev", "HOME": "/home/dev" },
+  "fs": {
+    "/home/dev": { "type": "dir" },
+    "/home/dev/project": { "type": "dir" },
+    "/home/dev/project/README.md": { "type": "file", "content": "# My Project\n" },
+    "/home/dev/project/app.py": { "type": "file", "content": "print('hello')\n" },
+    "/home/dev/project/node_modules/.cache/webpack": { "type": "dir" },
+    "/home/dev/project/node_modules/.cache/webpack/cache-main.pack": { "type": "file", "content": "... webpack cache data ...\n", "size": 536870912 },
+    "/var/log": { "type": "dir" },
+    "/var/log/nginx": { "type": "dir" },
+    "/var/log/nginx/access.log": { "type": "file", "content": "... huge log file ...\n", "size": 2147483648 },
+    "/var/log/nginx/error.log": { "type": "file", "content": "... error entries ...\n", "size": 104857600 },
+    "/var/log/syslog": { "type": "file", "content": "... system messages ...\n", "size": 524288000 },
+    "/tmp": { "type": "dir" },
+    "/tmp/core.dump.12345": { "type": "file", "content": "... core dump ...\n", "size": 1073741824 },
+    "/proc/mounts-info": {
+      "type": "file",
+      "content": "/dev/sda1 ext4 50G 46G 2.1G 52428800 48234496 2202009 92% / 3276800 294521 2982279 9%\ntmpfs tmpfs 3.9G 1.0G 2.9G 4088320 1048576 3039744 26% /tmp 999282 5 999277 1%\ntmpfs tmpfs 786M 1.2M 785M 804864 1228 803636 1% /run 999282 18 999264 1%\n"
+    }
+  },
+  "grader": {
+    "strategy": "contains",
+    "source": "all-stdout",
+    "loose": true,
+    "expected": ["access.log", "core.dump", "92%"],
+    "requireCommands": ["df", "du", "find"]
+  }
+}

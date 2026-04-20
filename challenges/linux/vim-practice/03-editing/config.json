@@ -1,0 +1,20 @@
+{
+  "cwd": "/home/dev",
+  "env": { "USER": "dev", "HOME": "/home/dev" },
+  "fs": {
+    "/home/dev": { "type": "dir" },
+    "/home/dev/app.py": {
+      "type": "file",
+      "content": "#!/usr/bin/env python3\n# TODO: remove this debug line before deploying\nimport os\nimport sys\nimport json\nfrom datetime import datetime\n\n\ndef get_config(path):\n    \"\"\"Load configuration from a JSON file.\"\"\"\n    with open(path, 'r') as f:\n        return json.load(f)\n\n\ndef setup_logging(level='INFO'):\n    \"\"\"Configure application logging.\"\"\"\n    import logging\n    logging.basicConfig(\n        level=getattr(logging, level),\n        format='%(asctime)s [%(levelname)s] %(message)s'\n    )\n    return logging.getLogger('app')\n\n\ndef connect_database(config):\n    \"\"\"Establish database connection.\"\"\"\n    host = config.get('db_host', 'localhost')\n    port = config.get('db_port', 5432)\n    name = config.get('db_name', 'devpolaris')\n    print(f\"Connecting to {name}@{host}:{port}\")\n    return True\n\n\ndef main():\n    config = get_config('/etc/app/config.json')\n    logger = setup_logging(config.get('log_level', 'INFO'))\n    logger.info('Application starting...')\n\n    if not connect_database(config):\n        logger.error('Database connection failed')\n        sys.exit(1)\n\n    logger.info('All systems ready')\n    print(f\"Server started at {datetime.now().isoformat()}\")\n\n\nif __name__ == '__main__':\n    main()\n"
+    }
+  },
+  "grader": {
+    "strategy": "final-fs-state",
+    "expectedFs": {
+      "/home/dev/app.py": {
+        "type": "file",
+        "exists": true
+      }
+    }
+  }
+}

@@ -1,0 +1,1 @@
+Each process has a `status` file at `/proc/<pid>/status`. Use `cat` to read the file and look for the `Name` and `PPid` fields. Start with PID 215 and follow the PPid chain upward. Use `grep PPid /proc/42/status` to filter for the parent line.

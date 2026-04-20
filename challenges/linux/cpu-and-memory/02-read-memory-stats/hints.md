@@ -1,0 +1,1 @@
+Use `cat /proc/meminfo` to see all memory counters. Pipe through `grep` to filter for specific fields like `grep MemAvailable /proc/meminfo`. Swap in use equals SwapTotal minus SwapFree; both values appear in the same file.

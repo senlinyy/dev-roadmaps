@@ -1,0 +1,1 @@
+Use `cd /etc` to navigate, then `ls` to see what's there. `cat hostname` reads a file in the current directory. `tail -n 5 /var/log/syslog` shows the last 5 lines. Finish with `cat /etc/os-release` so the grader sees the OS info as your last output.

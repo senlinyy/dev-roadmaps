@@ -1,0 +1,1 @@
+Use `grep -i oom /var/log/kern.log` to filter for OOM killer messages. The log lines contain both the PID and process name. Once you know the PID, read `/proc/<pid>/oom_score_adj` to see if the score was manually adjusted.

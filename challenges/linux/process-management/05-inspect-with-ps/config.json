@@ -1,0 +1,19 @@
+{
+  "cwd": "/home/dev",
+  "env": { "USER": "dev", "HOME": "/home/dev" },
+  "fs": {
+    "/home/dev": { "type": "dir" },
+    "/proc/1/status": { "type": "file", "content": "Name:\tinit\nState:\tS (sleeping)\nPid:\t1\nPPid:\t0\nUid:\t0\nVmRSS:\t1280 kB\nThreads:\t1\n" },
+    "/proc/50/status": { "type": "file", "content": "Name:\tnginx\nState:\tS (sleeping)\nPid:\t50\nPPid:\t1\nUid:\t33\nVmRSS:\t24576 kB\nThreads:\t2\n" },
+    "/proc/120/status": { "type": "file", "content": "Name:\tnode\nState:\tS (sleeping)\nPid:\t120\nPPid:\t1\nUid:\t1000\nVmRSS:\t98304 kB\nThreads:\t8\n" },
+    "/proc/155/status": { "type": "file", "content": "Name:\tworker\nState:\tZ (zombie)\nPid:\t155\nPPid:\t120\nUid:\t1000\nVmRSS:\t0 kB\nThreads:\t1\n" },
+    "/proc/200/status": { "type": "file", "content": "Name:\tsshd\nState:\tS (sleeping)\nPid:\t200\nPPid:\t1\nUid:\t0\nVmRSS:\t3840 kB\nThreads:\t1\n" }
+  },
+  "grader": {
+    "strategy": "contains",
+    "source": "all-stdout",
+    "loose": true,
+    "expected": ["worker", "Z (zombie)", "VmRSS"],
+    "requireCommands": ["cat", "grep"]
+  }
+}

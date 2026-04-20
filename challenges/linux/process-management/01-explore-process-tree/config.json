@@ -1,0 +1,21 @@
+{
+  "cwd": "/home/dev",
+  "env": { "USER": "dev", "HOME": "/home/dev" },
+  "fs": {
+    "/home/dev": { "type": "dir" },
+    "/proc/1/status": { "type": "file", "content": "Name:\tinit\nState:\tS (sleeping)\nPid:\t1\nPPid:\t0\nUid:\t0\nThreads:\t1\n" },
+    "/proc/42/status": { "type": "file", "content": "Name:\tsshd\nState:\tS (sleeping)\nPid:\t42\nPPid:\t1\nUid:\t0\nThreads:\t1\n" },
+    "/proc/42/cmdline": { "type": "file", "content": "/usr/sbin/sshd -D\n" },
+    "/proc/108/status": { "type": "file", "content": "Name:\tbash\nState:\tS (sleeping)\nPid:\t108\nPPid:\t42\nUid:\t1000\nThreads:\t1\n" },
+    "/proc/108/cmdline": { "type": "file", "content": "-bash\n" },
+    "/proc/215/status": { "type": "file", "content": "Name:\tnode\nState:\tS (sleeping)\nPid:\t215\nPPid:\t108\nUid:\t1000\nThreads:\t4\n" },
+    "/proc/215/cmdline": { "type": "file", "content": "node server.js\n" }
+  },
+  "grader": {
+    "strategy": "contains",
+    "source": "all-stdout",
+    "loose": true,
+    "expected": ["init", "node", "bash", "sshd"],
+    "requireCommands": ["cat", "grep"]
+  }
+}

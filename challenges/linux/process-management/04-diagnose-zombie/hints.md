@@ -1,0 +1,1 @@
+Use `grep -r zombie /proc/` to scan all status files for the zombie state. Once you find it, note the `PPid` field and read that PID's status file to get the parent's name. Then run `ps` to see it in the process listing.

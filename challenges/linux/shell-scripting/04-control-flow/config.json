@@ -1,0 +1,22 @@
+{
+  "cwd": "/home/dev",
+  "env": { "USER": "dev", "HOME": "/home/dev" },
+  "fs": {
+    "/home/dev": { "type": "dir" },
+    "/etc/hostname": { "type": "file", "content": "devpolaris-server\n" }
+  },
+  "grader": {
+    "strategy": "final-fs-state",
+    "expectedFs": {
+      "/home/dev/check.sh": {
+        "type": "file",
+        "contentContains": "[[ -f"
+      },
+      "/home/dev/servers.sh": {
+        "type": "file",
+        "contentContains": "for "
+      }
+    },
+    "requireCommands": ["chmod"]
+  }
+}

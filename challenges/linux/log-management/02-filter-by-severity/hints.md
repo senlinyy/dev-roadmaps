@@ -1,0 +1,1 @@
+Use `cat` to read the severity reference first. Then `grep "ERROR" /var/log/app/application.log` pulls out error-level lines. The `-c` flag on grep counts matches instead of printing them: `grep -c "WARNING" /var/log/app/application.log`.

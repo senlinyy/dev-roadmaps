@@ -1,0 +1,20 @@
+{
+  "cwd": "/home/dev",
+  "env": { "USER": "dev", "HOME": "/home/dev" },
+  "fs": {
+    "/home/dev": { "type": "dir" },
+    "/proc/meminfo": { "type": "file", "content": "MemTotal:       16384000 kB\nMemFree:          512000 kB\nMemAvailable:    2048000 kB\nBuffers:          256000 kB\nCached:          1280000 kB\nSwapTotal:       4096000 kB\nSwapFree:        2048000 kB\nSwapCached:        64000 kB\n" },
+    "/proc/sys/vm/swappiness": { "type": "file", "content": "60\n" },
+    "/proc/1/status": { "type": "file", "content": "Name:\tinit\nPid:\t1\nVmRSS:\t1280 kB\nVmSwap:\t0 kB\n" },
+    "/proc/500/status": { "type": "file", "content": "Name:\tjava\nPid:\t500\nVmRSS:\t4096000 kB\nVmSwap:\t1536000 kB\n" },
+    "/proc/600/status": { "type": "file", "content": "Name:\tnginx\nPid:\t600\nVmRSS:\t24576 kB\nVmSwap:\t4096 kB\n" },
+    "/proc/700/status": { "type": "file", "content": "Name:\tpostgres\nPid:\t700\nVmRSS:\t512000 kB\nVmSwap:\t256000 kB\n" }
+  },
+  "grader": {
+    "strategy": "contains",
+    "source": "all-stdout",
+    "loose": true,
+    "expected": ["SwapTotal", "SwapFree", "VmSwap", "60"],
+    "requireCommands": ["cat", "grep"]
+  }
+}

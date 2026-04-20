@@ -1,0 +1,1 @@
+Timer units have a `.timer` extension. Use `ls /etc/systemd/system/` to find them, then `cat` each one to read the schedule directives. The matching service unit has the same base name with a `.service` extension.

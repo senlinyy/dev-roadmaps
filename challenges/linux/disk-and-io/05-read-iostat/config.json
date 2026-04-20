@@ -1,0 +1,15 @@
+{
+  "cwd": "/home/dev",
+  "env": { "USER": "dev", "HOME": "/home/dev" },
+  "fs": {
+    "/home/dev": { "type": "dir" },
+    "/var/log/iostat-snapshot.txt": { "type": "file", "content": "Linux 5.15.0-91-generic (web-prod-01)    01/15/2024    _x86_64_\n\nDevice            r/s     w/s    rkB/s    wkB/s  await  %util\nsda            245.00  180.00  12800.0  9216.00  62.40  95.20\nsdb              3.20    1.80    128.0     72.00   1.20   2.10\nnvme0n1         42.00   28.00  2688.00  1792.00   0.45   8.30\n" }
+  },
+  "grader": {
+    "strategy": "contains",
+    "source": "all-stdout",
+    "loose": true,
+    "expected": ["sda", "%util", "await", "95.20"],
+    "requireCommands": ["cat", "grep"]
+  }
+}

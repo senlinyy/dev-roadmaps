@@ -1,0 +1,27 @@
+{
+  "cwd": "/home/dev",
+  "env": { "USER": "dev", "HOME": "/home/dev" },
+  "fs": {
+    "/home/dev": { "type": "dir" },
+    "/proc": { "type": "dir" },
+    "/proc/mounts-info": { "type": "file", "content": "/dev/sda1 ext4 50G 18G 30G 52428800 18874368 31457280 38% / 3276800 185342 3091458 6%\ntmpfs tmpfs 3.9G 0 3.9G 4088320 0 4088320 0% /dev/shm 999282 2 999280 1%\ntmpfs tmpfs 786M 1.2M 785M 804864 1228 803636 1% /run 999282 18 999264 1%\n/dev/sda2 ext4 200G 89G 101G 209715200 93323264 105906176 47% /data 13107200 42891 13064309 1%\ntmpfs tmpfs 3.9G 0 3.9G 4088320 0 4088320 0% /tmp 999282 1 999281 1%\n" },
+    "/var": { "type": "dir" },
+    "/var/log": { "type": "dir" },
+    "/var/log/syslog": { "type": "file", "content": "Jan 20 10:00:01 polaris systemd[1]: Started cron.\nJan 20 10:05:22 polaris sshd[1842]: session opened\n" },
+    "/var/log/auth.log": { "type": "file", "content": "Jan 20 10:01:22 polaris sshd[1842]: Accepted publickey for dev\n" },
+    "/var/log/kern.log": { "type": "file", "content": "Jan 20 09:55:00 polaris kernel: [    0.000000] Linux version 5.15.0\n" },
+    "/var/cache": { "type": "dir" },
+    "/var/cache/apt": { "type": "dir" },
+    "/var/tmp": { "type": "dir" },
+    "/var/lib": { "type": "dir" },
+    "/var/lib/dpkg": { "type": "dir" },
+    "/var/lib/dpkg/status": { "type": "file", "content": "Package: nginx\nStatus: install ok installed\nVersion: 1.24.0\n" }
+  },
+  "grader": {
+    "strategy": "contains",
+    "source": "all-stdout",
+    "loose": true,
+    "expected": ["/dev/sda1", "ext4", "50G", "/var/log", "3276800", "185342"],
+    "requireCommands": ["df", "du"]
+  }
+}

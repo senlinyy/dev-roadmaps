@@ -1,0 +1,20 @@
+{
+  "cwd": "/home/dev",
+  "env": { "USER": "dev", "HOME": "/home/dev" },
+  "fs": {
+    "/home/dev": { "type": "dir" },
+    "/etc/nginx/nginx.conf": {
+      "type": "file",
+      "content": "worker_processes auto;\nerror_log /var/log/nginx/error.log warn;\npid /var/run/nginx.pid;\n\nevents {\n    worker_connections 1024;\n}\n\nhttp {\n    include /etc/nginx/mime.types;\n    default_type application/octet-stream;\n\n    access_log /var/log/nginx/access.log;\n    sendfile on;\n    keepalive_timeout 65;\n\n    server {\n        listen 80;\n        server_name _;\n\n        location / {\n            root /var/www/html;\n            index index.html;\n        }\n\n        error_page 500 502 503 504 /50x.html;\n        location = /50x.html {\n            root /var/www/html;\n        }\n    }\n}\n"
+    }
+  },
+  "grader": {
+    "strategy": "final-fs-state",
+    "expectedFs": {
+      "/etc/nginx/nginx.conf": {
+        "type": "file",
+        "exists": true
+      }
+    }
+  }
+}

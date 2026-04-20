@@ -1,0 +1,15 @@
+{
+  "cwd": "/home/dev",
+  "env": { "USER": "dev", "HOME": "/home/dev" },
+  "fs": {
+    "/home/dev": { "type": "dir" },
+    "/var/log/dmesg": { "type": "file", "content": "[    0.000000] Linux version 5.15.0-91-generic\n[    0.523114] ACPI: Core revision 20210730\n[    1.204882] eth0: link up, 1000 Mbps\n[    2.801244] EXT4-fs (sda1): mounted filesystem with ordered data mode\n[  842.156723] Out of memory: Killed process 4521 (java) total-vm:8388608kB, anon-rss:7340032kB\n[  842.156801] oom_reaper: reaped process 4521 (java)\n[ 1205.443891] sd 0:0:0:0: [sda] tag#12 FAILED Result: hostbyte=DID_OK driverbyte=DRIVER_OK\n[ 1205.443920] blk_update_request: I/O error, dev sda, sector 209715200\n[ 1205.501332] EXT4-fs warning (device sda1): ext4_end_bio:348: I/O error\n" }
+  },
+  "grader": {
+    "strategy": "contains",
+    "source": "all-stdout",
+    "loose": true,
+    "expected": ["Out of memory", "Killed process", "I/O error", "sda"],
+    "requireCommands": ["cat", "grep"]
+  }
+}

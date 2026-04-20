@@ -1,0 +1,27 @@
+{
+  "cwd": "/home/dev",
+  "env": { "USER": "dev", "HOME": "/home/dev" },
+  "fs": {
+    "/home/dev": { "type": "dir" },
+    "/var": { "type": "dir" },
+    "/var/log": { "type": "dir" },
+    "/var/log/syslog": {
+      "type": "file",
+      "content": "2024-01-15 08:01:12 INFO Server started\n2024-01-15 08:05:01 WARN Slow query\n2024-01-15 08:10:22 INFO Health check\n2024-01-15 08:15:44 ERROR Connection refused\n2024-01-15 08:20:11 INFO Retry succeeded\n2024-01-15 08:25:03 WARN Memory high\n2024-01-15 08:30:55 ERROR Connection refused\n2024-01-15 08:35:19 ERROR Disk full\n2024-01-15 08:40:02 INFO Backup done\n2024-01-15 08:45:31 WARN Slow query\n2024-01-15 08:50:17 ERROR Connection refused\n2024-01-15 08:55:03 INFO Cache cleared\n"
+    }
+  },
+  "grader": {
+    "strategy": "contains",
+    "source": "all-stdout",
+    "loose": true,
+    "expected": [
+      "4",
+      "ERROR",
+      "INFO",
+      "WARN",
+      "3 Connection refused",
+      "1 Disk full"
+    ],
+    "requireCommands": ["grep", "sort", "uniq"]
+  }
+}

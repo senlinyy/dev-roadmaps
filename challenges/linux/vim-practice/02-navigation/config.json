@@ -1,0 +1,20 @@
+{
+  "cwd": "/home/dev",
+  "env": { "USER": "dev", "HOME": "/home/dev" },
+  "fs": {
+    "/home/dev": { "type": "dir" },
+    "/var/log/app/server.log": {
+      "type": "file",
+      "content": "2026-04-18 08:00:01 [INFO]  Application starting...\n2026-04-18 08:00:02 [INFO]  Loading configuration from /etc/app/config.yml\n2026-04-18 08:00:02 [INFO]  Database connection pool initialized (size=10)\n2026-04-18 08:00:03 [INFO]  Redis cache connected at 127.0.0.1:6379\n2026-04-18 08:00:03 [INFO]  Registering route: GET /api/v1/health\n2026-04-18 08:00:03 [INFO]  Registering route: GET /api/v1/users\n2026-04-18 08:00:03 [INFO]  Registering route: POST /api/v1/users\n2026-04-18 08:00:03 [INFO]  Registering route: GET /api/v1/projects\n2026-04-18 08:00:04 [INFO]  Server listening on port 8080\n2026-04-18 08:00:04 [INFO]  Health check endpoint ready\n2026-04-18 08:01:15 [INFO]  GET /api/v1/health 200 2ms\n2026-04-18 08:01:22 [INFO]  GET /api/v1/users 200 45ms\n2026-04-18 08:01:30 [WARN]  Slow query detected: SELECT * FROM users WHERE status='active' (320ms)\n2026-04-18 08:01:31 [INFO]  GET /api/v1/users 200 325ms\n2026-04-18 08:02:00 [INFO]  POST /api/v1/users 201 12ms\n2026-04-18 08:02:15 [ERROR] Connection refused: upstream service at 10.0.3.42:9090\n2026-04-18 08:02:15 [WARN]  Retrying upstream connection (attempt 1/3)\n2026-04-18 08:02:16 [WARN]  Retrying upstream connection (attempt 2/3)\n2026-04-18 08:02:17 [INFO]  Upstream connection restored\n2026-04-18 08:02:17 [INFO]  GET /api/v1/projects 200 89ms\n2026-04-18 08:03:00 [INFO]  Scheduled task: cleanup_expired_sessions started\n2026-04-18 08:03:01 [INFO]  Removed 42 expired sessions\n2026-04-18 08:03:01 [INFO]  Scheduled task: cleanup_expired_sessions completed\n2026-04-18 08:04:00 [INFO]  GET /api/v1/health 200 1ms\n2026-04-18 08:04:12 [WARN]  Rate limit approaching for client 192.168.1.105 (85/100)\n2026-04-18 08:04:30 [INFO]  GET /api/v1/users?page=2 200 38ms\n2026-04-18 08:04:45 [ERROR] Unhandled exception in request handler: NullPointerException\n2026-04-18 08:04:45 [ERROR] Stack trace: at UserService.findById(UserService.java:42)\n2026-04-18 08:04:45 [ERROR] Stack trace: at UserController.getUser(UserController.java:28)\n2026-04-18 08:04:45 [INFO]  Returning 500 Internal Server Error to client\n2026-04-18 08:05:00 [INFO]  GET /api/v1/health 200 1ms\n2026-04-18 08:05:30 [INFO]  Database connection pool stats: active=3, idle=7, total=10\n2026-04-18 08:06:00 [INFO]  GET /api/v1/projects 200 52ms\n2026-04-18 08:06:15 [INFO]  POST /api/v1/users 201 15ms\n2026-04-18 08:06:30 [WARN]  Disk usage at 82% on /var/log partition\n2026-04-18 08:07:00 [INFO]  GET /api/v1/health 200 2ms\n2026-04-18 08:07:30 [INFO]  Graceful shutdown initiated\n2026-04-18 08:07:30 [INFO]  Draining active connections (5 remaining)\n2026-04-18 08:07:31 [INFO]  All connections drained\n2026-04-18 08:07:31 [INFO]  Database connection pool closed\n2026-04-18 08:07:31 [INFO]  Application stopped cleanly\n"
+    }
+  },
+  "grader": {
+    "strategy": "final-fs-state",
+    "expectedFs": {
+      "/var/log/app/server.log": {
+        "type": "file",
+        "exists": true
+      }
+    }
+  }
+}

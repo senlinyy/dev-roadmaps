@@ -1,0 +1,30 @@
+{
+  "cwd": "/home/dev",
+  "env": { "USER": "dev", "HOME": "/home/dev" },
+  "fs": {
+    "/home/dev": { "type": "dir" },
+    "/etc/fstab": {
+      "type": "file",
+      "content": "# /etc/fstab: static file system information\n#\n# <file system>  <mount point>  <type>  <options>         <dump>  <pass>\n/dev/sda2         /              ext4    defaults,errors=remount-ro  0  1\n/dev/sda1         /boot          ext4    defaults          0  2\n/dev/sdb1         /data          xfs     defaults,noatime  0  2\nUUID=a1b2c3d4-e5f6-7890-abcd-ef1234567890  none  swap  sw  0  0\n"
+    },
+    "/proc/mounts-info": {
+      "type": "file",
+      "content": "/dev/sda2 ext4 49G 22G 25G 51380224 23068672 26214400 47% / 3276800 185342 3091458 6%\n/dev/sda1 ext4 496M 128M 343M 507904 131072 351232 27% /boot 65536 312 65224 1%\n/dev/sdb1 xfs 100G 34G 66G 104857600 35651584 69206016 34% /data 6553600 42891 6510709 1%\ntmpfs tmpfs 3.9G 0 3.9G 4088320 0 4088320 0% /dev/shm 999282 2 999280 1%\ntmpfs tmpfs 786M 1.2M 785M 804864 1228 803636 1% /run 999282 18 999264 1%\n"
+    },
+    "/boot": { "type": "dir" },
+    "/data": { "type": "dir" }
+  },
+  "customCommands": {
+    "lsblk": {
+      "stdout": "NAME   MAJ:MIN RM   SIZE RO TYPE MOUNTPOINT\nsda      8:0    0    50G  0 disk\n\u251c\u2500sda1   8:1    0   512M  0 part /boot\n\u2514\u2500sda2   8:2    0  49.5G  0 part /\nsdb      8:16   0   100G  0 disk\n\u2514\u2500sdb1   8:17   0   100G  0 part /data\n",
+      "exitCode": 0
+    }
+  },
+  "grader": {
+    "strategy": "contains",
+    "source": "all-stdout",
+    "loose": true,
+    "expected": ["sda", "sdb", "/data", "xfs", "noatime", "/boot"],
+    "requireCommands": ["lsblk", "cat", "df"]
+  }
+}

@@ -1,0 +1,1 @@
+Start by reading `signal-table.txt` with `cat` to see all signals and their descriptions. Look for entries marked "cannot trap". Then `cat cleanup.sh` to see the `trap` statement. Use `grep` with a keyword like "Default" to find signal 15.

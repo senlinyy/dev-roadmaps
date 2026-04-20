@@ -1,0 +1,21 @@
+{
+  "cwd": "/home/dev",
+  "env": { "USER": "dev", "HOME": "/home/dev" },
+  "fs": {
+    "/home/dev": { "type": "dir" },
+    "/home/dev/notes.txt": { "type": "file", "content": "exit code 0 means success\n" }
+  },
+  "grader": {
+    "strategy": "contains",
+    "source": "all-stdout",
+    "loose": true,
+    "expected": ["0", "File not found, using defaults"],
+    "requireCommands": ["echo", "mkdir"],
+    "expectedFs": {
+      "/home/dev/logs/app.log": {
+        "type": "file",
+        "contentContains": "started"
+      }
+    }
+  }
+}

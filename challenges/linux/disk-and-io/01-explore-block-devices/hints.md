@@ -1,0 +1,1 @@
+Start with `lsblk` to see the device tree. Then `cat /etc/fstab` to read mount configurations. Look for the line where `/data` is mounted to find both its filesystem type and mount options. Use `grep` on `/etc/fstab` if you want to filter for `noatime` specifically.
