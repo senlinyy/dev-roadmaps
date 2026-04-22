@@ -1,0 +1,20 @@
+{
+  "cwd": "/home/dev",
+  "env": { "USER": "dev", "HOME": "/home/dev" },
+  "fs": {
+    "/home/dev": { "type": "dir" },
+    "/etc/ssh": { "type": "dir" },
+    "/etc/ssh/sshd_config": {
+      "type": "file",
+      "content": "# OpenSSH server config - polaris-bastion-03\n# Provisioned from base image ubuntu-22.04-cloud (default values, NOT hardened)\n\nPort 22\nAddressFamily any\nListenAddress 0.0.0.0\n\n# Authentication\nPermitRootLogin yes\nMaxAuthTries 6\nMaxSessions 10\nPubkeyAuthentication yes\nPasswordAuthentication yes\nPermitEmptyPasswords no\nChallengeResponseAuthentication no\n\nUsePAM yes\nX11Forwarding yes\nPrintMotd no\nAcceptEnv LANG LC_*\nSubsystem sftp /usr/lib/openssh/sftp-server\n",
+      "mode": 420
+    }
+  },
+  "grader": {
+    "strategy": "contains",
+    "source": "all-stdout",
+    "loose": true,
+    "expected": ["PermitRootLogin yes", "PasswordAuthentication yes", "Port 22"],
+    "requireCommands": ["cat", "grep"]
+  }
+}

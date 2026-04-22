@@ -1,0 +1,1 @@
+`grep -r "PATTERN" /home/dev/postmortem/` walks every file in the directory and prints the matching line prefixed with the filename, which immediately tells you which incident file owns each failure marker.

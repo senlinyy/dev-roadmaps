@@ -1,0 +1,28 @@
+{
+  "cwd": "/home/dev",
+  "env": { "USER": "dev", "HOME": "/home/dev" },
+  "fs": {
+    "/home/dev": { "type": "dir" },
+    "/home/dev/vpc": { "type": "dir" },
+    "/home/dev/vpc/proposed-cidrs.txt": {
+      "type": "file",
+      "content": "10.5.0.0/16\n172.20.0.0/16\n11.0.0.0/16\n192.168.50.0/24\n"
+    },
+    "/home/dev/vpc/rfc1918.txt": {
+      "type": "file",
+      "content": "RFC 1918 private IPv4 ranges\n----------------------------\n10.0.0.0/8        16,777,216 addresses, default for cloud VPCs\n172.16.0.0/12     1,048,576 addresses, default for Docker bridges\n192.168.0.0/16    65,536 addresses, default for home routers\n\nAny address outside these three blocks is publicly routable and must NOT\nbe used for an internal VPC CIDR.\n"
+    }
+  },
+  "grader": {
+    "strategy": "contains",
+    "source": "all-stdout",
+    "loose": true,
+    "expected": [
+      "11.0.0.0/16",
+      "10.0.0.0/8",
+      "172.16.0.0/12",
+      "192.168.0.0/16"
+    ],
+    "requireCommands": ["cat", "grep"]
+  }
+}

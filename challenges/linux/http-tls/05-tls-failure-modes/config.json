@@ -1,0 +1,33 @@
+{
+  "cwd": "/home/dev",
+  "env": { "USER": "dev", "HOME": "/home/dev" },
+  "fs": {
+    "/home/dev": { "type": "dir" },
+    "/home/dev/postmortem": { "type": "dir" },
+    "/home/dev/postmortem/api-handshake.txt": {
+      "type": "file",
+      "content": "$ curl -v https://api.example.com/health\n*   Trying 203.0.113.12:443...\n* Connected to api.example.com (203.0.113.12) port 443\n* ALPN: offers h2,http/1.1\n* TLSv1.3 (OUT), TLS handshake, Client hello (1):\n* TLSv1.3 (IN), TLS handshake, Server hello (2):\n* TLSv1.3 (IN), TLS handshake, Encrypted Extensions (8):\n* TLSv1.3 (IN), TLS handshake, Certificate (11):\n* SSL certificate problem: unable to get local issuer certificate\n* TLSv1.3 (OUT), TLS alert, unknown CA (560):\n* error:0A000086:SSL routines::certificate verify failed\n* Closing connection\ncurl: (60) SSL certificate problem: unable to get local issuer certificate\nMore details here: https://curl.se/docs/sslcerts.html\n"
+    },
+    "/home/dev/postmortem/legacy-handshake.txt": {
+      "type": "file",
+      "content": "$ curl -v https://legacy.example.com/ping\n*   Trying 203.0.113.55:443...\n* Connected to legacy.example.com (203.0.113.55) port 443\n* ALPN: offers h2,http/1.1\n* TLSv1.3 (OUT), TLS handshake, Client hello (1):\n* TLSv1.3 (IN), TLS handshake, Server hello (2):\n* TLSv1.3 (IN), TLS handshake, Certificate (11):\n* Server certificate:\n*  subject: CN=www.example.com\n*  issuer: CN=R3, O=Let's Encrypt, C=US\n*  SSL: no alternative certificate subject name matches target host name 'legacy.example.com'\n* subjectAltName does not match legacy.example.com\n* Closing connection\ncurl: (60) SSL: no alternative certificate subject name matches target host name 'legacy.example.com'\n"
+    },
+    "/var/log/nginx": { "type": "dir" },
+    "/var/log/nginx/error.log": {
+      "type": "file",
+      "content": "2025/03/04 17:02:11 [error] 980#980: *44 SSL_do_handshake() failed (SSL: error:0A000086) while SSL handshaking to upstream, client: 10.0.0.9, server: api.example.com\n2025/03/04 17:02:11 [error] 980#980: *44 upstream prematurely closed connection while reading response header from upstream, client: 10.0.0.9, server: api.example.com, upstream: \"https://10.0.2.11:8443/health\"\n2025/03/04 17:03:48 [warn] 980#980: *51 SSL: hostname mismatch in certificate, client: 10.0.0.16, server: legacy.example.com\n2025/03/04 17:03:48 [error] 980#980: *51 upstream prematurely closed connection while reading response header from upstream, client: 10.0.0.16, server: legacy.example.com, upstream: \"https://10.0.2.20:8443/ping\"\n2025/03/04 17:04:02 [info] 980#980: *60 client closed connection during handshake, client: 10.0.0.21, server: legacy.example.com\n"
+    }
+  },
+  "grader": {
+    "strategy": "contains",
+    "source": "all-stdout",
+    "loose": true,
+    "expected": [
+      "certificate verify failed",
+      "subjectAltName does not match",
+      "upstream prematurely closed",
+      "legacy.example.com"
+    ],
+    "requireCommands": ["cat", "grep", "tail"]
+  }
+}

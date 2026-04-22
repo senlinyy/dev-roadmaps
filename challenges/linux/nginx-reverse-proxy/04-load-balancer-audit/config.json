@@ -1,0 +1,25 @@
+{
+  "cwd": "/home/dev",
+  "env": { "USER": "dev", "HOME": "/home/dev" },
+  "fs": {
+    "/home/dev": { "type": "dir" },
+    "/etc/nginx": { "type": "dir" },
+    "/etc/nginx/conf.d": { "type": "dir" },
+    "/etc/nginx/conf.d/upstream.conf": {
+      "type": "file",
+      "content": "upstream backend {\n    server 10.0.0.10:8080 weight=3;\n    server 10.0.0.11:8080 down;\n    server 10.0.0.12:8080 weight=1;\n    keepalive 32;\n}\n\nserver {\n    listen 80;\n    server_name app.example.com;\n\n    location / {\n        proxy_pass http://backend;\n        proxy_set_header Host $host;\n    }\n}\n"
+    },
+    "/var/log/nginx": { "type": "dir" },
+    "/var/log/nginx/upstream-access.log": {
+      "type": "file",
+      "content": "10.0.0.4 - - [04/Mar/2025:19:00:01 +0000] \"GET / HTTP/1.1\" 200 412 upstream=10.0.0.10:8080 rt=0.012\n10.0.0.7 - - [04/Mar/2025:19:00:03 +0000] \"GET / HTTP/1.1\" 200 412 upstream=10.0.0.10:8080 rt=0.014\n10.0.0.9 - - [04/Mar/2025:19:00:05 +0000] \"GET / HTTP/1.1\" 200 412 upstream=10.0.0.10:8080 rt=0.011\n10.0.0.12 - - [04/Mar/2025:19:00:07 +0000] \"GET / HTTP/1.1\" 200 412 upstream=10.0.0.12:8080 rt=0.020\n10.0.0.16 - - [04/Mar/2025:19:00:09 +0000] \"GET / HTTP/1.1\" 200 412 upstream=10.0.0.10:8080 rt=0.013\n10.0.0.21 - - [04/Mar/2025:19:00:11 +0000] \"GET / HTTP/1.1\" 200 412 upstream=10.0.0.10:8080 rt=0.012\n10.0.0.4 - - [04/Mar/2025:19:00:13 +0000] \"GET / HTTP/1.1\" 200 412 upstream=10.0.0.10:8080 rt=0.015\n10.0.0.7 - - [04/Mar/2025:19:00:15 +0000] \"GET / HTTP/1.1\" 200 412 upstream=10.0.0.12:8080 rt=0.019\n10.0.0.9 - - [04/Mar/2025:19:00:17 +0000] \"GET / HTTP/1.1\" 200 412 upstream=10.0.0.10:8080 rt=0.012\n10.0.0.16 - - [04/Mar/2025:19:00:19 +0000] \"GET / HTTP/1.1\" 200 412 upstream=10.0.0.10:8080 rt=0.014\n"
+    }
+  },
+  "grader": {
+    "strategy": "contains",
+    "source": "all-stdout",
+    "loose": true,
+    "expected": ["upstream backend", "10.0.0.10", "10.0.0.11", "10.0.0.12", "down"],
+    "requireCommands": ["cat", "grep"]
+  }
+}

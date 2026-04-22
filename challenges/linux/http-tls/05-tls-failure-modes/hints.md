@@ -1,0 +1,1 @@
+The api.example.com failure is a chain-of-trust issue (`certificate verify failed` / `unable to get local issuer certificate`). The legacy.example.com failure is a hostname-mismatch issue (`subjectAltName does not match`). The nginx error log shows both, so a single `grep` regex with `|` can pull both error strings in one shot.

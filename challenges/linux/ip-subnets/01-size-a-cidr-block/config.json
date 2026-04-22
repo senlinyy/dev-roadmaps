@@ -1,0 +1,19 @@
+{
+  "cwd": "/home/dev",
+  "env": { "USER": "dev", "HOME": "/home/dev" },
+  "fs": {
+    "/home/dev": { "type": "dir" },
+    "/home/dev/network-planning": { "type": "dir" },
+    "/home/dev/network-planning/cidr-cheatsheet.txt": {
+      "type": "file",
+      "content": "CIDR Cheat Sheet  internal network planning reference\n======================================================\n\nPrefix  Mask               Total IPs   Usable Hosts   Common Use\n------  -----------------  ----------  -------------  ----------------------------\n/16     255.255.0.0            65536          65534    VPC root\n/18     255.255.192.0          16384          16382    Very large tier\n/20     255.255.240.0           4096           4094    Large subnet / AZ tier\n/22     255.255.252.0           1024           1022    Medium subnet\n/24     255.255.255.0            256            254    Small service subnet\n/26     255.255.255.192           64             62    Bastion / NAT pool\n/28     255.255.255.240           16             14    TGW attachment / endpoint\n\nRule of thumb: pick the smallest prefix whose Usable Hosts column is >= your\ntarget instance count, then add at least one binary doubling for headroom.\n"
+    }
+  },
+  "grader": {
+    "strategy": "contains",
+    "source": "all-stdout",
+    "loose": true,
+    "expected": ["/20", "4094"],
+    "requireCommands": ["cat", "grep", "echo"]
+  }
+}

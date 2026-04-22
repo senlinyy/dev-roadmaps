@@ -1,0 +1,1 @@
+`iptables-save` writes one rule per line as `-A CHAIN ... -j TARGET`. Grepping for `"dport 80"` isolates the offending port-80 rule, and `grep ":INPUT"` shows the chain's default policy line at the top of the file.

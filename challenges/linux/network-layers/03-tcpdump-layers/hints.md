@@ -1,0 +1,1 @@
+In tcpdump output, `Flags [S]` is a bare SYN, `Flags [S.]` is a SYN-ACK, and a working three-way handshake will show both. A broken client appears as repeated SYNs with no `[S.]` reply. Pipe `grep "10.0.5.7" api-handshake.txt | wc -l` to count its retransmits.

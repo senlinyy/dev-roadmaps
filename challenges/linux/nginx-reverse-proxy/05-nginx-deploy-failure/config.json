@@ -1,0 +1,34 @@
+{
+  "cwd": "/home/dev",
+  "env": { "USER": "dev", "HOME": "/home/dev" },
+  "fs": {
+    "/home/dev": { "type": "dir" },
+    "/home/dev/postmortem": { "type": "dir" },
+    "/home/dev/postmortem/nginx-t.txt": {
+      "type": "file",
+      "content": "$ sudo nginx -t\nnginx: the configuration file /etc/nginx/nginx.conf syntax is being tested\nnginx: [emerg] unknown directive \"proxy_passs\" in /etc/nginx/sites-available/api.conf:14\nnginx: configuration file /etc/nginx/nginx.conf test failed\n"
+    },
+    "/etc/nginx": { "type": "dir" },
+    "/etc/nginx/sites-available": { "type": "dir" },
+    "/etc/nginx/sites-available/api.conf": {
+      "type": "file",
+      "content": "server {\n    listen 80;\n    server_name api.example.com;\n\n    location /api/v1/ {\n        proxy_pass http://127.0.0.1:3000;\n        proxy_set_header Host $host;\n        proxy_set_header X-Real-IP $remote_addr;\n        proxy_read_timeout 30s;\n    }\n\n    location /api/v2/ {\n        proxy_set_header Host $host;\n        proxy_passs http://127.0.0.1:3001;\n        proxy_set_header X-Real-IP $remote_addr;\n        proxy_read_timeout 30s;\n    }\n}\n"
+    },
+    "/var/log/nginx": { "type": "dir" },
+    "/var/log/nginx/error.log": {
+      "type": "file",
+      "content": "2025/03/04 20:01:11 [error] 980#980: *1 connect() failed (111: Connection refused) while connecting to upstream, client: 10.0.0.4, server: api.example.com, request: \"GET /api/v2/users HTTP/1.1\", upstream: \"http://127.0.0.1:3001/api/v2/users\"\n2025/03/04 20:02:14 [error] 980#980: *2 connect() failed (111: Connection refused) while connecting to upstream, client: 10.0.0.7, server: api.example.com, request: \"GET /api/v2/users HTTP/1.1\", upstream: \"http://127.0.0.1:3001/api/v2/users\"\n2025/03/04 20:03:48 [warn] 980#980: *3 upstream server temporarily disabled while connecting to upstream, client: 10.0.0.9, server: api.example.com\n2025/03/04 20:04:02 [error] 980#980: *4 connect() failed (111: Connection refused) while connecting to upstream, client: 10.0.0.16, server: api.example.com, request: \"GET /api/v2/users HTTP/1.1\", upstream: \"http://127.0.0.1:3001/api/v2/users\"\n2025/03/04 20:05:19 [info] 980#980: *5 client closed connection while waiting for request, client: 10.0.0.21, server: 0.0.0.0:80\n"
+    },
+    "/var/log/nginx/access.log": {
+      "type": "file",
+      "content": "10.0.0.4 - - [04/Mar/2025:20:01:11 +0000] \"GET /api/v2/users HTTP/1.1\" 502 166 \"-\" \"Mozilla/5.0\"\n10.0.0.7 - - [04/Mar/2025:20:02:14 +0000] \"GET /api/v2/users HTTP/1.1\" 502 166 \"-\" \"Mozilla/5.0\"\n10.0.0.16 - - [04/Mar/2025:20:04:02 +0000] \"GET /api/v2/users HTTP/1.1\" 502 166 \"-\" \"curl/8.4.0\"\n"
+    }
+  },
+  "grader": {
+    "strategy": "contains",
+    "source": "all-stdout",
+    "loose": true,
+    "expected": ["[emerg]", "proxy_passs", "api.conf:14", "502"],
+    "requireCommands": ["cat", "grep", "tail"]
+  }
+}

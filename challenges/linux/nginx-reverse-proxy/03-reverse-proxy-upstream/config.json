@@ -1,0 +1,38 @@
+{
+  "cwd": "/home/dev",
+  "env": { "USER": "dev", "HOME": "/home/dev" },
+  "fs": {
+    "/home/dev": { "type": "dir" },
+    "/home/dev/postmortem": { "type": "dir" },
+    "/etc/nginx": { "type": "dir" },
+    "/etc/nginx/sites-available": { "type": "dir" },
+    "/etc/nginx/sites-available/api.conf": {
+      "type": "file",
+      "content": "server {\n    listen 80;\n    server_name api.example.com;\n\n    location /api/v1/ {\n        proxy_pass http://127.0.0.1:3000;\n        proxy_set_header Host $host;\n        proxy_set_header X-Real-IP $remote_addr;\n        proxy_read_timeout 30s;\n    }\n\n    location /api/v2/ {\n        proxy_pass http://127.0.0.1:3001;\n        proxy_set_header Host $host;\n        proxy_set_header X-Real-IP $remote_addr;\n        proxy_read_timeout 30s;\n    }\n}\n"
+    },
+    "/home/dev/postmortem/v1-200.txt": {
+      "type": "file",
+      "content": "$ curl -v http://api.example.com/api/v1/users\n*   Trying 127.0.0.1:80...\n* Connected to api.example.com (127.0.0.1) port 80\n> GET /api/v1/users HTTP/1.1\n> Host: api.example.com\n> User-Agent: curl/8.4.0\n>\n< HTTP/1.1 200 OK\n< server: nginx/1.24.0\n< content-type: application/json\n< x-upstream: 127.0.0.1:3000\n<\n[{\"id\":1,\"name\":\"Ada\"},{\"id\":2,\"name\":\"Linus\"}]\n* Connection #0 to host api.example.com left intact\n"
+    },
+    "/home/dev/postmortem/v2-502.txt": {
+      "type": "file",
+      "content": "$ curl -v http://api.example.com/api/v2/users\n*   Trying 127.0.0.1:80...\n* Connected to api.example.com (127.0.0.1) port 80\n> GET /api/v2/users HTTP/1.1\n> Host: api.example.com\n> User-Agent: curl/8.4.0\n>\n< HTTP/1.1 502 Bad Gateway\n< server: nginx/1.24.0\n< content-type: text/html\n< content-length: 166\n<\n<html><head><title>502 Bad Gateway</title></head><body>\n<center><h1>502 Bad Gateway</h1></center>\n<hr><center>nginx/1.24.0</center>\n</body></html>\n* Connection #0 to host api.example.com left intact\n"
+    },
+    "/home/dev/postmortem/port-check.txt": {
+      "type": "file",
+      "content": "$ ss -tlnp\nState   Recv-Q  Send-Q  Local Address:Port   Peer Address:Port  Process\nLISTEN  0       128     0.0.0.0:80           0.0.0.0:*          users:((\"nginx\",pid=980))\nLISTEN  0       128     0.0.0.0:22           0.0.0.0:*          users:((\"sshd\",pid=412))\nLISTEN  0       128     127.0.0.1:3000       0.0.0.0:*          users:((\"node\",pid=1422))\n\n# Note: nothing is listening on 127.0.0.1:3001 — the v2 service never came up.\n"
+    }
+  },
+  "grader": {
+    "strategy": "contains",
+    "source": "all-stdout",
+    "loose": true,
+    "expected": [
+      "proxy_pass http://127.0.0.1:3000",
+      "proxy_pass http://127.0.0.1:3001",
+      "502 Bad Gateway",
+      "LISTEN"
+    ],
+    "requireCommands": ["cat", "grep"]
+  }
+}

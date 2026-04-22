@@ -1,0 +1,1 @@
+`sites-available/` is the catalog of every virtual host that *could* be live; `sites-enabled/` is the subset that nginx actually loads via the `include` line in `nginx.conf`. Note that `legacy.conf` exists in `sites-available/` but is not enabled.

@@ -1,0 +1,1 @@
+A `dig +trace` walks down the chain from the roots, so the top of the file is the root referral and the bottom is the final answer. Use `head` for the top, `tail` for the bottom, and `grep "NS"` to surface every delegation row in between.

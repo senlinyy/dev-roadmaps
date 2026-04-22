@@ -1,0 +1,35 @@
+{
+  "cwd": "/home/dev",
+  "env": { "USER": "dev", "HOME": "/home/dev" },
+  "fs": {
+    "/home/dev": { "type": "dir" },
+    "/home/dev/postmortem": { "type": "dir" },
+    "/home/dev/postmortem/01-link.txt": {
+      "type": "file",
+      "content": "# captured during incident INC-4412 - rack 7 cable swap\n$ ip link show eth0\n2: eth0: <NO-CARRIER,BROADCAST,MULTICAST,UP> mtu 1500 qdisc fq_codel state DOWN mode DEFAULT group default qlen 1000\n    link/ether 02:42:ac:11:00:02 brd ff:ff:ff:ff:ff:ff\n"
+    },
+    "/home/dev/postmortem/02-arp.txt": {
+      "type": "file",
+      "content": "# captured during incident INC-4418 - db host unreachable from app subnet\n$ ip neigh show\n192.168.1.1   dev eth0 lladdr 00:1a:2b:3c:4d:5e REACHABLE\n192.168.1.42  dev eth0 lladdr 02:42:ac:11:00:07 STALE\n192.168.1.50  dev eth0 FAILED\n"
+    },
+    "/home/dev/postmortem/03-route.txt": {
+      "type": "file",
+      "content": "# captured during incident INC-4423 - cannot reach upstream API\n$ ping -c 3 93.184.216.34\nPING 93.184.216.34 (93.184.216.34) 56(84) bytes of data.\nFrom 10.0.0.1: icmp_seq=1 Destination Host Unreachable\nFrom 10.0.0.1: icmp_seq=2 Destination Host Unreachable\nFrom 10.0.0.1: icmp_seq=3 Destination Host Unreachable\n\n$ ip route show\ndefault via 10.0.0.1 dev eth0\n10.0.0.0/24 dev eth0 proto kernel scope link src 10.0.0.5\n"
+    },
+    "/home/dev/postmortem/04-ports.txt": {
+      "type": "file",
+      "content": "# captured during incident INC-4427 - api health checks 503\n$ ss -tlnp\nState  Recv-Q  Send-Q  Local Address:Port  Peer Address:Port  Process\nLISTEN 0       128     0.0.0.0:22           0.0.0.0:*          users:((\"sshd\",pid=567,fd=3))\nLISTEN 0       128     0.0.0.0:443          0.0.0.0:*          users:((\"nginx\",pid=1234,fd=6))\n\n$ curl http://127.0.0.1:8080/health\ncurl: (7) Failed to connect to 127.0.0.1 port 8080: Connection refused\n"
+    },
+    "/home/dev/postmortem/05-tls.txt": {
+      "type": "file",
+      "content": "# captured during incident INC-4432 - browser warning at api.example.com\n$ curl -v https://api.example.com/users\n*   Trying 93.184.216.34:443...\n* Connected to api.example.com (93.184.216.34) port 443\n* SSL certificate problem: certificate has expired\n* Closing connection\ncurl: (60) SSL certificate problem: certificate has expired\n"
+    }
+  },
+  "grader": {
+    "strategy": "contains",
+    "source": "all-stdout",
+    "loose": true,
+    "expected": ["NO-CARRIER", "FAILED", "Destination Host Unreachable", "Connection refused", "certificate has expired"],
+    "requireCommands": ["grep"]
+  }
+}

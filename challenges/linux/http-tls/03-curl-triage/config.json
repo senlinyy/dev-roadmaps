@@ -1,0 +1,28 @@
+{
+  "cwd": "/home/dev",
+  "env": { "USER": "dev", "HOME": "/home/dev" },
+  "fs": {
+    "/home/dev": { "type": "dir" },
+    "/home/dev/postmortem": { "type": "dir" },
+    "/home/dev/postmortem/curl-runs": { "type": "dir" },
+    "/home/dev/postmortem/curl-runs/run-1-09-01.txt": {
+      "type": "file",
+      "content": "$ curl -v https://payments.example.com/v1/charge\n*   Trying 198.51.100.20:443...\n* Connected to payments.example.com (198.51.100.20) port 443\n* ALPN: server accepted h2\n> POST /v1/charge HTTP/2\n> Host: payments.example.com\n> User-Agent: curl/8.4.0\n> Content-Type: application/json\n> X-Request-Id: req-9-01-ok\n>\n< HTTP/2 200\n< server: nginx/1.24.0\n< content-type: application/json\n< x-request-id: req-9-01-ok\n< date: Tue, 04 Mar 2025 09:01:14 GMT\n<\n{\"status\":\"captured\",\"id\":\"ch_001\"}\n* Connection #0 to host payments.example.com left intact\n"
+    },
+    "/home/dev/postmortem/curl-runs/run-2-09-05.txt": {
+      "type": "file",
+      "content": "$ curl -v https://payments.example.com/v1/charge\n*   Trying 198.51.100.20:443...\n* Connected to payments.example.com (198.51.100.20) port 443\n* ALPN: server accepted h2\n> POST /v1/charge HTTP/2\n> Host: payments.example.com\n> User-Agent: curl/8.4.0\n> Content-Type: application/json\n> X-Request-Id: req-9-05-fail\n>\n< HTTP/2 503\n< server: nginx/1.24.0\n< content-type: application/json\n< retry-after: 5\n< x-request-id: req-9-05-fail\n< date: Tue, 04 Mar 2025 09:05:42 GMT\n<\n{\"error\":\"upstream_unavailable\",\"upstream\":\"payments-worker-2\"}\n* Connection #0 to host payments.example.com left intact\n"
+    },
+    "/home/dev/postmortem/curl-runs/run-3-09-09.txt": {
+      "type": "file",
+      "content": "$ curl -v https://payments.example.com/v1/charge\n*   Trying 198.51.100.20:443...\n* Connected to payments.example.com (198.51.100.20) port 443\n* ALPN: server accepted h2\n> POST /v1/charge HTTP/2\n> Host: payments.example.com\n> User-Agent: curl/8.4.0\n> Content-Type: application/json\n> X-Request-Id: req-9-09-ok\n>\n< HTTP/2 200\n< server: nginx/1.24.0\n< content-type: application/json\n< x-request-id: req-9-09-ok\n< date: Tue, 04 Mar 2025 09:09:03 GMT\n<\n{\"status\":\"captured\",\"id\":\"ch_002\"}\n* Connection #0 to host payments.example.com left intact\n"
+    }
+  },
+  "grader": {
+    "strategy": "contains",
+    "source": "all-stdout",
+    "loose": true,
+    "expected": ["HTTP/2 503", "HTTP/2 200", "X-Request-Id", "req-9-05-fail"],
+    "requireCommands": ["ls", "cat", "grep"]
+  }
+}

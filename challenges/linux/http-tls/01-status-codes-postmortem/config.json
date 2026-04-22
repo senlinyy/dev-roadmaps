@@ -1,0 +1,24 @@
+{
+  "cwd": "/home/dev",
+  "env": { "USER": "dev", "HOME": "/home/dev" },
+  "fs": {
+    "/home/dev": { "type": "dir" },
+    "/home/dev/postmortem": { "type": "dir" },
+    "/home/dev/postmortem/checkout-502.txt": {
+      "type": "file",
+      "content": "$ curl -v https://shop.example.com/api/checkout\n*   Trying 203.0.113.40:443...\n* Connected to shop.example.com (203.0.113.40) port 443\n* ALPN: server accepted h2\n* Server certificate: CN=shop.example.com\n> POST /api/checkout HTTP/2\n> Host: shop.example.com\n> User-Agent: curl/8.4.0\n> Content-Type: application/json\n> Content-Length: 184\n>\n< HTTP/2 502\n< server: nginx/1.24.0\n< date: Tue, 04 Mar 2025 14:22:18 GMT\n< content-type: text/html\n< content-length: 166\n<\n<html><head><title>502 Bad Gateway</title></head><body>\n<center><h1>502 Bad Gateway</h1></center>\n<hr><center>nginx/1.24.0</center>\n</body></html>\n* Connection #0 to host shop.example.com left intact\n"
+    },
+    "/var/log/nginx": { "type": "dir" },
+    "/var/log/nginx/access.log": {
+      "type": "file",
+      "content": "10.0.0.4 - - [04/Mar/2025:14:20:01 +0000] \"GET /api/health HTTP/2.0\" 200 17 \"-\" \"monitor/1.0\"\n10.0.0.7 - - [04/Mar/2025:14:21:55 +0000] \"GET /api/products HTTP/2.0\" 200 4120 \"-\" \"Mozilla/5.0\"\n10.0.0.9 - - [04/Mar/2025:14:22:18 +0000] \"POST /api/checkout HTTP/2.0\" 502 166 \"-\" \"Mozilla/5.0\" upstream=10.0.2.11:3000\n10.0.0.9 - - [04/Mar/2025:14:22:46 +0000] \"POST /api/checkout HTTP/2.0\" 502 166 \"-\" \"Mozilla/5.0\" upstream=10.0.2.11:3000\n10.0.0.12 - - [04/Mar/2025:14:23:02 +0000] \"GET /api/products HTTP/2.0\" 200 4120 \"-\" \"Mozilla/5.0\"\n10.0.0.9 - - [04/Mar/2025:14:23:11 +0000] \"POST /api/checkout HTTP/2.0\" 502 166 \"-\" \"Mozilla/5.0\" upstream=10.0.2.11:3000\n10.0.0.4 - - [04/Mar/2025:14:23:30 +0000] \"GET /api/health HTTP/2.0\" 200 17 \"-\" \"monitor/1.0\"\n10.0.0.16 - - [04/Mar/2025:14:24:01 +0000] \"POST /api/checkout HTTP/2.0\" 502 166 \"-\" \"curl/8.4.0\" upstream=10.0.2.11:3000\n10.0.0.21 - - [04/Mar/2025:14:24:17 +0000] \"GET /api/products HTTP/2.0\" 200 4120 \"-\" \"Mozilla/5.0\"\n10.0.0.9 - - [04/Mar/2025:14:25:00 +0000] \"GET /api/orders HTTP/2.0\" 200 812 \"-\" \"Mozilla/5.0\"\n"
+    }
+  },
+  "grader": {
+    "strategy": "contains",
+    "source": "all-stdout",
+    "loose": true,
+    "expected": ["502 Bad Gateway", "/api/checkout", "upstream"],
+    "requireCommands": ["cat", "grep"]
+  }
+}

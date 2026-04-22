@@ -11,6 +11,6 @@ You start in `/home/dev`. Your job:
 1. **Confirm where you are** with `pwd`.
 2. **Look around** - list everything in your home directory **including hidden files**.
 3. **Visit `/etc`** to see system configuration.
-4. **Return home**.
+4. **Return to `/home/dev`** with `cd` (no argument or with `~` both work).
 
 The grader requires you to use `pwd`, `ls`, and `cd` at least once each, and to finish back in `/home/dev` with the hidden-file listing as your last `ls` output.

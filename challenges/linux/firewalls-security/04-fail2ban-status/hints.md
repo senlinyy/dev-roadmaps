@@ -1,0 +1,1 @@
+Run `fail2ban-client status sshd` first to see who is currently banned, then `grep` the banned IP out of `/var/log/auth.log` to see the underlying brute-force pattern. Reading `jail.local` shows the thresholds (`maxretry`, `bantime`, `findtime`) the daemon is enforcing.

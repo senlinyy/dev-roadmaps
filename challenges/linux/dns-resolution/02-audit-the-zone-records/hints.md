@@ -1,0 +1,1 @@
+Each record type appears as its own column in the zone export. Grepping for the literal type word (`MX`, `CNAME`, `TXT`) pulls every matching row. The SPF record is a `TXT` value that begins with `v=spf1`.

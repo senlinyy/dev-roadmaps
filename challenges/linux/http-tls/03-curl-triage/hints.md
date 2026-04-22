@@ -1,0 +1,1 @@
+When you grep `"< HTTP/"` across all three files in one command, the output puts each filename next to its status line so you can see at a glance which run was the 503. The same works for `X-Request-Id` to pull the failing id for the timeline.

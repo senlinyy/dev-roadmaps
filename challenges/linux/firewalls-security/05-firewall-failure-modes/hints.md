@@ -1,0 +1,1 @@
+Use `grep -n` so each match is prefixed with its line number — the bug is whichever `dport 80` rule has the lower line number. The fix is to move the specific subnet `DROP` above the broad `ACCEPT` (or `iptables -I INPUT 1 ...` to insert at the top).

@@ -1,0 +1,1 @@
+`cat` the cheat sheet first to see the columns. Then `grep "/20"` to pull the matching row and confirm the usable-host count. Use `echo "selected /20 4094 usable hosts" > /home/dev/network-planning/decision.txt` to record the choice.

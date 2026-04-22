@@ -1,0 +1,1 @@
+Read the captured curl dump first to confirm the exact reason phrase nginx returned, then grep the access log for ` 502 ` (with surrounding spaces) so you don't accidentally match status `5024` bytes or similar.

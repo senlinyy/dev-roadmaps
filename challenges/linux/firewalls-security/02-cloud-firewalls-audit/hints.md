@@ -1,0 +1,1 @@
+There are two distinct bugs to find: the Security Group never opens 8080 (so even if NACL allows it, the per-instance bodyguard rejects it), and the NACL's `Egress` section only allows 80 and 443 — no rule for the `1024-65535` ephemeral range that return traffic uses. Grep both files for `8080` and `Egress` to surface them.

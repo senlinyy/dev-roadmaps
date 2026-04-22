@@ -1,0 +1,27 @@
+{
+  "cwd": "/home/dev",
+  "env": { "USER": "dev", "HOME": "/home/dev" },
+  "fs": {
+    "/home/dev": { "type": "dir" },
+    "/home/dev/vpc": { "type": "dir" },
+    "/home/dev/vpc/existing.txt": {
+      "type": "file",
+      "content": "vpc-prod    10.0.0.0/16    us-east-1\nvpc-stage   10.1.0.0/16    us-east-1\nvpc-data    10.2.0.0/16    us-east-1\n"
+    },
+    "/home/dev/vpc/peering-request.txt": {
+      "type": "file",
+      "content": "atlas-prod    10.50.0.0/16     requested by team Atlas\natlas-stage   10.51.0.0/16     requested by team Atlas\natlas-edge    10.0.128.0/17    requested by team Atlas\natlas-tools   192.168.100.0/24 requested by team Atlas\n"
+    }
+  },
+  "grader": {
+    "strategy": "contains",
+    "source": "all-stdout",
+    "loose": true,
+    "expected": [
+      "10.0.128.0/17",
+      "10.0.0.0/16",
+      "OVERLAP"
+    ],
+    "requireCommands": ["cat", "grep", "echo"]
+  }
+}
