@@ -64,16 +64,17 @@ jobs:
 
   revalidate:
     needs: deploy
-    if: ${{ needs.deploy.result == 'success' && secrets.DEVPOLARIS_REVALIDATE_WEBHOOK_URL != '' && secrets.DEVPOLARIS_REVALIDATE_WEBHOOK_SECRET != '' }}
+    if: ${{ needs.deploy.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    env:
+      DEVPOLARIS_REVALIDATE_WEBHOOK_URL: ${{ secrets.DEVPOLARIS_REVALIDATE_WEBHOOK_URL }}
+      DEVPOLARIS_REVALIDATE_WEBHOOK_SECRET: ${{ secrets.DEVPOLARIS_REVALIDATE_WEBHOOK_SECRET }}
+      DEVPOLARIS_CONTENT_VERSION: ${{ github.sha }}
+      DEVPOLARIS_CONTENT_BASE_URL: ${{ needs.deploy.outputs.page_url }}
     steps:
       - name: Send signed revalidation webhook
-        env:
-          DEVPOLARIS_REVALIDATE_WEBHOOK_URL: ${{ secrets.DEVPOLARIS_REVALIDATE_WEBHOOK_URL }}
-          DEVPOLARIS_REVALIDATE_WEBHOOK_SECRET: ${{ secrets.DEVPOLARIS_REVALIDATE_WEBHOOK_SECRET }}
-          DEVPOLARIS_CONTENT_VERSION: ${{ github.sha }}
-          DEVPOLARIS_CONTENT_BASE_URL: ${{ needs.deploy.outputs.page_url }}
+        if: ${{ env.DEVPOLARIS_REVALIDATE_WEBHOOK_URL != '' && env.DEVPOLARIS_REVALIDATE_WEBHOOK_SECRET != '' }}
         run: |
           timestamp="$(date +%s)"
           payload="$(node -e \"process.stdout.write(JSON.stringify({source:'dev-roadmaps',version:process.env.DEVPOLARIS_CONTENT_VERSION,generatedAt:new Date().toISOString(),baseUrl:process.env.DEVPOLARIS_CONTENT_BASE_URL}))\")"
