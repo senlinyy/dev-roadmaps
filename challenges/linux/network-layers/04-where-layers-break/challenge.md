@@ -8,11 +8,11 @@ The on-call engineer dumped five diagnostic outputs into `/home/dev/postmortem/`
 
 You start in `/home/dev`. Your job:
 
-1. **List the postmortem files** with `ls /home/dev/postmortem/` so you know what is there.
-2. **Find the Layer 1 incident** by recursively grepping for `NO-CARRIER` under `/home/dev/postmortem/`.
-3. **Find the Layer 2 incident** by grepping for `FAILED` (the marker `ip neigh show` prints when ARP cannot resolve).
-4. **Find the Layer 3 incident** by grepping for `Destination Host Unreachable`.
-5. **Find the Layer 4 incident** by grepping for `Connection refused`.
-6. **Find the Layer 7 incident** by grepping for `certificate has expired`.
+1. **Inventory the saved postmortem artifacts** under `/home/dev/postmortem/` so you know which diagnostic outputs you can search.
+2. **Find the artifact that proves a Layer 1 physical-link failure** and print the evidence line.
+3. **Find the artifact that proves a Layer 2 neighbor-resolution failure** and print the evidence line.
+4. **Find the artifact that proves a Layer 3 routing failure** and print the evidence line.
+5. **Find the artifact that proves a Layer 4 transport failure** and print the evidence line.
+6. **Find the artifact that proves a Layer 7 application/TLS failure** and print the evidence line.
 
 The grader requires you to use `grep`, and checks that the combined output mentions `NO-CARRIER`, `FAILED`, `Destination Host Unreachable`, `Connection refused`, and `certificate has expired`.

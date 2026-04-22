@@ -8,9 +8,9 @@ You're picking up the on-call rotation and have never looked at this box's nginx
 
 You start in `/home/dev`. Your job:
 
-1. **List the full nginx tree** with `ls -la /etc/nginx/` and `ls /etc/nginx/sites-available/ /etc/nginx/sites-enabled/` so you can see every config file at a glance.
-2. **Read the top-level config** at `/etc/nginx/nginx.conf` to confirm which `include` line pulls in the per-site configs.
-3. **Confirm which sites are actually live** by running `ls /etc/nginx/sites-enabled/` — only files in `sites-enabled/` get loaded.
-4. **Check the worker tuning** by running `grep "worker_" /etc/nginx/nginx.conf` to record the `worker_processes` and `worker_connections` values.
+1. **Inventory the `/etc/nginx/` tree** so you can see the top-level directories and the available vs enabled site files.
+2. **Inspect `/etc/nginx/nginx.conf`** and find the include rule that pulls in the live per-site configs.
+3. **Identify which virtual hosts are actually active** by checking the files present under `sites-enabled/`.
+4. **Surface the worker tuning values** so you can record the current `worker_processes` and `worker_connections` settings.
 
 The grader requires you to use `ls`, `cat`, and `grep`, and your combined output must contain `sites-enabled`, `worker_processes`, `worker_connections`, `www.conf`, and `api.conf`.

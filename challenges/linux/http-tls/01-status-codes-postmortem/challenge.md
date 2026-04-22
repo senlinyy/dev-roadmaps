@@ -8,9 +8,9 @@ A customer DM'd support: "I clicked Pay and got 502 Bad Gateway." The on-call en
 
 You start in `/home/dev`. Your job:
 
-1. **Read the captured curl output** at `/home/dev/postmortem/checkout-502.txt` to confirm the response status and reason phrase the customer saw.
-2. **List every 502 response** in `/var/log/nginx/access.log` by running `grep " 502 " /var/log/nginx/access.log`.
-3. **Count just the 502 responses** with `grep -c " 502 " /var/log/nginx/access.log` so you can quote the blast radius in the postmortem.
-4. **Confirm which endpoint failed** by running `grep "/api/checkout" /var/log/nginx/access.log` to scope the impact to checkout.
+1. **Inspect the captured response** at `/home/dev/postmortem/checkout-502.txt` so you can confirm the status and reason phrase the customer saw.
+2. **Surface every access-log entry with that failing status** from `/var/log/nginx/access.log`.
+3. **Count how many responses had that status** so the blast radius is explicit in the postmortem.
+4. **Identify which endpoint those failures hit** so the impact can be scoped to the right API path.
 
 The grader requires you to use `cat` and `grep`, and your combined output must contain `502 Bad Gateway`, `/api/checkout`, and `upstream`.

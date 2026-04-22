@@ -8,9 +8,9 @@ The deploy pipeline failed at the `nginx -t` step with `[emerg] unknown directiv
 
 You start in `/home/dev`. Your job:
 
-1. **Read the saved `nginx -t` output** at `/home/dev/postmortem/nginx-t.txt` to find which file and line failed validation.
-2. **Open that file** at `/etc/nginx/sites-available/api.conf` to see the bad directive in context.
-3. **Confirm the typo** by running `grep -n "proxy_passs" /etc/nginx/sites-available/api.conf` (three s's — that's the bug).
-4. **Check user-facing impact** by running `tail -n 3 /var/log/nginx/access.log` to see the 502s users were getting on `/api/v2/users` while the bad config sat in the tree.
+1. **Inspect the saved `nginx -t` output** at `/home/dev/postmortem/nginx-t.txt` to find which file and line failed validation.
+2. **Open the referenced config file** at `/etc/nginx/sites-available/api.conf` and inspect the bad line in context.
+3. **Surface the malformed directive itself** so the typo is undeniable before you hand it back to the dev.
+4. **Check the recent access log** and confirm the user-facing impact while that bad config was in the tree.
 
 The grader requires you to use `cat`, `grep`, and `tail`, and your combined output must contain `[emerg]`, `proxy_passs`, `api.conf:14`, and `502`.

@@ -8,8 +8,8 @@ Before flipping `example.com` over to a new DNS provider you need a record-type 
 
 You start in `/home/dev`. Your job:
 
-1. **Count the A records** by running `grep -c " A " /home/dev/dns-debug/example-zone.txt` so the ticket has a concrete number.
-2. **Show the MX and CNAME rows** by running `grep "MX" /home/dev/dns-debug/example-zone.txt` and `grep "CNAME" /home/dev/dns-debug/example-zone.txt` so the priority and alias targets are visible.
-3. **Show the SPF TXT record** by running `grep "v=spf1" /home/dev/dns-debug/example-zone.txt` so the email-auth string is captured.
+1. **Count the A records** in `/home/dev/dns-debug/example-zone.txt` so the migration ticket has a concrete inventory number.
+2. **Surface the mail-routing and alias records** so the MX priority and `www` alias target are both visible.
+3. **Find the SPF TXT record** so the email-auth policy is captured in the audit note.
 
 The grader requires you to use `grep`, and checks that your combined output contains `MX 10 mail1.example.com`, `CNAME app.example.com`, and `v=spf1`.

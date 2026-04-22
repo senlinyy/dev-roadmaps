@@ -8,8 +8,8 @@ Yesterday's deploy moved `app.example.com` to a new IP, but customer reports of 
 
 You start in `/home/dev`. Your job:
 
-1. **Show the TTL on the changed A record** by running `grep "app.example.com" /home/dev/dns-debug/zone-current.txt` so the `3600` TTL is visible.
-2. **Show the skipped checklist step** by running `grep "TTL" /home/dev/dns-debug/migration-checklist.txt` so the SKIPPED line jumps out.
-3. **Count resolvers still serving the old IP** by running `grep -c "93.184.216.34" /home/dev/dns-debug/cache-survey.txt` so the number of stale resolvers is on screen.
+1. **Surface the current TTL on `app.example.com`** from `/home/dev/dns-debug/zone-current.txt`.
+2. **Find the runbook step that should have lowered the TTL before the cutover** in `/home/dev/dns-debug/migration-checklist.txt`.
+3. **Count how many resolvers in `/home/dev/dns-debug/cache-survey.txt` still serve the old IP** so the stale-cache blast radius is explicit.
 
 The grader requires you to use `grep`, and checks that your combined output contains the TTL `3600`, the word `SKIPPED`, and the count `2`.

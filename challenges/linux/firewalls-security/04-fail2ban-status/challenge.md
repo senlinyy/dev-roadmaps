@@ -14,8 +14,8 @@ Your job is to read the jail status, then prove the currently-banned IP shows up
 
 You start in `/home/dev`. Your job:
 
-1. **Get the live jail status** with `fail2ban-client status sshd`.
-2. **Find the failed login attempts from the banned IP `203.0.113.42`** with `grep "203.0.113.42" /var/log/auth.log`.
-3. **Show the jail thresholds** with `cat /etc/fail2ban/jail.local`.
+1. **Check the live `sshd` jail status** so you can see which IP is currently banned and how many failures the jail observed.
+2. **Trace that banned IP through `/var/log/auth.log`** and surface the failed SSH attempts that explain why it was blocked.
+3. **Inspect `/etc/fail2ban/jail.local`** and surface the active ban thresholds the jail is using.
 
 The grader requires you to use `fail2ban-client`, `grep`, and `cat`, and checks that your combined output mentions `Banned IP list`, `203.0.113.42`, `Failed password`, `maxretry`, and `bantime`.

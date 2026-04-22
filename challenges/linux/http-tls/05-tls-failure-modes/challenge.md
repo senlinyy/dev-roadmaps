@@ -8,9 +8,9 @@ The synthetic monitor lit up two alerts in five minutes: `api.example.com` and `
 
 You start in `/home/dev`. Your job:
 
-1. **Read the api.example.com handshake dump** at `/home/dev/postmortem/api-handshake.txt` to identify the TLS error.
-2. **Read the legacy.example.com handshake dump** at `/home/dev/postmortem/legacy-handshake.txt` to identify a different TLS error.
-3. **Pull the exact OpenSSL error strings** by running `grep "verify|subjectAltName" /home/dev/postmortem/api-handshake.txt /home/dev/postmortem/legacy-handshake.txt`.
-4. **Confirm the upstream impact** by running `tail -n 5 /var/log/nginx/error.log` to see the nginx-side errors that fired during the same window.
+1. **Inspect the `api.example.com` handshake dump** at `/home/dev/postmortem/api-handshake.txt` and identify the TLS failure mode.
+2. **Inspect the `legacy.example.com` handshake dump** at `/home/dev/postmortem/legacy-handshake.txt` and identify the different TLS failure mode there.
+3. **Surface the exact OpenSSL error strings from both captures** so the two failure classes are visible side by side.
+4. **Check the recent nginx error log** and confirm the upstream impact that happened in the same window.
 
 The grader requires you to use `cat`, `grep`, and `tail`, and your combined output must contain `certificate verify failed`, `subjectAltName does not match`, `upstream prematurely closed`, and `legacy.example.com`.

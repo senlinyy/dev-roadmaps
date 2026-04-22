@@ -8,9 +8,9 @@ Marketing flagged that `https://legacy.example.com/about.html` is returning 404 
 
 You start in `/home/dev`. Your job:
 
-1. **Read the legacy site config** at `/etc/nginx/sites-available/legacy.conf` to find the `root` and `index` directives.
-2. **List the webroot** with `ls /var/www/legacy/` so you can see which files are actually being served.
-3. **Confirm `about.html` is not on disk** by running `find /var/www/legacy -name "about.html"` (no output = no file).
-4. **Prove the 404** by running `grep " 404 " /var/log/nginx/access.log` to find the matching access-log line for `/about.html`.
+1. **Inspect the legacy site config** at `/etc/nginx/sites-available/legacy.conf` to find the `root` and `index` directives.
+2. **Inspect the webroot contents** under `/var/www/legacy/` so you can see what nginx can actually serve.
+3. **Verify whether `about.html` exists anywhere under that webroot**.
+4. **Surface the matching 404 evidence from `/var/log/nginx/access.log`** for the failing `/about.html` request.
 
 The grader requires you to use `cat`, `ls`, `find`, and `grep`, and your combined output must contain `root /var/www/legacy`, `index.html`, `/about.html`, and ` 404 `.

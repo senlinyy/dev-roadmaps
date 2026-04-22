@@ -12,9 +12,9 @@ A new server `polaris-bastion-03` was provisioned from a stale Ubuntu image and 
 
 You start in `/home/dev`. Your job:
 
-1. **Read the active sshd config** with `cat /etc/ssh/sshd_config`.
-2. **Show the `PermitRootLogin` setting** with `grep "PermitRootLogin" /etc/ssh/sshd_config`.
-3. **Show the `PasswordAuthentication` setting** with another `grep`.
-4. **Show the `Port` directive** by grepping for `^Port`.
+1. **Inspect the active sshd configuration** at `/etc/ssh/sshd_config` so you can compare it against the hardening baseline.
+2. **Find the directive that controls root logins** and show the current value.
+3. **Find the directive that controls password authentication** and show the current value.
+4. **Find the SSH port directive** and show the value the daemon is actually listening on.
 
 The grader requires you to use `cat` and `grep`, and checks that your combined output mentions `PermitRootLogin yes`, `PasswordAuthentication yes`, and `Port 22`.

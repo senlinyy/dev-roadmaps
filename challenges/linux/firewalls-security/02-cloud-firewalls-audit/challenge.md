@@ -13,9 +13,9 @@ Security Groups are stateful (return traffic is auto-allowed), but NACLs are sta
 
 You start in `/home/dev`. Your job:
 
-1. **`cd` into `/home/dev/cloud-audit`** so the file names are short.
-2. **Search both files for port 8080** with `grep -n "8080" security-group.txt network-acl.txt`. The SG file should have **no** match; the NACL file should show an inbound 8080 rule.
-3. **List the SG inbound rules** with `cat security-group.txt` so you can confirm the SG only opens 22 and 443.
-4. **List the NACL outbound (egress) rules** with `grep "Egress: true" network-acl.txt` to confirm there is no rule covering ephemeral ports `1024-65535` for return traffic.
+1. **Move into `/home/dev/cloud-audit`** so you can compare the two AWS exports with shorter paths.
+2. **Compare both firewall layers for port 8080** and determine which one is actually responsible for the failed reachability.
+3. **Inspect the security group's inbound rules** so you can confirm exactly which public ports it allows.
+4. **Inspect the NACL's egress rules** and decide whether return traffic has room to come back on ephemeral ports.
 
 The grader requires you to use `cd`, `cat`, and `grep`, finishes in `/home/dev/cloud-audit`, and checks that your combined output mentions `sg-0a1b2c3d`, `FromPort: 22`, `FromPort: 443`, `8080`, and `Egress`.

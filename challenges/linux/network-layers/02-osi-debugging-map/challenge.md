@@ -14,9 +14,9 @@ Three open tickets just hit the queue:
 
 You start in `/home/dev`. Your job:
 
-1. **Open the cheatsheet** with `cat /home/dev/runbook/osi-cheatsheet.txt` so you can see the layer→symptom rows.
-2. **Find which layer owns "Connection refused"** by running `grep "Connection refused" /home/dev/runbook/osi-cheatsheet.txt`.
-3. **Find which layer owns "NO-CARRIER"** with another `grep`.
-4. **Find which layer owns ARP failures** by grepping for `ARP`.
+1. **Inspect the cheatsheet** at `/home/dev/runbook/osi-cheatsheet.txt` so you can see the layer-to-symptom mapping the team uses during incidents.
+2. **Find the row for the transport-layer reachability symptom** so the ticket about a blocked/refused connection is mapped to the right layer.
+3. **Find the row for the physical-link symptom** so the cable-swap incident is classified correctly.
+4. **Find the row for the ARP-resolution symptom** so the same-subnet neighbor failure is routed to the right part of the stack.
 
 The grader requires you to use `cat` and `grep`, and checks that the combined output mentions `Layer 4`, `Layer 1`, and `Layer 2`.

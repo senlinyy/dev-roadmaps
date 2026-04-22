@@ -8,9 +8,9 @@ The dashboard shows backend `10.0.0.10` running hot while `10.0.0.12` is barely 
 
 You start in `/home/dev`. Your job:
 
-1. **Read the upstream config** at `/etc/nginx/conf.d/upstream.conf` to list every backend in the pool.
-2. **Find any backend marked down** by running `grep "down" /etc/nginx/conf.d/upstream.conf`.
-3. **Count requests served by 10.0.0.10** with `grep -c "upstream=10.0.0.10" /var/log/nginx/upstream-access.log`, and the same for `10.0.0.12`.
-4. **Confirm `10.0.0.11` got zero traffic** by running `grep "upstream=10.0.0.11" /var/log/nginx/upstream-access.log` (no output proves it was skipped).
+1. **Inspect the upstream pool config** at `/etc/nginx/conf.d/upstream.conf` so every backend and weight is visible.
+2. **Find the backend that is explicitly disabled or otherwise removed from rotation**.
+3. **Measure how much traffic the hot and cold backends actually received** using `/var/log/nginx/upstream-access.log`.
+4. **Confirm whether `10.0.0.11` received any traffic at all** so you can prove whether it was skipped entirely.
 
 The grader requires you to use `cat` and `grep`, and your combined output must contain `upstream backend`, `10.0.0.10`, `10.0.0.11`, `10.0.0.12`, and `down`.

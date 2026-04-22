@@ -8,8 +8,8 @@ A teammate dropped four candidate CIDR blocks for a new VPC into `/home/dev/vpc/
 
 You start in `/home/dev`. Your job:
 
-1. **List the proposal** with `cat /home/dev/vpc/proposed-cidrs.txt` so every candidate block is on screen.
-2. **List the allowed prefixes** by running `cat /home/dev/vpc/rfc1918.txt` so you know which leading octets are private.
-3. **Filter out everything that starts with a private prefix** by running `grep -v "^10\." /home/dev/vpc/proposed-cidrs.txt | grep -v "^172\." | grep -v "^192.168"` so the only line that survives is the public block.
+1. **Inspect the proposed CIDRs** in `/home/dev/vpc/proposed-cidrs.txt` so every candidate block is visible before you review it.
+2. **Inspect the RFC 1918 reference** at `/home/dev/vpc/rfc1918.txt` so the allowed private ranges are on screen.
+3. **Narrow the proposal down to the one block that does not belong to a private range** and print that offending CIDR.
 
 The grader requires you to use `cat` and `grep`, and checks that your combined output contains the bad block `11.0.0.0/16` along with the private prefixes `10.0.0.0/8`, `172.16.0.0/12`, and `192.168.0.0/16`.

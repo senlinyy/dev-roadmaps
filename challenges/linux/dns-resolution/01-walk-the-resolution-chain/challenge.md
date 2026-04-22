@@ -8,8 +8,8 @@ order: 1
 
 You start in `/home/dev`. Your job:
 
-1. **Show the root referral** by running `head -n 20 /home/dev/dns-debug/api-trace.txt` so the `.` NS records are visible.
-2. **Pull every nameserver line** by running `grep "NS" /home/dev/dns-debug/api-trace.txt` so the root, TLD, and authoritative servers all appear together.
-3. **Show the final A-record answer** by running `tail -n 10 /home/dev/dns-debug/api-trace.txt` so the IP that the chain converged on is visible.
+1. **Surface the beginning of the trace** in `/home/dev/dns-debug/api-trace.txt` so the root referral is visible.
+2. **Pull out the nameserver handoffs** so the root, TLD, and authoritative hops all appear together.
+3. **Show the final answer section** so the incident channel can see which IP the trace eventually resolves to.
 
 The grader requires you to use `head`, `grep`, and `tail`, and checks that your combined output mentions a root server (`a.root-servers.net`), a `.com` TLD server (`a.gtld-servers.net`), the authoritative nameserver (`ns1.example.com`), and the final answer IP (`93.184.216.34`).

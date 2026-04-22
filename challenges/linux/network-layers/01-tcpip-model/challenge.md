@@ -8,9 +8,9 @@ A new on-call engineer needs a quick map of which services on `polaris-edge-01` 
 
 You start in `/home/dev`. Your job:
 
-1. **Read the full inventory** with `cat /home/dev/audit/service-inventory.txt` so you know what is in scope.
-2. **List every UDP service** (transport-layer UDP usually means DNS, NTP, or media/STUN) by grepping for `udp/` in that file.
-3. **Confirm HTTPS is bound** by grepping for `tcp/443` and showing the matching line.
-4. **Count the TCP services** with `grep -c "tcp/" /home/dev/audit/service-inventory.txt`.
+1. **Inspect the service inventory** at `/home/dev/audit/service-inventory.txt` so you understand the columns and the services in scope.
+2. **Isolate only the UDP-backed services** from that inventory so the on-call engineer can see which application protocols are using transport-layer UDP.
+3. **Find the row that proves HTTPS is listening** on the standard secure web port and show it in full.
+4. **Count how many services use TCP** so the handoff note includes the transport-layer split.
 
 The grader requires you to use `cat` and `grep`, and checks that your combined output mentions `udp/53`, `udp/123`, `udp/3478`, `tcp/443`, and `HTTPS`.

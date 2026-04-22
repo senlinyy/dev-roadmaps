@@ -8,9 +8,9 @@ The API team complains that `10.0.5.7` cannot reach the load balancer on port 80
 
 You start in `/home/dev`. Your job:
 
-1. **`cd` into `/home/dev/captures`** so the relative path is short.
-2. **Show every packet involving the broken client `10.0.5.7`** with `grep "10.0.5.7" api-handshake.txt`. You should see three back-to-back SYNs and zero replies — a classic black hole.
-3. **Show the working handshake from `10.0.0.5`** by grepping for `10.0.0.5.52314`. The output should include the `Flags [S.]` SYN-ACK from the LB.
-4. **Count how many SYN retransmits the broken client sent** by piping the previous grep into `wc -l`.
+1. **Move into `/home/dev/captures`** so you can work against the saved capture with short relative paths.
+2. **Surface every packet involving the broken client `10.0.5.7`** and show the evidence that its SYNs never receive a reply.
+3. **Surface the working exchange from `10.0.0.5`** and include the lines that prove the load balancer answered with a SYN-ACK.
+4. **Count the broken client's SYN attempts** so you can quantify the retransmits in the incident note.
 
 The grader requires you to use `cd`, `grep`, and `wc`, finishes in `/home/dev/captures`, and checks that your combined output contains `10.0.5.7.51000`, `Flags [S.]`, `172.17.0.2.443`, and `GET /api/users`.

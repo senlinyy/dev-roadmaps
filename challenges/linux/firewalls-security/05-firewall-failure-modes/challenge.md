@@ -10,9 +10,9 @@ iptables evaluates rules top to bottom and stops at the first match. A broad `AC
 
 You start in `/home/dev`. Your job:
 
-1. **Read the active ruleset** with `cat /etc/iptables/rules.v4`.
-2. **Show every rule that touches port 80 with line numbers** by running `grep -n "dport 80" /etc/iptables/rules.v4`. The `ACCEPT` line should print with a *lower* line number than the `DROP` line — that is the bug.
-3. **Confirm the abusive subnet is still reaching the server** with `grep "203.0.113" /var/log/iptables-recent.log`.
-4. **Show the line that should be the fix target** with `grep "203.0.113.0/24" /etc/iptables/rules.v4`.
+1. **Inspect the active ruleset** at `/etc/iptables/rules.v4` so you can reason about match order instead of just the rule text.
+2. **Surface every port-80 rule with line numbers** and determine which one wins when traffic arrives from the abusive subnet.
+3. **Confirm the abusive subnet still appears in the recent traffic snapshot** at `/var/log/iptables-recent.log`.
+4. **Surface the subnet-specific drop rule that should be moved earlier** so the remediation target is explicit.
 
 The grader requires you to use `cat` and `grep`, and checks that your combined output mentions `dport 80 -j ACCEPT`, `203.0.113.0/24`, `dport 80 -j DROP`, and `203.0.113.99`.
