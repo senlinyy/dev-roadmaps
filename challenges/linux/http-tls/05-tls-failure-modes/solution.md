@@ -1,7 +1,7 @@
 ```bash
-$ cat /home/dev/postmortem/api-handshake.txt
-$ cat /home/dev/postmortem/legacy-handshake.txt
-$ grep "verify|subjectAltName" /home/dev/postmortem/api-handshake.txt /home/dev/postmortem/legacy-handshake.txt
+$ cat /var/log/incidents/api-handshake.curl
+$ cat /var/log/incidents/legacy-handshake.curl
+$ grep "verify|subjectAltName" /var/log/incidents/api-handshake.curl /var/log/incidents/legacy-handshake.curl
 $ tail -n 5 /var/log/nginx/error.log
 ```
 

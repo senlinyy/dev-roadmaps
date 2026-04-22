@@ -4,11 +4,11 @@
   "fs": {
     "/home/dev": { "type": "dir" },
     "/home/dev/vpc": { "type": "dir" },
-    "/home/dev/vpc/proposal.txt": {
+    "/srv/requests/payments-vpc.plan": {
       "type": "file",
       "content": "vpc        10.0.0.0/16   primary application VPC\nsubnet-public-az-a    10.0.0.0/20   route table rt-public\nsubnet-public-az-b    10.0.16.0/20  route table rt-public\nsubnet-private-az-a   10.0.32.0/20  route table rt-private\nsubnet-private-az-b   10.0.48.0/20  route table rt-private\n# 10.0.64.0 .. 10.0.255.255 reserved for future tiers\n"
     },
-    "/home/dev/vpc/subnet-ranges.txt": {
+    "/var/lib/ipam/payments-vpc.allocations": {
       "type": "file",
       "content": "Reference: /20 subnet boundaries inside 10.0.0.0/16\n---------------------------------------------------\n10.0.0.0/20    network 10.0.0.0    broadcast 10.0.15.255\n10.0.16.0/20   network 10.0.16.0   broadcast 10.0.31.255\n10.0.32.0/20   network 10.0.32.0   broadcast 10.0.47.255\n10.0.48.0/20   network 10.0.48.0   broadcast 10.0.63.255\n\nEach broadcast address is exactly one less than the next subnet's network\naddress, which is the signature of a contiguous, non-overlapping plan.\n"
     }

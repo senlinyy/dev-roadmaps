@@ -3,12 +3,12 @@
   "env": { "USER": "dev", "HOME": "/home/dev" },
   "fs": {
     "/home/dev": { "type": "dir" },
-    "/home/dev/postmortem": { "type": "dir" },
-    "/home/dev/postmortem/api-handshake.txt": {
+    "/var/log/incidents": { "type": "dir" },
+    "/var/log/incidents/api-handshake.curl": {
       "type": "file",
       "content": "$ curl -v https://api.example.com/health\n*   Trying 203.0.113.12:443...\n* Connected to api.example.com (203.0.113.12) port 443\n* ALPN: offers h2,http/1.1\n* TLSv1.3 (OUT), TLS handshake, Client hello (1):\n* TLSv1.3 (IN), TLS handshake, Server hello (2):\n* TLSv1.3 (IN), TLS handshake, Encrypted Extensions (8):\n* TLSv1.3 (IN), TLS handshake, Certificate (11):\n* SSL certificate problem: unable to get local issuer certificate\n* TLSv1.3 (OUT), TLS alert, unknown CA (560):\n* error:0A000086:SSL routines::certificate verify failed\n* Closing connection\ncurl: (60) SSL certificate problem: unable to get local issuer certificate\nMore details here: https://curl.se/docs/sslcerts.html\n"
     },
-    "/home/dev/postmortem/legacy-handshake.txt": {
+    "/var/log/incidents/legacy-handshake.curl": {
       "type": "file",
       "content": "$ curl -v https://legacy.example.com/ping\n*   Trying 203.0.113.55:443...\n* Connected to legacy.example.com (203.0.113.55) port 443\n* ALPN: offers h2,http/1.1\n* TLSv1.3 (OUT), TLS handshake, Client hello (1):\n* TLSv1.3 (IN), TLS handshake, Server hello (2):\n* TLSv1.3 (IN), TLS handshake, Certificate (11):\n* Server certificate:\n*  subject: CN=www.example.com\n*  issuer: CN=R3, O=Let's Encrypt, C=US\n*  SSL: no alternative certificate subject name matches target host name 'legacy.example.com'\n* subjectAltName does not match legacy.example.com\n* Closing connection\ncurl: (60) SSL: no alternative certificate subject name matches target host name 'legacy.example.com'\n"
     },

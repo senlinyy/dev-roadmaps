@@ -3,17 +3,36 @@
   "env": { "USER": "dev", "HOME": "/home/dev" },
   "fs": {
     "/home/dev": { "type": "dir" },
-    "/home/dev/runbook": { "type": "dir" },
-    "/home/dev/runbook/osi-cheatsheet.txt": {
+    "/home/dev/reports": { "type": "dir" },
+    "/var/log": { "type": "dir" },
+    "/var/log/incidents": { "type": "dir" },
+    "/var/log/incidents/bastion-ssh.log": {
       "type": "file",
-      "content": "# OSI debugging cheatsheet - polaris SRE runbook v3\n# format: layer | name | typical symptom | first tool to reach for\nLayer 1 | Physical    | NO-CARRIER on the interface, link light off, bad cable      | ip link show <iface>\nLayer 2 | Data Link   | ARP entry FAILED, duplicate MAC, VLAN misconfig            | ip neigh show\nLayer 3 | Network     | Destination Host Unreachable, traceroute stops mid-path    | ip route show; traceroute <host>\nLayer 4 | Transport   | Connection refused, or SYN sent with no reply (black hole) | ss -tlnp; tcpdump port <port>\nLayer 7 | Application | HTTP 5xx, TLS certificate has expired, auth failure        | curl -v https://<host>\n"
+      "content": "Mar 04 18:10:11 bastion ssh[22841]: connect to host 10.0.2.12 port 22: Connection refused\nMar 04 18:10:12 bastion ssh[22841]: deploy@10.0.2.12 unreachable over SSH\n"
+    },
+    "/var/log/incidents/edge-link.log": {
+      "type": "file",
+      "content": "2: eth1: <NO-CARRIER,BROADCAST,MULTICAST,UP> mtu 1500 qdisc mq state DOWN mode DEFAULT group default qlen 1000\n    link/ether 52:54:00:11:22:33 brd ff:ff:ff:ff:ff:ff\n"
+    },
+    "/var/log/incidents/db-neighbor.log": {
+      "type": "file",
+      "content": "10.0.9.24 dev eth0 FAILED\n10.0.9.25 dev eth0 lladdr 52:54:00:ab:cd:ef REACHABLE\n"
     }
   },
   "grader": {
-    "strategy": "contains",
-    "source": "all-stdout",
-    "loose": true,
-    "expected": ["Layer 4", "Layer 1", "Layer 2", "Connection refused", "NO-CARRIER", "ARP"],
-    "requireCommands": ["cat", "grep"]
+    "strategy": "final-fs-state",
+    "expectedFs": [
+      {
+        "path": "/home/dev/reports/osi-routing.note",
+        "exists": true,
+        "type": "file",
+        "contentContains": [
+          "bastion-ssh Layer 4",
+          "edge-link Layer 1",
+          "db-neighbor Layer 2"
+        ]
+      }
+    ],
+    "requireCommands": ["cat", "echo"]
   }
 }

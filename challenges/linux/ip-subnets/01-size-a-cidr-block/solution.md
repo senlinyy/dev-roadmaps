@@ -1,8 +1,9 @@
 ```bash
-$ cat /home/dev/network-planning/cidr-cheatsheet.txt
-$ grep "/20" /home/dev/network-planning/cidr-cheatsheet.txt
-$ echo "selected /20 4094 usable hosts" > /home/dev/network-planning/decision.txt
-$ cat /home/dev/network-planning/decision.txt
+$ cat /srv/requests/payments-tier.request
+$ cat /var/lib/ipam/free-blocks.csv
+$ grep "/20" /var/lib/ipam/free-blocks.csv
+$ echo "selected /20 4094 usable hosts" > /home/dev/reports/payments-tier-allocation.note
+$ cat /home/dev/reports/payments-tier-allocation.note
 ```
 
-`/24` only buys 254 hosts and `/22` only 1022, so neither fits 4000 instances. `/20` gives 4094 usable hosts, which is the smallest prefix that covers the workload with one binary doubling of headroom.
+The request needs 4000 hosts. `/22` is too small at 1022 usable hosts, while `/18` would waste far more space than necessary. `/20` is the smallest free block that still provides 4094 usable addresses.

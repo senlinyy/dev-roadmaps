@@ -3,8 +3,8 @@
   "env": { "USER": "dev", "HOME": "/home/dev" },
   "fs": {
     "/home/dev": { "type": "dir" },
-    "/home/dev/captures": { "type": "dir" },
-    "/home/dev/captures/api-handshake.txt": {
+    "/var/log/network": { "type": "dir" },
+    "/var/log/network/lb-handshake.capture": {
       "type": "file",
       "content": "# tcpdump -i eth0 -nn -c 20 host 10.0.0.5 or host 10.0.5.7\n# captured on lb-01 at 2025-01-15 14:23 UTC\n14:23:01.112233 IP 10.0.0.5.52314 > 172.17.0.2.443: Flags [S], seq 1234, win 64240, length 0\n14:23:01.112456 IP 172.17.0.2.443 > 10.0.0.5.52314: Flags [S.], seq 5678, ack 1235, win 65160, length 0\n14:23:01.112789 IP 10.0.0.5.52314 > 172.17.0.2.443: Flags [.], ack 1, win 502, length 0\n14:23:01.115678 IP 10.0.0.5.52314 > 172.17.0.2.443: Flags [P.], seq 1:245, ack 1, win 502, length 244\n14:23:01.117890 IP 172.17.0.2.443 > 10.0.0.5.52314: Flags [.], ack 245, win 64916, length 0\n14:23:01.118001 IP 172.17.0.2.443 > 10.0.0.5.52314: Flags [P.], seq 1:512, ack 245, win 64916, length 511\n14:23:01.500000 IP 10.0.5.7.51000 > 172.17.0.2.80: Flags [S], seq 9999, win 64240, length 0\n14:23:02.520000 IP 10.0.5.7.51000 > 172.17.0.2.80: Flags [S], seq 9999, win 64240, length 0\n14:23:04.540000 IP 10.0.5.7.51000 > 172.17.0.2.80: Flags [S], seq 9999, win 64240, length 0\n14:23:08.560000 IP 10.0.5.7.51000 > 172.17.0.2.80: Flags [S], seq 9999, win 64240, length 0\n14:23:09.000000 IP 10.0.0.5.52314 > 172.17.0.2.443: Flags [P.], seq 245:289, ack 512, length 44 GET /api/users HTTP/1.1\n"
     }
@@ -15,6 +15,6 @@
     "loose": true,
     "expected": ["10.0.5.7.51000", "Flags [S.]", "172.17.0.2.443", "GET /api/users"],
     "requireCommands": ["cd", "grep", "wc"],
-    "requireCwd": "/home/dev/captures"
+    "requireCwd": "/var/log/network"
   }
 }

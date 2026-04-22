@@ -8,8 +8,8 @@ The payments API is intermittently returning 503. SRE captured three `curl -v` r
 
 You start in `/home/dev`. Your job:
 
-1. **Inventory the saved `curl -v` runs** under `/home/dev/postmortem/curl-runs/`.
-2. **Inspect the failing run** at `/home/dev/postmortem/curl-runs/run-2-09-05.txt` so you understand the full request/response pair.
+1. **Inventory the saved `curl -v` runs** under `/var/log/incidents/curl-runs/`.
+2. **Inspect the failing run** at `/var/log/incidents/curl-runs/run-2-09-05.curl` so you understand the full request/response pair.
 3. **Compare the HTTP status lines across all three captures** so the good and bad runs are visible together.
 4. **Surface the request IDs from all three captures** so the failing call can be pinned to the timeline.
 

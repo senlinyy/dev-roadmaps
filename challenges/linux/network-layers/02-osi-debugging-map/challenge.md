@@ -1,22 +1,16 @@
 ---
-title: "Map Symptoms to OSI Layers"
+title: "Route Incident Snapshots to the Right OSI Layer"
 sectionSlug: the-osi-model-as-a-debugging-map
 order: 2
 ---
 
-The platform team keeps a one-page OSI debugging cheatsheet at `/home/dev/runbook/osi-cheatsheet.txt`. During an incident, the on-call engineer's job is to look at the symptom they are seeing and grep the cheatsheet for the layer to investigate first.
-
-Three open tickets just hit the queue:
-
-- "ssh hangs from the bastion, no `Connection refused`, just silence" → blocked port (Layer 4 territory).
-- "switch port shows `NO-CARRIER` after the cable swap" → physical link issue.
-- "`ip neigh show` reports `FAILED` for the database host on the same subnet" → ARP problem.
+Three incident snapshots were dropped into `/var/log/incidents/` before the last on-call handed the queue to you. You need to decide which OSI layer each one belongs to *without* a crib sheet: a refused SSH connection, a dead switch port showing `NO-CARRIER`, and a same-subnet neighbor lookup that ends in `FAILED`. Record the routing decision so the next engineer knows where to start.
 
 You start in `/home/dev`. Your job:
 
-1. **Inspect the cheatsheet** at `/home/dev/runbook/osi-cheatsheet.txt` so you can see the layer-to-symptom mapping the team uses during incidents.
-2. **Find the row for the transport-layer reachability symptom** so the ticket about a blocked/refused connection is mapped to the right layer.
-3. **Find the row for the physical-link symptom** so the cable-swap incident is classified correctly.
-4. **Find the row for the ARP-resolution symptom** so the same-subnet neighbor failure is routed to the right part of the stack.
+1. **Review the three incident snapshots** in `/var/log/incidents/` and identify the key symptom in each one.
+2. **Classify each incident by OSI layer** using the article's debugging model.
+3. **Write `/home/dev/reports/osi-routing.note`** with one line per incident using the format `incident-name Layer N`.
+4. **Print the completed routing note** so the handoff is visible in the terminal history.
 
-The grader requires you to use `cat` and `grep`, and checks that the combined output mentions `Layer 4`, `Layer 1`, and `Layer 2`.
+The grader requires you to use `cat` and `echo`, and checks that your routing note maps `bastion-ssh` to `Layer 4`, `edge-link` to `Layer 1`, and `db-neighbor` to `Layer 2`.

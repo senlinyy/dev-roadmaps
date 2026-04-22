@@ -10,7 +10,7 @@ You start in `/home/dev`. Your job:
 
 1. **Inspect the API site config** at `/etc/nginx/sites-available/api.conf` so the v1 and v2 location blocks are visible together.
 2. **Surface every configured upstream target** from that file.
-3. **Compare the working and broken request captures** at `/home/dev/postmortem/v1-200.txt` and `/home/dev/postmortem/v2-502.txt`.
-4. **Use the saved socket inventory** in `/home/dev/postmortem/port-check.txt` to determine which upstream port is not actually listening.
+3. **Compare the working and broken request captures** at `/var/log/incidents/v1-200.curl` and `/var/log/incidents/v2-502.curl`.
+4. **Use the saved socket inventory** in `/var/log/incidents/ss-ports.log` to determine which upstream port is not actually listening.
 
 The grader requires you to use `cat` and `grep`, and your combined output must contain `proxy_pass http://127.0.0.1:3000`, `proxy_pass http://127.0.0.1:3001`, `502 Bad Gateway`, and `LISTEN`.

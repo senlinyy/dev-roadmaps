@@ -3,8 +3,8 @@
   "env": { "USER": "dev", "HOME": "/home/dev" },
   "fs": {
     "/home/dev": { "type": "dir" },
-    "/home/dev/postmortem": { "type": "dir" },
-    "/home/dev/postmortem/checkout-502.txt": {
+    "/var/log/incidents": { "type": "dir" },
+    "/var/log/incidents/checkout-502.curl": {
       "type": "file",
       "content": "$ curl -v https://shop.example.com/api/checkout\n*   Trying 203.0.113.40:443...\n* Connected to shop.example.com (203.0.113.40) port 443\n* ALPN: server accepted h2\n* Server certificate: CN=shop.example.com\n> POST /api/checkout HTTP/2\n> Host: shop.example.com\n> User-Agent: curl/8.4.0\n> Content-Type: application/json\n> Content-Length: 184\n>\n< HTTP/2 502\n< server: nginx/1.24.0\n< date: Tue, 04 Mar 2025 14:22:18 GMT\n< content-type: text/html\n< content-length: 166\n<\n<html><head><title>502 Bad Gateway</title></head><body>\n<center><h1>502 Bad Gateway</h1></center>\n<hr><center>nginx/1.24.0</center>\n</body></html>\n* Connection #0 to host shop.example.com left intact\n"
     },

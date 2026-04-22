@@ -1,7 +1,7 @@
 ```bash
-$ grep "app.example.com" /home/dev/dns-debug/zone-current.txt
-$ grep "TTL" /home/dev/dns-debug/migration-checklist.txt
-$ grep -c "93.184.216.34" /home/dev/dns-debug/cache-survey.txt
+$ grep "app.example.com" /etc/bind/zones/db.example.com.current
+$ grep "TTL" /var/log/change/app-cutover.log
+$ grep -c "93.184.216.34" /var/log/dns/cache-survey.log
 2
 ```
 

@@ -1,5 +1,5 @@
 ```bash
-$ cat /home/dev/postmortem/checkout-502.txt
+$ cat /var/log/incidents/checkout-502.curl
 $ grep " 502 " /var/log/nginx/access.log
 $ grep -c " 502 " /var/log/nginx/access.log
 $ grep "/api/checkout" /var/log/nginx/access.log

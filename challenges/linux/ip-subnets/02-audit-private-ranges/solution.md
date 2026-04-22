@@ -1,8 +1,8 @@
 ```bash
-$ cat /home/dev/vpc/rfc1918.txt
-$ cat /home/dev/vpc/proposed-cidrs.txt
-$ grep -v "^10\." /home/dev/vpc/proposed-cidrs.txt | grep -v "^172\." | grep -v "^192.168"
-11.0.0.0/16
+$ cat /srv/requests/marketing-vpc.cidrs
+$ grep -v "^10\." /srv/requests/marketing-vpc.cidrs | grep -v "^172\." | grep -v "^192.168"
+$ echo "REJECT 11.0.0.0/16 public range" > /home/dev/reports/marketing-vpc-review.note
+$ cat /home/dev/reports/marketing-vpc-review.note
 ```
 
-The reference file establishes the three allowed leading-octet patterns. Stripping each of them in turn from the proposal leaves only `11.0.0.0/16`, which falls outside every RFC 1918 block and therefore would route to the public internet if assigned.
+The first, second, and fourth proposals are private ranges. `11.0.0.0/16` is outside RFC 1918 space, so approving it would create a publicly routable VPC CIDR and should be rejected.

@@ -1,1 +1,1 @@
-`wc -l file` shows the line count without needing a pipe. `grep "az-b"` (case sensitive) pulls just the two AZ-b rows. The reference file in `subnet-ranges.txt` lists each broadcast address so you can see the four `/20` blocks meet end-to-end with no overlap and no gaps.
+`wc -l file` shows the line count without needing a pipe. `grep "az-b"` (case sensitive) pulls just the two AZ-b rows. The reference file in `payments-vpc.allocations` lists each broadcast address so you can see the four `/20` blocks meet end-to-end with no overlap and no gaps.

@@ -4,11 +4,11 @@ sectionSlug: where-each-layer-breaks
 order: 4
 ---
 
-The on-call engineer dumped five diagnostic outputs into `/home/dev/postmortem/`, one per file, each captured during a different production incident this week. Each file contains the verbatim output of a real Linux network tool (`ip link`, `ip neigh`, `traceroute`, `ss -tlnp`, `curl -v`). Your job is to recursively grep the directory for the failure marker that identifies which OSI layer broke in each incident.
+The on-call engineer dumped five diagnostic outputs into `/var/log/incidents/`, one per file, each captured during a different production incident this week. Each file contains the verbatim output of a real Linux network tool (`ip link`, `ip neigh`, `traceroute`, `ss -tlnp`, `curl -v`). Your job is to recursively grep the directory for the failure marker that identifies which OSI layer broke in each incident.
 
 You start in `/home/dev`. Your job:
 
-1. **Inventory the saved postmortem artifacts** under `/home/dev/postmortem/` so you know which diagnostic outputs you can search.
+1. **Inventory the saved postmortem artifacts** under `/var/log/incidents/` so you know which diagnostic outputs you can search.
 2. **Find the artifact that proves a Layer 1 physical-link failure** and print the evidence line.
 3. **Find the artifact that proves a Layer 2 neighbor-resolution failure** and print the evidence line.
 4. **Find the artifact that proves a Layer 3 routing failure** and print the evidence line.

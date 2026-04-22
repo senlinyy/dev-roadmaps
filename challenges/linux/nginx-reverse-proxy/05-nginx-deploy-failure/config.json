@@ -3,8 +3,8 @@
   "env": { "USER": "dev", "HOME": "/home/dev" },
   "fs": {
     "/home/dev": { "type": "dir" },
-    "/home/dev/postmortem": { "type": "dir" },
-    "/home/dev/postmortem/nginx-t.txt": {
+    "/var/log/incidents": { "type": "dir" },
+    "/var/log/nginx/nginx-t.err": {
       "type": "file",
       "content": "$ sudo nginx -t\nnginx: the configuration file /etc/nginx/nginx.conf syntax is being tested\nnginx: [emerg] unknown directive \"proxy_passs\" in /etc/nginx/sites-available/api.conf:14\nnginx: configuration file /etc/nginx/nginx.conf test failed\n"
     },

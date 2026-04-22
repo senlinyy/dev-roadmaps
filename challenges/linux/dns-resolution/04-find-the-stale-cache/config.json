@@ -3,16 +3,16 @@
   "env": { "USER": "dev", "HOME": "/home/dev" },
   "fs": {
     "/home/dev": { "type": "dir" },
-    "/home/dev/dns-debug": { "type": "dir" },
-    "/home/dev/dns-debug/zone-current.txt": {
+    "/var/log/dns": { "type": "dir" },
+    "/etc/bind/zones/db.example.com.current": {
       "type": "file",
       "content": "; example.com zone, post-migration snapshot\nexample.com.        3600    IN      NS      ns1.example.com.\nexample.com.        3600    IN      NS      ns2.example.com.\napp.example.com.    3600    IN      A       93.184.216.99\napi.example.com.    300     IN      A       93.184.216.41\nwww.example.com.    300     IN      CNAME   app.example.com.\n"
     },
-    "/home/dev/dns-debug/migration-checklist.txt": {
+    "/var/log/change/app-cutover.log": {
       "type": "file",
       "content": "Migration runbook for app.example.com IP swap\n---------------------------------------------\nDONE     1. Announce maintenance window in #ops\nSKIPPED  2. Lower TTL on app.example.com A record from 3600 to 60 at least 24h ahead\nDONE     3. Cut over A record from 93.184.216.34 to 93.184.216.99\nDONE     4. Verify origin server health on the new IP\nPENDING  5. Raise TTL back to 3600 once propagation is confirmed\n"
     },
-    "/home/dev/dns-debug/cache-survey.txt": {
+    "/var/log/dns/cache-survey.log": {
       "type": "file",
       "content": "Resolver survey for app.example.com, 2026-04-15 09:12 UTC\n---------------------------------------------------------\n8.8.8.8         93.184.216.99\n1.1.1.1         93.184.216.99\n208.67.222.222  93.184.216.34\n9.9.9.9         93.184.216.34\n"
     }

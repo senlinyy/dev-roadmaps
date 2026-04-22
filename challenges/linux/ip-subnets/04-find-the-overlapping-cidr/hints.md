@@ -2,4 +2,4 @@
 
 ---
 
-Use `grep "10.0" /home/dev/vpc/peering-request.txt` to surface only the rows that touch the `10.0.x.x` space. Exactly one row matches, and that is the overlap.
+Use `grep "10.0" /srv/requests/atlas-peering.cidrs` to surface only the rows that touch the `10.0.x.x` space. Exactly one row matches, and that is the overlap.

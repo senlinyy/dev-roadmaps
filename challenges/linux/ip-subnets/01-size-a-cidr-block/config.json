@@ -3,17 +3,31 @@
   "env": { "USER": "dev", "HOME": "/home/dev" },
   "fs": {
     "/home/dev": { "type": "dir" },
-    "/home/dev/network-planning": { "type": "dir" },
-    "/home/dev/network-planning/cidr-cheatsheet.txt": {
+    "/home/dev/reports": { "type": "dir" },
+    "/srv": { "type": "dir" },
+    "/srv/requests": { "type": "dir" },
+    "/srv/requests/payments-tier.request": {
       "type": "file",
-      "content": "CIDR Cheat Sheet  internal network planning reference\n======================================================\n\nPrefix  Mask               Total IPs   Usable Hosts   Common Use\n------  -----------------  ----------  -------------  ----------------------------\n/16     255.255.0.0            65536          65534    VPC root\n/18     255.255.192.0          16384          16382    Very large tier\n/20     255.255.240.0           4096           4094    Large subnet / AZ tier\n/22     255.255.252.0           1024           1022    Medium subnet\n/24     255.255.255.0            256            254    Small service subnet\n/26     255.255.255.192           64             62    Bastion / NAT pool\n/28     255.255.255.240           16             14    TGW attachment / endpoint\n\nRule of thumb: pick the smallest prefix whose Usable Hosts column is >= your\ntarget instance count, then add at least one binary doubling for headroom.\n"
+      "content": "service=payments-tier\nregion=us-east-1\nrequired_hosts=4000\npriority=prod-cutover\n"
+    },
+    "/var": { "type": "dir" },
+    "/var/lib": { "type": "dir" },
+    "/var/lib/ipam": { "type": "dir" },
+    "/var/lib/ipam/free-blocks.csv": {
+      "type": "file",
+      "content": "cidr,usable_hosts,status,region\n10.24.0.0/24,254,free,us-east-1\n10.24.4.0/22,1022,free,us-east-1\n10.24.8.0/20,4094,free,us-east-1\n10.24.32.0/18,16382,free,us-east-1\n"
     }
   },
   "grader": {
-    "strategy": "contains",
-    "source": "all-stdout",
-    "loose": true,
-    "expected": ["/20", "4094"],
+    "strategy": "final-fs-state",
+    "expectedFs": [
+      {
+        "path": "/home/dev/reports/payments-tier-allocation.note",
+        "exists": true,
+        "type": "file",
+        "contentContains": ["selected /20 4094 usable hosts"]
+      }
+    ],
     "requireCommands": ["cat", "grep", "echo"]
   }
 }

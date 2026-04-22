@@ -8,9 +8,9 @@ The cert-monitor cron exported `openssl x509 -text` dumps for every cert in prod
 
 You start in `/home/dev`. Your job:
 
-1. **Inspect the `api.prod` certificate dump** at `/home/dev/certs/api-prod.txt`.
+1. **Inspect the `api.prod` certificate dump** at `/etc/ssl/audit/api-prod.peminfo`.
 2. **Surface the validity window** so you can quote the exact expiry in the renewal ticket.
-3. **Compare that expiry with the internal CA dump** at `/home/dev/certs/internal-ca.txt` to rule out a CA-wide issue.
+3. **Compare that expiry with the internal CA dump** at `/etc/ssl/audit/internal-ca.peminfo` to rule out a CA-wide issue.
 4. **Surface the issuer and subject information** so the renewal ticket includes the relevant chain-of-trust details.
 
 The grader requires you to use `cat` and `grep`, and your combined output must contain `Not After`, `api.prod.example.com`, `Let's Encrypt`, and `Issuer:`.

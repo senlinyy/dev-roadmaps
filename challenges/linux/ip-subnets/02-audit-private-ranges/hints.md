@@ -1,5 +1,5 @@
-RFC 1918 reserves three blocks: `10.0.0.0/8`, `172.16.0.0/12`, and `192.168.0.0/16`. Anything starting with a different first octet is public.
+RFC 1918 private IPv4 space only comes from three ranges: `10.0.0.0/8`, `172.16.0.0/12`, and `192.168.0.0/16`.
 
 ---
 
-Chain three `grep -v` filters together: strip lines starting with `10.`, then `172.`, then `192.168`. Whatever survives is the public block.
+If you eliminate every candidate that starts with one of those private prefixes, only the public CIDR will survive. Write the rejection note after you isolate it.

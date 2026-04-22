@@ -1,1 +1,1 @@
-Each row in the cheatsheet starts with `Layer N`. Grep for the symptom string ("Connection refused", "NO-CARRIER", "ARP") and the matching row tells you which layer to look at first.
+Look at the failure marker in each snapshot, then map it from the article: `NO-CARRIER` is physical, `FAILED` in neighbor resolution is data link, and `Connection refused` is transport. Write the note with one incident per line and then print it.

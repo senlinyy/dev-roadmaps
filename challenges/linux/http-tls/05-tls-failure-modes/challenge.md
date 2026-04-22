@@ -8,8 +8,8 @@ The synthetic monitor lit up two alerts in five minutes: `api.example.com` and `
 
 You start in `/home/dev`. Your job:
 
-1. **Inspect the `api.example.com` handshake dump** at `/home/dev/postmortem/api-handshake.txt` and identify the TLS failure mode.
-2. **Inspect the `legacy.example.com` handshake dump** at `/home/dev/postmortem/legacy-handshake.txt` and identify the different TLS failure mode there.
+1. **Inspect the `api.example.com` handshake dump** at `/var/log/incidents/api-handshake.curl` and identify the TLS failure mode.
+2. **Inspect the `legacy.example.com` handshake dump** at `/var/log/incidents/legacy-handshake.curl` and identify the different TLS failure mode there.
 3. **Surface the exact OpenSSL error strings from both captures** so the two failure classes are visible side by side.
 4. **Check the recent nginx error log** and confirm the upstream impact that happened in the same window.
 

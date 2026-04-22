@@ -1,5 +1,5 @@
 ```bash
-$ cat /home/dev/postmortem/nginx-t.txt
+$ cat /var/log/nginx/nginx-t.err
 $ cat /etc/nginx/sites-available/api.conf
 $ grep -n "proxy_passs" /etc/nginx/sites-available/api.conf
 $ tail -n 3 /var/log/nginx/access.log

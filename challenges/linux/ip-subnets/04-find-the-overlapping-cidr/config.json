@@ -4,11 +4,11 @@
   "fs": {
     "/home/dev": { "type": "dir" },
     "/home/dev/vpc": { "type": "dir" },
-    "/home/dev/vpc/existing.txt": {
+    "/etc/polaris/vpc-owned.cidrs": {
       "type": "file",
       "content": "vpc-prod    10.0.0.0/16    us-east-1\nvpc-stage   10.1.0.0/16    us-east-1\nvpc-data    10.2.0.0/16    us-east-1\n"
     },
-    "/home/dev/vpc/peering-request.txt": {
+    "/srv/requests/atlas-peering.cidrs": {
       "type": "file",
       "content": "atlas-prod    10.50.0.0/16     requested by team Atlas\natlas-stage   10.51.0.0/16     requested by team Atlas\natlas-edge    10.0.128.0/17    requested by team Atlas\natlas-tools   192.168.100.0/24 requested by team Atlas\n"
     }
