@@ -91,8 +91,8 @@ jobs:
           esac
 
           timestamp="$(date +%s)"
-          payload="$(node -e \"process.stdout.write(JSON.stringify({source:'dev-roadmaps',version:process.env.DEVPOLARIS_CONTENT_VERSION,generatedAt:new Date().toISOString(),baseUrl:process.env.DEVPOLARIS_CONTENT_BASE_URL}))\")"
-          signature="$(node -e \"const crypto=require('crypto'); const payload=process.argv[1]; const timestamp=process.argv[2]; process.stdout.write('sha256='+crypto.createHmac('sha256', process.env.DEVPOLARIS_REVALIDATE_WEBHOOK_SECRET).update(timestamp + '.' + payload).digest('hex'))\" "$payload" "$timestamp")"
+          payload="$(node -e 'process.stdout.write(JSON.stringify({source:"dev-roadmaps",version:process.env.DEVPOLARIS_CONTENT_VERSION,generatedAt:new Date().toISOString(),baseUrl:process.env.DEVPOLARIS_CONTENT_BASE_URL}))')"
+          signature="$(node -e 'const crypto=require("crypto"); const payload=process.argv[1]; const timestamp=process.argv[2]; process.stdout.write("sha256="+crypto.createHmac("sha256", process.env.DEVPOLARIS_REVALIDATE_WEBHOOK_SECRET).update(timestamp + "." + payload).digest("hex"))' "$payload" "$timestamp")"
 
           echo "Sending revalidation webhook to $DEVPOLARIS_REVALIDATE_WEBHOOK_URL"
 
