@@ -1,0 +1,206 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A deploy pipeline fails before reloading Nginx:\n\n```text\n$ nginx -t\nnginx: [emerg] unknown directive \"proxy_passs\" in /etc/nginx/sites-available/api.conf:14\nnginx: configuration file /etc/nginx/nginx.conf test failed\n```\n\nWhat is the precise failing location?",
+      "options": [
+        {
+          "id": "a",
+          "text": "`/etc/nginx/sites-available/api.conf:14`"
+        },
+        {
+          "id": "b",
+          "text": "`/var/log/nginx/access.log:14`"
+        },
+        {
+          "id": "c",
+          "text": "`/etc/hosts:443`"
+        },
+        {
+          "id": "d",
+          "text": "The validator output does not include a file or line number"
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The config test reports the bad directive and exact source location. The file and line are `/etc/nginx/sites-available/api.conf:14`."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "Line 14 in the `/api/v2/` block is:\n\n```nginx\nproxy_passs http://127.0.0.1:3001;\n```\n\nWhich replacement unblocks `nginx -t` while preserving the upstream target?",
+      "options": [
+        {
+          "id": "a",
+          "text": "`proxy_pass http://127.0.0.1:3001;`"
+        },
+        {
+          "id": "b",
+          "text": "`proxy_passs http://127.0.0.1:3001;`"
+        },
+        {
+          "id": "c",
+          "text": "`proxy_set_header http://127.0.0.1:3001;`"
+        },
+        {
+          "id": "d",
+          "text": "`proxy_pass http://127.0.0.1:3000;`"
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The directive is misspelled with an extra `s`. The upstream target should stay `http://127.0.0.1:3001;`, so only the directive name changes to `proxy_pass`."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "A different deploy fails to start Nginx with:\n\n```text\nnginx: [emerg] bind() to 0.0.0.0:80 failed (98: Address already in use)\n```\n\nWhich next check best matches the article's troubleshooting guidance?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Use `ss -tlnp` filtered for port 80 to find the process already listening"
+        },
+        {
+          "id": "b",
+          "text": "Change `try_files` because SPA fallbacks reserve port 80"
+        },
+        {
+          "id": "c",
+          "text": "Delete the TLS certificate because bind errors mean certificate permission denied"
+        },
+        {
+          "id": "d",
+          "text": "Lower the DNS TTL because stale cache can occupy a local port"
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The article's port-in-use failure mode shows this exact bind error and recommends checking listeners with `ss -tlnp`. The problem is another process on the port, not DNS, SPA routing, or certificate permissions."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "Nginx is running, but users get:\n\n```text\nHTTP/1.1 502 Bad Gateway\n```\n\nThe error log says:\n\n```text\nconnect() failed (111: Connection refused) while connecting to upstream, upstream: \"http://127.0.0.1:3000/users\"\n```\n\nWhat is the most likely cause?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The upstream app is not running on the expected address and port, or it is listening somewhere else"
+        },
+        {
+          "id": "b",
+          "text": "The client sent a malformed JSON body, so Nginx could not parse it"
+        },
+        {
+          "id": "c",
+          "text": "The browser blocked CORS before reaching Nginx"
+        },
+        {
+          "id": "d",
+          "text": "The static `root` path lacks an `index.html` file"
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The article defines 502 as Nginx reaching for an upstream that is not there or returns invalid data. A connection-refused upstream log points at the app process or port binding."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A report says Nginx returns 504 for `/reports/export`. The backend is reachable, but the request takes about 90 seconds and the proxy timeout is 60 seconds. What is the best interpretation?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The upstream did not respond within Nginx's timeout window, so diagnose backend latency before only raising the timeout"
+        },
+        {
+          "id": "b",
+          "text": "The upstream sent malformed HTTP immediately, which is always a 502"
+        },
+        {
+          "id": "c",
+          "text": "The Nginx config has an unknown directive, so it never started"
+        },
+        {
+          "id": "d",
+          "text": "The certificate file permissions are wrong because 504 is a TLS-only error"
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The article distinguishes 504 from 502: the upstream is reachable but too slow to respond within the allowed time. Increasing timeout may be needed, but the backend latency is the real investigation."
+    },
+    {
+      "id": "q6",
+      "type": "multiple",
+      "scenario": "An on-call follows the article's quick diagnostic checklist for an Nginx outage. Which checks belong in that first pass?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Check whether Nginx is running, for example with `systemctl status nginx`"
+        },
+        {
+          "id": "b",
+          "text": "Validate the config with `nginx -t`"
+        },
+        {
+          "id": "c",
+          "text": "Inspect recent Nginx error logs"
+        },
+        {
+          "id": "d",
+          "text": "Test whether the backend is reachable with a local `curl`"
+        },
+        {
+          "id": "e",
+          "text": "Inspect listening ports with `ss -tlnp`"
+        },
+        {
+          "id": "f",
+          "text": "Rotate every DNS nameserver before checking local evidence"
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c",
+        "d",
+        "e"
+      ],
+      "explanation": "The quick checklist is process status, config validity, logs, backend reachability, and listening ports. DNS can be relevant in some incidents, but rotating nameservers before checking local Nginx evidence is not the checklist."
+    },
+    {
+      "id": "q7",
+      "type": "single",
+      "scenario": "After a certificate renewal, `nginx -t` fails with:\n\n```text\nnginx: [emerg] SSL_CTX_use_certificate_chain(\"/etc/letsencrypt/live/example.com/fullchain.pem\") failed\n  (SSL: error:0200100D:system library:fopen:Permission denied)\n```\n\nWhich cause best matches the article?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The Nginx master process cannot read the certificate chain path because ownership or permissions were changed incorrectly"
+        },
+        {
+          "id": "b",
+          "text": "The upstream app is too slow, so Nginx should raise `proxy_read_timeout`"
+        },
+        {
+          "id": "c",
+          "text": "The port is already in use, so Nginx cannot bind to `0.0.0.0:80`"
+        },
+        {
+          "id": "d",
+          "text": "The SPA fallback should point to `/index.html` because certificate files are static assets"
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The article's certificate permission failure shows this error pattern. The fix is to verify permissions and ownership so the Nginx master process can read the certificate files before workers drop privileges."
+    }
+  ]
+}

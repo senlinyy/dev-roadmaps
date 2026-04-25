@@ -106,16 +106,29 @@ type ChallengeGroupMeta = {
 
 type ChallengeConfig = Record<string, unknown>;
 
-type ChallengeStep = {
+type QuizConfig = Record<string, unknown>;
+
+type ChallengeStepBase = {
   id: string;
   title: string;
   sectionSlug?: string;
   order: number;
   description: string;
-  config: ChallengeConfig;
   solution: string;
   hints: string[];
 };
+
+type PracticalChallengeStep = ChallengeStepBase & {
+  kind: 'practical';
+  config: ChallengeConfig;
+};
+
+type QuizChallengeStep = ChallengeStepBase & {
+  kind: 'quiz';
+  quiz: QuizConfig;
+};
+
+type ChallengeStep = PracticalChallengeStep | QuizChallengeStep;
 
 type ChallengeGroupFull = ChallengeGroupMeta & {
   steps: ChallengeStep[];
@@ -128,6 +141,7 @@ type SectionPracticeLink = {
   stepIndex: number;
   stepTitle: string;
   groupTitle: string;
+  kind: ChallengeStep['kind'];
 };
 
 type Manifest = {
@@ -137,7 +151,7 @@ type Manifest = {
   categories: ChallengeCategoryMeta[];
   groupsByCategory: Record<string, ChallengeGroupMeta[]>;
   groupsByArticle: Record<string, ChallengeGroupMeta[]>;
-  sectionPracticeByArticle: Record<string, Record<string, SectionPracticeLink>>;
+  sectionPracticeByArticle: Record<string, Record<string, SectionPracticeLink[]>>;
 };
 
 function asString(value: unknown, fallback: string): string {
@@ -412,30 +426,43 @@ function loadStep(groupDir: string, stepId: string): ChallengeStep | null {
   const stepDir = path.join(groupDir, stepId);
   const challengePath = path.join(stepDir, 'challenge.md');
   const configPath = path.join(stepDir, 'config.json');
+  const quizPath = path.join(stepDir, 'quiz.json');
 
-  if (!exists(challengePath) || !exists(configPath)) {
+  if (!exists(challengePath) || (!exists(configPath) && !exists(quizPath))) {
     return null;
   }
 
   const parsed = readMatter(challengePath);
-  const config = JSON.parse(fs.readFileSync(configPath, 'utf-8')) as ChallengeConfig;
   const solutionPath = path.join(stepDir, 'solution.md');
   const hintsPath = path.join(stepDir, 'hints.md');
   const solution = exists(solutionPath) ? fs.readFileSync(solutionPath, 'utf-8') : '';
   const hintsRaw = exists(hintsPath) ? fs.readFileSync(hintsPath, 'utf-8') : '';
 
-  return {
+  const base = {
     id: stepId,
     title: asString(parsed.data.title, stepId),
     sectionSlug: asOptionalString(parsed.data.sectionSlug),
     order: asNumber(parsed.data.order, 999),
     description: parsed.content,
-    config,
     solution,
     hints: hintsRaw
       .split(/\n---+\n/)
       .map((entry) => entry.trim())
       .filter((entry) => entry.length > 0),
+  };
+
+  if (exists(quizPath)) {
+    return {
+      ...base,
+      kind: 'quiz',
+      quiz: JSON.parse(fs.readFileSync(quizPath, 'utf-8')) as QuizConfig,
+    };
+  }
+
+  return {
+    ...base,
+    kind: 'practical',
+    config: JSON.parse(fs.readFileSync(configPath, 'utf-8')) as ChallengeConfig,
   };
 }
 
@@ -507,8 +534,8 @@ function buildSectionPracticeMap(
   articleSlug: string,
   categories: ChallengeCategoryMeta[],
   groupsByCategory: Record<string, ChallengeGroupMeta[]>,
-): Record<string, SectionPracticeLink> {
-  const map: Record<string, SectionPracticeLink> = {};
+): Record<string, SectionPracticeLink[]> {
+  const map: Record<string, SectionPracticeLink[]> = {};
 
   for (const category of categories) {
     if (!category.available) {
@@ -526,18 +553,21 @@ function buildSectionPracticeMap(
       }
 
       full.steps.forEach((step, index) => {
-        if (!step.sectionSlug || map[step.sectionSlug]) {
+        if (!step.sectionSlug) {
           return;
         }
 
-        map[step.sectionSlug] = {
+        const bucket = map[step.sectionSlug] ?? [];
+        bucket.push({
           category: category.id,
           groupId: meta.id,
           stepId: step.id,
           stepIndex: index,
           stepTitle: step.title,
           groupTitle: meta.title,
-        };
+          kind: step.kind,
+        });
+        map[step.sectionSlug] = bucket;
       });
     }
   }
@@ -617,7 +647,7 @@ function buildManifest(): Manifest {
     }
   }
 
-  const sectionPracticeByArticle: Record<string, Record<string, SectionPracticeLink>> = {};
+  const sectionPracticeByArticle: Record<string, Record<string, SectionPracticeLink[]>> = {};
   for (const articleSlug of articleSlugs) {
     sectionPracticeByArticle[articleSlug] = buildSectionPracticeMap(articleSlug, categories, groupsByCategory);
   }

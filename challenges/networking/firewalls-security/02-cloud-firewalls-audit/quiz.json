@@ -1,0 +1,201 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A public client cannot complete requests to an EC2 app on TCP 8080. The exported rules show:\n\n```text\nSecurity Group sg-app\nInbound:  allow tcp 8080 from 0.0.0.0/0\nOutbound: allow all traffic to 0.0.0.0/0\n\nNetwork ACL acl-public\nIngress rule 100: allow tcp 8080 from 0.0.0.0/0\nEgress rule 100: allow tcp 80 to 0.0.0.0/0\nEgress rule 110: allow tcp 443 to 0.0.0.0/0\n```\n\nWhich layer is still the best suspect?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The Network ACL, because it is stateless and lacks an egress rule for the client return path"
+        },
+        {
+          "id": "b",
+          "text": "The Security Group, because stateful firewalls require a separate inbound rule for response traffic"
+        },
+        {
+          "id": "c",
+          "text": "The application listener, because cloud firewall evidence cannot affect a public client"
+        },
+        {
+          "id": "d",
+          "text": "The SSH hardening policy, because port 8080 is not the default SSH port"
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The Security Group permits inbound 8080 and, because it is stateful, permits replies for that allowed connection. The NACL is stateless, so it must allow both directions, including egress back to the client's ephemeral port."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A client opens a TCP connection from source port `53144` to the instance's destination port `8080`. The request reaches the subnet, but the response never reaches the client. Which NACL egress rule best matches the missing return path?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Allow outbound TCP `1024-65535` to the client range that needs to receive responses"
+        },
+        {
+          "id": "b",
+          "text": "Allow outbound TCP `8080` only, because the application listens on 8080"
+        },
+        {
+          "id": "c",
+          "text": "Allow outbound UDP `53` only, because DNS always carries web responses"
+        },
+        {
+          "id": "d",
+          "text": "Allow inbound TCP `1024-65535` only, because egress rules do not affect stateless ACLs"
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The server response is destined for the client's temporary source port, not back to destination port 8080. The article calls out the common ephemeral range `1024-65535` for stateless NACL return traffic."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "An NACL export for a subnet includes these ingress entries:\n\n```text\nRule  90 DENY  tcp 0-65535 0.0.0.0/0\nRule 100 ALLOW tcp 443     0.0.0.0/0\nRule 110 ALLOW tcp 8080    0.0.0.0/0\n```\n\nHTTPS traffic is not reaching the instances. What is the most accurate review comment?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Rule 90 wins first and denies the packet before the later allow rules are evaluated"
+        },
+        {
+          "id": "b",
+          "text": "All NACL allow rules are merged together, so rule order cannot explain the failure"
+        },
+        {
+          "id": "c",
+          "text": "The Security Group must be wrong because NACLs only evaluate outbound traffic"
+        },
+        {
+          "id": "d",
+          "text": "The rules are fine because explicit denies are ignored when a later allow is more specific"
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The article states that NACLs evaluate rules in order by rule number, first match wins. A broad deny at a lower number shadows later allows for the same traffic."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "A design review proposes one Security Group per subnet and one NACL per instance. The author says this matches AWS firewall scope. How should you correct the design?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Security Groups wrap individual resources, while NACLs wrap entire subnets"
+        },
+        {
+          "id": "b",
+          "text": "Security Groups and NACLs both wrap only the whole VPC"
+        },
+        {
+          "id": "c",
+          "text": "NACLs wrap individual processes, while Security Groups wrap Linux users"
+        },
+        {
+          "id": "d",
+          "text": "Both controls are HTTP-layer filters and do not apply to EC2 networking"
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Security Groups are resource-level, stateful controls. NACLs are subnet-level, stateless controls. Reversing their scope leads to incorrect rules and debugging assumptions."
+    },
+    {
+      "id": "q5",
+      "type": "multiple",
+      "scenario": "You are reviewing an incident summary for a public service that times out only from the internet. The evidence says:\n\n```text\nEC2 curl localhost:8080: HTTP/1.1 200 OK\nSecurity Group inbound: tcp 8080 from 0.0.0.0/0\nSecurity Group outbound: all traffic allowed\nNACL ingress: tcp 8080 allowed\nNACL egress: tcp 80 and tcp 443 allowed, no other egress allows\n```\n\nWhich conclusions are defensible from this evidence?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The application can respond locally, so host-level app startup is not the first suspect"
+        },
+        {
+          "id": "b",
+          "text": "The Security Group is unlikely to be the remaining blocker for the inbound request shown"
+        },
+        {
+          "id": "c",
+          "text": "The NACL still needs outbound ephemeral-port coverage for replies"
+        },
+        {
+          "id": "d",
+          "text": "The NACL can be ignored because Security Groups are always evaluated after application code"
+        },
+        {
+          "id": "e",
+          "text": "Adding only an outbound TCP 8080 NACL rule would not cover a client source port like 53144"
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c",
+        "e"
+      ],
+      "explanation": "The local curl proves the process can answer on the instance. The Security Group permits inbound 8080 and is stateful, but the stateless NACL still lacks the response path to ephemeral client ports. Outbound 8080 alone targets the wrong destination port for replies."
+    },
+    {
+      "id": "q6",
+      "type": "single",
+      "scenario": "An engineer says, \"iptables on the box allows 8080, so AWS firewall rules cannot be the reason public traffic times out.\" The instance never logs the failed public requests. Which answer best explains the flaw?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Cloud firewalls can drop packets before they reach the instance, so host iptables may never see the traffic"
+        },
+        {
+          "id": "b",
+          "text": "iptables always overrides Security Groups because it runs inside the guest operating system"
+        },
+        {
+          "id": "c",
+          "text": "Security Groups filter only outbound traffic, so inbound reachability must be an app log issue"
+        },
+        {
+          "id": "d",
+          "text": "NACLs apply only to DNS traffic and cannot affect a web app port"
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The article emphasizes that cloud firewalls sit in front of the instance. If a Security Group or NACL blocks the packet, the operating system and its iptables rules never get a chance to log or accept it."
+    },
+    {
+      "id": "q7",
+      "type": "single",
+      "scenario": "A WebSocket client connects successfully through an AWS Network Load Balancer, stays idle for several minutes, then receives a TCP reset on the next message. Firewall allows are correct and short-lived requests work. Which mitigation best matches the cloud-firewall trap from the article?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Enable TCP keepalives below the load balancer idle timeout or shorten the client pool idle lifetime"
+        },
+        {
+          "id": "b",
+          "text": "Replace every Security Group inbound rule with NACL inbound rules because load balancers ignore state"
+        },
+        {
+          "id": "c",
+          "text": "Lower the DNS TTL because TCP resets are caused by stale resolver cache entries"
+        },
+        {
+          "id": "d",
+          "text": "Disable SSH password authentication because idle WebSocket flows use the SSH daemon"
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The article notes that managed load balancers and NAT devices can drop idle connection-tracking entries, causing later packets to receive resets. Keepalives or shorter idle reuse times keep the flow from going stale."
+    }
+  ]
+}

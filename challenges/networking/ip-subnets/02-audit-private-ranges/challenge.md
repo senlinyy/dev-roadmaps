@@ -5,6 +5,4 @@ order: 2
 kind: quiz
 ---
 
-RFC 1918 carves out exactly three blocks of address space that routers on the public internet are required *not* to forward. Anything outside those blocks is publicly routable, which means using it inside a VPC is a recipe for either NAT collisions, packets escaping to the internet, or operations teams asking *who owns this IP?*.
-
-This quiz puts you in front of CIDR plans, ranges, and routing edge cases. Pick the answer that survives a network review at a real company.
+Private range audits are about more than recognizing `10.x.x.x`. Review each plan for RFC 1918 boundaries, CGNAT space, link-local addresses, documentation ranges, and overlaps that would break peering or VPN routing. Choose the decision that would survive a real network design review.

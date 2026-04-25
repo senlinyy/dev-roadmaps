@@ -1,0 +1,201 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A docs SPA works at `/`, but a pasted deep link returns 404:\n\n```nginx\nserver {\n    root /var/www/docs;\n    index index.html;\n\n    location / {\n        try_files $uri $uri/ =404;\n    }\n}\n```\n\nThe file `/var/www/docs/index.html` exists. Which `try_files` line fixes client-side routes while preserving real file checks?",
+      "options": [
+        {
+          "id": "a",
+          "text": "`try_files $uri $uri/ /index.html;`"
+        },
+        {
+          "id": "b",
+          "text": "`try_files /guides/getting-started =404;`"
+        },
+        {
+          "id": "c",
+          "text": "`try_files $host $uri =404;`"
+        },
+        {
+          "id": "d",
+          "text": "`try_files $uri =403;`"
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "A SPA deep link is not a real file on disk. The article shows `try_files $uri $uri/ /index.html;` so Nginx serves real assets first, then falls back to the SPA shell."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "The access log shows:\n\n```text\nGET /guides/getting-started HTTP/2 404\nGET /assets/app.8f31.js HTTP/2 200\nGET / HTTP/2 200\n```\n\nThe config uses `root /var/www/docs`, and `/var/www/docs/index.html` exists. Why is changing `root` the wrong primary fix?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The webroot already serves the SPA shell and assets; the missing behavior is falling back unknown paths to `/index.html`"
+        },
+        {
+          "id": "b",
+          "text": "The `root` directive controls browser history, so moving it always fixes deep links"
+        },
+        {
+          "id": "c",
+          "text": "The asset request succeeded only because Nginx ignored the `root` directive"
+        },
+        {
+          "id": "d",
+          "text": "A SPA cannot use an `index.html` file, so the root must point to JavaScript directly"
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The evidence proves the current root can serve `/` and assets. The 404 happens because `/guides/getting-started` is a client-side route, not a file path, so `try_files` needs the index fallback."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "A teammate proposes this shortcut for a SPA:\n\n```nginx\nlocation / {\n    try_files /index.html;\n}\n```\n\nWhat problem does this introduce compared with the article's pattern?",
+      "options": [
+        {
+          "id": "a",
+          "text": "It skips checking `$uri` and `$uri/`, so real assets and directories can be hidden behind the SPA shell"
+        },
+        {
+          "id": "b",
+          "text": "It is required because SPAs must serve `index.html` for every asset request"
+        },
+        {
+          "id": "c",
+          "text": "It changes the TCP port from 80 to 443"
+        },
+        {
+          "id": "d",
+          "text": "It disables Nginx config validation"
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The article's order matters: try the requested file, then a directory, then fallback. Serving `/index.html` unconditionally can mask missing assets and break static file delivery."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "A static-site review contains this Nginx block:\n\n```nginx\nserver {\n    listen 80;\n    server_name docs.example.com;\n    root /var/www/docs;\n    index index.html;\n\n    location / {\n        try_files $uri $uri/ /index.html;\n    }\n}\n```\n\nWhich comments are accurate?",
+      "options": [
+        {
+          "id": "a",
+          "text": "`root` maps URL paths to files under `/var/www/docs`"
+        },
+        {
+          "id": "b",
+          "text": "`index index.html` tells Nginx what to serve for directory requests such as `/`"
+        },
+        {
+          "id": "c",
+          "text": "`try_files` checks the exact file first, then a directory, then the SPA fallback"
+        },
+        {
+          "id": "d",
+          "text": "This config means the backend application server will receive every static asset request"
+        },
+        {
+          "id": "e",
+          "text": "After editing this file, `nginx -t` should pass before reloading Nginx"
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c",
+        "e"
+      ],
+      "explanation": "The static file section explains `root`, `index`, `try_files`, and the habit of testing config before reload. This block serves static files directly; it does not proxy every asset to an app server."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "After fixing `try_files`, the homepage returns 403 and the Nginx error log says:\n\n```text\nopen() \"/var/www/docs/index.html\" failed (13: Permission denied)\n```\n\nWhich finding best matches the article's static file deployment warning?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Nginx cannot read the files as its worker user, so ownership or permissions for `/var/www/docs` need correction"
+        },
+        {
+          "id": "b",
+          "text": "The SPA fallback is wrong because all permission errors require `=404`"
+        },
+        {
+          "id": "c",
+          "text": "The backend app is down because a 403 always means `proxy_pass` failed"
+        },
+        {
+          "id": "d",
+          "text": "The DNS record is stale because Nginx resolved the wrong hostname"
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The article warns that Nginx must be able to read static files, commonly owned by `www-data` on Debian or Ubuntu. A permission-denied log line is not solved by changing SPA routing."
+    },
+    {
+      "id": "q6",
+      "type": "single",
+      "scenario": "A deploy script edits the docs site config and immediately runs `systemctl restart nginx`. The new config contains a typo. Which safer deployment habit from the article should replace this?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Run `nginx -t` first, then reload Nginx only after the config test succeeds"
+        },
+        {
+          "id": "b",
+          "text": "Restart without testing because Nginx silently fixes syntax errors"
+        },
+        {
+          "id": "c",
+          "text": "Delete the old config before testing so Nginx has fewer files to parse"
+        },
+        {
+          "id": "d",
+          "text": "Use `curl` against the backend app because static configs are not parsed by `nginx -t`"
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The article recommends testing with `nginx -t` before applying changes. A reload with a valid config avoids taking a working server down because of a syntax error."
+    },
+    {
+      "id": "q7",
+      "type": "single",
+      "scenario": "A combined Nginx config has an API proxy and a SPA fallback:\n\n```nginx\nlocation /api/ {\n    proxy_pass http://localhost:3000;\n}\n\nlocation / {\n    root /var/www/example/dist;\n    try_files $uri $uri/ /index.html;\n}\n```\n\nWhy is this structure better than placing the SPA fallback in the `/api/` location?",
+      "options": [
+        {
+          "id": "a",
+          "text": "API requests should be forwarded to the app, while non-API paths can fall back to the SPA shell"
+        },
+        {
+          "id": "b",
+          "text": "The SPA fallback must handle `/api/` first so backend routes are never called"
+        },
+        {
+          "id": "c",
+          "text": "Nginx can serve static files only when every location uses `proxy_pass`"
+        },
+        {
+          "id": "d",
+          "text": "The `root` directive applies only to TCP port numbers"
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The article's combined pattern separates static assets and API routes. Nginx should serve the SPA for browser routes, while `/api/` remains dynamic traffic for the backend."
+    }
+  ]
+}

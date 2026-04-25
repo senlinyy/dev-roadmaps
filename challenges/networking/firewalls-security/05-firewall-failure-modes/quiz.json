@@ -1,95 +1,200 @@
 {
+  "passThreshold": 1,
   "questions": [
     {
       "id": "q1",
       "type": "single",
-      "scenario": "An engineer added a `DROP` rule for an abusive `203.0.113.0/24` subnet to an iptables firewall yesterday. Today, traffic from that subnet is still hitting the web server. `iptables -L INPUT -n --line-numbers` returns:\n\n```\nChain INPUT (policy ACCEPT)\nnum  target  prot opt source           destination\n1    ACCEPT  tcp  --  0.0.0.0/0        0.0.0.0/0   tcp dpt:80\n2    ACCEPT  tcp  --  0.0.0.0/0        0.0.0.0/0   tcp dpt:443\n3    DROP    tcp  --  203.0.113.0/24   0.0.0.0/0   tcp dpt:80\n4    ACCEPT  all  --  0.0.0.0/0        0.0.0.0/0\n```\n\n**Why is the DROP rule ineffective?**",
+      "scenario": "Abuse traffic from `203.0.113.0/24` is still reaching a web server after a block was added. The rules show:\n\n```text\nChain INPUT (policy DROP)\nnum  target  prot opt source           destination\n1    ACCEPT  tcp  --  0.0.0.0/0        0.0.0.0/0   tcp dpt:80\n2    ACCEPT  tcp  --  0.0.0.0/0        0.0.0.0/0   tcp dpt:443\n3    DROP    tcp  --  203.0.113.0/24   0.0.0.0/0   tcp dpt:80\n```\n\nWhy is the block ineffective?",
       "options": [
-        { "id": "a", "text": "iptables evaluates rules top to bottom and stops at the first match. Rule 1 accepts all port-80 traffic before rule 3 ever sees the packet, making rule 3 dead code." },
-        { "id": "b", "text": "The DROP rule is missing the `-i` interface specifier" },
-        { "id": "c", "text": "iptables does not support source-CIDR matching for DROP" },
-        { "id": "d", "text": "The chain policy is ACCEPT, which overrides DROP rules" }
+        {
+          "id": "a",
+          "text": "iptables evaluates from top to bottom and stops at the first match, so the broad port 80 accept shadows the later source-specific drop"
+        },
+        {
+          "id": "b",
+          "text": "The chain policy is DROP, which disables every explicit DROP rule"
+        },
+        {
+          "id": "c",
+          "text": "Source CIDR matching is supported only in the OUTPUT chain"
+        },
+        {
+          "id": "d",
+          "text": "The rule needs to mention port 443 before it can affect port 80"
+        }
       ],
-      "correct": ["a"],
-      "explanation": "iptables match logic is first-match-wins, top-down within a chain. The blanket `ACCEPT tcp dpt:80` at line 1 catches every port-80 packet, including those from 203.0.113.0/24, so the DROP at line 3 is unreachable. Fix: insert the DROP *above* line 1 with `iptables -I INPUT 1 -s 203.0.113.0/24 -p tcp --dport 80 -j DROP`. Chain policies are only the fallback when no rule matches; they do not override explicit rules."
+      "correct": [
+        "a"
+      ],
+      "explanation": "Rule order matters. A packet from `203.0.113.0/24` to port 80 matches rule 1 and is accepted immediately, so rule 3 is never evaluated. The fix is to insert the specific DROP above the broad ACCEPT. Chain policy is only the fallback when no rule matches, and source CIDR matching is valid in INPUT."
     },
     {
       "id": "q2",
       "type": "single",
-      "scenario": "You deploy a stateful service whose backend opens long-lived TCP connections (15+ minutes idle between messages) to a database behind an AWS NLB. Connections are silently dropped after about 350 seconds of idle and the application sees `Connection reset by peer` on the next write. **What is the most likely cause?**",
+      "scenario": "An ALB can send SYN packets to an EC2 instance on TCP 443, but health checks time out. The instance security group allows inbound 443 from the ALB security group and allows all outbound. The subnet NACL has:\n\n```text\nInbound:  allow tcp 443 from 10.0.10.0/24\nOutbound: deny  tcp 1024-65535 to 10.0.10.0/24\nOutbound: allow all\n```\n\nWhat is the failure mode?",
       "options": [
-        { "id": "a", "text": "The database is restarting every 6 minutes" },
-        { "id": "b", "text": "AWS NLB has a 350-second idle timeout for TCP flows; you must enable TCP keepalives below that threshold or use proxy-protocol heartbeats" },
-        { "id": "c", "text": "The Security Group is rate-limiting connections" },
-        { "id": "d", "text": "The kernel's `tcp_fin_timeout` is set too low" }
+        {
+          "id": "a",
+          "text": "The NACL is stateless and blocks the instance's SYN-ACK back to the ALB ephemeral port"
+        },
+        {
+          "id": "b",
+          "text": "The security group needs a separate inbound rule for the ALB ephemeral port"
+        },
+        {
+          "id": "c",
+          "text": "The ALB must use TCP source port 443 for health checks"
+        },
+        {
+          "id": "d",
+          "text": "The NACL inbound rule should allow UDP because HTTPS uses UDP by default"
+        }
       ],
-      "correct": ["b"],
-      "explanation": "AWS NLB has a fixed 350-second TCP idle timeout (and ALB has 60s by default, configurable). After that, the NLB silently removes the flow from its connection table. Subsequent packets from either side hit a stale entry and the NLB sends RST. The standard mitigation is application-level keepalives or kernel TCP keepalives (`tcp_keepalive_time`) tuned below 350s. This is a stateful-middlebox timeout problem, not a database or kernel-side issue. `tcp_fin_timeout` only governs sockets in FIN-WAIT-2, irrelevant here."
+      "correct": [
+        "a"
+      ],
+      "explanation": "Security groups are stateful, but NACLs are stateless and evaluate each direction independently. The ALB connects from an ephemeral source port to instance port 443. The response leaves the subnet with destination port in the ephemeral range, and the NACL outbound deny blocks it. The fix is to allow the required ephemeral return range. HTTPS over TCP does not use UDP by default."
     },
     {
       "id": "q3",
       "type": "single",
-      "scenario": "An EC2 instance has a Security Group with a single inbound rule: `Allow TCP 22 from 10.0.0.0/8`. The instance is in a subnet whose Network ACL has `Allow All Inbound` and `Deny TCP 22 Outbound to 0.0.0.0/0` (everything else is allowed). An admin from `10.0.5.7` SSHes in. **Does it work, and why?**",
+      "scenario": "During an incident, an engineer appends a rule to block port 443:\n\n```text\n1 ACCEPT all  --  0.0.0.0/0  0.0.0.0/0  ctstate RELATED,ESTABLISHED\n2 ACCEPT tcp  --  0.0.0.0/0  0.0.0.0/0  tcp dpt:443\n3 DROP   tcp  --  0.0.0.0/0  0.0.0.0/0  tcp dpt:443\n```\n\nExisting browser sessions keep working and new sessions still connect. What is the actual mistake?",
       "options": [
-        { "id": "a", "text": "Yes: Security Groups are stateful, so the inbound SSH connection's return traffic is automatically allowed regardless of outbound rules" },
-        { "id": "b", "text": "Yes: but only because Network ACLs do not apply to TCP traffic" },
-        { "id": "c", "text": "No: the NACL outbound deny on TCP/22 will block return traffic; NACLs are stateless and evaluate each direction independently" },
-        { "id": "d", "text": "No: the Security Group must also allow outbound for the response" }
+        {
+          "id": "a",
+          "text": "The DROP was appended below the existing allow rule, so new port 443 traffic matches the allow before the drop"
+        },
+        {
+          "id": "b",
+          "text": "Conntrack makes all future port 443 sessions permanent once one session exists"
+        },
+        {
+          "id": "c",
+          "text": "The ESTABLISHED rule must be deleted because it applies to every new SYN"
+        },
+        {
+          "id": "d",
+          "text": "Port 443 can only be filtered in the FORWARD chain"
+        }
       ],
-      "correct": ["c"],
-      "explanation": "This is the canonical SG-vs-NACL trap. Security Groups *are* stateful, return traffic for an allowed inbound connection is automatically permitted, so SG-only configs work fine. NACLs are *stateless*: every direction is evaluated independently, and ephemeral return ports must be explicitly allowed outbound. The outbound `Deny TCP 22` does not actually block anything (return traffic uses an ephemeral source port, not 22), but a real NACL deny on the ephemeral range (1024-65535) would silently break SSH. The correct fix when using NACLs is to allow ephemeral port ranges outbound."
+      "correct": [
+        "a"
+      ],
+      "explanation": "The new DROP is dead code for new 443 connections because rule 2 accepts them first. Rule 1 explains why established flows can continue, but it does not make new sessions permanent. A correct emergency block would insert the DROP above the broad accept and, if immediate disconnect is required, also address existing conntrack entries."
     },
     {
       "id": "q4",
       "type": "single",
-      "scenario": "An engineer runs `iptables -A INPUT -p tcp --dport 80 -j DROP` on a busy web server, and existing browser sessions keep working for several minutes before slowly failing, while new connections are blocked immediately. **Why?**",
+      "scenario": "A NAT host starts dropping random new connections while many existing connections continue. `dmesg` shows:\n\n```text\nnf_conntrack: nf_conntrack: table full, dropping packet\n```\n\n`sysctl` shows the count is close to the maximum. What is happening?",
       "options": [
-        { "id": "a", "text": "iptables rules apply only to new connections; existing sessions are tracked by conntrack and pass via the implicit `RELATED,ESTABLISHED` rule already present in the chain" },
-        { "id": "b", "text": "iptables takes several minutes to propagate to the kernel" },
-        { "id": "c", "text": "The TCP retransmit window keeps existing connections alive" },
-        { "id": "d", "text": "The DROP rule was inserted in the wrong chain" }
+        {
+          "id": "a",
+          "text": "The conntrack table is exhausted, so stateful filtering cannot allocate entries for new flows"
+        },
+        {
+          "id": "b",
+          "text": "The INPUT policy was changed to ACCEPT, so packets are bypassing the firewall"
+        },
+        {
+          "id": "c",
+          "text": "The DNS resolver cache is full, so new domains cannot resolve"
+        },
+        {
+          "id": "d",
+          "text": "The SSH daemon reached `MaxAuthTries` and blocked all TCP traffic"
+        }
       ],
-      "correct": ["a"],
-      "explanation": "Most production iptables rulesets begin with `-m state --state ESTABLISHED,RELATED -j ACCEPT`. That rule lets conntrack-tracked existing flows through *before* any later DROP can match them. New SYNs land in `NEW` state and hit the DROP. Old sessions trickle out as their TCP connections eventually fail keepalives or hit conntrack timeouts. This is exactly why you cannot rely on a DROP rule alone for emergency blocking, you must also flush conntrack (`conntrack -D -s <ip>`) to disconnect existing sessions immediately."
+      "correct": [
+        "a"
+      ],
+      "explanation": "Stateful firewalling and NAT require a conntrack entry per active flow. When the table fills, the kernel drops packets that need new state, which looks like random firewall loss even when no rule changed. The article's fixes are to raise the limit, tune long TCP timeouts, or bypass tracking for appropriate high-volume traffic."
     },
     {
       "id": "q5",
-      "type": "multiple",
-      "scenario": "After enabling `nftables` rate-limiting on SSH (`limit rate 5/minute burst 10 packets`), legitimate users report slow SSH connections during deploys when many CI runners SSH simultaneously. **Which mitigations are reasonable?** (Select all that apply.)",
+      "type": "single",
+      "scenario": "A host is not a router. An engineer tries to block traffic destined for the host itself from `10.99.0.0/16` with:\n\n```text\niptables -A FORWARD -s 10.99.0.0/16 -j DROP\n```\n\nThe traffic still reaches services on the host. What is wrong?",
       "options": [
-        { "id": "a", "text": "Exclude the CI runners' source IPs from the rate-limit rule by matching them earlier with an explicit accept" },
-        { "id": "b", "text": "Increase the burst size and tune the rate to the actual peak" },
-        { "id": "c", "text": "Move rate-limiting from the firewall to fail2ban, which only triggers on failed auth attempts" },
-        { "id": "d", "text": "Disable conntrack on the host" }
+        {
+          "id": "a",
+          "text": "Traffic destined to the local host traverses INPUT, while FORWARD is only for packets routed through the host"
+        },
+        {
+          "id": "b",
+          "text": "iptables cannot filter by source CIDR on endpoint hosts"
+        },
+        {
+          "id": "c",
+          "text": "The rule needs a matching OUTPUT rule before INPUT can see it"
+        },
+        {
+          "id": "d",
+          "text": "The default policy must be ACCEPT before any DROP can work"
+        }
       ],
-      "correct": ["a", "b", "c"],
-      "explanation": "(a) Whitelisting trusted source IPs above the limit is a clean fix and common in CI/CD setups. (b) Tuning rate and burst to actual peak traffic is the right *measurement-driven* response, limits exist to stop abuse, not legitimate concurrency. (c) Failed-auth-based rate-limiting (fail2ban) is targeted at brute-force attempts and avoids penalizing successful logins, which matches the real threat better than blanket SYN limits. (d) Disabling conntrack would break almost all stateful firewall and NAT behavior, a wildly disproportionate response."
+      "correct": [
+        "a"
+      ],
+      "explanation": "The built-in chains map to packet paths. INPUT handles packets arriving for the local host, OUTPUT handles packets the host originates, and FORWARD handles transit traffic when the host is routing for others. On an endpoint, a FORWARD rule will not affect traffic to local services. The source CIDR match is valid, but it belongs in INPUT for this case."
     },
     {
       "id": "q6",
       "type": "single",
-      "scenario": "An engineer SSHes into a bastion and from there SSHes into a private host. Both hops work. They then try `scp file.tar.gz private-host:/tmp/` from the bastion, the connection authenticates, then hangs at `0%` and eventually `Connection reset by peer`. From `dmesg` on the private host: `nf_conntrack: nf_conntrack: table full, dropping packet`. **What is the failure?**",
+      "scenario": "A careful default-deny ruleset works during testing. After a kernel reboot, the server is reachable on every port again. The change log shows rules were added interactively with `iptables`, but no persistence command was run. What happened?",
       "options": [
-        { "id": "a", "text": "SSH authentication is broken on the private host" },
-        { "id": "b", "text": "The conntrack table is exhausted, so new connection-state entries are dropped, including the data-channel packets of the scp transfer" },
-        { "id": "c", "text": "The private host is out of disk space in `/tmp`" },
-        { "id": "d", "text": "iptables is denying the scp port" }
+        {
+          "id": "a",
+          "text": "iptables rules live in kernel memory and were lost because they were not saved to the distro's persistent rules file"
+        },
+        {
+          "id": "b",
+          "text": "Security groups automatically delete host firewalls during a reboot"
+        },
+        {
+          "id": "c",
+          "text": "The conntrack table restored the old ACCEPT decisions after boot"
+        },
+        {
+          "id": "d",
+          "text": "The default policy always resets to DROP unless fail2ban is installed"
+        }
       ],
-      "correct": ["b"],
-      "explanation": "`nf_conntrack: table full` means the kernel's connection-tracking table is at capacity. Stateful firewalls *require* every connection to have an entry in this table, so when it fills up, new packets are dropped, including new data-channel packets and even existing flows that get evicted. The scp control channel may have established before exhaustion, but the data flow drops. The fix is to raise `nf_conntrack_max` and tune `nf_conntrack_tcp_timeout_*` values, and to investigate why the table filled (often from idle long-tail connections or a SYN flood). Disk-full would error with `No space left on device`, not reset."
+      "correct": [
+        "a"
+      ],
+      "explanation": "The article calls out the forgot-to-save failure mode: iptables rules are in kernel memory until written with a persistence mechanism such as `iptables-save > /etc/iptables/rules.v4` on Debian and Ubuntu. Rebooting without saving restores the previous boot-time state, often wide open. Security groups and conntrack do not persist or delete local iptables rules this way."
     },
     {
       "id": "q7",
-      "type": "single",
-      "scenario": "An engineer wants to block all traffic from `10.0.99.0/24` to a host. They run:\n\n```\niptables -A FORWARD -s 10.0.99.0/24 -j DROP\n```\n\non the host itself (not a router). Traffic from `10.0.99.0/24` still reaches the host. **What is the bug?**",
+      "type": "multiple",
+      "scenario": "A teammate is about to change SSH from port 22 to 2222 and set the INPUT policy to DROP on a remote instance. Which precautions match the article's failure-mode guidance? Select all that apply.",
       "options": [
-        { "id": "a", "text": "The DROP must be in the FORWARD chain on a router; on an endpoint host, traffic destined to the host itself goes through the INPUT chain, not FORWARD" },
-        { "id": "b", "text": "iptables does not allow blocking by source CIDR" },
-        { "id": "c", "text": "The chain default is ACCEPT, overriding the DROP" },
-        { "id": "d", "text": "The rule needs `-p tcp` to take effect" }
+        {
+          "id": "a",
+          "text": "Add an allow rule for the new SSH port before removing the old port rule"
+        },
+        {
+          "id": "b",
+          "text": "Keep the current SSH session open while testing a second connection to the new port"
+        },
+        {
+          "id": "c",
+          "text": "Set the default INPUT policy to DROP first, then add allow rules after the session disconnects"
+        },
+        {
+          "id": "d",
+          "text": "Use a timed rollback, such as a scheduled flush, while testing risky remote firewall changes"
+        },
+        {
+          "id": "e",
+          "text": "Rely on fail2ban to restore SSH access if all network rules block the new port"
+        }
       ],
-      "correct": ["a"],
-      "explanation": "iptables chains correspond to packet paths in the kernel: `INPUT` for packets destined to the local host, `OUTPUT` for packets the host originates, and `FORWARD` only for packets the host is *routing through* (i.e., it acts as a router/gateway). On an endpoint host that is not forwarding, the FORWARD chain is never traversed, the rule is a no-op. The correct chain is `INPUT`: `iptables -I INPUT -s 10.0.99.0/24 -j DROP`. Choosing the wrong chain is one of the most common iptables mistakes when people start from a router-config tutorial."
+      "correct": [
+        "a",
+        "b",
+        "d"
+      ],
+      "explanation": "Safe remote firewall work preserves an active path while testing the new one. Add the new allow rule before deleting the old rule, keep the working session open, and use a timed rollback when changing default policies remotely. Setting DROP first is the lockout pattern the article warns about. fail2ban bans abusive IPs; it does not recover an SSH port that the firewall blocks for everyone."
     }
   ]
 }

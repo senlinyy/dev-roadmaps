@@ -5,6 +5,4 @@ order: 1
 kind: quiz
 ---
 
-CIDR math is the difference between *we have room for the next deployment* and *we ran out of IPs at 03:00 and the autoscaler is paging*. The math itself is simple: pick the prefix length whose host count covers what you need, but the practical edges (cloud reserved IPs, route table limits, growth headroom) are where teams get burned.
-
-This quiz puts you in front of capacity decisions. Pick the answer that you would defend in an architecture review.
+CIDR sizing is capacity planning with consequences: a block that barely fits today can block autoscaling tomorrow, while scattered allocations make routing harder later. Use the address-count formula, AWS reserved-address rules, alignment, and summarization concepts from the article. Pick the answer you could defend in an architecture review.

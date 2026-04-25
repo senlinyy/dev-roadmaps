@@ -96,13 +96,33 @@ jobs:
 
           echo "Sending revalidation webhook to $DEVPOLARIS_REVALIDATE_WEBHOOK_URL"
 
-          curl --silent --show-error --fail \
+          response_file="$(mktemp)"
+          http_status="000"
+          if ! http_status="$(curl --silent --show-error \
             --connect-timeout 10 \
             --max-time 30 \
             --retry 3 \
             --retry-delay 2 \
+            --output "$response_file" \
+            --write-out "%{http_code}" \
             --request POST "$DEVPOLARIS_REVALIDATE_WEBHOOK_URL" \
             --header "content-type: application/json" \
             --header "x-devpolaris-timestamp: $timestamp" \
             --header "x-devpolaris-signature: $signature" \
-            --data "$payload"
+            --data "$payload")"; then
+            echo "::warning::Revalidation webhook request failed before receiving an HTTP response. Content was still published."
+            rm -f "$response_file"
+            exit 0
+          fi
+
+          if [[ "$http_status" -lt 200 || "$http_status" -ge 300 ]]; then
+            echo "::warning::Revalidation webhook returned HTTP $http_status. Content was still published."
+            if [[ -s "$response_file" ]]; then
+              sed 's/^/webhook: /' "$response_file"
+            fi
+            rm -f "$response_file"
+            exit 0
+          fi
+
+          cat "$response_file"
+          rm -f "$response_file"

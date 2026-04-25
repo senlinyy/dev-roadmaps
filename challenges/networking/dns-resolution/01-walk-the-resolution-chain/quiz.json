@@ -1,0 +1,201 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A developer reports that only one laptop cannot resolve `api.example.com`. The captured resolver evidence is:\n\n```text\n$ cat /etc/resolv.conf\nnameserver 127.0.0.53\n\nsystemd-resolved[842]: query api.example.com IN A\nsystemd-resolved[842]: forwarded api.example.com IN A to 1.1.1.1#53\n```\n\nWhich role mapping should you use in the incident note?",
+      "options": [
+        {
+          "id": "a",
+          "text": "`127.0.0.53` is the local stub resolver, and `1.1.1.1` is the recursive resolver it asks on behalf of the laptop"
+        },
+        {
+          "id": "b",
+          "text": "`127.0.0.53` is the authoritative resolver for `example.com`, and `1.1.1.1` is the application server"
+        },
+        {
+          "id": "c",
+          "text": "`127.0.0.53` is a root name server, and `1.1.1.1` is the `.com` TLD server"
+        },
+        {
+          "id": "d",
+          "text": "`127.0.0.53` is the browser cache, and `1.1.1.1` is the final `A` record returned to the app"
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The local machine starts with a stub resolver, and `127.0.0.53` is the common systemd-resolved stub address. The forwarder log proves that the stub asked a recursive resolver at `1.1.1.1`; neither address is the authoritative server or final application IP."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A saved `dig +trace api.example.com` excerpt shows the handoff near the end of the lookup:\n\n```text\ncom.              172800 IN NS a.gtld-servers.net.\nexample.com.      172800 IN NS ns1.example.com.\napi.example.com.     300 IN A  93.184.216.34\n;; Received 61 bytes from 199.43.135.53#53(ns1.example.com) in 22 ms\n```\n\nWhat does this prove about the final answer?",
+      "options": [
+        {
+          "id": "a",
+          "text": "`ns1.example.com` is authoritative for the zone evidence shown, and it returned `93.184.216.34` as the `A` answer"
+        },
+        {
+          "id": "b",
+          "text": "`a.gtld-servers.net` is the application server because it appears before the final `A` record"
+        },
+        {
+          "id": "c",
+          "text": "`93.184.216.34` is a recursive resolver that still has the answer cached"
+        },
+        {
+          "id": "d",
+          "text": "The lookup failed at the root layer because the root server did not return an IP address directly"
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The trace first shows delegation from the TLD toward `example.com`, then the authoritative nameserver returns the final `A` record. Root and TLD servers refer the resolver onward; they normally do not provide the application host IP for a delegated zone."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "During a corporate VPN incident, every DNS query from one subnet times out:\n\n```text\n$ dig @8.8.8.8 api.example.com\n;; communications error to 8.8.8.8#53: timed out\n;; no servers could be reached\n\n$ dig @1.1.1.1 google.com\n;; communications error to 1.1.1.1#53: timed out\n;; no servers could be reached\n```\n\nThe same domains resolve from a different network. Which diagnosis best fits the evidence?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The client network path is blocking or losing DNS traffic before any authoritative answer can be returned"
+        },
+        {
+          "id": "b",
+          "text": "The `api.example.com` zone has no `A` record because all timeouts mean NXDOMAIN"
+        },
+        {
+          "id": "c",
+          "text": "The authoritative nameserver is healthy because public resolvers always answer from cache"
+        },
+        {
+          "id": "d",
+          "text": "The browser is rejecting the TLS certificate before DNS resolution starts"
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Timeouts to multiple known recursive resolvers indicate that the client cannot reach DNS service on the network path, often because UDP or TCP 53 is blocked. NXDOMAIN would be an explicit DNS response, not a transport timeout, and TLS happens after DNS resolution."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "A recursive resolver returns an error, but a direct authoritative query succeeds:\n\n```text\n$ dig @192.0.2.53 api.example.com\n;; ->>HEADER<<- opcode: QUERY, status: SERVFAIL, id: 39011\n\n$ dig @ns1.example.com api.example.com A\n;; ->>HEADER<<- opcode: QUERY, status: NOERROR, id: 8821\n;; ANSWER SECTION:\napi.example.com. 300 IN A 93.184.216.34\n```\n\nWhat should you conclude first?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The authoritative data can answer correctly, so the recursive path or validation path used by `192.0.2.53` needs investigation"
+        },
+        {
+          "id": "b",
+          "text": "The hostname does not exist, because SERVFAIL and NXDOMAIN are equivalent client symptoms"
+        },
+        {
+          "id": "c",
+          "text": "The application server at `93.184.216.34` is refusing TCP connections"
+        },
+        {
+          "id": "d",
+          "text": "The stub resolver is authoritative for `example.com` because the direct query bypassed it"
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "SERVFAIL means the resolver could not complete the lookup successfully. Because the authoritative query returns NOERROR with an `A` answer, the zone data shown is not missing; the next focus is the recursive resolver path, validation, or upstream reachability."
+    },
+    {
+      "id": "q5",
+      "type": "multiple",
+      "scenario": "You are reviewing a junior engineer's DNS chain summary for `api.example.com`:\n\n```text\nLaptop resolver: 127.0.0.53\nForwarded to: 1.1.1.1#53\nTrace referral: example.com. NS ns1.example.com.\nFinal answer: api.example.com. 300 IN A 93.184.216.34\n```\n\nWhich review comments are accurate?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The laptop first asks a stub resolver before the query is forwarded elsewhere"
+        },
+        {
+          "id": "b",
+          "text": "`1.1.1.1` is acting as the recursive resolver in this evidence"
+        },
+        {
+          "id": "c",
+          "text": "`ns1.example.com` is the authoritative nameserver named by the referral"
+        },
+        {
+          "id": "d",
+          "text": "`93.184.216.34` should be described as the `.com` TLD server"
+        },
+        {
+          "id": "e",
+          "text": "The TTL of 300 means resolvers may cache this answer for five minutes"
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c",
+        "e"
+      ],
+      "explanation": "The chain is stub resolver, recursive resolver, referral to authoritative nameserver, then final record answer. `93.184.216.34` is the application IP in the `A` record, not a TLD server. A TTL of 300 seconds is five minutes of cache lifetime."
+    },
+    {
+      "id": "q6",
+      "type": "single",
+      "scenario": "A migration ticket includes this DNS answer:\n\n```text\nwww.example.com. 300 IN CNAME app.example.com.\napp.example.com. 300 IN A     93.184.216.34\n```\n\nA teammate says the browser can connect directly to the CNAME record without another lookup. What is the most accurate correction?",
+      "options": [
+        {
+          "id": "a",
+          "text": "A CNAME is an alias to another name, and the resolver still needs the target name to produce an address such as the `A` record shown"
+        },
+        {
+          "id": "b",
+          "text": "A CNAME is only used for mail delivery, so the browser must query an MX record next"
+        },
+        {
+          "id": "c",
+          "text": "A CNAME is a root-server referral, so the recursive resolver should ignore the `A` record"
+        },
+        {
+          "id": "d",
+          "text": "A CNAME contains an IPv6 address, so the browser should open a TCP connection to `app.example.com` as a literal IP"
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The record type section explains that CNAME records create aliases from one name to another. Clients still need an address record such as `A` or `AAAA` for the final target before they can open a network connection."
+    },
+    {
+      "id": "q7",
+      "type": "single",
+      "scenario": "A Kubernetes workload logs this resolver path while calling another service:\n\n```text\nquery payments.default.svc.cluster.local A\nstub resolver: 10.244.2.17\nrecursive resolver: 10.96.0.10 (CoreDNS)\nauthoritative source: Kubernetes service registry\nanswer: 10.108.44.21\n```\n\nWhy is this still the same DNS resolution chain pattern from the article?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The stub asks a recursive resolver, and that resolver finds the authoritative source for the name, even though the authority is the cluster service registry"
+        },
+        {
+          "id": "b",
+          "text": "Cluster DNS skips recursive resolution because service names are always hardcoded in each pod image"
+        },
+        {
+          "id": "c",
+          "text": "CoreDNS is the final application server because it returns a service IP"
+        },
+        {
+          "id": "d",
+          "text": "The answer cannot be DNS because `.cluster.local` names are not public internet domains"
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The article notes that the same resolver roles appear inside Kubernetes, with CoreDNS acting as the recursive resolver and authoritative answers coming from cluster state. Private DNS zones still use DNS concepts even when they are not public internet names."
+    }
+  ]
+}

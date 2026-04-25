@@ -1,1 +1,0 @@
-The audit only cares about three controls: who can log in as root, whether passwords are accepted at all, and which port the daemon exposes. Pull those directives first, then turn the findings into a short remediation note with corrected values.

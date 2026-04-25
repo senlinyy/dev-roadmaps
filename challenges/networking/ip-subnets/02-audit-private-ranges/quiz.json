@@ -1,97 +1,205 @@
 {
+  "passThreshold": 1,
   "questions": [
     {
       "id": "q1",
       "type": "single",
-      "scenario": "A teammate proposes the following four blocks for a new VPC:\n\n```\n10.40.0.0/16\n172.20.0.0/16\n192.168.50.0/24\n172.32.0.0/16\n```\n\n**Which one must be rejected?**",
+      "scenario": "A VPC intake request lists four candidate CIDR blocks for a new private network:\n\n```text\n10.40.0.0/16\n172.20.0.0/16\n192.168.50.0/24\n172.32.0.0/16\n```\n\nWhich block must be rejected as not RFC 1918 private space?",
       "options": [
-        { "id": "a", "text": "10.40.0.0/16" },
-        { "id": "b", "text": "172.20.0.0/16" },
-        { "id": "c", "text": "192.168.50.0/24" },
-        { "id": "d", "text": "172.32.0.0/16" }
+        {
+          "id": "a",
+          "text": "`10.40.0.0/16`"
+        },
+        {
+          "id": "b",
+          "text": "`172.20.0.0/16`"
+        },
+        {
+          "id": "c",
+          "text": "`192.168.50.0/24`"
+        },
+        {
+          "id": "d",
+          "text": "`172.32.0.0/16`"
+        }
       ],
-      "correct": ["d"],
-      "explanation": "RFC 1918 reserves `172.16.0.0/12`, which covers `172.16.0.0` through `172.31.255.255` *only*. `172.32.0.0/16` falls outside that range and is publicly routable space (currently announced by various commercial entities). Using it internally means: (a) traffic to `172.32.x.x` from inside the VPC will egress to the internet via the default route, and (b) when those public hosts try to reply, replies hit your VPC instead of going where the user expected. The other three are all valid private ranges."
+      "correct": [
+        "d"
+      ],
+      "explanation": "RFC 1918 includes all of `10.0.0.0/8`, `172.16.0.0/12`, and `192.168.0.0/16`. The `172.16.0.0/12` range ends at `172.31.255.255`, so `172.32.0.0/16` is outside private space and may be publicly routed. The other three are valid private ranges."
     },
     {
       "id": "q2",
       "type": "single",
-      "scenario": "An infra engineer wants to use `100.64.0.0/16` for an internal Kubernetes pod network because it's *unused at the company*. A senior asks them to reconsider.\n\n**What is the strongest reason not to use it?**",
+      "scenario": "A Kubernetes platform team proposes `100.64.20.0/22` for pod IPs in a greenfield VPC because no current company network uses it. The service will be reachable from employees on mobile carriers and home ISPs. What is the strongest objection?",
       "options": [
-        { "id": "a", "text": "It's not RFC 1918, so it will be NAT'd to the internet by default" },
-        { "id": "b", "text": "`100.64.0.0/10` is reserved by RFC 6598 for *Carrier-Grade NAT*. ISPs use it inside their networks. If users are on a CGN'd connection, your internal IPs will collide with the path between user and your service, and weird symptoms (intermittent reachability, MTU bugs) will surface only for those users." },
-        { "id": "c", "text": "It's a deprecated range and will be removed in IPv4 next year" },
-        { "id": "d", "text": "It's reserved for multicast" }
+        {
+          "id": "a",
+          "text": "`100.64.0.0/10` is shared address space for carrier-grade NAT, so it can collide with ISP paths and should not be picked casually for greenfield VPC space"
+        },
+        {
+          "id": "b",
+          "text": "`100.64.0.0/10` is part of RFC 1918, so it can never be routed by Kubernetes"
+        },
+        {
+          "id": "c",
+          "text": "The range is reserved for IPv6 transition only and cannot carry IPv4 packets"
+        },
+        {
+          "id": "d",
+          "text": "The range is multicast, so every packet would be broadcast to all pods"
+        }
       ],
-      "correct": ["b"],
-      "explanation": "`100.64.0.0/10` is a well-known landmine. RFC 6598 reserves it for ISP-side CGNAT, so a non-trivial fraction of your users (mobile carriers, fiber ISPs in many regions) will already have addresses inside it. If you also use it internally, packets crossing the boundary get ambiguous and routing gets weird. Some companies do use it because they have no choice (10.x exhausted), but they always front it with a NAT and accept the operational tax. *Don't choose it for greenfield work.*"
+      "correct": [
+        "a"
+      ],
+      "explanation": "The private-ranges section calls out `100.64.0.0/10` as RFC 6598 shared address space for CGNAT. It is not RFC 1918. Some providers and clusters use it under constraints, but choosing it for greenfield internal space can collide with carrier networks and create hard-to-debug reachability issues."
     },
     {
       "id": "q3",
       "type": "single",
-      "scenario": "Three CIDR blocks claimed to be private:\n\n1. `10.0.0.0/8`\n2. `192.168.0.0/16`\n3. `192.0.2.0/24`\n\n**Which are actually private (RFC 1918) ranges?**",
+      "scenario": "A copied Terraform example accidentally leaves this route in a production VPC module:\n\n```hcl\ndestination_cidr_block = \"198.51.100.0/24\"\n```\n\nWhy should the reviewer reject it?",
       "options": [
-        { "id": "a", "text": "Only 1" },
-        { "id": "b", "text": "1 and 2 only" },
-        { "id": "c", "text": "1, 2, and 3" },
-        { "id": "d", "text": "Only 2" }
+        {
+          "id": "a",
+          "text": "It is a TEST-NET documentation range, not production private address space"
+        },
+        {
+          "id": "b",
+          "text": "It is the upper half of `192.168.0.0/16`, so it overlaps home networks"
+        },
+        {
+          "id": "c",
+          "text": "It is carrier-grade NAT space used by mobile ISPs"
+        },
+        {
+          "id": "d",
+          "text": "It is link-local space and cannot cross routers"
+        }
       ],
-      "correct": ["b"],
-      "explanation": "RFC 1918 lists exactly: `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`. `192.0.2.0/24` is `TEST-NET-1` from RFC 5737, reserved for *documentation and examples*. It is not routable on the internet, but it is also not for production private use, many security tools and example configs assume traffic to it is fake, and using it internally produces confusing logs. The other documentation ranges (`198.51.100.0/24`, `203.0.113.0/24`) have the same status."
+      "correct": [
+        "a"
+      ],
+      "explanation": "The article lists `192.0.2.0/24`, `198.51.100.0/24`, and `203.0.113.0/24` as RFC 5737 documentation ranges. They are for examples and tutorials, not real production configs. The other descriptions map to different ranges: RFC 1918 private, RFC 6598 CGNAT, and RFC 3927 link-local."
     },
     {
       "id": "q4",
       "type": "single",
-      "scenario": "A team is building a multi-region service across three AWS VPCs and one on-prem datacenter, all peered together. They want non-overlapping private ranges for each. They propose:\n\n```\nus-east-1 VPC:    10.0.0.0/16\nus-west-2 VPC:    10.1.0.0/16\neu-west-1 VPC:    10.2.0.0/16\non-prem DC:       10.0.0.0/8\n```\n\n**What is the problem?**",
+      "scenario": "An internal DNS request asks for `metrics.internal.example.com` to resolve to `169.254.12.34` so every service can scrape it. Clients live in several VPC subnets. What is wrong with the request?",
       "options": [
-        { "id": "a", "text": "On-prem `10.0.0.0/8` is a *supernet* of all three VPCs. Once peered, the routing tables will contain an entry for `10.0.0.0/8`, which overlaps the more-specific VPC routes. Most routers prefer longest-prefix match so it 'works', but the on-prem network has nowhere left to grow without renumbering, and any host accidentally configured outside the VPC supernets routes to on-prem." },
-        { "id": "b", "text": "There is no problem; AWS resolves overlap automatically" },
-        { "id": "c", "text": "The bug is `eu-west-1`: Europe must use `192.168.x.x`" },
-        { "id": "d", "text": "VPC peering does not support transitive routing across three regions" }
+        {
+          "id": "a",
+          "text": "`169.254.0.0/16` is link-local, so routers do not forward it across subnets"
+        },
+        {
+          "id": "b",
+          "text": "`169.254.0.0/16` is public internet space and requires a paid allocation"
+        },
+        {
+          "id": "c",
+          "text": "`169.254.0.0/16` is a valid RFC 1918 block but only for databases"
+        },
+        {
+          "id": "d",
+          "text": "The address is invalid because IPv4 octets cannot contain 254"
+        }
       ],
-      "correct": ["a"],
-      "explanation": "Choosing `/8` for one site burns the entire 10/8 plane and collides with every future allocation. The standard pattern is *carve 10/8 into per-site /16s or /14s up front*: e.g. `10.0.0.0/14` to us-east, `10.4.0.0/14` to us-west, `10.8.0.0/14` to eu-west, `10.16.0.0/12` to on-prem. Plan the supernet structure first, allocate from it second. Renaming address space across active VPCs is one of the most painful migrations in ops, so getting this right at design time matters."
+      "correct": [
+        "a"
+      ],
+      "explanation": "The article identifies `169.254.0.0/16` as link-local. It is meaningful only on the local segment, and providers also reserve specific addresses such as metadata endpoints inside it. Putting a shared DNS name on a link-local address implies reachability that routers will not provide."
     },
     {
       "id": "q5",
       "type": "single",
-      "scenario": "You see this in a security review:\n\n> *Allow inbound TCP/443 from 0.0.0.0/0; allow internal RDP from 10.0.0.0/8.*\n\n**Which is the most precise objection?**",
+      "scenario": "A company plans a cloud and on-prem network with these ranges:\n\n```text\nus-east VPC: 10.0.0.0/16\nus-west VPC: 10.1.0.0/16\neu VPC:      10.2.0.0/16\non-prem:     10.0.0.0/8\n```\n\nThey say the regions are fine because each VPC has a different `/16`. What is the real review finding?",
       "options": [
-        { "id": "a", "text": "RDP should never be allowed from any range" },
-        { "id": "b", "text": "`0.0.0.0/0` is fine for HTTPS, it just means *any IPv4 source*. The real issue (if any) is whether 443 should be limited to a CDN range. The `10.0.0.0/8` for RDP is also fine *iff* the company actually owns and controls that entire supernet, which is the assumption you should verify before accepting the rule." },
-        { "id": "c", "text": "`0.0.0.0/0` includes the broadcast address `255.255.255.255` and is therefore invalid as a source" },
-        { "id": "d", "text": "RDP cannot use TCP" }
+        {
+          "id": "a",
+          "text": "The on-prem `/8` is a supernet that overlaps every VPC, leaving no clean non-overlapping route plan"
+        },
+        {
+          "id": "b",
+          "text": "Only Europe can use `192.168.0.0/16`, so the eu VPC range is invalid"
+        },
+        {
+          "id": "c",
+          "text": "The VPC ranges are public because all `10.x.x.x` addresses are internet-routable"
+        },
+        {
+          "id": "d",
+          "text": "The plan is safe because longest-prefix match always removes operational risk"
+        }
       ],
-      "correct": ["b"],
-      "explanation": "`0.0.0.0/0` is the standard *match anything* CIDR, it's how you say public on edge ACLs and how the default route is expressed. It is not, by itself, a bug. The substantive question is whether the *trust boundary* matches the rule. Same with `10.0.0.0/8`: it's only safe if the operator is sure no untrusted networks share that supernet (think of merged companies, contractor VPNs, third-party VPCs). The audit posture is *what does this CIDR actually contain in our environment*, not *which letters are in it*."
+      "correct": [
+        "a"
+      ],
+      "explanation": "The article stresses that networks that need to talk must not overlap. `10.0.0.0/8` contains all three listed `/16` VPCs, so the plan burns the entire 10/8 space on-prem and collides with the cloud allocation. Longest-prefix match can mask some cases, but it does not make a clean, scalable peering or VPN plan."
     },
     {
       "id": "q6",
-      "type": "single",
-      "scenario": "An app team requests internal DNS for a name pointing at `169.254.1.5`. The networking team pushes back.\n\n**Why?**",
+      "type": "multiple",
+      "scenario": "A security audit flags every CIDR that is not valid RFC 1918 private address space. Which entries should be flagged? Select all that apply.\n\n```text\n10.255.0.0/16\n172.16.5.0/24\n172.31.255.0/24\n172.32.0.0/16\n192.0.2.0/24\n198.51.100.0/24\n100.64.0.0/16\n```",
       "options": [
-        { "id": "a", "text": "`169.254.0.0/16` is the *link-local* range (RFC 3927). Each host autoconfigures addresses in it for local communication only, packets to link-local addresses do not cross routers. Putting a globally-resolvable DNS name in front of a link-local IP means clients on other subnets cannot reach it." },
-        { "id": "b", "text": "169.254 is reserved for IPv6 only" },
-        { "id": "c", "text": "It is a Class C reserved for IANA experiments" },
-        { "id": "d", "text": "The team should use `127.0.0.0/8` instead for internal services" }
+        {
+          "id": "a",
+          "text": "`10.255.0.0/16`"
+        },
+        {
+          "id": "b",
+          "text": "`172.31.255.0/24`"
+        },
+        {
+          "id": "c",
+          "text": "`172.32.0.0/16`"
+        },
+        {
+          "id": "d",
+          "text": "`192.0.2.0/24`"
+        },
+        {
+          "id": "e",
+          "text": "`198.51.100.0/24`"
+        },
+        {
+          "id": "f",
+          "text": "`100.64.0.0/16`"
+        }
       ],
-      "correct": ["a"],
-      "explanation": "Link-local addresses are *per-segment* by definition, no router will forward them. They are useful for very specific things (cloud metadata services use `169.254.169.254`, IPv6 link-local for neighbor discovery), but giving one a DNS name implies global reachability and breaks for any client not on the same broadcast domain. (d) is also wrong for a different reason: `127.0.0.0/8` is loopback, only meaningful inside one host."
+      "correct": [
+        "c",
+        "d",
+        "e",
+        "f"
+      ],
+      "explanation": "`10.255.0.0/16` is inside `10.0.0.0/8`, and `172.31.255.0/24` is still inside `172.16.0.0/12`, so they are RFC 1918. `172.32.0.0/16` is just outside the private 172 range. `192.0.2.0/24` and `198.51.100.0/24` are documentation ranges. `100.64.0.0/16` is shared CGNAT space, not RFC 1918."
     },
     {
       "id": "q7",
-      "type": "multiple",
-      "scenario": "Below are several CIDR blocks that might appear in a network plan. **Which are *not* valid private (RFC 1918) ranges and would need rejection or special justification in an internal audit?** (Select all that apply.)\n\n```\n10.255.0.0/16\n172.16.5.0/24\n192.168.0.0/16\n100.64.0.0/16\n198.51.100.0/24\n172.31.255.0/24\n203.0.113.0/24\n```",
+      "type": "single",
+      "scenario": "A vendor VPC uses `192.168.0.0/16`. Your office VPN routes `192.168.1.0/24` for branch users, and engineers want a VPN connection between the two networks. What is the problem?",
       "options": [
-        { "id": "a", "text": "10.255.0.0/16" },
-        { "id": "b", "text": "172.16.5.0/24" },
-        { "id": "c", "text": "100.64.0.0/16" },
-        { "id": "d", "text": "198.51.100.0/24" },
-        { "id": "e", "text": "172.31.255.0/24" },
-        { "id": "f", "text": "203.0.113.0/24" }
+        {
+          "id": "a",
+          "text": "The branch `/24` is contained inside the vendor `/16`, so the networks overlap and routing cannot unambiguously decide ownership"
+        },
+        {
+          "id": "b",
+          "text": "Both ranges are public, so the VPN must use NAT to reach the internet"
+        },
+        {
+          "id": "c",
+          "text": "The branch range is link-local and cannot be used by clients"
+        },
+        {
+          "id": "d",
+          "text": "There is no problem because any two RFC 1918 networks can always be peered"
+        }
       ],
-      "correct": ["c", "d", "f"],
-      "explanation": "RFC 1918 covers `10.0.0.0/8` (so `10.255.0.0/16` is in), `172.16.0.0/12` (so `172.16.5.0/24` and `172.31.255.0/24` are both in, `172.31` is the upper edge), and `192.168.0.0/16`. Outside that: `100.64.0.0/10` is RFC 6598 CGNAT (reject for greenfield); `198.51.100.0/24` is `TEST-NET-2` (RFC 5737 docs); `203.0.113.0/24` is `TEST-NET-3` (RFC 5737 docs). Knowing the four common reservation buckets, RFC 1918 private, RFC 6598 CGNAT, RFC 5737 docs, RFC 3927 link-local, covers 95% of audit pushbacks."
+      "correct": [
+        "a"
+      ],
+      "explanation": "Private address space is not globally unique. Two valid RFC 1918 networks still cannot communicate cleanly if one contains the other. `192.168.1.0/24` sits inside `192.168.0.0/16`, so packets for branch users and vendor hosts overlap. The fix is non-overlapping allocation or a carefully designed NAT boundary, not simple peering."
     }
   ]
 }

@@ -1,0 +1,201 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "The frontend started failing browser calls after an API deploy. Staging and prod both return `HTTP/2 200`, but their headers differ:\n\n```text\n# staging\naccess-control-allow-origin: https://app.example.com\naccess-control-allow-methods: GET,POST,OPTIONS\naccess-control-allow-headers: authorization,content-type\nx-request-id: stg-7712\n\n# prod\ncontent-type: application/json\nx-request-id: prod-8841\n```\n\nWhat is the incident finding?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Prod is missing the CORS response header family, starting with `access-control-allow-origin`"
+        },
+        {
+          "id": "b",
+          "text": "Prod is broken because a successful API response cannot use status `200`"
+        },
+        {
+          "id": "c",
+          "text": "Staging is broken because CORS headers should appear only on failed responses"
+        },
+        {
+          "id": "d",
+          "text": "The `x-request-id` values prove the browser cached an old TLS certificate"
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The article explains that browser CORS enforcement depends on `Access-Control-Allow-Origin` and related headers. The HTTP status can still be 200 while the browser blocks JavaScript from reading the response."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A public API returns this response during a traffic spike:\n\n```text\nHTTP/2 429\ncontent-type: application/json\nx-ratelimit-limit: 60\nx-ratelimit-remaining: 0\nx-ratelimit-reset: 1713600000\nx-request-id: edge-9912\n```\n\nWhat should the client team do before retrying aggressively?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Use the rate-limit headers to back off until the reset window instead of treating the response as a server crash"
+        },
+        {
+          "id": "b",
+          "text": "Ignore the headers because all `4xx` responses mean the server is overloaded"
+        },
+        {
+          "id": "c",
+          "text": "Open a TLS incident because rate-limit headers are only sent during certificate failures"
+        },
+        {
+          "id": "d",
+          "text": "Replace the request body with HTML because `429` requires `text/html` content"
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The status-code section identifies `429` as rate limiting, and the headers section shows APIs communicate limit, remaining count, and reset time through response headers. Retrying without backoff makes the problem worse."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "A mobile client fails to parse a successful API response. The capture shows:\n\n```text\nHTTP/2 200\ncontent-type: text/html; charset=utf-8\nx-request-id: api-23f7\n\n{\"id\":\"ord_123\",\"status\":\"paid\"}\n```\n\nWhich diagnosis best matches the header evidence?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The body looks like JSON, but the `Content-Type` header tells clients to interpret it as HTML"
+        },
+        {
+          "id": "b",
+          "text": "The status code is in the `2xx` family, so clients must parse the body correctly regardless of headers"
+        },
+        {
+          "id": "c",
+          "text": "The request ID changed the JSON syntax before the client received it"
+        },
+        {
+          "id": "d",
+          "text": "The response failed at the DNS layer because JSON cannot be sent over HTTP/2"
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "`Content-Type` tells the receiver how to interpret the body. A 200 status only says the request succeeded; it does not make an incorrect media type safe for clients."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "A distributed trace investigation starts with this response header from the edge API:\n\n```text\nx-request-id: 7f2c-prod-9911\n```\n\nWhy is this header useful during incident triage?",
+      "options": [
+        {
+          "id": "a",
+          "text": "It lets teams correlate the same request across downstream logs instead of matching by timestamp alone"
+        },
+        {
+          "id": "b",
+          "text": "It tells the browser which origins are allowed to call the API"
+        },
+        {
+          "id": "c",
+          "text": "It carries the user's password in a reversible encoding"
+        },
+        {
+          "id": "d",
+          "text": "It proves the response can be cached for exactly one hour"
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The article describes `X-Request-ID` or correlation IDs as traceability headers. They let teams search logs for a single request as it moves through services."
+    },
+    {
+      "id": "q5",
+      "type": "multiple",
+      "scenario": "You are building a header-focused incident summary for an API regression. Which response headers from this capture are meaningful evidence covered by the article?\n\n```text\nHTTP/2 200\ncontent-type: application/json; charset=utf-8\ncache-control: public, max-age=60\naccess-control-allow-origin: https://app.example.com\nx-request-id: api-2026-04-15-7712\nserver: envoy\n```",
+      "options": [
+        {
+          "id": "a",
+          "text": "`content-type`, because it tells clients how to parse the body"
+        },
+        {
+          "id": "b",
+          "text": "`cache-control`, because it controls response freshness and caching behavior"
+        },
+        {
+          "id": "c",
+          "text": "`access-control-allow-origin`, because browsers use it for CORS decisions"
+        },
+        {
+          "id": "d",
+          "text": "`x-request-id`, because it supports request tracing through logs"
+        },
+        {
+          "id": "e",
+          "text": "`server`, because it alone proves whether the JSON schema is valid"
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c",
+        "d"
+      ],
+      "explanation": "Content type, cache control, CORS, and request IDs are all header concepts covered in the article. The `server` header can be operational context, but by itself it does not prove schema validity or explain these browser and cache behaviors."
+    },
+    {
+      "id": "q6",
+      "type": "single",
+      "scenario": "A frontend error says, \"blocked by CORS policy.\" The same URL works from a backend job using `curl`, and the API returns `HTTP/2 200` to both clients. What is the best explanation?",
+      "options": [
+        {
+          "id": "a",
+          "text": "CORS is enforced by browsers, so non-browser clients can succeed even when browser JavaScript is blocked by missing allow-origin headers"
+        },
+        {
+          "id": "b",
+          "text": "CORS is a TCP handshake feature, so `curl` bypasses the transport layer"
+        },
+        {
+          "id": "c",
+          "text": "A 200 response proves CORS cannot be involved"
+        },
+        {
+          "id": "d",
+          "text": "The backend job works because it automatically rewrites DNS records"
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The article notes that CORS is a browser security policy. `curl`, server-side jobs, and mobile apps are not blocked by the browser's JavaScript origin checks, even if the API still needs correct headers for web clients."
+    },
+    {
+      "id": "q7",
+      "type": "single",
+      "scenario": "Users see stale profile data for up to an hour after an API fix. The response header for the profile endpoint is:\n\n```text\ncache-control: public, max-age=3600\ncontent-type: application/json\nx-request-id: profile-4420\n```\n\nWhich header is the primary suspect?",
+      "options": [
+        {
+          "id": "a",
+          "text": "`cache-control: public, max-age=3600`, because it permits caches to reuse the response for one hour"
+        },
+        {
+          "id": "b",
+          "text": "`content-type: application/json`, because JSON responses are always cached permanently"
+        },
+        {
+          "id": "c",
+          "text": "`x-request-id`, because request IDs force browsers to reuse old bodies"
+        },
+        {
+          "id": "d",
+          "text": "No header can affect freshness, because only DNS TTL controls API response caching"
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "`Cache-Control` defines how responses can be cached and for how long. A one-hour max-age is a plausible cause of stale API data, while content type and request ID do not define freshness."
+    }
+  ]
+}

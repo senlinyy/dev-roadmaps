@@ -5,6 +5,4 @@ order: 5
 kind: quiz
 ---
 
-The `Type=` directive in a unit file tells systemd how the service signals readiness. Pick the wrong type and systemd either marks the service "active" before it can serve traffic, or hangs forever waiting for a notification that never comes.
-
-This quiz puts you in front of common readiness mismatches. The right answer is whichever type lets dependent services (and load balancers, and health checks) believe the service is ready exactly when it really is.
+The `Type=` directive is a contract between a process and systemd about when the service is really ready. This knowledge check focuses on readiness races, double-fork daemons, one-time jobs, notify units, and type mismatches that make green service status lie.

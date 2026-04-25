@@ -5,6 +5,4 @@ order: 3
 kind: quiz
 ---
 
-`Requires=`, `Wants=`, `After=`, and `Before=` are how systemd encodes the difference between *needs* and *wishes*, and between *ordering* and *requirement*. Mixing them up is the most common reason a service either fails to start at boot or refuses to come up after a dependency restarts.
-
-This quiz puts you in front of unit fragments and asks what would actually happen. Pick the answer that an SRE would defend during a startup-order incident review.
+systemd unit relationships separate ordering, hard requirements, soft preferences, lifecycle propagation, and start conditions. This knowledge check asks you to reason from realistic unit fragments and decide what systemd will actually do during boot, restart, and skipped-start scenarios.

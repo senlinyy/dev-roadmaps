@@ -1,0 +1,201 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "The backend exposes routes like `/users` and `/orders`. Requests through Nginx to `/api/users` return 404. The config is:\n\n```nginx\nlocation /api/ {\n    proxy_pass http://127.0.0.1:3000;\n}\n```\n\nThe upstream capture shows `GET /api/users`. Which `proxy_pass` line should be used if Nginx is meant to strip `/api/`?",
+      "options": [
+        {
+          "id": "a",
+          "text": "`proxy_pass http://127.0.0.1:3000/;`"
+        },
+        {
+          "id": "b",
+          "text": "`proxy_pass http://127.0.0.1:3000;`"
+        },
+        {
+          "id": "c",
+          "text": "`proxy_pass /api/users;`"
+        },
+        {
+          "id": "d",
+          "text": "`proxy_pass http://127.0.0.1:3000/api/;`"
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The article explains the trailing slash behavior. With `location /api/` and `proxy_pass http://127.0.0.1:3000/;`, Nginx replaces the matched prefix and forwards `/users`."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A different backend is built with routes under `/api`, including `/api/users`. The Nginx config is:\n\n```nginx\nlocation /api/ {\n    proxy_pass http://127.0.0.1:3000/;\n}\n```\n\nClients get 404 because the backend receives `/users`. Which fix matches the backend router?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Remove the trailing slash so Nginx forwards the full original URI: `proxy_pass http://127.0.0.1:3000;`"
+        },
+        {
+          "id": "b",
+          "text": "Keep the trailing slash because every backend should receive stripped paths"
+        },
+        {
+          "id": "c",
+          "text": "Replace `proxy_pass` with `root /api/` so the app router handles the path"
+        },
+        {
+          "id": "d",
+          "text": "Add `try_files $uri /index.html` inside `/api/` so API responses become static files"
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "If the backend expects `/api/users`, the no-slash form preserves the full original URI. The trailing-slash form is only correct when the backend expects the prefix to be stripped."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "A reverse proxy works functionally, but the app generates redirect URLs pointing at `http://localhost:3000` instead of `https://api.example.com`. The config lacks:\n\n```nginx\nproxy_set_header Host $host;\nproxy_set_header X-Forwarded-Proto $scheme;\n```\n\nWhat is the best explanation?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The app is missing original host and scheme context, so it builds URLs from the upstream connection instead of the client-facing request"
+        },
+        {
+          "id": "b",
+          "text": "The app needs a trailing slash on `proxy_pass` because headers cannot affect redirects"
+        },
+        {
+          "id": "c",
+          "text": "The DNS `A` record is wrong because redirect URLs are resolved before HTTP headers"
+        },
+        {
+          "id": "d",
+          "text": "The Nginx worker cannot read static files because `Host` controls filesystem ownership"
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The article states that forwarding `Host` and `X-Forwarded-Proto` lets the application know the original domain and whether the client used HTTP or HTTPS. Without them, virtual hosting and URL generation can break."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "A production proxy block is being reviewed:\n\n```nginx\nlocation / {\n    proxy_pass http://localhost:3000;\n    proxy_set_header Host $host;\n    proxy_set_header X-Real-IP $remote_addr;\n    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n    proxy_set_header X-Forwarded-Proto $scheme;\n}\n```\n\nWhich statements accurately describe these headers?",
+      "options": [
+        {
+          "id": "a",
+          "text": "`Host` preserves the original domain name for the application"
+        },
+        {
+          "id": "b",
+          "text": "`X-Real-IP` carries the direct client IP as seen by Nginx"
+        },
+        {
+          "id": "c",
+          "text": "`X-Forwarded-For` carries the proxy chain so logs and rate limits can identify clients"
+        },
+        {
+          "id": "d",
+          "text": "`X-Forwarded-Proto` tells the app whether the original request used HTTP or HTTPS"
+        },
+        {
+          "id": "e",
+          "text": "`X-Forwarded-Proto` changes the backend TCP port automatically"
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c",
+        "d"
+      ],
+      "explanation": "The article describes each of these forwarding headers and why production proxies need them. They pass request context to the app; they do not automatically change which TCP port the backend listens on."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A rate limiter in the application suddenly treats all users as one client after moving behind Nginx. The app logs show every request from `127.0.0.1`. What is the most likely proxy configuration gap?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Missing client IP forwarding headers such as `X-Real-IP` and `X-Forwarded-For`"
+        },
+        {
+          "id": "b",
+          "text": "Using `try_files` without a SPA fallback"
+        },
+        {
+          "id": "c",
+          "text": "Setting `index index.html` in the static server block"
+        },
+        {
+          "id": "d",
+          "text": "Lowering DNS TTL before a migration"
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Without forwarding headers, the app sees Nginx itself as the client. The article calls out rate limiting and logging as reasons `X-Real-IP` and `X-Forwarded-For` are required."
+    },
+    {
+      "id": "q6",
+      "type": "single",
+      "scenario": "A backend has routes `/users` and `/orders`. Nginx exposes them under `/api/`. The failed access trace shows:\n\n```text\nclient request: GET /api/users\nupstream request: GET /api/users\nbackend route table: GET /users, GET /orders\nbackend response: 404\n```\n\nWhy is this a proxy path bug rather than a missing backend route?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The backend route exists as `/users`, but Nginx forwarded `/api/users` instead of stripping the external prefix"
+        },
+        {
+          "id": "b",
+          "text": "The backend route table proves `/api/users` exists and should have returned 200"
+        },
+        {
+          "id": "c",
+          "text": "A 404 from any upstream always means the process is offline"
+        },
+        {
+          "id": "d",
+          "text": "Nginx cannot forward paths that begin with `/api/`"
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The manifest and trace together show a prefix mismatch. The backend knows `/users`, but it received `/api/users`, which points to the no-slash `proxy_pass` behavior described in the article."
+    },
+    {
+      "id": "q7",
+      "type": "single",
+      "scenario": "A developer removes all `proxy_set_header` lines because the app still returns 200 in smoke tests. Which production issue is most likely to appear later?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Logs, rate limits, virtual hosting, or redirects can use Nginx's local context instead of the real client request context"
+        },
+        {
+          "id": "b",
+          "text": "Nginx will stop parsing the config because `proxy_set_header` is required syntax after every `proxy_pass`"
+        },
+        {
+          "id": "c",
+          "text": "Static assets will always return 404 because headers control `root` lookup"
+        },
+        {
+          "id": "d",
+          "text": "DNS resolution will fail because the resolver reads `X-Forwarded-For`"
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "A simple 200 check may miss context-dependent behavior. The article emphasizes that forwarding headers are not optional in production because apps need the original host, client IP, proxy chain, and scheme."
+    }
+  ]
+}

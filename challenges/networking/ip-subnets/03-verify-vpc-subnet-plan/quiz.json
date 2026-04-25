@@ -1,0 +1,201 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A proposal claims to carve a `10.0.0.0/16` VPC into the article's four `/20` subnets:\n\n```text\npublic-a   10.0.0.0/20\npublic-b   10.0.16.0/20\nprivate-a  10.0.32.0/20\nprivate-b  10.0.32.0/20\n```\n\nWhat review verdict should you give?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Fail the plan because `private-b` duplicates `private-a` instead of using the next non-overlapping `/20` block"
+        },
+        {
+          "id": "b",
+          "text": "Pass the plan because every line uses a private `10.0.0.0/8` address"
+        },
+        {
+          "id": "c",
+          "text": "Pass the plan because two private subnets are allowed to share a CIDR when they are in different availability zones"
+        },
+        {
+          "id": "d",
+          "text": "Fail the plan only because public subnets cannot use `/20` blocks"
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The article's clean allocation uses adjacent non-overlapping `/20` blocks: `10.0.0.0`, `10.0.16.0`, `10.0.32.0`, and `10.0.48.0`. Duplicating a CIDR creates an overlap that breaks routing assumptions."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "An app team wants to know how many addresses a proposed AWS subnet can practically support:\n\n```text\nSubnet: 10.0.48.0/20\nTotal addresses by CIDR math: 4096\n```\n\nWhich capacity estimate best matches the article?",
+      "options": [
+        {
+          "id": "a",
+          "text": "About 4091 usable addresses in AWS, because AWS reserves 5 addresses per subnet"
+        },
+        {
+          "id": "b",
+          "text": "Exactly 4096 usable addresses, because cloud subnets do not reserve network or broadcast addresses"
+        },
+        {
+          "id": "c",
+          "text": "Exactly 254 usable addresses, because every private subnet behaves like a `/24`"
+        },
+        {
+          "id": "d",
+          "text": "No usable addresses, because `/20` is smaller than the AWS minimum subnet size"
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The article gives the formula `2^(32 - prefix)` for total addresses and notes that AWS reserves 5 addresses per subnet. For `/20`, that is 4096 total and about 4091 usable in AWS."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "A reviewer asks whether the initial four `/20` subnets consume the whole `10.0.0.0/16` VPC. The plan is:\n\n```text\n10.0.0.0/20\n10.0.16.0/20\n10.0.32.0/20\n10.0.48.0/20\n```\n\nWhat is the best answer?",
+      "options": [
+        {
+          "id": "a",
+          "text": "No, only 16,384 of 65,536 total addresses are allocated, leaving `10.0.64.0` through `10.0.255.255` for future needs"
+        },
+        {
+          "id": "b",
+          "text": "Yes, four `/20` subnets always consume an entire `/16`"
+        },
+        {
+          "id": "c",
+          "text": "No, but only the public subnets count toward VPC capacity"
+        },
+        {
+          "id": "d",
+          "text": "Yes, because AWS requires every VPC to allocate all private ranges immediately"
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The article computes that four `/20` subnets allocate 16,384 total addresses from a `/16`, leaving 49,152 addresses. Planning space for future subnets is intentional."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "You are reviewing this clean VPC plan against the article's pattern:\n\n```text\nVPC: 10.0.0.0/16\npublic-a   10.0.0.0/20\npublic-b   10.0.16.0/20\nprivate-a  10.0.32.0/20\nprivate-b  10.0.48.0/20\n```\n\nWhich review comments are accurate?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Each subnet is inside the parent `10.0.0.0/16` VPC"
+        },
+        {
+          "id": "b",
+          "text": "The subnet boundaries are adjacent and non-overlapping"
+        },
+        {
+          "id": "c",
+          "text": "Each `/20` has 4096 total addresses before provider reservations"
+        },
+        {
+          "id": "d",
+          "text": "The plan leaves unallocated space after `10.0.63.255` for future subnets"
+        },
+        {
+          "id": "e",
+          "text": "The plan is invalid because a `/16` can contain only one `/20` child subnet"
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c",
+        "d"
+      ],
+      "explanation": "The four blocks match the article's clean allocation. They sit inside the VPC, do not overlap, each provide 4096 total addresses, and leave the rest of the `/16` for growth. A `/16` can contain many smaller subnets."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "An IPAM export and a Terraform proposal disagree for one named subnet:\n\n```text\nIPAM reservation: subnet-private-az-b,10.0.48.0/20,az-b,private\nTerraform plan:   subnet-private-az-b,10.0.32.0/20,az-b,private\n```\n\nThe other three subnet names match their reservations. What is the correct review verdict?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Block the change because the named subnet is assigned a different CIDR than its reservation and collides with the expected private-a range"
+        },
+        {
+          "id": "b",
+          "text": "Approve the change because both CIDRs are inside `10.0.0.0/16`"
+        },
+        {
+          "id": "c",
+          "text": "Approve the change because private subnets in separate availability zones should share one CIDR"
+        },
+        {
+          "id": "d",
+          "text": "Block the change only if the subnet is public, because private subnets do not participate in routing"
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "A subnet plan must keep each named allocation unique and non-overlapping. Even though both CIDRs are private and inside the parent VPC, using the wrong `/20` for a named subnet can break route tables, capacity tracking, and ownership expectations."
+    },
+    {
+      "id": "q6",
+      "type": "single",
+      "scenario": "A team proposes replacing four `/20` subnets with dozens of tiny `/24` subnets because each tier currently has fewer than 100 hosts. Which article-based concern should you raise?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Many tiny subnets can consume route-table entries and leave less room for scaling; a handful of larger aligned subnets is often easier to summarize and operate"
+        },
+        {
+          "id": "b",
+          "text": "`/24` subnets are public by definition and cannot be used inside a VPC"
+        },
+        {
+          "id": "c",
+          "text": "`/20` subnets are illegal in AWS because the maximum subnet size is `/24`"
+        },
+        {
+          "id": "d",
+          "text": "Route tables ignore CIDR size, so the choice has no operational impact"
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The article notes practical constraints around route-table limits and route summarization. Overly small subnets also risk exhausting addresses as services scale."
+    },
+    {
+      "id": "q7",
+      "type": "single",
+      "scenario": "A VPC design review assigns internet-facing load balancers and private application servers to the same subnet because both need to reach the internet. What is the best correction?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Use public subnets for load balancers that face the internet and private subnets for app servers or databases that should not be directly reachable"
+        },
+        {
+          "id": "b",
+          "text": "Put every workload in a public subnet because NAT makes private subnets impossible"
+        },
+        {
+          "id": "c",
+          "text": "Put load balancers in private subnets only because they never need public reachability"
+        },
+        {
+          "id": "d",
+          "text": "Avoid availability zones because high availability requires one subnet total"
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The article's VPC scenario separates public subnets for internet-facing load balancers from private subnets for application servers and databases. Both can have outbound paths, but direct inbound exposure is different."
+    }
+  ]
+}

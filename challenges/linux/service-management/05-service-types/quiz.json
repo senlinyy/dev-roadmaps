@@ -1,95 +1,261 @@
 {
+  "passThreshold": 1,
   "questions": [
     {
       "id": "q1",
       "type": "single",
-      "scenario": "Your team writes a Go HTTP API. It binds the listener and starts serving in the foreground; it does not fork, does not write a PID file, and does not call `sd_notify`. The unit file currently has `Type=simple`. The load balancer is configured to start sending traffic when systemd says the service is `active`.\n\nIntermittently, the LB sends requests during deploys and gets `Connection refused` for ~200ms.\n\n**What is the correct fix?**",
+      "scenario": "A Go API starts in the foreground and takes about two seconds to warm a connection pool after the binary launches. The load balancer begins sending traffic as soon as `systemctl is-active api.service` returns success. With this unit, deploys sometimes produce a short burst of `Connection refused`:\n\n```ini\n[Service]\nType=simple\nExecStart=/usr/local/bin/api\n```\n\nThe application can call `sd_notify(READY=1)` after it has bound the socket and finished warmup. What is the best service-type change?",
       "options": [
-        { "id": "a", "text": "Change to `Type=forking` and write a PID file after `listen()`" },
-        { "id": "b", "text": "Keep `Type=simple` and make the LB more patient" },
-        { "id": "c", "text": "Add `sd_notify(\"READY=1\")` after `listen()` succeeds and change to `Type=notify`. Now systemd marks the unit `active` only after the socket is bound, eliminating the race." },
-        { "id": "d", "text": "Use `Type=oneshot` with `RemainAfterExit=yes`" }
+        {
+          "id": "a",
+          "text": "Change to `Type=notify` and send `READY=1` only after the process is actually ready to serve."
+        },
+        {
+          "id": "b",
+          "text": "Keep `Type=simple`, because systemd cannot represent application readiness."
+        },
+        {
+          "id": "c",
+          "text": "Change to `Type=forking` and add a PID file even though the Go process stays in the foreground."
+        },
+        {
+          "id": "d",
+          "text": "Change to `Type=oneshot` with `RemainAfterExit=yes` so the unit remains active after startup."
+        }
       ],
-      "correct": ["c"],
-      "explanation": "`Type=simple` marks the service active *the moment systemd `exec`s the binary*, which is before `listen()` returns. That gap is your 200ms race. `Type=notify` lets the program tell systemd *exactly* when it is ready (typically right after `Listen` succeeds), which is the only way to make `systemctl is-active` line up with reality. `forking` requires the program to actually double-fork and write a PID file, overkill for a foreground Go binary. `oneshot` is for tasks that run and exit."
+      "correct": [
+        "a"
+      ],
+      "explanation": "The article explains that `Type=simple` marks a service started as soon as the process is launched, not when it can serve traffic. If the program can signal readiness, `Type=notify` makes systemd wait for `READY=1`. `forking` is for legacy double-fork daemons, and `oneshot` is for commands that run and exit."
     },
     {
       "id": "q2",
       "type": "single",
-      "scenario": "You write a unit for a database migration that runs on boot, applies pending schema changes, and exits 0. You want subsequent services to wait until migrations finish before starting.\n\n**Which configuration is correct?**",
+      "scenario": "A migration job must run during boot before the API starts. It applies pending schema changes and exits 0. Operators want `After=db-migrate.service` on the API to mean the migration finished successfully, and they want status output to show that the migration unit completed and remains satisfied. Which service configuration is the best fit?",
       "options": [
-        { "id": "a", "text": "`Type=simple`: systemd will wait for the process to exit before marking it active" },
-        { "id": "b", "text": "`Type=oneshot`: systemd waits for the process to exit, then marks it active. Combined with `RemainAfterExit=yes`, dependent units with `After=migrate.service` will see it as still-active and start in order." },
-        { "id": "c", "text": "`Type=notify`: let the migration call `sd_notify(\"READY=1\")` when done" },
-        { "id": "d", "text": "`Type=forking`: fork a worker that exits, then the parent stays alive" }
+        {
+          "id": "a",
+          "text": "`Type=oneshot` with `RemainAfterExit=yes`, because systemd waits for the command to exit and can keep the unit active after success."
+        },
+        {
+          "id": "b",
+          "text": "`Type=simple`, because simple units wait for a process to exit before becoming active."
+        },
+        {
+          "id": "c",
+          "text": "`Type=notify`, because every boot task should call `sd_notify(READY=1)` before it exits."
+        },
+        {
+          "id": "d",
+          "text": "`Type=forking`, because schema migrations should fork once and leave a watcher process behind."
+        }
       ],
-      "correct": ["b"],
-      "explanation": "`oneshot` is purpose-built for tasks that run-and-exit. systemd waits for the ExecStart command to exit, *then* marks the unit active, the opposite of `simple`, which marks active immediately on exec. Add `RemainAfterExit=yes` so the unit stays in the active state after exit, otherwise dependent services with `After=` may see the unit as inactive again and start anyway. (a) `simple` would be backwards: the unit goes active immediately and other services would start before migration finishes."
+      "correct": [
+        "a"
+      ],
+      "explanation": "`oneshot` is the article's fit for short commands that do one thing and finish. `RemainAfterExit=yes` is the standard pattern when other units should treat the completed setup as still active. `simple` becomes active too early for this purpose, `notify` is unnecessary unless the program is a long-running readiness-aware service, and `forking` does not match a run-to-completion job."
     },
     {
       "id": "q3",
       "type": "single",
-      "scenario": "An old daemon `legacyd` is started by a SysV-style script. It double-forks on startup, the grandparent exits, and the running daemon writes its PID to `/var/run/legacyd.pid`. You want to manage it under systemd.\n\nWhich `Type=` and supporting directive matches this behavior?",
+      "scenario": "A legacy monitoring daemon was ported from a SysV script. Startup behavior is:\n\n```text\nparent starts\nparent forks child\nchild forks daemon grandchild\nparent exits\ndaemon writes /run/legacy-mon.pid\n```\n\nWhich unit model gives systemd the clearest way to track the real daemon?",
       "options": [
-        { "id": "a", "text": "`Type=simple` with `Restart=always`" },
-        { "id": "b", "text": "`Type=forking` with `PIDFile=/var/run/legacyd.pid` so systemd can track the surviving daemon process after the parent exits" },
-        { "id": "c", "text": "`Type=notify` with `NotifyAccess=all`" },
-        { "id": "d", "text": "`Type=exec` so systemd traces the fork" }
+        {
+          "id": "a",
+          "text": "`Type=forking` with `PIDFile=/run/legacy-mon.pid`."
+        },
+        {
+          "id": "b",
+          "text": "`Type=simple` with `Restart=always`."
+        },
+        {
+          "id": "c",
+          "text": "`Type=notify` with no application changes."
+        },
+        {
+          "id": "d",
+          "text": "`Type=oneshot` with `RemainAfterExit=yes`."
+        }
       ],
-      "correct": ["b"],
-      "explanation": "`forking` is exactly the legacy-daemon model: ExecStart launches a process that backgrounds itself and exits. systemd treats the *exit of the parent* as the readiness signal, but it needs the `PIDFile=` directive to know which child is the actual daemon (otherwise it loses track and considers the unit dead). For new code, prefer `simple` or `notify`; never write *new* daemons that double-fork. But for SysV ports, `forking` + `PIDFile=` is the right adapter."
+      "correct": [
+        "a"
+      ],
+      "explanation": "The article says `Type=forking` is the adapter for classic daemons that background themselves. Because systemd did not spawn the final grandchild directly, `PIDFile=` tells it which process is the main daemon. A foreground type, a notify type without a notification, or a oneshot job would misrepresent the process shape."
     },
     {
       "id": "q4",
       "type": "single",
-      "scenario": "You set `Type=notify` on a Python service and the unit fails to start with:\n\n```\nFailed to start app.service: start operation timed out\n```\n\nThe code does call `systemd.daemon.notify(\"READY=1\")`. The journal shows the service printed `Listening on :8080` and is serving requests, but systemd still kills it after `TimeoutStartSec=90` thinking it never became ready.\n\n**What is the most likely cause?**",
+      "scenario": "A Python service uses `Type=notify`. The journal shows it is serving requests, but systemd eventually kills it for startup timeout:\n\n```text\napp[2200]: worker-3 listening on :8080\napp[2200]: worker-3 sent READY=1\nsystemd[1]: app.service: start operation timed out. Terminating.\n```\n\nThe unit has no `NotifyAccess=` line. What is the most likely unit-level cause?",
       "options": [
-        { "id": "a", "text": "`NotifyAccess=` is not set in the unit, defaulting to `main`. The notification came from a worker process, not the main PID, so systemd ignored it." },
-        { "id": "b", "text": "Python's `systemd.daemon` library is broken on this distro" },
-        { "id": "c", "text": "`READY=1` must be sent over TCP, not over the notify socket" },
-        { "id": "d", "text": "`TimeoutStartSec` must be set to 0 for notify-type services" }
+        {
+          "id": "a",
+          "text": "The readiness message came from a worker process while the default `NotifyAccess=main` accepts notifications only from the main process."
+        },
+        {
+          "id": "b",
+          "text": "`READY=1` must be sent through TCP to port 1, so systemd ignored a local notification."
+        },
+        {
+          "id": "c",
+          "text": "`Type=notify` services must also set `RemainAfterExit=yes` or systemd discards readiness."
+        },
+        {
+          "id": "d",
+          "text": "systemd never supports notify readiness for Python processes."
+        }
       ],
-      "correct": ["a"],
-      "explanation": "`Type=notify` requires the notification to come from a process systemd is willing to listen to. The default is `NotifyAccess=main`, only the main PID's notifications count. If the service forks workers and one of them sends `READY=1`, systemd silently drops it and times out. Fixes: have the main process send the notification, or set `NotifyAccess=all` (less safe), or `NotifyAccess=exec` (any process started by ExecStart). Always check `NotifyAccess` first when notify-type units mysteriously time out."
+      "correct": [
+        "a"
+      ],
+      "explanation": "The service-types section calls out `NotifyAccess=`. With the default `main`, a notification from a worker can be silently ignored, leaving the unit in `activating` until `TimeoutStartSec` expires. The fix is usually to have the main process send `READY=1`, or deliberately widen `NotifyAccess`. The other options do not match how systemd notifications work."
     },
     {
       "id": "q5",
       "type": "single",
-      "scenario": "A teammate writes a unit with `Type=simple` for a worker that exits cleanly when its queue drains. The unit shows as `inactive (dead)` after the queue drains and other services with `Requires=worker.service` complain they have a dead dependency.\n\n**What is the right architectural fix?**",
+      "scenario": "A new unit should run a foreground process that is ready immediately. A typo in the binary path should fail the unit before dependent services start. Which type best improves on `simple` for this specific case on a recent systemd release?",
       "options": [
-        { "id": "a", "text": "Add `Restart=always` so the unit immediately respawns when it exits" },
-        { "id": "b", "text": "Change to `Type=oneshot` with `RemainAfterExit=yes`" },
-        { "id": "c", "text": "If the worker is *meant* to be a long-running daemon, the bug is the early exit, fix it to keep polling. If it is *meant* to drain-and-exit, model it as a `oneshot` (or a timer-driven unit), and move dependent services off `Requires=` because there is no longer a long-running thing to require." },
-        { "id": "d", "text": "Use `Type=notify` so systemd knows the worker finished gracefully" }
+        {
+          "id": "a",
+          "text": "`Type=exec`, because it waits until the child successfully executes the binary before considering the service started."
+        },
+        {
+          "id": "b",
+          "text": "`Type=forking`, because systemd can infer missing binaries only after a parent exits."
+        },
+        {
+          "id": "c",
+          "text": "`Type=notify`, because systemd automatically sends `READY=1` after a successful `execve()`."
+        },
+        {
+          "id": "d",
+          "text": "`Type=oneshot`, because all typo detection requires a command that exits."
+        }
       ],
-      "correct": ["c"],
-      "explanation": "This is a *modeling* problem, not a directive problem. `Restart=always` papers over the bug, it doesn't ask whether the worker should be a daemon or a job. `Type=oneshot` would only work if the worker really is a one-shot, in which case dependent services with `Requires=` are the wrong abstraction. The honest fix is to decide which it is, then pick the matching type and dependency style. systemd's strength is forcing this clarity."
+      "correct": [
+        "a"
+      ],
+      "explanation": "The article distinguishes `simple` from `exec`: `simple` can look started before the new binary has actually executed, while `exec` waits for a successful `execve()`. That catches missing paths or early setup failures before dependents proceed. The other service types solve different process shapes and readiness signals."
     },
     {
       "id": "q6",
       "type": "single",
-      "scenario": "Reading a unit, you see:\n\n```\n[Service]\nType=exec\nExecStart=/usr/bin/myservice\n```\n\nA junior asks how `Type=exec` differs from `Type=simple`.\n\n**What is the most accurate answer?**",
+      "scenario": "A team changes a foreground Rust TCP server from `Type=simple` to `Type=notify` because they saw `notify` used in another service. The Rust server has no `sd_notify` code. After the change, `systemctl start` hangs until the start timeout, then stops the process. What is the correct diagnosis?",
       "options": [
-        { "id": "a", "text": "`exec` and `simple` are aliases" },
-        { "id": "b", "text": "`Type=simple` marks the unit active as soon as systemd `fork()`s the child. `Type=exec` waits until the child has successfully `execve()`d the binary, so cgroup/namespace setup failures (chroot, working dir, missing binary) cause the unit to fail to start instead of starting and immediately dying." },
-        { "id": "c", "text": "`Type=exec` runs the command without a shell; `Type=simple` always runs through `/bin/sh`" },
-        { "id": "d", "text": "`Type=exec` only works for binaries owned by root" }
+        {
+          "id": "a",
+          "text": "`Type=notify` waits for an explicit `READY=1` message. A service that never sends one remains activating until the timeout."
+        },
+        {
+          "id": "b",
+          "text": "`Type=notify` is unsupported for TCP servers, so systemd waits for the first inbound connection."
+        },
+        {
+          "id": "c",
+          "text": "The server should add `PIDFile=`, because notify services are tracked only through PID files."
+        },
+        {
+          "id": "d",
+          "text": "The unit should add `RemainAfterExit=yes`, because notify services are considered one-shot jobs."
+        }
       ],
-      "correct": ["b"],
-      "explanation": "Subtle but important. With `simple`, the fork succeeded but the exec might still fail (wrong binary path, chroot doesn't exist, missing capability), and the unit briefly looks active before crashing. With `exec` (introduced in systemd 240), the kernel call to `execve()` must return success before the unit is considered started. This means dependent services don't start chasing a unit that never actually ran. Prefer `exec` over `simple` for new units when your systemd is recent enough."
+      "correct": [
+        "a"
+      ],
+      "explanation": "`notify` is not a magic readiness probe. The program must call `sd_notify(READY=1)` or use an equivalent helper. Without that message, systemd correctly waits and eventually times out. `PIDFile=` belongs with forking daemons, and `RemainAfterExit=` belongs with oneshot setup jobs."
     },
     {
       "id": "q7",
-      "type": "multiple",
-      "scenario": "You are reviewing four candidate units below. Which choices are sensible matches between the service's behavior and its `Type=`?\n\n```\nUnit A:  long-running TCP server, single foreground process, no readiness API\n         Type=notify\nUnit B:  Bash script that creates /var/lib/foo, exits 0\n         Type=simple\nUnit C:  long-running gRPC server that calls sd_notify(READY=1) after registering services\n         Type=notify\nUnit D:  legacy daemon that double-forks and writes /var/run/old.pid\n         Type=forking, PIDFile=/var/run/old.pid\n```\n\n**Which of these are correct? (Select all that apply.)**",
+      "type": "single",
+      "scenario": "A worker unit is modeled as a daemon:\n\n```ini\n[Service]\nType=simple\nRestart=always\nExecStart=/usr/local/bin/drain-queue\n```\n\nThe program drains all current messages, exits 0, immediately restarts, finds no work, exits 0 again, and repeats all day. What is the best architectural review comment?",
       "options": [
-        { "id": "a", "text": "Unit A: `notify` is correct" },
-        { "id": "b", "text": "Unit B: `simple` is correct" },
-        { "id": "c", "text": "Unit C: `notify` is correct" },
-        { "id": "d", "text": "Unit D: `forking` with `PIDFile=` is correct" }
+        {
+          "id": "a",
+          "text": "Decide whether this is a daemon or a run-to-completion job. If it is meant to drain and exit, model it as a `oneshot` or timer-driven unit rather than a forever daemon with `Restart=always`."
+        },
+        {
+          "id": "b",
+          "text": "Keep `Restart=always`, because every clean exit from a worker is a crash under systemd."
+        },
+        {
+          "id": "c",
+          "text": "Change only to `Type=forking`, because backgrounding prevents restart loops."
+        },
+        {
+          "id": "d",
+          "text": "Change only to `Type=exec`, because `exec` waits for the queue to become non-empty."
+        }
       ],
-      "correct": ["c", "d"],
-      "explanation": "Unit A is wrong: `Type=notify` requires the program to call `sd_notify(READY=1)`. Without that, the service starts but systemd hangs at `activating` until the start timeout. The right type for a foreground server with no readiness API is `Type=simple` (or `exec`). Unit B is wrong: a script that runs-and-exits should be `Type=oneshot` (with `RemainAfterExit=yes` if anything depends on it). With `simple`, systemd would mark it active, then immediately see it exit 0 and mark it inactive, confusing for dependents. Unit C and Unit D are correct matches."
+      "correct": [
+        "a"
+      ],
+      "explanation": "The article's service-type section and restart-policy section both point to modeling the process honestly. Daemons stay alive and may use restart policies. Jobs that run and exit are better represented as `oneshot` units, often triggered by timers, and generally should not use `Restart=always`. Changing the type without changing the model would hide the design problem."
+    },
+    {
+      "id": "q8",
+      "type": "multiple",
+      "scenario": "You are reviewing candidate unit fragments. Which pairings correctly match the program behavior to `Type=` and related directives? (Select all that apply.)\n\n```text\nCandidate 1: foreground HTTP server, ready as soon as exec succeeds, no sd_notify support\nCandidate 2: one-time cache warmer script that exits 0 and should count as completed for later units\nCandidate 3: modern database that sends READY=1 after recovery and socket bind\nCandidate 4: old daemon that double-forks and writes /run/old.pid\n```",
+      "options": [
+        {
+          "id": "a",
+          "text": "Candidate 1: `Type=exec` is sensible on recent systemd because it catches failed execution before dependents start."
+        },
+        {
+          "id": "b",
+          "text": "Candidate 2: `Type=oneshot` with `RemainAfterExit=yes` is sensible for completed setup state."
+        },
+        {
+          "id": "c",
+          "text": "Candidate 3: `Type=notify` is sensible because the program has a real readiness signal."
+        },
+        {
+          "id": "d",
+          "text": "Candidate 4: `Type=forking` with `PIDFile=/run/old.pid` is sensible for a double-fork daemon."
+        },
+        {
+          "id": "e",
+          "text": "Candidate 1: `Type=notify` is required for every network server even when the program cannot send readiness."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c",
+        "d"
+      ],
+      "explanation": "The first four pairings map directly to the article's table and caveats: `exec` for an immediately ready foreground process on newer systemd, `oneshot` plus `RemainAfterExit` for completed setup, `notify` for real readiness signaling, and `forking` plus `PIDFile` for legacy double-fork daemons. A network server does not automatically require `notify`; it must support the notification."
+    },
+    {
+      "id": "q9",
+      "type": "multiple",
+      "scenario": "A status page says `billing.service` is active, but the port is closed. You inspect the unit and process list:\n\n```ini\n[Service]\nType=forking\nExecStart=/usr/local/bin/billing-api\n```\n\n```bash\n$ ps -o pid,ppid,cmd -C billing-api\n  PID  PPID CMD\n 9100     1 /usr/local/bin/billing-api\n```\n\nThe binary is a modern foreground server and does not double-fork. Which conclusions are valid? (Select all that apply.)",
+      "options": [
+        {
+          "id": "a",
+          "text": "The declared type does not match the process shape. `Type=forking` is for a parent that exits after creating a daemon child."
+        },
+        {
+          "id": "b",
+          "text": "Foreground servers without readiness support are usually better modeled as `Type=exec` or `Type=simple`, depending on systemd version and desired exec failure detection."
+        },
+        {
+          "id": "c",
+          "text": "Adding `PIDFile=` is the correct fix even though the application does not background itself."
+        },
+        {
+          "id": "d",
+          "text": "This kind of mismatch can make systemd's active state and Main PID disagree with the process that is actually serving traffic."
+        },
+        {
+          "id": "e",
+          "text": "Changing to `Type=oneshot` would make systemd keep the TCP server active after it exits."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "d"
+      ],
+      "explanation": "The article's failure modes call out active-looking services that do not answer because the type is wrong. A foreground server should not be declared `forking` unless it actually backgrounds itself, and `PIDFile=` is not a patch for the wrong process model. `exec` or `simple` fit an immediately ready foreground service; `notify` fits only if the program can signal readiness. `oneshot` is for commands that finish, not TCP daemons."
     }
   ]
 }

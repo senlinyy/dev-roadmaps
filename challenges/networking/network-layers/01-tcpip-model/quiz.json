@@ -1,0 +1,201 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A service inventory for `polaris-edge-01` contains:\n\n```text\nProcess: nginx\nListener: 0.0.0.0:443\nProtocol: HTTPS\n```\n\nWhich TCP/IP layer mapping is best supported by this evidence?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Application layer: HTTPS. Transport layer: TCP port 443"
+        },
+        {
+          "id": "b",
+          "text": "Internet layer: HTTPS. Network access layer: TCP port 443"
+        },
+        {
+          "id": "c",
+          "text": "Transport layer: HTTPS. Application layer: TCP port 443"
+        },
+        {
+          "id": "d",
+          "text": "Network access layer: HTTPS. Internet layer: nginx"
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "HTTPS is the application protocol. TCP and its port number belong to the transport layer, which decides which program receives the connection and how reliable delivery works."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "An egress snapshot shows:\n\n```text\n2: eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 state UP\n    link/ether 52:54:00:24:08:14\n    inet 10.24.8.14/20 scope global eth0\ndefault via 10.24.0.1 dev eth0\n```\n\nWhich mapping is correct?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Internet layer: `10.24.8.14/20` and default gateway. Network access layer: `eth0` and the MAC address"
+        },
+        {
+          "id": "b",
+          "text": "Application layer: `10.24.8.14/20`. Transport layer: `52:54:00:24:08:14`"
+        },
+        {
+          "id": "c",
+          "text": "Network access layer: default gateway. Application layer: `eth0`"
+        },
+        {
+          "id": "d",
+          "text": "Transport layer: `10.24.0.1`. Internet layer: the MAC address"
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "IP addresses and routing live at the internet layer. Interface state and MAC addresses are network access layer evidence because they describe the local link and frame delivery."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "A packet capture during a successful HTTPS connection includes:\n\n```text\n14:23:01 IP 10.0.0.5.52314 > 172.17.0.2.443: Flags [S], length 0\n14:23:01 IP 172.17.0.2.443 > 10.0.0.5.52314: Flags [S.], length 0\n14:23:01 IP 10.0.0.5.52314 > 172.17.0.2.443: Flags [.], length 0\n```\n\nWhich layer is this evidence primarily demonstrating?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Transport layer, because the SYN, SYN-ACK, and ACK packets are the TCP three-way handshake"
+        },
+        {
+          "id": "b",
+          "text": "Physical layer, because flags prove the cable is unplugged"
+        },
+        {
+          "id": "c",
+          "text": "Application layer, because the capture shows the HTTP response body"
+        },
+        {
+          "id": "d",
+          "text": "Data link layer, because no IP addresses are involved"
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The article describes TCP's connection setup as SYN, SYN-ACK, and ACK at the transport layer. This capture shows IPs and ports, but the key evidence is the TCP handshake."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "You are classifying incident snapshots for a triage channel. Which layer mappings are accurate?",
+      "options": [
+        {
+          "id": "a",
+          "text": "`ip link show eth0` reports `NO-CARRIER` and `state DOWN`: Physical layer"
+        },
+        {
+          "id": "b",
+          "text": "`ip neigh show` reports a peer as `FAILED`: Data link layer"
+        },
+        {
+          "id": "c",
+          "text": "`traceroute` reaches the first router and then prints `* * *`: Network layer"
+        },
+        {
+          "id": "d",
+          "text": "`telnet 93.184.216.34 8080` returns `Connection refused`: Application layer only"
+        },
+        {
+          "id": "e",
+          "text": "`curl -v` connects to port 443 but reports an expired certificate: Application layer"
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c",
+        "e"
+      ],
+      "explanation": "The article maps no carrier to physical problems, ARP failures to data link, traceroute and routing to network, and TLS certificate failures after connection to application-layer behavior. Connection refused is a transport-layer symptom because the host responded but no process accepted the port."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A server loses all connectivity after a maintenance window. The first check shows:\n\n```text\n$ ip link show eth0\n2: eth0: <NO-CARRIER,BROADCAST,MULTICAST,UP> mtu 1500 state DOWN\n```\n\nWhere should the on-call start?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Layer 1 physical checks such as cable, switch port, fiber, or NIC state"
+        },
+        {
+          "id": "b",
+          "text": "Layer 7 certificate renewal because `NO-CARRIER` means TLS expired"
+        },
+        {
+          "id": "c",
+          "text": "Layer 4 port binding because the output proves nginx stopped listening"
+        },
+        {
+          "id": "d",
+          "text": "DNS record changes because interface carrier state is controlled by authoritative nameservers"
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The article's physical-layer failure example uses `NO-CARRIER` and `state DOWN`. If the link is not established, higher-layer configuration cannot restore connectivity by itself."
+    },
+    {
+      "id": "q6",
+      "type": "single",
+      "scenario": "Two hosts should be on the same local subnet, but one cannot reach the gateway. The ARP table shows:\n\n```text\n$ ip neigh show\n192.168.1.1 dev eth0 FAILED\n```\n\nWhich layer is most likely involved first?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Data link layer, because ARP failed to map the gateway IP to a MAC address on the local network"
+        },
+        {
+          "id": "b",
+          "text": "Application layer, because the HTTP status code was not returned"
+        },
+        {
+          "id": "c",
+          "text": "Transport layer, because TCP retransmissions are always caused by DNS"
+        },
+        {
+          "id": "d",
+          "text": "Physical layer only, because ARP never depends on local switching or VLANs"
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "ARP is the glue between IP addresses and local MAC delivery. A failed neighbor entry points to Layer 2 issues such as VLAN mismatch, switch problems, powered-off destination, or blocked broadcast."
+    },
+    {
+      "id": "q7",
+      "type": "single",
+      "scenario": "A `curl -v` capture for an API says:\n\n```text\n* Connected to api.example.com (93.184.216.34) port 443\n* SSL certificate problem: certificate has expired\ncurl: (60) SSL certificate problem: certificate has expired\n```\n\nWhich conclusion is best?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Lower network layers and the TCP connection worked; the failure is at the application layer where TLS is validated"
+        },
+        {
+          "id": "b",
+          "text": "Layer 3 routing failed because the client never reached an IP address"
+        },
+        {
+          "id": "c",
+          "text": "Layer 4 failed because the TCP handshake never completed"
+        },
+        {
+          "id": "d",
+          "text": "Layer 2 failed because certificates are MAC-address records"
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The output proves the client resolved the name, reached the IP, and connected to TCP 443. The remaining failure is TLS certificate validation, which the article places with application-layer failures."
+    }
+  ]
+}

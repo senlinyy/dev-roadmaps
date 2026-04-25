@@ -3,7 +3,6 @@
   "env": { "USER": "dev", "HOME": "/home/dev" },
   "fs": {
     "/home/dev": { "type": "dir" },
-    "/home/dev/reports": { "type": "dir" },
     "/etc/ssl/audit": { "type": "dir" },
     "/etc/ssl/audit/api-prod.peminfo": {
       "type": "file",
@@ -15,19 +14,13 @@
     }
   },
   "grader": {
-    "strategy": "final-fs-state",
-    "expectedFs": [
-      {
-        "path": "/home/dev/reports/api-cert-renewal.note",
-        "exists": true,
-        "type": "file",
-        "contentContains": [
-          "leaf Mar  5 09:14:01 2025 GMT",
-          "CA Jan  1 00:00:00 2033 GMT",
-          "DNS:api.example.com"
-        ]
-      }
+    "strategy": "contains",
+    "source": "all-stdout",
+    "expected": [
+      "Not After : Mar  5 09:14:01 2025 GMT",
+      "Not After : Jan  1 00:00:00 2033 GMT",
+      "DNS:api.example.com"
     ],
-    "requireCommands": ["cat", "grep", "echo"]
+    "requireCommands": ["cat", "grep"]
   }
 }

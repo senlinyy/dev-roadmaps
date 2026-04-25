@@ -1,0 +1,201 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "The incident channel has two saved lookups for the same hostname after an API cutover:\n\n```text\n$ dig @1.1.1.1 api.example.com A\n;; ->>HEADER<<- opcode: QUERY, status: NOERROR, id: 1010\n;; ANSWER SECTION:\napi.example.com. 60 IN A 93.184.216.99\n;; SERVER: 1.1.1.1#53(1.1.1.1) (UDP)\n\n$ dig @192.0.2.53 api.example.com A\n;; ->>HEADER<<- opcode: QUERY, status: NOERROR, id: 2020\n;; ANSWER SECTION:\napi.example.com. 2418 IN A 93.184.216.34\n;; SERVER: 192.0.2.53#53(192.0.2.53) (UDP)\n```\n\nWhat is the most accurate resolver-to-answer summary?",
+      "options": [
+        {
+          "id": "a",
+          "text": "`1.1.1.1` is serving `93.184.216.99`, while `192.0.2.53` is still serving `93.184.216.34`"
+        },
+        {
+          "id": "b",
+          "text": "`1.1.1.1` and `192.0.2.53` agree because both responses have status NOERROR"
+        },
+        {
+          "id": "c",
+          "text": "`192.0.2.53` is serving the new answer because its TTL is larger"
+        },
+        {
+          "id": "d",
+          "text": "Neither resolver answered because the output does not include `+short`"
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The `SERVER` footer identifies which resolver answered, and the `ANSWER SECTION` shows the record it returned. Both responses are syntactically successful, but they disagree on the IP address."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A stale internal resolver returns this answer during a blue-green cutover:\n\n```text\n;; ANSWER SECTION:\napi.example.com. 2418 IN A 93.184.216.34\n;; WHEN: Wed Apr 15 14:32:00 UTC 2026\n```\n\nThe authoritative record was changed to `93.184.216.99` ten minutes ago. What does the TTL evidence imply?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The resolver can keep returning the old cached address until the remaining TTL counts down"
+        },
+        {
+          "id": "b",
+          "text": "The resolver must query the authoritative server on every request because the TTL is nonzero"
+        },
+        {
+          "id": "c",
+          "text": "The authoritative server has deleted the record because stale answers always become NXDOMAIN"
+        },
+        {
+          "id": "d",
+          "text": "The browser should ignore DNS because TTL only applies to HTTP cache headers"
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "TTL is the DNS cache lifetime. A resolver that cached the old address can serve it until the TTL expires, which is why different clients can see different IPs during propagation."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "A release engineer checks propagation with several public resolvers:\n\n```text\nResolver 8.8.8.8:\n93.184.216.99\nResolver 1.1.1.1:\n93.184.216.99\nResolver 208.67.222.222:\n93.184.216.34\nResolver 9.9.9.9:\n93.184.216.99\n```\n\nWhat should the release note say?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Propagation is still in progress because one resolver still returns the old IP while the others return the new IP"
+        },
+        {
+          "id": "b",
+          "text": "DNS is complete because a majority of resolvers return the new IP"
+        },
+        {
+          "id": "c",
+          "text": "The application is down because public resolvers should never disagree"
+        },
+        {
+          "id": "d",
+          "text": "The record is missing because one resolver did not return a CNAME"
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The article recommends checking multiple resolvers during migrations. If any resolver still returns the old address, some clients may still hit the old deployment until that resolver cache expires."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "A support engineer reports that `dig +short api.example.com` from a laptop returns `93.184.216.34`, but `dig @1.1.1.1 +short api.example.com` returns `93.184.216.99`. The laptop's full output includes:\n\n```text\n;; SERVER: 127.0.0.53#53(127.0.0.53) (UDP)\n```\n\nWhat is the next best comparison?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Compare the default stub result with one or more explicitly selected resolvers to identify which resolver path is stale"
+        },
+        {
+          "id": "b",
+          "text": "Stop checking DNS and restart the web server because `+short` hides HTTP status codes"
+        },
+        {
+          "id": "c",
+          "text": "Assume the authoritative zone is broken because the laptop uses a loopback stub address"
+        },
+        {
+          "id": "d",
+          "text": "Delete the `A` record because two different answers prove the name is invalid"
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The default lookup is answered by the configured resolver path, shown by the `SERVER` footer. Querying explicit resolvers with `@` is the right way to isolate which path still has a cached or different answer."
+    },
+    {
+      "id": "q5",
+      "type": "multiple",
+      "scenario": "You need to post a concise DNS evidence summary in an incident channel. The saved output includes:\n\n```text\n;; ->>HEADER<<- opcode: QUERY, status: NOERROR, id: 40719\n;; ANSWER SECTION:\napi.example.com. 60 IN A 93.184.216.99\n;; Query time: 24 msec\n;; SERVER: 1.1.1.1#53(1.1.1.1) (UDP)\n;; WHEN: Wed Apr 15 14:30:01 UTC 2026\n```\n\nWhich fields are essential for explaining resolver state during a migration?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The `SERVER` line, because it names the resolver that answered"
+        },
+        {
+          "id": "b",
+          "text": "The `ANSWER SECTION`, because it shows the record type and IP returned"
+        },
+        {
+          "id": "c",
+          "text": "The TTL value, because it tells how long this answer may stay cached"
+        },
+        {
+          "id": "d",
+          "text": "The terminal prompt username, because it proves which authoritative server owns the zone"
+        },
+        {
+          "id": "e",
+          "text": "The query status, because NOERROR versus NXDOMAIN changes the diagnosis"
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c",
+        "e"
+      ],
+      "explanation": "Resolver identity, status, answer, and TTL are the evidence needed to reason about propagation and caching. A shell prompt or local username does not prove anything about authoritative ownership."
+    },
+    {
+      "id": "q6",
+      "type": "single",
+      "scenario": "A deployment checklist says the DNS TTL was lowered to 60 seconds five minutes before the IP change. Several customers still see the old IP with a TTL near 3500 seconds. What planning mistake most likely caused this?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The TTL was lowered too late, so some resolvers had already cached the old record using the previous longer TTL"
+        },
+        {
+          "id": "b",
+          "text": "The TTL should have been set to zero because DNS records cannot be changed while cached"
+        },
+        {
+          "id": "c",
+          "text": "The `A` record should have been replaced by an MX record before the migration"
+        },
+        {
+          "id": "d",
+          "text": "The resolver footer should have been removed so clients would trust the new answer"
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The article explains that the old TTL is what existing resolver caches already honor. Lowering the TTL immediately before a change does not shorten cache entries that were created earlier under the old value."
+    },
+    {
+      "id": "q7",
+      "type": "single",
+      "scenario": "A teammate wants to use `dig +trace api.example.com` because the ordinary lookup returns SERVFAIL through one resolver. Which question is `+trace` best suited to answer?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Whether the delegation path from root to TLD to authoritative nameserver can lead to a final answer"
+        },
+        {
+          "id": "b",
+          "text": "Whether the browser accepted the site's TLS certificate after connecting"
+        },
+        {
+          "id": "c",
+          "text": "Whether the web server process is bound to TCP port 443"
+        },
+        {
+          "id": "d",
+          "text": "Whether the HTTP response contains the correct `Cache-Control` header"
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The article describes `+trace` as replaying the full resolution path from root servers down. It is useful for delegation problems, not for TLS, process listeners, or HTTP response headers."
+    }
+  ]
+}

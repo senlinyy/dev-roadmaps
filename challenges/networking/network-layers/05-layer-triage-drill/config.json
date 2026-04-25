@@ -1,0 +1,43 @@
+{
+  "cwd": "/home/dev",
+  "env": { "USER": "dev", "HOME": "/home/dev" },
+  "fs": {
+    "/home/dev": { "type": "dir" },
+    "/var/log/network/layer-checks": { "type": "dir" },
+    "/var/log/network/layer-checks/01-ip-link.out": {
+      "type": "file",
+      "content": "$ ip link show eth0\n2: eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc mq state UP mode DEFAULT group default qlen 1000\n    link/ether 52:54:00:aa:10:05 brd ff:ff:ff:ff:ff:ff\n"
+    },
+    "/var/log/network/layer-checks/02-ip-neigh.out": {
+      "type": "file",
+      "content": "$ ip neigh show 10.30.0.1\n10.30.0.1 dev eth0 lladdr 52:54:00:aa:00:01 REACHABLE\n"
+    },
+    "/var/log/network/layer-checks/03-ip-route.out": {
+      "type": "file",
+      "content": "$ ip route get 10.30.8.20\n10.30.8.20 via 10.30.0.1 dev eth0 src 10.30.4.15 uid 1000\n    cache\n$ ip route show default\ndefault via 10.30.0.1 dev eth0 proto dhcp src 10.30.4.15 metric 100\n"
+    },
+    "/var/log/network/layer-checks/04-tcp-connect.out": {
+      "type": "file",
+      "content": "$ curl -v --connect-timeout 3 https://checkout.internal/health\n*   Trying 10.30.8.20:443...\n* Connected to checkout.internal (10.30.8.20) port 443\n* TLSv1.3 (OUT), TLS handshake, Client hello\n* TLSv1.3 (IN), TLS handshake, Server hello\n> GET /health HTTP/2\n< HTTP/2 503\n< x-request-id: edge-74f2\n< content-type: application/json\n{\"status\":\"degraded\",\"upstream\":\"inventory\"}\n"
+    },
+    "/var/log/network/layer-checks/05-gateway.log": {
+      "type": "file",
+      "content": "2026-04-25T10:42:18Z edge-gw request_id=edge-74f2 service=checkout route=/health upstream=inventory status=503 error=\"no healthy upstream\"\n"
+    }
+  },
+  "grader": {
+    "strategy": "contains",
+    "source": "all-stdout",
+    "loose": true,
+    "expected": [
+      "LOWER_UP",
+      "REACHABLE",
+      "default via 10.30.0.1",
+      "Connected to checkout.internal",
+      "HTTP/2 503",
+      "no healthy upstream"
+    ],
+    "requireCommands": ["cd", "find", "cat", "grep"],
+    "requireCwd": "/var/log/network/layer-checks"
+  }
+}

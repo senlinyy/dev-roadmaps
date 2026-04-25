@@ -1,1 +1,0 @@
-When you grep both files in one command, the output prefixes each match with the filename. Use that to compare a header that should match in both environments (`cache-control` or `content-type`) and then the header family that only staging still has.

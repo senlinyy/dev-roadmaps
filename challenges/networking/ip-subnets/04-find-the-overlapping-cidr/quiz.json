@@ -1,0 +1,200 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A peering request arrives from team Atlas:\n\n```text\nCurrent estate:\nvpc-prod       10.0.0.0/16\nvpc-analytics  10.1.0.0/16\n\nAtlas request:\natlas-edge     10.0.128.0/17\n```\n\nWhat is the correct review result?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Reject it because `10.0.128.0/17` sits inside the existing `10.0.0.0/16` range"
+        },
+        {
+          "id": "b",
+          "text": "Approve it because a `/17` can never overlap a `/16`"
+        },
+        {
+          "id": "c",
+          "text": "Approve it because AWS checks only for exact CIDR equality"
+        },
+        {
+          "id": "d",
+          "text": "Reject it only if Atlas uses a public IP range"
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "A `/16` covers every address from `10.0.0.0` through `10.0.255.255`. The requested `/17` is a subset of that range, so peering would create ambiguous routing."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "An on-prem VPN proposal includes this new route:\n\n```text\nonprem-containers 172.17.10.0/24\n```\n\nYour platform inventory says many hosts use Docker's default bridge network `172.17.0.0/16`. What should you flag?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The proposal overlaps the Docker bridge range and can collide with container networking on those hosts"
+        },
+        {
+          "id": "b",
+          "text": "The proposal is public internet space, so overlap checks do not apply"
+        },
+        {
+          "id": "c",
+          "text": "The proposal is safe because `/24` networks cannot overlap `/16` networks"
+        },
+        {
+          "id": "d",
+          "text": "The proposal is safe because all `172.x.x.x` addresses are outside private networking"
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The article calls out `172.16.0.0/12` as private space and mentions Docker's default `172.17.0.0/16`. A `/24` inside that `/16` overlaps it even though the prefix lengths differ."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "A production VPC request copies these CIDRs from an example document:\n\n```text\napi-vpc      192.0.2.0/24\nworker-vpc   198.51.100.0/24\nedge-vpc     203.0.113.0/24\n```\n\nWhat is the best review comment?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Reject them because these are documentation ranges and should not appear in real production configuration"
+        },
+        {
+          "id": "b",
+          "text": "Approve them because documentation ranges are reserved for private cloud VPCs"
+        },
+        {
+          "id": "c",
+          "text": "Approve only `203.0.113.0/24` because it is the largest private range"
+        },
+        {
+          "id": "d",
+          "text": "Reject them because `/24` is smaller than the AWS minimum subnet size"
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The article lists `192.0.2.0/24`, `198.51.100.0/24`, and `203.0.113.0/24` as documentation ranges. Seeing them in production usually means someone copied examples without replacing the values."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "Your current routed inventory is:\n\n```text\nprod-core       10.0.0.0/16\nprod-shared     10.2.0.0/16\ncorp-vpn        172.16.0.0/12\n```\n\nWhich proposed ranges overlap the current inventory?",
+      "options": [
+        {
+          "id": "a",
+          "text": "`10.0.64.0/18`"
+        },
+        {
+          "id": "b",
+          "text": "`10.3.0.0/16`"
+        },
+        {
+          "id": "c",
+          "text": "`172.20.5.0/24`"
+        },
+        {
+          "id": "d",
+          "text": "`192.168.100.0/24`"
+        },
+        {
+          "id": "e",
+          "text": "`10.2.128.0/17`"
+        }
+      ],
+      "correct": [
+        "a",
+        "c",
+        "e"
+      ],
+      "explanation": "`10.0.64.0/18` is inside `10.0.0.0/16`, `172.20.5.0/24` is inside `172.16.0.0/12`, and `10.2.128.0/17` is inside `10.2.0.0/16`. The other proposed ranges may be private, but they do not overlap the inventory shown."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "Atlas also requests these CIDRs:\n\n```text\n10.50.0.0/16\n10.51.0.0/16\n192.168.100.0/24\n```\n\nThe current estate contains only `10.0.0.0/16`, `10.1.0.0/16`, and `10.2.0.0/16`. Why are these not the blocking ranges in this inventory?",
+      "options": [
+        {
+          "id": "a",
+          "text": "They do not intersect the three existing routed ranges, even though they are private address space"
+        },
+        {
+          "id": "b",
+          "text": "They are public address ranges, so peering ignores them"
+        },
+        {
+          "id": "c",
+          "text": "They are safe because every `/16` is automatically non-overlapping with every other `/16`"
+        },
+        {
+          "id": "d",
+          "text": "They are safe because `192.168.0.0/16` can never be used in a cloud VPC"
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Overlap checks compare actual address ranges. The listed Atlas ranges are private, but they do not fall inside `10.0.0.0/16`, `10.1.0.0/16`, or `10.2.0.0/16`."
+    },
+    {
+      "id": "q6",
+      "type": "single",
+      "scenario": "A host in subnet `10.0.0.0/20` is configured as follows:\n\n```text\naddress 10.0.1.50\nmask    255.255.255.0\npeer    10.0.2.100\n```\n\nTraffic to the peer takes a strange gateway path or fails intermittently. Which subnetting mistake best explains it?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The host mask is `/24`, so it wrongly treats `10.0.2.100` as outside the local subnet even though the real subnet is `/20`"
+        },
+        {
+          "id": "b",
+          "text": "The peer is outside `10.0.0.0/20`, so the gateway path is always correct"
+        },
+        {
+          "id": "c",
+          "text": "The mask is too large because `/24` includes every address in `10.0.0.0/16`"
+        },
+        {
+          "id": "d",
+          "text": "The problem is DNS, because IP masks do not affect routing decisions"
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The article's wrong-mask failure mode uses this exact pattern: a host configured with a narrower mask sends traffic to the default gateway even when the destination belongs in the actual local subnet."
+    },
+    {
+      "id": "q7",
+      "type": "single",
+      "scenario": "A manager asks why peering cannot just prefer the more specific route if two VPCs both use `10.0.0.0/16`. Which explanation is most accurate for the review?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Overlapping CIDRs make ownership ambiguous for destinations inside the shared range, so the safe fix is non-overlapping allocation or renumbering"
+        },
+        {
+          "id": "b",
+          "text": "Peering works with overlaps as long as both VPCs use private RFC 1918 space"
+        },
+        {
+          "id": "c",
+          "text": "The router can always infer ownership from the VPC name in the DNS record"
+        },
+        {
+          "id": "d",
+          "text": "Overlaps matter only for IPv6, not IPv4"
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The article states that overlapping CIDRs break peering and routing because routers cannot decide which network owns a destination address. There is no shortcut other than planning non-overlapping ranges or renumbering one side."
+    }
+  ]
+}

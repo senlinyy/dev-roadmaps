@@ -1,0 +1,201 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "multiple",
+      "scenario": "A new bastion was built from an old image. The active SSH settings are:\n\n```text\nPort 22\nPermitRootLogin yes\nPasswordAuthentication yes\nPubkeyAuthentication yes\nMaxAuthTries 6\nPermitEmptyPasswords no\n```\n\nWhich remediation items match the article's hardening target?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Set `PasswordAuthentication no` after confirming key-based login works"
+        },
+        {
+          "id": "b",
+          "text": "Set `PermitRootLogin no` so root cannot log in directly"
+        },
+        {
+          "id": "c",
+          "text": "Move SSH away from port 22, for example `Port 2222`, to reduce scanner noise"
+        },
+        {
+          "id": "d",
+          "text": "Set `PubkeyAuthentication no` so passwords become the only supported login method"
+        },
+        {
+          "id": "e",
+          "text": "Lower `MaxAuthTries` to a small value such as `3`"
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c",
+        "e"
+      ],
+      "explanation": "The hardening section recommends key-based auth, no direct root login, a non-default port to reduce noise, and fewer authentication attempts. Disabling public-key authentication would undermine key-based access and make password exposure worse."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A scanner finds these two differences between production and the approved bastion baseline:\n\n```text\nproduction: PasswordAuthentication yes\nbaseline:   PasswordAuthentication no\n\nproduction: PrintMotd no\nbaseline:   PrintMotd yes\n```\n\nWhich finding is the highest-risk authentication exposure?",
+      "options": [
+        {
+          "id": "a",
+          "text": "`PasswordAuthentication yes`, because an internet-facing bastion will accept brute-force password attempts"
+        },
+        {
+          "id": "b",
+          "text": "`PrintMotd no`, because missing a login banner prevents TCP encryption"
+        },
+        {
+          "id": "c",
+          "text": "`PrintMotd no`, because it grants root access to unauthenticated clients"
+        },
+        {
+          "id": "d",
+          "text": "`PasswordAuthentication yes`, but only because it disables SSH logging entirely"
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Password authentication is a direct attack surface for brute-force login attempts. A message-of-the-day setting may be a policy issue, but it is not the same immediate authentication exposure."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "A change request sets `PasswordAuthentication no` on a cloud instance. The requester has not tested SSH key login yet and the instance has no serial console. What should the reviewer require before approval?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Verify that an authorized key is installed and a key-based login succeeds before disabling passwords"
+        },
+        {
+          "id": "b",
+          "text": "Disable `PubkeyAuthentication` first so the password change is easier to observe"
+        },
+        {
+          "id": "c",
+          "text": "Apply the change immediately because password removal can always be fixed through DNS"
+        },
+        {
+          "id": "d",
+          "text": "Remove `AllowUsers` because user restrictions prevent the kernel from reading SSH keys"
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The article warns that disabling passwords before key-based access works can lock you out of a cloud instance. The safe rollout proves key login first, then disables password authentication."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "A bastion owner argues that changing `Port 22` to `Port 2222` is enough hardening by itself. What is the best response?",
+      "options": [
+        {
+          "id": "a",
+          "text": "A non-default port reduces automated scanner noise, but meaningful hardening still requires controls such as key-only auth and no root login"
+        },
+        {
+          "id": "b",
+          "text": "Changing the port encrypts SSH traffic, so password authentication becomes safe on the internet"
+        },
+        {
+          "id": "c",
+          "text": "Changing the port disables root login automatically in OpenSSH"
+        },
+        {
+          "id": "d",
+          "text": "Port changes are harmful because SSH can only run on TCP 22"
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The article explicitly calls a port change obscurity, not real security. It helps reduce log noise, but it must be combined with stronger authentication and authorization settings."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "The active config says:\n\n```text\nPermitRootLogin yes\nAllowUsers deploy admin\n```\n\nWhy is `PermitRootLogin yes` still a hardening violation?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Direct root login removes the extra barrier of compromising a regular user first and then escalating"
+        },
+        {
+          "id": "b",
+          "text": "Root login forces SSH to use UDP instead of TCP"
+        },
+        {
+          "id": "c",
+          "text": "Root login disables `AllowUsers` for every account on the machine"
+        },
+        {
+          "id": "d",
+          "text": "Root login is required only when password authentication is disabled"
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "`PermitRootLogin no` prevents direct remote access to the most privileged account. `AllowUsers` is useful, but it does not make direct root login a good default."
+    },
+    {
+      "id": "q6",
+      "type": "single",
+      "scenario": "An audit discovers a contractor account that still exists in `/etc/passwd`. The SSH config has no `AllowUsers` line. Which hardening change best reduces the risk that this forgotten account can SSH in?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Add an `AllowUsers` list containing only the approved operator accounts"
+        },
+        {
+          "id": "b",
+          "text": "Raise `MaxAuthTries` so legitimate users have more attempts"
+        },
+        {
+          "id": "c",
+          "text": "Set `PermitEmptyPasswords yes` so account state is easier to test"
+        },
+        {
+          "id": "d",
+          "text": "Remove `PubkeyAuthentication yes` so user allowlisting happens automatically"
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The article describes `AllowUsers` as a way to restrict SSH access to named accounts. A forgotten system user should not become a remote login path unless it is explicitly approved."
+    },
+    {
+      "id": "q7",
+      "type": "single",
+      "scenario": "A hardened baseline includes:\n\n```text\nPasswordAuthentication no\nPubkeyAuthentication yes\nKexAlgorithms curve25519-sha256,curve25519-sha256@libssh.org\n```\n\nA proposed rollback changes only `PubkeyAuthentication yes` to `PubkeyAuthentication no`. What is the operational impact?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Key-based login would be disabled, which conflicts with the baseline that also disables password login"
+        },
+        {
+          "id": "b",
+          "text": "Only the SSH port would change, so existing key users would not notice"
+        },
+        {
+          "id": "c",
+          "text": "The change would improve hardening because passwords and keys should both be disabled for SSH"
+        },
+        {
+          "id": "d",
+          "text": "The change affects only DNS resolution for the bastion hostname"
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The baseline depends on public-key authentication because password authentication is disabled. Turning off public-key auth can lock out legitimate users and does not match the key-based-only hardening goal."
+    }
+  ]
+}

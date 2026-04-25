@@ -1,96 +1,200 @@
 {
+  "passThreshold": 1,
   "questions": [
     {
       "id": "q1",
       "type": "single",
-      "scenario": "A new autoscaling service needs room for **4000 instances** in one VPC subnet. Free blocks available from your IPAM (in priority order, smallest first): `/22`, `/21`, `/20`.\n\n**Which is the smallest block that satisfies the request?**",
+      "scenario": "A platform team requests one AWS subnet for a bursty worker pool. They need at least 3,900 assignable IPv4 addresses during peak deploys. IPAM has these free aligned blocks in the target VPC: `/22`, `/21`, `/20`, and `/19`. AWS reserves 5 addresses in every subnet. Which is the smallest block that satisfies the request?",
       "options": [
-        { "id": "a", "text": "/22 (1024 addresses)" },
-        { "id": "b", "text": "/21 (2048 addresses)" },
-        { "id": "c", "text": "/20 (4096 addresses)" },
-        { "id": "d", "text": "/19 (8192 addresses)" }
+        {
+          "id": "a",
+          "text": "`/22`, because it has 1,024 total addresses and reserves do not apply to private subnets"
+        },
+        {
+          "id": "b",
+          "text": "`/21`, because 2,048 total addresses leaves enough room after AWS reservations"
+        },
+        {
+          "id": "c",
+          "text": "`/20`, because 4,096 total addresses leaves 4,091 usable after AWS reserves"
+        },
+        {
+          "id": "d",
+          "text": "`/19`, because every subnet with more than 1,000 hosts must use 8,192 addresses"
+        }
       ],
-      "correct": ["c"],
-      "explanation": "Host counts: /22 = 1024, /21 = 2048, /20 = 4096, /19 = 8192. 4000 fits in a /20 *barely*, and in AWS you actually lose 5 addresses per subnet (network, broadcast, VPC router, DNS, future), so the practical capacity of a /20 is 4091. The team is one hot quarter away from running out. In practice a /19 is a safer pick if the IPAM has one, but the question asks for the smallest that satisfies, which is /20. /22 and /21 are both too small."
+      "correct": [
+        "c"
+      ],
+      "explanation": "The article gives the formula `2^(32 - prefix)` total addresses and notes AWS reserves 5 per subnet. A `/20` has 4,096 total and 4,091 usable in AWS, so it is the smallest listed block that clears 3,900. `/21` and `/22` are too small. `/19` works but is not the smallest satisfying choice."
     },
     {
       "id": "q2",
       "type": "single",
-      "scenario": "Your team allocated a `/24` (256 addresses) for a Kubernetes node subnet in AWS. The cluster scaled to 240 nodes and the autoscaler started failing with `InsufficientFreeAddressesInSubnet`.\n\n**Why so early?**",
+      "scenario": "During a peer review, someone writes `10.50.4.130/25` on a firewall ticket and asks for the subnet boundary before approving the rule. What are the network and broadcast addresses for this subnet?",
       "options": [
-        { "id": "a", "text": "AWS reserves 5 addresses per subnet (network address, VPC router, DNS, future use, broadcast). Available host count on a /24 is 251, not 256. With ENI secondary IPs, ELB nodes, and other AWS-managed addresses also consuming space, hitting allocation failure at 240 is normal." },
-        { "id": "b", "text": "Kubernetes reserves 16 IPs per node for system services" },
-        { "id": "c", "text": "/24 only has 128 usable addresses in AWS" },
-        { "id": "d", "text": "The team forgot to enable IPv6" }
+        {
+          "id": "a",
+          "text": "Network `10.50.4.0`, broadcast `10.50.4.255`"
+        },
+        {
+          "id": "b",
+          "text": "Network `10.50.4.128`, broadcast `10.50.4.255`"
+        },
+        {
+          "id": "c",
+          "text": "Network `10.50.4.130`, broadcast `10.50.4.130`"
+        },
+        {
+          "id": "d",
+          "text": "Network `10.50.4.64`, broadcast `10.50.4.191`"
+        }
       ],
-      "correct": ["a"],
-      "explanation": "AWS docs make this explicit: 5 addresses per subnet are reserved. Beyond that, every ENI of every pod (in `awsvpc` networking mode), every load balancer, and every NAT gateway in the same subnet consumes addresses. The general rule is plan capacity at *50-60%* of the nominal subnet size to leave room for ENIs and bursts. The fix here is migrate to a /22 or /21 for the node subnet, or move pods to a separate larger subnet via a CNI like Calico in VPC-native mode with secondary CIDRs."
+      "correct": [
+        "b"
+      ],
+      "explanation": "A `/25` splits a `/24` into two blocks of 128 addresses: `.0` through `.127`, and `.128` through `.255`. The address `.130` is in the second half, so the network is `10.50.4.128` and the broadcast is `10.50.4.255`. The key mental model is that subnet boundaries align to the block size."
     },
     {
       "id": "q3",
       "type": "single",
-      "scenario": "A teammate writes the address `10.50.4.130/25` and asks: *what is the network address and the broadcast address of this subnet?*",
+      "scenario": "A VPC plan starts with `10.0.0.0/16`. Two `/20` subnets are already allocated:\n\n```text\n10.0.0.0/20\n10.0.16.0/20\n```\n\nThe team wants the next adjacent `/20` without overlap or gaps. Which block should IPAM allocate next?",
       "options": [
-        { "id": "a", "text": "Network 10.50.4.0, broadcast 10.50.4.255" },
-        { "id": "b", "text": "Network 10.50.4.128, broadcast 10.50.4.255" },
-        { "id": "c", "text": "Network 10.50.4.130, broadcast 10.50.4.130" },
-        { "id": "d", "text": "Network 10.50.4.64, broadcast 10.50.4.191" }
+        {
+          "id": "a",
+          "text": "`10.0.20.0/20`, because the previous block starts at 16"
+        },
+        {
+          "id": "b",
+          "text": "`10.0.24.0/20`, because each block advances by 8 in the third octet"
+        },
+        {
+          "id": "c",
+          "text": "`10.0.32.0/20`, because a `/20` advances by 16 in the third octet"
+        },
+        {
+          "id": "d",
+          "text": "`10.0.255.0/20`, because it is the last subnet in the `/16`"
+        }
       ],
-      "correct": ["b"],
-      "explanation": "A /25 splits a /24 in half. The two halves of `10.50.4.0/24` are `10.50.4.0/25` (covering .0-.127) and `10.50.4.128/25` (covering .128-.255). `10.50.4.130` falls in the second half, so the network address is `10.50.4.128` and the broadcast is `10.50.4.255`. Quick mental check: the prefix length 25 means the boundary moves into the last octet by one bit, so each subnet is 128 addresses wide, and the network addresses are multiples of 128 in the last octet (0 and 128). This kind of mental model: *the network address always aligns to the block size*, is what saves you in pager-mode."
+      "correct": [
+        "c"
+      ],
+      "explanation": "A `/20` has 4,096 addresses, which is 16 full values in the third octet. The sequence inside `10.0.0.0/16` is `10.0.0.0/20`, `10.0.16.0/20`, `10.0.32.0/20`, and so on. Starting at 20 or 24 is not aligned to the `/20` boundary and would overlap an existing block or be invalid."
     },
     {
       "id": "q4",
       "type": "single",
-      "scenario": "Two CIDR blocks are proposed for separate workloads:\n\n```\nA: 10.20.0.0/22\nB: 10.20.4.0/23\n```\n\n**Do they overlap?**",
+      "scenario": "A cloud route table has 47 entries and the soft limit is 50. A team wants to add 12 new `/24` application subnets from `10.30.0.0/16` behind the same transit gateway attachment. What allocation strategy best avoids the route limit?",
       "options": [
-        { "id": "a", "text": "Yes: any /22 and /23 starting in the same /16 overlap" },
-        { "id": "b", "text": "No: A covers 10.20.0.0-10.20.3.255 (1024 addresses) and B covers 10.20.4.0-10.20.5.255 (512 addresses). They are adjacent, not overlapping." },
-        { "id": "c", "text": "Yes: B is fully contained in A" },
-        { "id": "d", "text": "Cannot tell without a subnet calculator" }
+        {
+          "id": "a",
+          "text": "Scatter the `/24` blocks across the `/16` so future teams have more choices"
+        },
+        {
+          "id": "b",
+          "text": "Allocate the `/24` blocks inside one aligned supernet, for example a `/20`, and advertise the single covering route"
+        },
+        {
+          "id": "c",
+          "text": "Use `/32` host routes so each instance can move independently"
+        },
+        {
+          "id": "d",
+          "text": "Avoid CIDR notation and write the subnet mask in dotted decimal instead"
+        }
       ],
-      "correct": ["b"],
-      "explanation": "/22 = 1024 addresses, so `10.20.0.0/22` ends at `10.20.3.255`. /23 = 512 addresses, so `10.20.4.0/23` starts at `10.20.4.0` and ends at `10.20.5.255`. They are adjacent and could be summarized into a single `10.20.0.0/21` (2048 addresses), but they do not overlap. The rule of thumb: a block always aligns to its size, a /22 starts on a multiple of 1024 in the host portion (so the third octet is a multiple of 4: 0, 4, 8, …)."
+      "correct": [
+        "b"
+      ],
+      "explanation": "The article explains route summarization: adjacent, power-of-two-aligned blocks can be advertised as one shorter prefix. A `/20` covers 16 `/24`s, enough for the 12 requested subnets plus room. Scattering the allocations prevents summarization and consumes route entries. `/32` routes make the limit problem worse."
     },
     {
       "id": "q5",
       "type": "single",
-      "scenario": "An infra plan splits a `/16` into eight `/19`s for eight environments. A team requests one of the /19s for production and wants to further split it for *web*, *app*, and *data* tiers, with **at least 1000 addresses per tier**.\n\n**What prefix length do you give each tier?**",
+      "scenario": "A team asks for `10.70.8.0/29` in AWS for a tiny internal load balancer tier because they only expect two resources. What is the correct review response?",
       "options": [
-        { "id": "a", "text": "/22 (1024 addresses): exactly fits, but no headroom" },
-        { "id": "b", "text": "/21 (2048 addresses): gives ~2× headroom and uses 6144 of the 8192 in the /19, leaving a /21 free for growth" },
-        { "id": "c", "text": "/24 (256 addresses): small and tidy" },
-        { "id": "d", "text": "/20 (4096 addresses): maximum room" }
+        {
+          "id": "a",
+          "text": "Reject it, AWS VPC subnets cannot be smaller than `/28`, and AWS reserves 5 addresses in each subnet"
+        },
+        {
+          "id": "b",
+          "text": "Approve it, because `/29` has 8 addresses and 2 resources fit"
+        },
+        {
+          "id": "c",
+          "text": "Approve it only if it is a private subnet with no route to an internet gateway"
+        },
+        {
+          "id": "d",
+          "text": "Reject it only if the subnet is in `192.168.0.0/16`"
+        }
       ],
-      "correct": ["b"],
-      "explanation": "The /19 has 8192 addresses. Three /22s (1024 each) = 3072 used, 5120 left, but each tier has zero growth room and AWS reserves eat in. Three /21s (2048 each) = 6144 used, 2048 left for growth, a clean /21 reserved. /20 would be too greedy: three /20s (4096 each) = 12288, doesn't fit in a /19. The general capacity-planning move: pick the prefix one or two steps larger than the strict minimum, and leave at least one same-sized block reserved for growth. (a) is the *just barely fits* trap that causes 18-month renumbering projects."
+      "correct": [
+        "a"
+      ],
+      "explanation": "The VPC practice section says AWS rejects anything smaller than `/28`. Even when a tiny block looks sufficient on paper, cloud provider constraints and reserved addresses matter. The right move is to allocate at least a `/28`, and often a larger block if the tier may grow."
     },
     {
       "id": "q6",
-      "type": "single",
-      "scenario": "An ops doc says: *VPC peering routes max out at 50 routes per VPC, and our routing table currently has 47 entries.* The team wants to add 12 new /24 subnets from `10.30.0.0/16`.\n\n**What is the cleanest fix?**",
+      "type": "multiple",
+      "scenario": "You are reviewing a subnet plan. Which comments are valid based on CIDR sizing and the AWS constraints covered in the article? Select all that apply.\n\n```text\nworker subnet: 10.10.0.0/22 for 1,500 instances\npublic edge:   10.10.8.0/28 for a small load balancer tier\ndata tier:     10.10.16.0/21 for 1,000 instances with growth headroom\nlegacy tier:   10.10.24.0/30 for one appliance ENI\n```",
       "options": [
-        { "id": "a", "text": "Allocate the 12 /24s individually and add them as 12 routes" },
-        { "id": "b", "text": "Allocate the 12 /24s as a contiguous block and summarize them as a single supernet route. For example, 16 contiguous /24s aggregate into a /20, which is one route entry. Picking aligned ranges enables this aggregation." },
-        { "id": "c", "text": "File a support ticket to raise the limit to 200" },
-        { "id": "d", "text": "Use a different routing protocol than the cloud default" }
+        {
+          "id": "a",
+          "text": "The worker subnet is undersized because a `/22` has only 1,024 total addresses before AWS reservations"
+        },
+        {
+          "id": "b",
+          "text": "The public edge `/28` is the smallest AWS-allowed subnet size, with 11 usable addresses after reserves"
+        },
+        {
+          "id": "c",
+          "text": "The data tier `/21` has 2,048 total addresses, so it fits 1,000 instances with reasonable headroom"
+        },
+        {
+          "id": "d",
+          "text": "The legacy tier `/30` is acceptable in AWS because one ENI needs only one usable IP"
+        },
+        {
+          "id": "e",
+          "text": "Every listed subnet must be changed to `/24` because cloud VPCs cannot route mixed prefix lengths"
+        }
       ],
-      "correct": ["b"],
-      "explanation": "Route table caps are real (AWS, GCP, Azure all have them) and the standard escape hatch is *summarize*. If the 12 /24s fall inside a `/20` (which holds 16 /24s) and that /20 is otherwise yours, you can add a single `10.30.X.0/20` route instead of 12 individual ones. This is exactly why allocating in aligned, contiguous blocks at the IPAM stage matters, non-contiguous /24s scattered across a /16 cannot be summarized. Asking to raise the limit is the last resort, not the first."
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "A `/22` cannot hold 1,500 instances. A `/28` is the AWS minimum and leaves 11 usable addresses after the 5 reserved addresses. A `/21` provides 2,048 total addresses, enough for 1,000 with room. A `/30` is below AWS's allowed minimum, so it should be rejected. VPCs routinely route mixed prefix lengths."
     },
     {
       "id": "q7",
-      "type": "multiple",
-      "scenario": "Below are CIDR allocations from a real plan. **Which entries have a problem you would flag in review?** (Select all that apply.)\n\n```\nA: 10.10.0.0/24 for 50 hosts (50% utilization)\nB: 10.20.0.0/22 for 1500 hosts in AWS\nC: 10.30.4.0/23 for 200 hosts (10% utilization)\nD: 10.40.5.128/25 for 100 hosts\nE: 10.50.0.0/30 for 1 ELB ENI\n```",
+      "type": "single",
+      "scenario": "A VM is configured with IP `10.0.1.50` and mask `255.255.255.0`. The actual cloud subnet is `10.0.0.0/20`. The VM can reach `10.0.1.80`, but traffic to `10.0.2.100` takes the default gateway path and intermittently fails. What is the root cause?",
       "options": [
-        { "id": "a", "text": "A: sized fine, no problem" },
-        { "id": "b", "text": "B: /22 has 1024 addresses; 1500 hosts will not fit" },
-        { "id": "c", "text": "C: /23 has 512 for 200 hosts is fine but very low utilization; consider /24 instead to free a /24 for adjacent use" },
-        { "id": "d", "text": "D: sized fine, no problem" },
-        { "id": "e", "text": "E: /30 has 4 addresses; in AWS that is 0 usable after the 5 reserved, so the ELB cannot get an ENI. Use at least /28." }
+        {
+          "id": "a",
+          "text": "The VM has the wrong mask, so it thinks only `10.0.1.0/24` is local even though `10.0.2.100` is inside the real `/20`"
+        },
+        {
+          "id": "b",
+          "text": "The VM needs a public IP because private addresses cannot communicate across subnets"
+        },
+        {
+          "id": "c",
+          "text": "The broadcast address for `10.0.0.0/20` is `10.0.1.255`, so `10.0.2.100` is outside the VPC"
+        },
+        {
+          "id": "d",
+          "text": "The default gateway must be removed because gateways are never used inside a VPC"
+        }
       ],
-      "correct": ["b", "c", "e"],
-      "explanation": "(B) is undersized: /22 only has 1024 addresses, can never hold 1500. Needs a /21 minimum. (C) is the wasteful-but-not-broken case worth flagging in review, 10% utilization is fine for a fast-growing tier, terrible for a stable one. (E) is the AWS minimum-subnet trap: AWS requires *at least a /28* for any subnet because of its 5 reserved addresses. /30 would have negative usable capacity. (A) at 50% is healthy. (D) is also fine: /25 has 128 addresses, 100 hosts fits with growth room."
+      "correct": [
+        "a"
+      ],
+      "explanation": "The article's wrong-mask failure mode matches this exactly. The host was configured as `/24`, so it treats only `10.0.1.0` through `10.0.1.255` as local. In the actual `/20`, `10.0.2.100` is local and should be reached directly. The mismatched mask sends same-subnet traffic to the gateway and creates confusing intermittent failures."
     }
   ]
 }

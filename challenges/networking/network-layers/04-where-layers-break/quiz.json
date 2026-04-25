@@ -1,95 +1,200 @@
 {
+  "passThreshold": 1,
   "questions": [
     {
       "id": "q1",
       "type": "single",
-      "scenario": "An EC2 instance in `us-east-1a` lost connectivity to its database. From the instance, `ip link show eth0` reports `state UP` and `ip addr` shows the expected `10.0.3.42/24`. `ping 10.0.3.1` (the subnet gateway) returns 100% packet loss. `arp -n` shows no entry for `10.0.3.1`. The hypervisor metrics show no NIC errors.\n\n**Which OSI layer should you investigate first?**",
+      "scenario": "A server was moved to a new rack and never came back in monitoring. The console shows:\n\n```text\n$ ip link show eth0\n2: eth0: <NO-CARRIER,BROADCAST,MULTICAST,UP> mtu 1500 state DOWN\n$ ping -c 1 10.0.0.1\nconnect: Network is unreachable\n```\n\nWhich first action matches the evidence?",
       "options": [
-        { "id": "a", "text": "Layer 1: even though `state UP` is reported, the virtual NIC may not actually be passing traffic, so the cable/optic equivalent (the underlying ENI) is suspect" },
-        { "id": "b", "text": "Layer 2: ARP for the gateway is silently failing, which means frames cannot be addressed; check the security group, network ACL, and that the gateway is up" },
-        { "id": "c", "text": "Layer 3: the routing table has dropped its default route, even though ICMP would still queue ARP requests" },
-        { "id": "d", "text": "Layer 4: the database refused the TCP connection, which would also cause `ping` to fail" }
+        {
+          "id": "a",
+          "text": "Check the cable, switch port, optic, or virtual NIC attachment before changing routes"
+        },
+        {
+          "id": "b",
+          "text": "Restart nginx because the application health check is failing"
+        },
+        {
+          "id": "c",
+          "text": "Add a default route because `ping` reported a network error"
+        },
+        {
+          "id": "d",
+          "text": "Rotate the TLS certificate because HTTPS will fail without one"
+        }
       ],
-      "correct": ["b"],
-      "explanation": "`state UP` and a valid IP exonerate L1/L3 locally. ARP failing for the *gateway* itself is the smoking gun, without an ARP entry, the host cannot encapsulate IP packets into Ethernet frames and ping shows 100% loss. In AWS this almost always means a security group / NACL is dropping ARP-related traffic, or the ENI was detached. ICMP failure is the *symptom*, not the cause; jumping to L4 would be a mistake because `ping` does not use TCP at all."
+      "correct": [
+        "a"
+      ],
+      "explanation": "`NO-CARRIER` and `state DOWN` are Layer 1 indicators. Until the link sees carrier, routing, TCP, and HTTP cannot be meaningfully tested. Adding routes or restarting applications may be necessary later, but they cannot fix a physical link that is down."
     },
     {
       "id": "q2",
       "type": "single",
-      "scenario": "You have two hosts A and B on the same VLAN. From A, `ping B` works. From A, `curl http://B:8080/health` hangs until timeout. On B, `ss -tlnp | grep 8080` returns no rows. There is no firewall on either host.\n\n**What is the next single command you would run on host B to confirm the root cause?**",
+      "scenario": "Two hosts are supposed to be on the same VLAN. Host `app01` has `10.44.8.10/24`, and `db01` has `10.44.8.20/24`. From `app01`:\n\n```text\n$ ping -c 3 10.44.8.20\n3 packets transmitted, 0 received, 100% packet loss\n$ ip neigh show 10.44.8.20\n10.44.8.20 dev eth0 FAILED\n```\n\nWhich fault domain is most likely?",
       "options": [
-        { "id": "a", "text": "`tcpdump -i eth0 host A` on B to see if SYN packets arrive" },
-        { "id": "b", "text": "`ip route get A` on B to verify the return route" },
-        { "id": "c", "text": "`systemctl status <the-app>` on B to check whether the service is running" },
-        { "id": "d", "text": "`traceroute A` on B to find a routing loop" }
+        {
+          "id": "a",
+          "text": "Layer 2, because ARP for a same-subnet peer failed"
+        },
+        {
+          "id": "b",
+          "text": "Layer 3, because the default gateway has the wrong route"
+        },
+        {
+          "id": "c",
+          "text": "Layer 4, because the database port is closed"
+        },
+        {
+          "id": "d",
+          "text": "Layer 7, because the SQL query timed out"
+        }
       ],
-      "correct": ["c"],
-      "explanation": "`ss -tlnp` showing nothing on 8080 already proves no process is listening. The next step is not more network forensics, it is asking *why isn't the app running*. `systemctl status` (or equivalent) tells you in one command whether the unit failed, never started, or crash-looped. `tcpdump` would show SYNs landing and being RST-or-ignored, which is downstream evidence you already have via `curl` hanging. Don't keep poking the network when the transport-layer evidence already pointed up the stack."
+      "correct": [
+        "a"
+      ],
+      "explanation": "For peers inside the same `/24`, the sender should resolve the destination MAC with ARP and send the frame directly. A `FAILED` neighbor entry means that local data-link step failed, often due to VLAN mismatch, switch policy, powered-off host, or wrong mask. The default gateway is not needed for same-subnet delivery."
     },
     {
       "id": "q3",
       "type": "single",
-      "scenario": "`curl https://api.example.com/v1/orders` from a Kubernetes pod returns:\n\n```\ncurl: (6) Could not resolve host: api.example.com\n```\n\nFrom the same pod, `curl https://1.1.1.1` succeeds and `curl https://93.184.216.34` (the example.com IP) succeeds. `cat /etc/resolv.conf` shows `nameserver 10.96.0.10` (kube-dns).\n\n**Which is the most precise statement of where the failure lives?**",
+      "scenario": "After a route-table change, an instance can reach local subnet peers but not a public package mirror:\n\n```text\n$ ping -c 2 93.184.216.34\nFrom 10.0.0.44 icmp_seq=1 Destination Host Unreachable\n$ ip route show\n10.0.0.0/24 dev eth0 proto kernel scope link src 10.0.0.44\n```\n\nWhat is broken?",
       "options": [
-        { "id": "a", "text": "Layer 3: IP routing to the internet is broken from this pod" },
-        { "id": "b", "text": "Layer 7: kube-dns (the application providing name resolution) is reachable but failing to resolve, or the pod cannot reach `10.96.0.10` at all" },
-        { "id": "c", "text": "Layer 4: TCP to api.example.com is being blocked specifically on port 443" },
-        { "id": "d", "text": "Layer 2: the pod's veth pair has lost its peer" }
+        {
+          "id": "a",
+          "text": "Layer 1, because the NIC carrier is down"
+        },
+        {
+          "id": "b",
+          "text": "Layer 2, because ARP cannot resolve the public mirror MAC"
+        },
+        {
+          "id": "c",
+          "text": "Layer 3, because the host has no route outside its local subnet"
+        },
+        {
+          "id": "d",
+          "text": "Layer 7, because the mirror returned an application error"
+        }
       ],
-      "correct": ["b"],
-      "explanation": "Reaching arbitrary IPs over HTTPS proves L1-L4 work to the public internet. The only thing that does not work is *name → IP*. DNS is an application-layer service (it runs on top of UDP/TCP), so this is a Layer 7 problem, but specifically about the directory service, not the user-facing API. The two real possibilities are (a) kube-dns itself is failing to answer or returning NXDOMAIN, or (b) the pod cannot route to the cluster service IP `10.96.0.10`. Next step: `dig @10.96.0.10 api.example.com` from the pod to bisect those two."
+      "correct": [
+        "c"
+      ],
+      "explanation": "The route table contains only the connected local subnet and no default route. That is a Layer 3 routing failure: the host does not know where to send packets for non-local destinations. ARP for the public mirror is not expected because public destinations are reached through a gateway."
     },
     {
       "id": "q4",
       "type": "single",
-      "scenario": "Within five minutes, three independent reports come in:\n\n1. `curl https://web.prod` from the office returns `curl: (35) error:0A000410:SSL routines::sslv3 alert handshake failure`\n2. `curl https://web.prod` from a CI runner in another VPC succeeds.\n3. The certificate on `web.prod` expires in 48 days.\n\n**What is the most likely root cause?**",
+      "scenario": "A load balancer health check fails against one backend. On the backend host:\n\n```text\n$ ss -tlnp | grep 8080\n$ curl -v http://127.0.0.1:8080/health\n* connect to 127.0.0.1 port 8080 failed: Connection refused\n```\n\nWhich explanation best fits?",
       "options": [
-        { "id": "a", "text": "The certificate expired early; rotate it" },
-        { "id": "b", "text": "A TLS version or cipher mismatch, the office client is offering a TLS profile the server (or an inspecting middlebox in the office network) refuses" },
-        { "id": "c", "text": "DNS in the office is resolving `web.prod` to the wrong IP" },
-        { "id": "d", "text": "The web server crashed and is returning RST on 443" }
+        {
+          "id": "a",
+          "text": "The application is not listening on port 8080, so the failure is at Layer 4 or immediately above it"
+        },
+        {
+          "id": "b",
+          "text": "The subnet route table is missing a route back to the load balancer"
+        },
+        {
+          "id": "c",
+          "text": "The TLS certificate on the backend expired"
+        },
+        {
+          "id": "d",
+          "text": "The host cannot resolve the load balancer DNS name"
+        }
       ],
-      "correct": ["b"],
-      "explanation": "The CI runner succeeding rules out a server-side failure (cert, listener, routing). DNS misresolution would usually fail in a different way (`Connection refused`, wrong cert CN). The error code itself is the giveaway: `sslv3 alert handshake failure` means the server (or a TLS-inspecting proxy) actively rejected the negotiated parameters. Office networks frequently terminate TLS at a security appliance that disables old ciphers, when the client and that appliance can't agree, you get exactly this alert. Next step: rerun with `curl --tls-max 1.2 -v` from the office and compare against the CI runner's `--tls-max 1.3` baseline."
+      "correct": [
+        "a"
+      ],
+      "explanation": "`ss` shows no listener and localhost curl is refused. That means the local kernel has no process bound to port 8080, or a local reject rule is responding with a reset. This is not a route, DNS, or TLS problem because the local loopback test never leaves the host and never starts TLS."
     },
     {
       "id": "q5",
       "type": "single",
-      "scenario": "A teammate insists *the firewall is dropping traffic* because their `curl` to the staging API hangs. You ask for evidence and they show:\n\n```\n$ curl -v http://staging-api:8080/health\n*   Trying 10.20.4.7:8080...\n* connect to 10.20.4.7 port 8080 failed: Connection refused\n```\n\n**Are they correct, and what does the evidence actually prove?**",
+      "scenario": "A service is reachable from inside its VPC but not from a VPN client. Packet capture on the service host during a VPN test shows no packets. Packet capture on the VPN gateway shows repeated outbound SYNs toward the service IP with no SYN-ACK. The client sees `Connection timed out`.\n\nWhich layer should the firewall team review?",
       "options": [
-        { "id": "a", "text": "Yes: `Connection refused` is the standard message a stateful firewall returns when it drops a SYN" },
-        { "id": "b", "text": "No: `Connection refused` means a TCP RST came back, which a dropping firewall would not generate; either no process is listening on `10.20.4.7:8080`, or a firewall is configured to *reject* (not *drop*) the SYN" },
-        { "id": "c", "text": "Yes: the absence of a banner proves the firewall ate the response" },
-        { "id": "d", "text": "No: but the evidence is inconclusive without a packet capture" }
+        {
+          "id": "a",
+          "text": "Layer 4, because the TCP handshake never completes and the symptom matches a silent SYN drop"
+        },
+        {
+          "id": "b",
+          "text": "Layer 7, because the application is returning an HTTP timeout"
+        },
+        {
+          "id": "c",
+          "text": "Layer 6, because TLS cipher negotiation failed"
+        },
+        {
+          "id": "d",
+          "text": "Layer 1, because the client cable is unplugged"
+        }
       ],
-      "correct": ["b"],
-      "explanation": "`Connection refused` (curl exit 7) means the kernel actively returned a TCP RST. Dropping firewalls generate *silence*, which surfaces as a hang and `curl: (28) Connection timed out`. So either nothing is listening on 8080 of `10.20.4.7`, or someone configured `iptables -j REJECT --reject-with tcp-reset`. The first is far more common. The diagnostic move is `ss -tlnp` on the destination host, not a firewall ticket."
+      "correct": [
+        "a"
+      ],
+      "explanation": "A timeout with repeated SYNs and no SYN-ACK is classic transport-layer connection setup failure. It often means a security group, NACL, host firewall, or middlebox is silently dropping the SYN or reply. There is no HTTP or TLS exchange until the TCP handshake completes."
     },
     {
       "id": "q6",
-      "type": "single",
-      "scenario": "An nginx access log on the edge shows:\n\n```\n10.0.0.5 - - [10/Apr/2026:14:02:11 +0000] \"GET /v1/users/42 HTTP/1.1\" 504 0 \"-\" \"axios/1.6.0\" upstream_response_time=30.001 request_time=30.002\n```\n\nYou suspect the upstream service. From the edge host, `curl -v --max-time 5 http://upstream-svc:8080/v1/users/42` returns inside one second with `200 OK`.\n\n**What is the most likely explanation for the 504?**",
+      "type": "multiple",
+      "scenario": "A nightly upload over an IPSec VPN fails only for large files. Small API calls succeed. The EC2 instance MTU is `9001`, the VPN path MTU is `1500`, and a network device on the path blocks ICMP `fragmentation needed` messages. Which conclusions are valid? Select all that apply.",
       "options": [
-        { "id": "a", "text": "nginx's `proxy_read_timeout` is set lower than the upstream's tail latency, and the upstream is intermittently slow on `/v1/users/42`" },
-        { "id": "b", "text": "DNS for `upstream-svc` is broken from the edge" },
-        { "id": "c", "text": "The TLS certificate between nginx and upstream has expired" },
-        { "id": "d", "text": "The upstream is rate-limiting nginx specifically and returning 504" }
+        {
+          "id": "a",
+          "text": "This can be a Layer 3 PMTU black hole because oversized packets cannot be adjusted when ICMP feedback is blocked"
+        },
+        {
+          "id": "b",
+          "text": "Lowering the interface or tunnel MTU is a reasonable mitigation to prevent oversized packets from entering the path"
+        },
+        {
+          "id": "c",
+          "text": "The evidence points first to a Layer 7 JSON serialization bug because only large payloads fail"
+        },
+        {
+          "id": "d",
+          "text": "Blocking all ICMP is harmless because ICMP is only used by `ping`"
+        },
+        {
+          "id": "e",
+          "text": "Successful small requests do not prove the routed path is healthy for every packet size"
+        }
       ],
-      "correct": ["a"],
-      "explanation": "`upstream_response_time=30.001` lining up exactly with the proxy timeout window is the fingerprint of a `proxy_read_timeout` cap. A live curl returning fast does *not* exonerate the upstream, it proves the request *can* be fast, which means the upstream has variable latency and you've capped it too aggressively. Either raise the timeout, fix the upstream's tail latency (DB query, GC pause), or fall back faster. (b) and (c) would surface as different log lines / errors; (d) is plausible but would normally surface as 429 from upstream or 502 from nginx, not 504."
+      "correct": [
+        "a",
+        "b",
+        "e"
+      ],
+      "explanation": "The article calls out fragmentation and PMTU discovery as Layer 3 concerns. If large packets exceed the VPN path MTU and ICMP feedback is blocked, small traffic can work while large transfers hang. Reducing MTU or fixing ICMP handling are reasonable mitigations. The symptom is not primarily JSON-related, and ICMP also carries control messages that keep PMTU discovery working."
     },
     {
       "id": "q7",
-      "type": "multiple",
-      "scenario": "A new microservice is failing every health check from the load balancer. You collect:\n\n```\n# from the LB\n$ curl -v --max-time 3 http://10.0.5.20:8080/health\n*   Trying 10.0.5.20:8080...\n* connect to 10.0.5.20 port 8080 failed: Connection timed out\n\n# from the service host\n$ ss -tlnp | grep 8080\nLISTEN  0  128  127.0.0.1:8080  0.0.0.0:*  users:((\"app\",pid=4112,fd=6))\n$ sudo iptables -L INPUT -n -v\nChain INPUT (policy ACCEPT 0 packets)\n```\n\n**Which of the following are plausible root causes? (Select all that apply.)**",
+      "type": "single",
+      "scenario": "An API endpoint returns `HTTP/1.1 500 Internal Server Error`. Packet captures show the client completed TCP and TLS to the server, and the application log includes the request ID with an unhandled exception. Which layer is the user-visible error in?",
       "options": [
-        { "id": "a", "text": "The app is bound to `127.0.0.1` instead of `0.0.0.0`, so external SYNs are dropped at the kernel" },
-        { "id": "b", "text": "A cloud-level security group or NACL between the LB subnet and the service subnet is dropping the SYN" },
-        { "id": "c", "text": "The host's local iptables INPUT chain is dropping traffic on 8080" },
-        { "id": "d", "text": "The LB and service are in different VPCs with no peering / transit gateway between them" }
+        {
+          "id": "a",
+          "text": "Layer 7, because the server generated an HTTP application error after lower layers succeeded"
+        },
+        {
+          "id": "b",
+          "text": "Layer 4, because the client could not complete a TCP handshake"
+        },
+        {
+          "id": "c",
+          "text": "Layer 3, because the client's default route is missing"
+        },
+        {
+          "id": "d",
+          "text": "Layer 2, because the proxy cannot resolve the client's MAC address"
+        }
       ],
-      "correct": ["a", "b", "d"],
-      "explanation": "(a) is the *primary* finding from `ss`: binding to `127.0.0.1` means the kernel will not even ACK a SYN from a non-loopback source. (b) and (d) are both valid because `Connection timed out` (curl exit 28) is consistent with a silent drop anywhere on the path, security groups, NACLs, missing peering, or a misrouted subnet would all surface this way. (c) is *not* plausible: the iptables dump shows an empty INPUT chain with `policy ACCEPT`, so local iptables is exonerated. The ranked next steps are: rebind the app to `0.0.0.0`, then if symptoms persist, packet-capture on the service host to see whether SYNs even arrive."
+      "correct": [
+        "a"
+      ],
+      "explanation": "An HTTP 500 is an application-layer response. The client already completed TCP and TLS, and the application log has the request ID and exception, so the visible failure is Layer 7. The evidence does not point at a missing route, ARP failure, or TCP handshake failure."
     }
   ]
 }

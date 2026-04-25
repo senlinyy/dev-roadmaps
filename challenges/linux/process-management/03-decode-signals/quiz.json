@@ -1,96 +1,260 @@
 {
+  "passThreshold": 1,
   "questions": [
     {
       "id": "q1",
       "type": "single",
-      "scenario": "A teammate runs `kill 4123` to stop a long-running data export, but the process keeps running. Frustrated, they run `kill -9 4123` and the process disappears. They conclude *plain `kill` is broken on this server*.\n\n**What actually happened?**",
+      "scenario": "During a deploy, an operator stops a report exporter with the default signal:\n\n```bash\n$ kill 18472\n$ sleep 20\n$ ps -o pid,stat,cmd -p 18472\n  PID STAT CMD\n18472 S    /usr/local/bin/report-exporter\n$ kill -9 18472\n$ ps -p 18472\n  PID TTY          TIME CMD\n```\n\nThe operator says the first command proved that `kill` is unreliable on this host. What is the most accurate explanation?",
       "options": [
-        { "id": "a", "text": "`kill` defaults to `SIGTERM`, which the export had a handler for and chose to ignore (or it was mid-syscall and didn't service it). `SIGKILL` cannot be caught, so the kernel killed it unconditionally." },
-        { "id": "b", "text": "`kill` without `-9` only sends a request to the shell, not to the process" },
-        { "id": "c", "text": "The process was a zombie, and only `SIGKILL` reaps zombies" },
-        { "id": "d", "text": "`SIGTERM` requires root; `SIGKILL` does not" }
+        {
+          "id": "a",
+          "text": "The default `kill` signal is `SIGTERM`, which the process can catch, delay, or ignore while it cleans up. `SIGKILL` cannot be caught or ignored, so the kernel terminated it without giving the process a cleanup path."
+        },
+        {
+          "id": "b",
+          "text": "The default `kill` command only signals the current shell session. `kill -9` is the first command that actually targets the process ID."
+        },
+        {
+          "id": "c",
+          "text": "The process was already a zombie. `SIGKILL` reaped the zombie after the parent failed to call `wait()`."
+        },
+        {
+          "id": "d",
+          "text": "The default signal requires root privileges, while `SIGKILL` can be sent by any user that knows the PID."
+        }
       ],
-      "correct": ["a"],
-      "explanation": "`kill` with no signal sends `SIGTERM` (15), which is *catchable*. Well-behaved daemons trap it to flush, close connections, and exit cleanly, but they can also legitimately ignore it for a while (e.g. mid-transaction). `SIGKILL` (9) and `SIGSTOP` (19) are the only signals the kernel will not deliver to user-space handlers, so they always succeed. The lesson: `kill -9` is not *more powerful*; it is *non-negotiable*. Use it last, not first."
+      "correct": [
+        "a"
+      ],
+      "explanation": "Plain `kill` sends `SIGTERM` by default. That is a polite shutdown request, not a guaranteed removal, and a service can install a handler to drain work or even ignore it. `SIGKILL` is different because the kernel does not deliver it to user-space handlers. A zombie is already dead and cannot be killed, and signal permissions do not become looser just because the signal number is 9."
     },
     {
       "id": "q2",
       "type": "single",
-      "scenario": "Your service writes a large in-memory cache to disk during shutdown so it can warm-start next boot. Operations runs `systemctl stop myapp` and you notice the cache file is missing on restart.\n\n**Which is the most likely cause?**",
+      "scenario": "A Kubernetes worker writes checkpoints during shutdown. The application logs show the handler starts, but checkpoints are often missing after rolling updates:\n\n```text\n2025-04-19T10:15:01Z signal=SIGTERM msg=\"begin checkpoint flush\" estimated_seconds=45\n2025-04-19T10:15:31Z kubelet msg=\"Killing container with a grace period expired\"\n```\n\nThe pod spec sets `terminationGracePeriodSeconds: 30`. What change best fits the evidence?",
       "options": [
-        { "id": "a", "text": "The service didn't trap `SIGTERM`, so systemd's default `SIGTERM` killed it before the shutdown handler ran" },
-        { "id": "b", "text": "The service did trap `SIGTERM`, but its flush took longer than `TimeoutStopSec` (90s default), so systemd escalated to `SIGKILL` and the write was aborted mid-way" },
-        { "id": "c", "text": "Either A or B: both manifest as a missing or truncated cache file on restart, and you cannot distinguish them without checking the journal for the `Killing process …` escalation message" },
-        { "id": "d", "text": "`systemctl stop` always sends `SIGKILL` first, so no graceful path is possible" }
+        {
+          "id": "a",
+          "text": "Increase the termination grace period so the `SIGTERM` handler has time to flush before Kubernetes escalates to `SIGKILL`."
+        },
+        {
+          "id": "b",
+          "text": "Trap `SIGKILL` and run the same checkpoint code from that handler."
+        },
+        {
+          "id": "c",
+          "text": "Replace the handler with `SIGSTOP`, because stopped processes keep their memory and can flush later."
+        },
+        {
+          "id": "d",
+          "text": "Remove the `SIGTERM` handler so the kernel closes all files in a deterministic order."
+        }
       ],
-      "correct": ["c"],
-      "explanation": "Both A and B cause the same symptom (no cache on restart) but have different fixes. A means *write a SIGTERM handler*; B means *raise `TimeoutStopSec=` in the unit file or speed up the flush*. The only way to tell which one bit you is the journal entry, systemd logs `Stopping…`, then either a clean `Deactivated successfully` (handler ran fine but didn't write) or `Killing process X (myapp) with signal SIGKILL` (timeout escalation). Always check the journal before guessing the fix."
+      "correct": [
+        "a"
+      ],
+      "explanation": "The article describes Kubernetes sending `SIGTERM` first, waiting for the grace period, then using `SIGKILL`. The log shows the grace period is shorter than the expected flush, so the kernel eventually kills the process before cleanup finishes. `SIGKILL` cannot be trapped, `SIGSTOP` only pauses the process, and removing the handler would make graceful shutdown less reliable."
     },
     {
       "id": "q3",
       "type": "single",
-      "scenario": "A Python service that intentionally writes `signal.signal(signal.SIGSTOP, custom_handler)` raises an exception on startup:\n\n```\nValueError: signal only works in main thread of the main interpreter\n```\n\nYou move it to the main thread and now get:\n\n```\nOSError: [Errno 22] Invalid argument\n```\n\n**Why?**",
+      "scenario": "A production web worker refuses to disappear during an incident:\n\n```bash\n$ ps -o pid,stat,wchan,cmd -p 8112\n  PID STAT WCHAN  CMD\n 8112 D    nfs_wait nginx: worker process\n$ kill -9 8112\n$ ps -o pid,stat,wchan,cmd -p 8112\n  PID STAT WCHAN  CMD\n 8112 D    nfs_wait nginx: worker process\n```\n\nWhat should the incident lead investigate first?",
       "options": [
-        { "id": "a", "text": "Python's `signal` module does not support `SIGSTOP` on Linux; use `SIGTSTP` instead" },
-        { "id": "b", "text": "`SIGSTOP` cannot be caught, blocked, or handled by user code on any Unix, the kernel rejects the registration. Use `SIGTSTP` (Ctrl-Z) if you want a catchable 'pause' signal." },
-        { "id": "c", "text": "The process needs `CAP_KILL` to register handlers for stop signals" },
-        { "id": "d", "text": "Errno 22 means the signal table is full; restart the process" }
+        {
+          "id": "a",
+          "text": "The process is in uninterruptible sleep waiting on kernel I/O. Fix the blocked I/O path, such as NFS or disk, so the pending signal can take effect."
+        },
+        {
+          "id": "b",
+          "text": "nginx workers catch `SIGKILL` by default. Send the signal to the master process instead."
+        },
+        {
+          "id": "c",
+          "text": "The PID belongs to a thread, so Linux queues `SIGKILL` until every thread receives a matching signal."
+        },
+        {
+          "id": "d",
+          "text": "The operator used the wrong signal number. `SIGKILL` is 15 on Linux and `SIGTERM` is 9."
+        }
       ],
-      "correct": ["b"],
-      "explanation": "`SIGKILL` and `SIGSTOP` are the two signals the POSIX kernel refuses to let user code interpose on. The kernel needs at least one always-works *kill* and one always-works *suspend* so an operator can never be locked out by a misbehaving program. `SIGTSTP` (terminal stop, what Ctrl-Z sends) *is* catchable and is the right signal for a graceful pause/resume hook."
+      "correct": [
+        "a"
+      ],
+      "explanation": "The `D` state is uninterruptible sleep. A process stuck there is inside a kernel wait, commonly storage or network filesystem I/O, and signals are acted on only when the process reaches a safe point again. nginx cannot catch `SIGKILL`, thread targeting is not the issue shown here, and the signal numbers are reversed in the wrong option."
     },
     {
       "id": "q4",
       "type": "single",
-      "scenario": "An nginx worker is hung. You run:\n\n```\n$ ps -o pid,stat,cmd -p 8112\n  PID STAT CMD\n 8112 D    nginx: worker process\n```\n\nYou send `kill -9 8112`. The PID does not go away.\n\n**Why doesn't `SIGKILL` work?**",
+      "scenario": "A container uses this entrypoint:\n\n```dockerfile\nENTRYPOINT [\"/bin/sh\", \"-c\", \"python /srv/worker.py\"]\n```\n\nThe Python code has a `SIGTERM` handler that drains work. During node maintenance, the handler never logs anything, and the pod exits only after the runtime sends a final kill signal. Which root cause best matches the article?",
       "options": [
-        { "id": "a", "text": "You need root; SIGKILL respects file permissions" },
-        { "id": "b", "text": "The `D` state means the process is in uninterruptible sleep waiting on the kernel (typically I/O). `SIGKILL` is delivered, but the kernel only acts on it when the process returns from kernel space, fix the underlying I/O (NFS, dying disk) and the kill will take effect." },
-        { "id": "c", "text": "nginx workers ignore SIGKILL by default; send the signal to the master instead" },
-        { "id": "d", "text": "PID 8112 is actually a thread, not a process, so SIGKILL is queued forever" }
+        {
+          "id": "a",
+          "text": "The shell is PID 1 in the container. PID 1 has special signal behavior, and most shells do not forward shutdown signals to children, so the Python process never receives the graceful request."
+        },
+        {
+          "id": "b",
+          "text": "Python processes cannot receive signals inside Linux PID namespaces unless they run as root."
+        },
+        {
+          "id": "c",
+          "text": "Kubernetes sends shutdown signals only to the host PID, not to the container namespace."
+        },
+        {
+          "id": "d",
+          "text": "`SIGTERM` is generated only by interactive terminals, so a runtime cannot use it during pod shutdown."
+        }
       ],
-      "correct": ["b"],
-      "explanation": "`D` state (uninterruptible sleep) is the one situation where even `SIGKILL` appears to do nothing. The kernel has the process blocked in a syscall (commonly NFS, a dying disk, or a misbehaving FUSE mount). Pending signals are checked when control returns to user space, if it never returns, the signal sits there. The actual fix is to unblock the I/O (kill the NFS server, remount, replace the disk). A long-lived `D` process is a system health signal, not a process problem."
+      "correct": [
+        "a"
+      ],
+      "explanation": "The article calls out the container PID 1 trap. A shell wrapper can become PID 1, ignore default termination behavior, and fail to forward signals to the actual workload. Running the app directly, using `exec` in the wrapper, or adding a tiny init like `tini` fixes that path. The other options contradict Linux signal and namespace behavior described in the article."
     },
     {
       "id": "q5",
       "type": "single",
-      "scenario": "A worker container has a child Python script that needs to clean up a tempdir on shutdown. The container's `ENTRYPOINT` is:\n\n```\nENTRYPOINT [\"/bin/bash\", \"-c\", \"python /app/worker.py\"]\n```\n\nWhen Kubernetes sends `SIGTERM`, the cleanup never runs.\n\n**What is the root cause?**",
+      "scenario": "A host records this kernel message and the service supervisor immediately starts a replacement process:\n\n```text\nkernel: Out of memory: Killed process 26631 (java) total-vm:8145152kB, anon-rss:5120936kB, file-rss:0kB, shmem-rss:0kB\n```\n\nThe application team asks why its shutdown hook did not close a batch cleanly. What is the best answer?",
       "options": [
-        { "id": "a", "text": "Python ignores SIGTERM by default; you must register a handler" },
-        { "id": "b", "text": "The shell wrapper becomes PID 1 inside the container. PID 1 has special signal semantics: it does not get default handlers, and bash does not forward signals to its child. SIGTERM hits bash, which shrugs, and python is killed by the eventual SIGKILL." },
-        { "id": "c", "text": "Kubernetes sends SIGTERM to the container, not to the process; the container runtime is the bug" },
-        { "id": "d", "text": "Python on Linux requires `--init` flag to receive signals" }
+        {
+          "id": "a",
+          "text": "The OOM killer terminates the selected process as if a force kill occurred, so user-space shutdown hooks do not get a chance to run."
+        },
+        {
+          "id": "b",
+          "text": "The OOM killer sends `SIGTERM`, but Java ignores it unless the process has a foreground terminal."
+        },
+        {
+          "id": "c",
+          "text": "The kernel converts all OOM exits into zombies until PID 1 runs the application's shutdown hook."
+        },
+        {
+          "id": "d",
+          "text": "The supervisor caused the missing cleanup by restarting too quickly before the original process handled `SIGINT`."
+        }
       ],
-      "correct": ["b"],
-      "explanation": "PID 1 is special: the kernel will not deliver any signal that PID 1 has not explicitly installed a handler for, including the *default* terminate behavior. So `SIGTERM` to a bash PID 1 does nothing because bash didn't trap it. Worse, bash does not forward signals to its child either. Fix options: (1) `ENTRYPOINT [\"python\", \"/app/worker.py\"]` so python is PID 1 and can register its own handler; (2) `exec python /app/worker.py` inside the shell so python *replaces* bash; (3) use `tini` / `--init` as an init that forwards signals."
+      "correct": [
+        "a"
+      ],
+      "explanation": "The process-management article says the OOM killer makes the process disappear like someone ran `kill -9`, with the record in `dmesg` or the journal. That means cleanup hooks and signal handlers are bypassed. This is not a terminal issue, not zombie reaping, and not a `SIGINT` restart race."
     },
     {
       "id": "q6",
       "type": "single",
-      "scenario": "Your application writes `signal(SIGCHLD, SIG_IGN)` at startup *because* it forks short-lived helpers and you don't want to deal with reaping. Months later, someone tries `wait()` in a debug build and it always returns -1 with `errno=ECHILD`, even immediately after a fork.\n\n**Why?**",
+      "scenario": "A background helper exits, but it remains visible in the process table:\n\n```bash\n$ ps -o pid,ppid,stat,cmd -p 30241\n  PID  PPID STAT CMD\n30241 29810 Z    [sync-helper] <defunct>\n$ kill -9 30241\n$ ps -o pid,ppid,stat,cmd -p 30241\n  PID  PPID STAT CMD\n30241 29810 Z    [sync-helper] <defunct>\n```\n\nWhat fix should the owner prioritize?",
       "options": [
-        { "id": "a", "text": "Setting `SIGCHLD` to `SIG_IGN` tells the kernel to auto-reap children, which is exactly what you wanted, but it also means there are *no zombies for `wait()` to harvest*, hence ECHILD. The two behaviors are coupled." },
-        { "id": "b", "text": "`wait()` is broken on glibc when SIGCHLD is ignored; use `waitpid()` instead" },
-        { "id": "c", "text": "ECHILD means the child finished before the parent could call wait(); use `WNOHANG`" },
-        { "id": "d", "text": "Forking inside a signal handler is undefined behavior and corrupts the process table" }
+        {
+          "id": "a",
+          "text": "Fix or restart the parent process so it calls `wait()` and reaps the child's exit status."
+        },
+        {
+          "id": "b",
+          "text": "Send `SIGSTOP` before `SIGKILL`, because zombies must be paused before they can be removed."
+        },
+        {
+          "id": "c",
+          "text": "Raise the child's nice priority so it can finish the remaining cleanup work."
+        },
+        {
+          "id": "d",
+          "text": "Delete the matching `/proc` directory so the kernel frees the PID slot."
+        }
       ],
-      "correct": ["a"],
-      "explanation": "Linux gives `signal(SIGCHLD, SIG_IGN)` a special meaning: it instructs the kernel to auto-reap exited children so they never become zombies. The side effect is exactly what the question describes, `wait()` cannot find a child to harvest because there are none. If you also want `wait()` to work, the right primitive is `sigaction(SIGCHLD, ...)` with `SA_NOCLDWAIT` *or* an empty handler that just returns. `SIG_IGN` with the auto-reap behavior is a single-purpose tool."
+      "correct": [
+        "a"
+      ],
+      "explanation": "A zombie has already exited. It is waiting only for its parent to collect the exit code with `wait()`, so no signal can kill it again. The parent must reap it, or be restarted so PID 1 adopts and reaps the zombie. Nice values and manual `/proc` deletion do not solve a reaping bug."
     },
     {
       "id": "q7",
-      "type": "multiple",
-      "scenario": "Your team is reviewing a service's signal handling design. The service: serializes a checkpoint to disk, has a 60s upper bound on that flush, runs as PID 1 in a container, and is started by Kubernetes.\n\n**Which design choices are correct? (Select all that apply.)**",
+      "type": "single",
+      "scenario": "A daemon starts fire-and-forget image thumbnail helpers. The parent sets `SIGCHLD` to `SIG_IGN` to avoid zombie buildup. Later, a debug build tries to call `wait()` after forking a helper and consistently gets `ECHILD` even though the helper just exited. What is the most accurate explanation?",
       "options": [
-        { "id": "a", "text": "Trap `SIGTERM` and run the checkpoint flush" },
-        { "id": "b", "text": "Trap `SIGKILL` as a last-resort fast-flush path" },
-        { "id": "c", "text": "Set Kubernetes `terminationGracePeriodSeconds` to at least 60 (and ideally 90)" },
-        { "id": "d", "text": "Make sure the service binary is PID 1 itself, or use an init like `tini`, so the signal actually reaches it" },
-        { "id": "e", "text": "Trap `SIGINT` and treat it the same as `SIGTERM`, so `Ctrl-C` in a `kubectl exec -it` shell behaves predictably" }
+        {
+          "id": "a",
+          "text": "Ignoring `SIGCHLD` tells the kernel to auto-reap children, so there is no child exit status left for `wait()` to collect."
+        },
+        {
+          "id": "b",
+          "text": "`wait()` only works for foreground children. Background helpers must be collected through job control."
+        },
+        {
+          "id": "c",
+          "text": "`ECHILD` means the child is still running and the parent needs to retry without blocking."
+        },
+        {
+          "id": "d",
+          "text": "The parent must send itself `SIGHUP` before it can see child exit codes."
+        }
       ],
-      "correct": ["a", "c", "d", "e"],
-      "explanation": "(a) is the standard graceful-shutdown pattern. (c) gives the trap enough time to finish before Kubernetes escalates to SIGKILL. (d) avoids the PID-1-eats-signals trap covered in the previous question. (e) is good hygiene: many CLIs send SIGINT, and treating both the same makes behavior consistent. (b) is the only wrong answer: `SIGKILL` cannot be trapped on any POSIX system. Any code claiming to handle it is dead code."
+      "correct": [
+        "a"
+      ],
+      "explanation": "The article explains the `SIGCHLD` escape hatch: `SIG_IGN` or `SA_NOCLDWAIT` can ask the kernel to reap children automatically. That prevents zombies, but it also discards the exit status that `wait()` would normally collect. The issue is not job control, a retry mode, or `SIGHUP`."
+    },
+    {
+      "id": "q8",
+      "type": "multiple",
+      "scenario": "You are reviewing a shutdown design for a containerized batch processor. It must flush a small queue, should be safe during normal rollouts, and has no need to preserve work after an OOM kill. Which review comments are correct? (Select all that apply.)",
+      "options": [
+        {
+          "id": "a",
+          "text": "Handle `SIGTERM` and make the handler finish the queue flush quickly enough for the configured grace period."
+        },
+        {
+          "id": "b",
+          "text": "Handle `SIGKILL` as the final fallback so the same cleanup runs even after the grace period expires."
+        },
+        {
+          "id": "c",
+          "text": "Avoid a shell wrapper as PID 1 unless it uses `exec` or a tiny init that forwards signals and reaps children."
+        },
+        {
+          "id": "d",
+          "text": "Treat `SIGINT` consistently with `SIGTERM` if operators run the same process interactively during tests."
+        },
+        {
+          "id": "e",
+          "text": "Assume an OOM kill will run the normal signal handler, then rely on the supervisor restart for cleanup."
+        }
+      ],
+      "correct": [
+        "a",
+        "c",
+        "d"
+      ],
+      "explanation": "A graceful container shutdown depends on catching `SIGTERM`, having enough grace time, and making sure the real workload receives the signal. Treating `SIGINT` similarly is good operational hygiene for interactive runs. `SIGKILL` and OOM kills bypass user-space handlers, so they cannot be used for a cleanup path."
+    },
+    {
+      "id": "q9",
+      "type": "multiple",
+      "scenario": "An incident review lists several proposed signal-handling facts for the runbook. Which statements are accurate enough to keep? (Select all that apply.)",
+      "options": [
+        {
+          "id": "a",
+          "text": "`SIGKILL` and `SIGSTOP` are the two signals user code cannot catch, block, or ignore."
+        },
+        {
+          "id": "b",
+          "text": "`SIGTERM` is the default signal sent by `kill`, and it is intended as a polite shutdown request."
+        },
+        {
+          "id": "c",
+          "text": "Long-lived processes in `D` state may remain visible after `SIGKILL` until the blocked kernel I/O returns."
+        },
+        {
+          "id": "d",
+          "text": "A zombie should be removed by sending `SIGKILL` to the zombie PID before checking the parent."
+        },
+        {
+          "id": "e",
+          "text": "If a process catches or ignores `SIGTERM`, immediate escalation to `SIGKILL` is always safer than allowing a short drain period."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "The correct runbook notes match the article: `SIGKILL` and `SIGSTOP` are non-negotiable, default `kill` sends `SIGTERM`, and `D` state can make even a force kill appear stuck until I/O unblocks. A zombie is already dead and needs its parent to reap it. Escalating immediately to `SIGKILL` can lose in-flight work, so the article recommends trying graceful termination first and using force kill last."
     }
   ]
 }
