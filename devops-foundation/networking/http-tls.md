@@ -227,6 +227,8 @@ sequenceDiagram
 
 This diagram shows TLS 1.2, which requires two round trips before any data can flow. TLS 1.3 (the current standard) reduces this to one round trip by combining several of these steps, and it supports 0-RTT resumption for repeat connections. That difference matters at scale: shaving one round trip off every new connection translates to measurably faster page loads for users across the globe, especially those on high-latency mobile networks.
 
+TLS 1.3 also dropped the old RSA key exchange entirely, and the reason is worth understanding. Under RSA key exchange, the client encrypted the session key with the server's public RSA key and sent it across the network. That worked, but it meant anyone who later stole the server's private key could decrypt every past session they had recorded, including ones from years ago. Modern key exchange (ECDHE, where the E stands for "ephemeral") generates a fresh key pair for every connection and throws it away when the session ends. Even if the server's long-term private key is compromised tomorrow, traffic recorded today is still safe because the keys that encrypted it no longer exist anywhere. This property is called **forward secrecy**, and TLS 1.3 enforces it by removing every cipher suite that does not provide it.
+
 One more handshake detail worth knowing: the client tells the server which hostname it is trying to reach using the TLS **SNI** (Server Name Indication) extension inside the unencrypted ClientHello. A single IP can host hundreds of HTTPS sites, and the server uses SNI to pick the matching certificate before the handshake continues. Old clients that omit SNI, or test commands like `openssl s_client` without `-servername example.com`, get the server's default vhost certificate instead of the one for the hostname they actually wanted, which then trips a "hostname mismatch" error that has nothing to do with the certificate itself.
 
 ## Certificates and the Chain of Trust
@@ -308,7 +310,17 @@ $ curl -L -v https://example.com 2>&1 | grep -E "^< (HTTP|Location:)"
 
 ### CORS Errors
 
-CORS (Cross-Origin Resource Sharing) is the browser's policy for controlling which domains can call your API from JavaScript. If your frontend at `app.example.com` calls an API at `api.example.com`, the browser first sends an OPTIONS preflight request. If the API does not respond with `Access-Control-Allow-Origin: app.example.com` (or `*`), the browser blocks the request. The confusing part: this is purely a browser restriction. The same request from `curl`, from your server code, or from a mobile app works fine. The API is not broken; the browser is enforcing a security policy. The fix is to configure the API to return the correct CORS headers.
+CORS (Cross-Origin Resource Sharing) is the browser's policy for controlling which domains can call your API from JavaScript. Before getting into the rules, it is worth understanding why CORS exists at all, because the rules only make sense once you see what they prevent.
+
+The root of the problem is not the data your code sends; it is the data the browser sends automatically. Browsers are designed to be helpful. If you are logged into bank.com, your browser stores a session cookie for that domain, and every time any code in any tab makes a request to bank.com, the browser attaches that cookie so you do not have to log in again. Without CORS, here is the nightmare scenario:
+
+1. You are logged into your bank in Tab A.
+2. You visit malicious-site.com in Tab B.
+3. The script on malicious-site.com runs `fetch('https://bank.com/transfer-funds', { method: 'POST', body: '{"amount":1000}' })`.
+4. The browser attaches your bank.com session cookie automatically because the request is going to bank.com.
+5. The bank sees a valid cookie, processes the transfer, and you are out a thousand dollars.
+
+CORS exists so the browser can ask the server "should I trust this cross-origin code?" before handing it the response. If your frontend at `app.example.com` calls an API at `api.example.com`, the browser first sends an OPTIONS preflight request (or for "simple" requests, sends the real one but withholds the response from the JavaScript caller until headers come back). If the API does not respond with `Access-Control-Allow-Origin: app.example.com` (or `*`), the browser blocks the JavaScript from reading the response. The confusing part: this is purely a browser restriction. The same request from `curl`, from your server code, or from a mobile app works fine because none of those are running attacker-controlled JavaScript inside a logged-in user's session. The API is not broken; the browser is enforcing a security policy on behalf of the user. The fix is to configure the API to return the correct CORS headers for the origins you actually trust.
 
 ### 502 and 504: Upstream Failures
 

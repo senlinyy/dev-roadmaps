@@ -66,6 +66,8 @@ Three filesystems cover almost every Linux machine you will meet:
 
 For most workloads, the right answer is "use whatever your distribution defaults to." The two cases where the choice matters are large database volumes (XFS handles large files and many parallel writers better than ext4) and systems that need cheap, frequent snapshots (btrfs or LVM thin pools).
 
+One feature all three modern filesystems share is a **journal**, and it is the reason your laptop boots in seconds after a hard crash instead of an hour. A filesystem update is rarely a single write: creating a file touches the inode table, the directory entry, the block allocation bitmap, and the data blocks themselves. If the power dies in the middle, those structures can disagree (a directory pointing at a half-allocated inode, a free-block bitmap that still marks claimed blocks as free), and the result is silent corruption that surfaces hours later as missing files or duplicate blocks. The pre-journal answer was `fsck`: at next boot, walk the entire filesystem and reconcile every structure against every other. On a multi-terabyte volume that took hours, sometimes a full day, and the machine was offline the whole time. A journal sidesteps the problem by writing the *intent* of every change to a small reserved area first, then performing the change, then marking the journal entry done. After a crash, the kernel only has to scan the journal: anything in flight is either replayed or rolled back, and the filesystem is consistent in seconds. This is the same trick a database transaction log uses, applied one layer down.
+
 You almost never create a filesystem by hand on a server you did not provision yourself. When you do, the commands look like this:
 
 ```bash

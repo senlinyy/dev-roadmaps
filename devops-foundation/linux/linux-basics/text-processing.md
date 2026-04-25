@@ -22,6 +22,10 @@ One of the most important ideas in Linux is that nearly everything is represente
 
 This matters because it means you only need to learn one set of tools. The same `grep` command that searches a log file also searches configuration files, source code, command output, and anything else. Once you know how to process text, you can work with almost anything on a Linux system.
 
+There is a second reason this toolkit looks the way it does, and it traces back to the hardware Unix was born on. The first Unix machines had kilobytes of RAM and could not load a multi-gigabyte log file into memory. The tools you are about to learn were designed to read input one line at a time, transform it, and emit it, without ever holding the whole file in memory. That constraint is gone today, but the streaming design is exactly why the same `grep` that searches a 100-byte file also searches a 100GB file without breaking a sweat. Every tool in this article is a small filter that reads a stream and writes a stream, which is also why they compose into pipelines so cleanly: one tool's output line becomes the next tool's input line.
+
+You will also notice that there is a separate command for searching (`grep`), a separate command for substituting (`sed`), and a separate command for column processing (`awk`), even though one large tool could in theory do all three. That split is deliberate. The Unix tradition is that every tool does exactly one job, takes text on stdin, and emits text on stdout. The reason is composition: when each piece is small and predictable, you can chain them in any order, and you only have to learn how each piece behaves once. A monolithic "text tool" with hundreds of options would be harder to learn, harder to compose, and impossible to extend without modifying it. Keep this in mind when a pipeline looks like five commands in a row: that is the design working as intended, not a sign that the toolkit is missing something.
+
 Let's start with the simplest tools for looking at text.
 
 ### Viewing Files with cat, head, and tail
@@ -189,6 +193,8 @@ Here is a quick reference for the most commonly used grep flags:
 ### A Quick Detour: Regular Expressions
 
 So far we have been searching for plain words, but grep can match much more flexible patterns using regular expressions (often shortened to "regex"). A regular expression is a mini-language for describing text patterns. If you have used `re.search()` in Python or `String.prototype.match()` in JavaScript, it is the same idea: instead of saying "find this exact string," you say "find anything that looks like this shape." For example, `[0-9]+` matches one or more digits, `^ERROR` matches lines that start with `ERROR`, and `\.log$` matches lines that end with `.log` (the backslash escapes the dot, which would otherwise mean "any character").
+
+If you are wondering why regex syntax is so terse and unfriendly compared to a modern language, the answer is the same as with so many Unix design choices: the constraints of the 1970s. Ken Thompson's original `grep` was written for a PDP-11 with very little memory, talking to teletypes that printed every character on physical paper. Every keystroke was expensive and every line of source code competed for kilobytes. So the syntax was compressed to single characters: `.` for any character, `*` for "any number of the previous thing," `^` and `$` for line anchors. Readability was a luxury the hardware could not afford. Decades later, regex syntax is still cryptic because changing it would break every script ever written, and because programmers have learned to read it. When a modern language like Python adds verbose regex flags (`re.VERBOSE`), it is acknowledging that the original syntax optimized for typing speed, not for the next reader.
 
 There is a historical quirk: grep supports two regex dialects. Basic Regular Expressions (BRE, the default) require backslashes in front of special characters like `+`, `?`, `|`, `(`, and `)` to give them their special meaning. Extended Regular Expressions (ERE) treat those same characters as special by default. BRE was the original syntax on old Unix systems, and ERE was added later to make patterns easier to read. Most people prefer ERE today, which is why the `-E` flag is so common.
 
@@ -410,6 +416,8 @@ This builds the array keyed by the first field (here, an IP address) and prints 
 ## Building Pipelines
 
 The pipe operator `|` connects the output of one command to the input of the next. This is the core idea that makes all of these tools work together. Each tool does one thing well, and pipes let you compose them into complex operations.
+
+The pipe was not always obvious. In early Unix, programs read from input files and wrote to output files, and connecting two programs meant writing the first one's output to a temporary file, then running the second one on that file. Doug McIlroy, who ran the research group at Bell Labs that produced Unix, kept arguing that there had to be a way to "garden-hose" the output of one program directly into the input of another. In 1972, Ken Thompson finally implemented it, and overnight the entire shape of Unix changed: tools that previously needed to know how to read files now only had to read stdin and write stdout, and the shell handled the wiring. The reason this matters today is that every command in this article is built on that assumption. As long as a tool reads stdin and writes stdout, it composes with every other tool in the toolkit, even ones written decades later. The pipe is the contract that lets `grep`, `awk`, `sort`, and `ripgrep` (which did not exist when the original Unix toolkit was designed) all snap together without any of them knowing about each other.
 
 ### A Simple Pipeline
 

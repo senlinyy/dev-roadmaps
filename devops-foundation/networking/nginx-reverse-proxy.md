@@ -78,7 +78,11 @@ $ sudo systemctl status nginx
              └─1238 "nginx: worker process"
 ```
 
-The `start` command launches Nginx, `enable` tells systemd to start it automatically on boot, and `status` confirms it is running. Notice the output shows a master process and two worker processes. The master handles configuration reloading and log rotation; the workers handle actual HTTP connections. You can verify Nginx is serving its default page by hitting localhost:
+The `start` command launches Nginx, `enable` tells systemd to start it automatically on boot, and `status` confirms it is running. Notice the output shows a master process and two worker processes. The master handles configuration reloading and log rotation; the workers handle actual HTTP connections. Each worker is a single thread that uses an event loop (`epoll` on Linux, `kqueue` on BSD) to juggle thousands of connections at once, the same model Node.js uses.
+
+Nginx exists in this shape because of the C10K problem. By the late 1990s, Apache's prefork model (one process or thread per connection) was hitting a wall: serving 10,000 concurrent connections meant 10,000 processes, each with its own memory footprint and context-switching cost, and the kernel ground to a halt long before that number. Igor Sysoev wrote Nginx in 2002-2004 specifically to handle the connections Apache could not. The trick is that most connections are idle most of the time (waiting on the network, not doing work), so a single thread can manage tens of thousands of them by sleeping on a single `epoll_wait` call and only waking up for the few that have data ready. This is why Nginx uses a fixed pool of workers (one per CPU core, set by `worker_processes auto`) instead of one worker per request, and it is also why your Node.js app behind Nginx can punch above its weight: Nginx absorbs the slow clients, drip-feeds the fast bytes to your app, and only forwards a request once it has the whole thing buffered.
+
+You can verify Nginx is serving its default page by hitting localhost:
 
 ```bash
 $ curl -s localhost | head -5
@@ -262,7 +266,7 @@ The `proxy_set_header` lines are important, and skipping them is a common mistak
 
 Without these headers, your application cannot tell who the real client is. Your rate limiter sees one IP address (Nginx) sending all the traffic. Your logging shows every request coming from `127.0.0.1`. Your app generates `http://` links even though the client connected over HTTPS. Setting these headers correctly is not optional; it is a requirement for any production reverse proxy setup.
 
-One subtle behavior of `proxy_pass` trips up almost everyone the first time. Whether or not you put a trailing slash on the upstream URL changes how the path is forwarded. Compare:
+One subtle behavior of `proxy_pass` trips up almost everyone the first time. Whether or not you put a trailing slash on the upstream URL changes how the path is forwarded. The rule is a historical accident: when the upstream URL has no path component (no slash after the host), Nginx forwards the request URI unchanged; when the upstream URL has any path component (even just a `/`), Nginx replaces the matching `location` prefix with that path. The original authors needed both behaviors and the trailing slash was the lever they picked, but nothing about the syntax tells you which mode you are in. Document it because it bites everyone, and once you know the rule, both forms become predictable. Compare:
 
 ```nginx
 # No trailing slash: the full original URI is forwarded as-is

@@ -28,6 +28,8 @@ If you have used npm, you already understand naming and namespaces. An npm packa
 
 You have seen IPv4 addresses everywhere already, even if you never thought of them as a topic. Your home wifi probably handed your laptop something like `192.168.1.42`. The EC2 instance you launched in AWS got an internal address like `10.0.1.137`. A Docker container you started yesterday landed on `172.17.0.2`. They all share the exact same shape: four numbers from 0 to 255, separated by dots. Each of those four numbers is called an octet (because under the hood it is 8 bits), and the whole address is really just a 32-bit binary number with an invisible line drawn somewhere in the middle. Everything to the left of that line identifies the network (think "the neighborhood"), and everything to the right identifies one specific device on that network, called a "host".
 
+Why 32 bits? When IPv4 was finalized in 1981, the entire ARPANET had a few hundred hosts, and 4.3 billion addresses looked absurdly generous. Nobody planned for every phone, fridge, and EC2 instance on the planet to want one. By the early 1990s the math had stopped working, and the IETF spent the rest of the decade building escape hatches (CIDR, NAT, RFC 1918) before IPv6 was finally usable. Most of the awkwardness in this article exists because we are still living with that 1981 sizing decision.
+
 Where exactly is that line drawn? That is what a subnet mask tells you. The mask is another address-shaped number whose only job is to mark which bits belong to the network and which belong to the host. The classic mask `255.255.255.0` says "the first three numbers are the network, the last number is the host". If you write it out in binary the pattern becomes obvious:
 
 ```text
@@ -40,7 +42,7 @@ The 1s mark network bits, the 0s mark host bits, and the spot where 1s stop and 
 
 With 8 host bits you get 256 possible addresses (2^8 = 256), but two of them are off limits. The very first address (`.0`) is the network address itself, like the name of the street rather than any one house on it. The very last address (`.255`) is the broadcast address, which you use to shout one message to every house on the street at once. That leaves 254 actual usable addresses for laptops, servers, containers, and so on. This is exactly why a home wifi network like `192.168.1.0/24` holds 254 devices, not 256.
 
-You might still see references to "classful" networking with Class A, B, and C. That system was replaced in 1993 because it wasted enormous chunks of address space. The terms still show up in older docs and certification exams, but real networks today use CIDR exclusively, which is the next section.
+You might still see references to "classful" networking with Class A, B, and C. That system was replaced in 1993 because it wasted enormous chunks of address space. The original scheme only let you split the 32 bits at fixed boundaries: a Class A took the first 8 bits as the network (16 million hosts), a Class B took 16 (65 thousand hosts), a Class C took 24 (254 hosts). If your organization needed 500 addresses, a Class C was too small and a Class B handed you 65,000 you would never use. There was no way to split a Class B across two organizations either. Every "right size" allocation had to round up to the next power of 256, and the IANA was burning through the address pool fast as a result. CIDR fixed this by letting the boundary land on any bit, so you can ask for exactly what you need. The classful terms still show up in older docs and certification exams, but real networks today use CIDR exclusively, which is the next section.
 
 ## CIDR Notation: Slicing the Address Space
 
@@ -83,6 +85,8 @@ The binary column makes the network/host boundary visible. The dotted line in th
 ## Private vs Public Ranges
 
 Not all IP addresses are created equal. Some are routable on the public internet, and some are explicitly reserved for private use. If you have ever connected to a home Wi-Fi network and checked your IP, it probably started with `192.168`. That is a private address. Your router handles the translation between your private address and the single public IP your ISP assigned you, using a process called NAT (Network Address Translation).
+
+Private ranges exist for two reasons that compound each other. First, IPv4 ran out of public addresses, so ISPs could not give every device on Earth a globally unique one; reserving a few large blocks for "internal use, never routed on the public internet" let billions of home devices share a handful of public IPs through NAT. Second, those reserved blocks needed to be the same everywhere so that a router on the public internet could refuse to forward them on sight, which prevents your home `192.168.1.42` from ever colliding with someone else's `192.168.1.42` across the wire. The blocks were not designed for cloud VPCs, but they turned out to be exactly what AWS, GCP, and Azure needed: a pool of addresses you could carve up freely without coordinating with anyone.
 
 RFC 1918 defines three private address blocks. Every home network, corporate LAN, cloud VPC, and Docker container network uses addresses from one of these ranges.
 

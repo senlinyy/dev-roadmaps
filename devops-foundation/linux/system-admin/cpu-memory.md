@@ -75,7 +75,7 @@ Linux 5.15.0-91-generic (web-prod-01)    01/15/2024    _x86_64_   (4 CPU)
 Average:     all   35.21    0.00    8.32   11.69    0.25    0.49    0.33   43.71
 ```
 
-Three things stand out in that output. `%iowait` averaging 11–14% means the CPU is regularly twiddling its thumbs because something is waiting on disk. That is not a CPU problem, it is a disk problem masquerading as one. `%steal` of 0.3% is fine; on a noisy AWS `t3` burstable instance you will sometimes see 5–20% steal, which means you are renting CPU you cannot actually use. And `%sys` over 10% with low `%usr` is the signature of a syscall-heavy workload (lots of small `read()`/`write()` calls, or a process forking constantly).
+Three things stand out in that output. `%iowait` averaging 11-14% means the CPU is regularly twiddling its thumbs because something is waiting on disk. That is not a CPU problem, it is a disk problem masquerading as one. `%steal` of 0.3% is fine; on a noisy AWS `t3` burstable instance you will sometimes see 5-20% steal, which means you are renting CPU you cannot actually use. And `%sys` over 10% with low `%usr` is the signature of a syscall-heavy workload (lots of small `read()`/`write()` calls, or a process forking constantly).
 
 To see how the load is distributed across cores, add `-P ALL`:
 
@@ -234,7 +234,7 @@ procs -----------memory---------- ---swap-- -----io---- -system-- ------cpu-----
 
 `si` and `so` both consistently above zero, `wa` (iowait) at 55%, `r` (run queue) of 8 on a 4-core box. The system has stopped doing useful work. It is spending most of its time shuttling pages between disk and RAM. The fix is binary: either the workload shrinks (kill the runaway process) or the hardware grows (more RAM). No amount of swappiness tuning saves you here.
 
-The `swappiness` knob (`/proc/sys/vm/swappiness`, range 0–100) controls how eager the kernel is to swap. The default is 60. Database servers commonly set it to 10 or even 1, because losing your hot index pages to swap is catastrophic for query latency. On a Kubernetes node, swap is usually disabled entirely (`swapoff -a`). The kubelet historically refused to start with swap enabled, and although that has loosened, the convention persists because container memory limits behave more predictably without swap in the picture.
+The `swappiness` knob (`/proc/sys/vm/swappiness`, range 0-100) controls how eager the kernel is to swap. The default is 60. Database servers commonly set it to 10 or even 1, because losing your hot index pages to swap is catastrophic for query latency. On a Kubernetes node, swap is usually disabled entirely (`swapoff -a`). The kubelet historically refused to start with swap enabled, and although that has loosened, the convention persists because container memory limits behave more predictably without swap in the picture.
 
 ```bash
 $ cat /proc/sys/vm/swappiness
@@ -268,7 +268,7 @@ Four columns earn their keep on almost every incident.
 - **`si` and `so` (swap in/out, KB/sec)**: the smoking gun for swap thrashing. If both are nonzero across multiple samples, the kernel is shuttling pages between RAM and disk and the system has stopped doing useful work. Skip ahead to the swap section.
 - **`wa` (CPU iowait %)**: the CPU was idle waiting on storage. Same meaning as in `top`. High `wa` paired with high `bi`/`bo` (block-device read/write rates) confirms a disk-bound workload.
 
-In the sample above all four are calm: `r` of 1–3 on a 4-core box, `b` mostly 0, `si`/`so` zero, `wa` in the single digits. This is a healthy machine. Now compare that pattern to the swap-thrashing capture in the next section and the difference jumps out.
+In the sample above all four are calm: `r` of 1-3 on a 4-core box, `b` mostly 0, `si`/`so` zero, `wa` in the single digits. This is a healthy machine. Now compare that pattern to the swap-thrashing capture in the next section and the difference jumps out.
 
 The full reference of every column, for when you need it:
 
@@ -325,6 +325,8 @@ Threads:       1
 
 `VmRSS` is the same number `ps` reports. `VmSwap` shows how much of this process has been paged out, useful when you want to know which process is taking the swap hit, not just which is taking RAM.
 
+Before we get to the OOM killer, it helps to know why it has to exist at all. Linux deliberately practices **overcommit**: when a process calls `malloc()` and asks for a gigabyte, the kernel almost always says yes, even when the box does not actually have a free gigabyte to hand out. The reasoning is that most programs ask for far more memory than they ever touch (a JVM reserves a huge heap, a fork()'d child briefly inherits its parent's address space, glibc rounds allocations up generously). Refusing those reservations would make most software fail to start, so the kernel promises memory now and gambles that the process will not write to all of it. Most of the time the gamble pays off. When it does not, several processes simultaneously try to actually use what was promised, and the kernel runs out of physical pages with nowhere to back them. At that point the only choices are to crash the whole system or to pick one process and kill it. The OOM killer is the second option implemented as policy.
+
 When the kernel runs out of memory entirely and cannot reclaim any more from caches, it invokes the **OOM killer** (Out-Of-Memory killer). The OOM killer is the kernel's last resort: pick a victim, send `SIGKILL`, hope the survivors can keep running. The system is going to lose a process either way; the only question is which one.
 
 The selection is not random. Think of it as a most-wanted list. Every process gets a "badness" score that grows with how much memory it is hogging, so the biggest consumer is usually the first to go. That score lives in `/proc/<pid>/oom_score`. There is also a thumb-on-the-scale knob, `/proc/<pid>/oom_score_adj`, which an admin can set ahead of time to make a process more or less attractive as a victim. The range goes from `-1000` (basically immortal, the kernel will avoid this process at almost any cost) to `+1000` (please kill me first). Critical infrastructure like `sshd` is often nudged toward the negative end so you can still log in after the dust settles, while a known-greedy batch job might be nudged positive so it dies before taking out a database.
@@ -351,7 +353,7 @@ That message tells you exactly what died (`python3`, PID 4892), how much it was 
 
 Knowing the metrics is half the job. The other half is recognizing the patterns. Here are the four diagnoses you will reach for again and again.
 
-**1. CPU steal on a noisy cloud VM.** You are on an AWS `t3.medium` or a GCP `e2-small`. Latency spikes show up at random. `mpstat` shows `%steal` of 15–40%. The host is overcommitted and the hypervisor is handing your CPU slices to other tenants. There is no fix you can deploy from inside the guest. Either move to a non-burstable instance type (`m5`, `c5`, etc.) or accept that you are renting "best-effort" compute. Burstable instances also have a CPU credit balance. Once it hits zero, you are throttled regardless of steal. AWS exposes this as the `CPUCreditBalance` CloudWatch metric.
+**1. CPU steal on a noisy cloud VM.** You are on an AWS `t3.medium` or a GCP `e2-small`. Latency spikes show up at random. `mpstat` shows `%steal` of 15-40%. The host is overcommitted and the hypervisor is handing your CPU slices to other tenants. There is no fix you can deploy from inside the guest. Either move to a non-burstable instance type (`m5`, `c5`, etc.) or accept that you are renting "best-effort" compute. Burstable instances also have a CPU credit balance. Once it hits zero, you are throttled regardless of steal. AWS exposes this as the `CPUCreditBalance` CloudWatch metric.
 
 **2. Swap thrashing.** Latency is terrible, `vmstat` shows `si` and `so` both nonzero and sustained, `wa` is high, `r` exceeds your core count. The system is paging. Find the offender with `ps aux --sort=-%mem | head` or by scanning `/proc/*/status` for high `VmSwap`. Kill it, restart it with a memory cap, or add RAM. Do not waste time tuning swappiness during the incident.
 

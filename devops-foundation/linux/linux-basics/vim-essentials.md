@@ -72,6 +72,8 @@ The `!` in `:q!` is a force flag. It tells Vim "I know I have unsaved changes an
 
 If you accidentally opened the wrong file or made edits you regret, `:q!` is your escape hatch. No damage done.
 
+There is one more piece of vim's design worth knowing about before you make your first edits, because eventually you will see it on screen. When you open a file, vim does not edit the file directly. It loads the contents into an in-memory buffer and writes a hidden swap file alongside it (something like `.deploy.sh.swp`). All your edits go into the buffer, and `:w` is what actually overwrites the file on disk. The swap file exists for a single reason: crash recovery. If your SSH session drops, your laptop loses power, or vim itself crashes mid-edit, the swap file preserves your unsaved changes so you can recover them next time you open the file. The downside is that if you ever see "swap file already exists" when opening a file, vim is warning you that either another process is editing the same file, or a previous session crashed and never cleaned up. That distinction (buffer in memory, swap file on disk, real file untouched until you save) is also why `:q!` is safe: nothing you typed has touched the original file.
+
 To create a new file, just open a name that does not exist yet:
 
 ```bash
@@ -102,6 +104,8 @@ In Normal mode, Vim offers layered navigation: from single characters up to the 
 ### Character and Line Movement
 
 The most basic movement keys are `h`, `j`, `k`, and `l`. They move the cursor left, down, up, and right respectively. The arrow keys also work, but experienced Vim users prefer `hjkl` because your fingers never leave the home row.
+
+The reason the keys are `hjkl` specifically (and not, say, `wasd` like a video game) is the same hardware story from earlier. The ADM-3A terminal Bill Joy used had no arrow keys at all. Look at a photograph of that keyboard and you will see arrows literally printed on the `h`, `j`, `k`, and `l` keycaps, because those were the keys you used to move the cursor in any program on that machine. Joy mapped vi's navigation to the same keys because that is what users were already trained on. The arrows on the keycap disappeared decades ago, but the convention stuck because once enough scripts, plugins, and muscle memory depend on a layout, changing it costs more than keeping it.
 
 ```text
      k

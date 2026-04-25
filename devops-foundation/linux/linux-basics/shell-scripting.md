@@ -116,7 +116,11 @@ Always prefer `$(...)` over backticks for command substitution. Backticks are ha
 
 ## Simple Control Flow: if/else and for Loops
 
-Now that you can store values in variables, you need ways to make decisions and repeat actions. The `if` statement in Bash tests the exit code of a command. An exit code is a number that every command returns when it finishes: 0 means success, and any non-zero value means something went wrong. Think of it like `process.exit(0)` in Node or `sys.exit(0)` in Python, except every command (not just your scripts) reports one. If the command succeeds (exit code 0), the `then` block runs:
+Now that you can store values in variables, you need ways to make decisions and repeat actions. The `if` statement in Bash tests the exit code of a command. An exit code is a number that every command returns when it finishes: 0 means success, and any non-zero value means something went wrong. Think of it like `process.exit(0)` in Node or `sys.exit(0)` in Python, except every command (not just your scripts) reports one.
+
+The reason the convention is "0 means success" rather than "1 means success" comes from a simple insight: there is exactly one way to succeed, but there are many distinct ways to fail. A command either did what was asked or it did not, so success collapses cleanly into a single value. Failure, on the other hand, has shades: file not found, permission denied, invalid argument, network unreachable, out of memory. Reserving zero for success leaves every other number free to encode a specific failure mode, which is why exit code 1 typically means "generic error", 2 means "misuse of shell builtins", 126 means "command found but not executable", 127 means "command not found", and 130 means "killed by Ctrl+C". A return-code system designed the other way around (1 for success) would have wasted the cleanest integer on the case that needs the least information.
+
+If the command succeeds (exit code 0), the `then` block runs:
 
 ```bash
 #!/usr/bin/env bash
@@ -227,6 +231,8 @@ rm -rf *
 ```
 
 Without any safety flags, the `cd` fails silently, and `rm -rf *` runs in whatever directory you happened to be in before. This is the kind of silent failure that causes real damage.
+
+Why is the default this way? It is a historical artifact, not a deliberate modern choice. The Bourne shell of the late 1970s was designed when "scripts" were short, interactive sequences a sysadmin would type and watch run on a teletype. If `cp` failed because a disk was full, the human at the terminal would see the error message scroll by and decide what to do. There was no expectation of unattended automation, no CI pipelines, no production servers running scripts at 3am with no human in the loop. By the time those use cases became normal, millions of scripts already depended on the "keep going on error" behavior, so changing the default would have broken every shell script on Earth. Instead, Bash added opt-in flags that you should turn on at the top of every new script.
 
 The fix is a single line that you should add to every script, right after the shebang:
 
