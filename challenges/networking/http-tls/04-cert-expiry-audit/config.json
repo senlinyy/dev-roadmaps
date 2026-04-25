@@ -1,0 +1,33 @@
+{
+  "cwd": "/home/dev",
+  "env": { "USER": "dev", "HOME": "/home/dev" },
+  "fs": {
+    "/home/dev": { "type": "dir" },
+    "/home/dev/reports": { "type": "dir" },
+    "/etc/ssl/audit": { "type": "dir" },
+    "/etc/ssl/audit/api-prod.peminfo": {
+      "type": "file",
+      "content": "Certificate:\n    Data:\n        Version: 3 (0x2)\n        Serial Number:\n            04:8a:1c:11:5f:4d:bb:0a:9c:7e:33:21:88:09:6e:71\n        Signature Algorithm: sha256WithRSAEncryption\n        Issuer: C=US, O=Let's Encrypt, CN=R3\n        Validity\n            Not Before: Dec  5 09:14:02 2024 GMT\n            Not After : Mar  5 09:14:01 2025 GMT\n        Subject: CN=api.prod.example.com\n        Subject Public Key Info:\n            Public Key Algorithm: rsaEncryption\n                RSA Public-Key: (2048 bit)\n        X509v3 extensions:\n            X509v3 Subject Alternative Name:\n                DNS:api.prod.example.com, DNS:api.example.com\n            X509v3 Extended Key Usage:\n                TLS Web Server Authentication, TLS Web Client Authentication\n            Authority Information Access:\n                CA Issuers - URI:http://r3.i.lencr.org/\n                OCSP - URI:http://r3.o.lencr.org\n"
+    },
+    "/etc/ssl/audit/internal-ca.peminfo": {
+      "type": "file",
+      "content": "Certificate:\n    Data:\n        Version: 3 (0x2)\n        Serial Number: 1 (0x1)\n        Signature Algorithm: sha256WithRSAEncryption\n        Issuer: C=US, O=Polaris Internal, CN=Polaris Root CA\n        Validity\n            Not Before: Jan  1 00:00:00 2023 GMT\n            Not After : Jan  1 00:00:00 2033 GMT\n        Subject: C=US, O=Polaris Internal, CN=Polaris Root CA\n        X509v3 extensions:\n            X509v3 Basic Constraints: critical\n                CA:TRUE\n            X509v3 Key Usage: critical\n                Certificate Sign, CRL Sign\n"
+    }
+  },
+  "grader": {
+    "strategy": "final-fs-state",
+    "expectedFs": [
+      {
+        "path": "/home/dev/reports/api-cert-renewal.note",
+        "exists": true,
+        "type": "file",
+        "contentContains": [
+          "leaf Mar  5 09:14:01 2025 GMT",
+          "CA Jan  1 00:00:00 2033 GMT",
+          "DNS:api.example.com"
+        ]
+      }
+    ],
+    "requireCommands": ["cat", "grep", "echo"]
+  }
+}

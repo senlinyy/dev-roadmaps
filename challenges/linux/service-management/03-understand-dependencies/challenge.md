@@ -1,17 +1,10 @@
 ---
-title: "Understand Dependencies"
+title: "Reason About systemd Dependencies and Ordering"
 sectionSlug: dependencies-ordering-and-targets
 order: 3
+kind: quiz
 ---
 
-Systemd uses `Requires`, `Wants`, and `After` directives to express relationships between services. Understanding these tells you what must be running before a service can start, and what happens when a dependency fails.
+`Requires=`, `Wants=`, `After=`, and `Before=` are how systemd encodes the difference between *needs* and *wishes*, and between *ordering* and *requirement*. Mixing them up is the most common reason a service either fails to start at boot or refuses to come up after a dependency restarts.
 
-You start in `/home/dev`. Your job:
-
-1. **Read the webapp unit file** at `/etc/systemd/system/webapp.service` to see its dependency configuration.
-2. **Find the hard dependency** by grepping for `Requires=` in the webapp unit file.
-3. **Find the soft dependency** by grepping for `Wants=` in the webapp unit file.
-4. **Check the boot order** by grepping for `After=` across all unit files with `grep -r After /etc/systemd/system/`.
-5. **Identify which dependency is critical**: the `Requires` target will bring webapp down if it fails.
-
-The grader requires you to use `cat` and `grep`, and checks that your output contains the hard and soft dependency names, the network target, and the `Requires` directive.
+This quiz puts you in front of unit fragments and asks what would actually happen. Pick the answer that an SRE would defend during a startup-order incident review.

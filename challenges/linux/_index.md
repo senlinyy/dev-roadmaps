@@ -1,6 +1,6 @@
 ---
-title: "Linux Terminal"
-description: "Practice shell commands in a realistic simulated Linux environment. Each challenge includes hints and an official solution."
+title: "Linux"
+description: "Practice shell, filesystem, process, service, and log workflows in a realistic simulated Linux environment."
 kind: linux
 icon: Terminal
 color: "#5CE0D2"

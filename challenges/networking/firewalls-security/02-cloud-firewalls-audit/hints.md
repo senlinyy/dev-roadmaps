@@ -1,0 +1,1 @@
+Start by checking whether the Security Group already exposes 8080. If it does, the remaining problem has to be in the stateless layer — and for a stateless firewall, return traffic matters just as much as the inbound rule.

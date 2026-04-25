@@ -1,1 +1,0 @@
-`grep` patterns here are JS-style regex, so `grep "Issuer:|Subject:"` matches either string in one pass — no need for separate calls. The leaf cert expires `Mar 5 2025`; the internal CA is good through 2033, so the renewal target is the leaf only.

@@ -1,1 +1,0 @@
-When you grep both files in one command (e.g. `grep -i "Access-Control-Allow-Origin" api-prod.headers api-staging.headers`), the output prefixes each match with the filename — that prefix is what proves which environment had the header.

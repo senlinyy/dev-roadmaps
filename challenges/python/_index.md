@@ -4,6 +4,6 @@ description: "Interactive Python challenges. Coming soon."
 kind: python
 icon: Code
 color: "#F59E0B"
-order: 2
+order: 3
 available: false
 ---

@@ -1,15 +1,10 @@
 ---
-title: "Decode Process Signals"
+title: "Reason About Process Signals"
 sectionSlug: signals-how-everything-talks-to-a-process
 order: 3
+kind: quiz
 ---
 
-Signals are how the kernel and other processes communicate with a running program. Some signals can be caught and handled; others cannot. Knowing the difference is critical for writing reliable services.
+Signals are how the kernel and other processes ask a running program to react. Some signals can be caught and re-defined; some cannot. Knowing the difference is the line between graceful shutdowns and corrupted state.
 
-You start in `/home/dev`. Your job:
-
-1. **Read the signal reference table** in `signal-table.txt` and identify which signals cannot be trapped.
-2. **Read `cleanup.sh`** to see which signals the script traps.
-3. **Grep the signal table** for the default `kill` signal and find its number.
-
-The grader requires you to use `cat` and `grep`, and your combined output must include SIGKILL, SIGSTOP, SIGTERM, SIGINT, and the number 15.
+This quiz puts you in front of real on-call situations where signal choice or signal misunderstanding is the actual cause. Pick the answer that an experienced operator would defend in a postmortem.

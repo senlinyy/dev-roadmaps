@@ -1,1 +1,0 @@
-Look at the failure marker in each snapshot, then map it from the article: `NO-CARRIER` is physical, `FAILED` in neighbor resolution is data link, and `Connection refused` is transport. Write the note with one incident per line and then print it.

@@ -1,1 +1,0 @@
-`grep -r "PATTERN" /var/log/incidents/` walks every file in the directory and prints the matching line prefixed with the filename, which immediately tells you which incident file owns each failure marker.

@@ -1,0 +1,1 @@
+The leaf cert and the CA cert are different artifacts with different expiry dates. Look for the `Not After` lines in both, then find the `Subject Alternative Name` block in the leaf cert so the renewal note includes every hostname that must stay covered.

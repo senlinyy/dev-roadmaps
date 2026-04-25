@@ -1,1 +1,0 @@
-Read the webapp unit file with `cat` first. Then use `grep` to search for `Requires=`, `Wants=`, and `After=` directives. The `Requires` directive names the service that must succeed for webapp to start. Use `grep -r After /etc/systemd/system/` to see ordering across all services.

@@ -1,16 +1,10 @@
 ---
-title: "Identify Service Types"
+title: "Pick the Right systemd Service Type"
 sectionSlug: service-types-and-what-active-means
 order: 5
+kind: quiz
 ---
 
-The `Type=` directive in a unit file tells systemd how the service signals readiness. Getting it wrong means systemd thinks a service is ready before it actually is, or waits forever for a notification that never comes.
+The `Type=` directive in a unit file tells systemd how the service signals readiness. Pick the wrong type and systemd either marks the service "active" before it can serve traffic, or hangs forever waiting for a notification that never comes.
 
-You start in `/home/dev`. Your job:
-
-1. **Read the unit file** at `/etc/systemd/system/api.service` and identify its `Type=` value.
-2. **Read the unit file** at `/etc/systemd/system/worker.service` and identify its `Type=` value.
-3. **Find the unit that uses `Type=oneshot`** by grepping across all unit files in `/etc/systemd/system/`.
-4. **Check the status file** at `/var/run/api.status` to see what readiness mechanism the API uses.
-
-The grader requires you to use `cat` and `grep`, and your combined output must contain the words "notify", "simple", "oneshot", and "READY=1".
+This quiz puts you in front of common readiness mismatches. The right answer is whichever type lets dependent services (and load balancers, and health checks) believe the service is ready exactly when it really is.

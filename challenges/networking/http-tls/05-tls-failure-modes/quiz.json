@@ -1,0 +1,95 @@
+{
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "`curl https://api.example.com/healthz` from a brand-new Alpine container returns:\n\n```\ncurl: (60) SSL certificate problem: unable to get local issuer certificate\n```\n\nThe same `curl` from your laptop succeeds. The certificate on `api.example.com` is signed by a public CA that any modern browser trusts. **What is the root cause?**",
+      "options": [
+        { "id": "a", "text": "The server is presenting an expired certificate" },
+        { "id": "b", "text": "The server is not stapling OCSP responses" },
+        { "id": "c", "text": "The Alpine container is missing the `ca-certificates` package, so its trust store has no root CAs to chain against" },
+        { "id": "d", "text": "The server is using an unsupported TLS version" }
+      ],
+      "correct": ["c"],
+      "explanation": "Alpine's base image ships without `ca-certificates`. Without that package, `/etc/ssl/certs` is empty and curl cannot build a chain to any public root, so every HTTPS site fails with `unable to get local issuer certificate`. Your laptop has a populated trust store, which is why it works. The fix is `apk add --no-cache ca-certificates`. Expiry would say `certificate has expired`; an unsupported TLS version would say `no protocols available`."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "`curl -v https://app.example.com/` returns:\n\n```\n* Server certificate:\n*  subject: CN=*.api.example.com\n*  start date: Mar 12 00:00:00 2025 GMT\n*  expire date: Apr 11 00:00:00 2026 GMT\n*  issuer: CN=R3, O=Let's Encrypt, C=US\n* SSL: no alternative certificate subject name matches target host name 'app.example.com'\n```\n\n**What is the failure?**",
+      "options": [
+        { "id": "a", "text": "The certificate is expired" },
+        { "id": "b", "text": "The certificate's subject and SAN do not cover `app.example.com` — the wildcard `*.api.example.com` only covers names directly under `api.example.com`" },
+        { "id": "c", "text": "The CA is untrusted" },
+        { "id": "d", "text": "The client does not support SNI" }
+      ],
+      "correct": ["b"],
+      "explanation": "Wildcard certificates match exactly one DNS label to the left of the wildcard. `*.api.example.com` matches `foo.api.example.com` but **not** `app.example.com` (different parent zone) and not `a.b.api.example.com` (two labels). The cert is otherwise valid — within its date range and chained to a trusted CA — so curl explicitly says the issue is hostname mismatch. The fix is to either reissue the cert with a SAN for `app.example.com` or serve `app.example.com` from a different vhost with the right cert."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "Two services live behind the same nginx instance with SNI-based routing. `curl --resolve api.example.com:443:198.51.100.10 https://api.example.com/` works. `openssl s_client -connect 198.51.100.10:443` (with no `-servername` flag) returns the certificate for the **default** vhost, which is `legacy.example.com`. **What is happening?**",
+      "options": [
+        { "id": "a", "text": "nginx is corrupted and serving random certificates" },
+        { "id": "b", "text": "Without `-servername`, the client sends no SNI extension. nginx falls back to the default server block and presents that vhost's certificate." },
+        { "id": "c", "text": "The TLS session resumption ticket has the wrong key" },
+        { "id": "d", "text": "DNS is poisoned" }
+      ],
+      "correct": ["b"],
+      "explanation": "SNI is the TLS extension that tells the server which vhost the client wants *before* the certificate is sent. When you connect with `openssl s_client` without `-servername`, no SNI is sent, and nginx serves the certificate of whatever `server` block is marked `default_server` (or the first one in config order). This is normal, expected behavior — not a bug. Always pass `-servername api.example.com` when probing multi-tenant TLS endpoints, otherwise you'll diagnose phantom mismatches."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "An internal service-mesh client logs:\n\n```\nx509: certificate signed by unknown authority\n```\n\nYou confirm the server is presenting a certificate signed by your **internal** CA, and the client image was rebuilt yesterday from the same Dockerfile that has worked for months. The internal CA bundle is mounted via a Kubernetes ConfigMap. **What is the most likely cause?**",
+      "options": [
+        { "id": "a", "text": "The internal CA's root certificate expired" },
+        { "id": "b", "text": "The ConfigMap volume mount changed permissions and the client process can no longer read the CA bundle" },
+        { "id": "c", "text": "The yesterday rebuild bumped the base image, which trusts a different default trust store path; the ConfigMap mount now lands at a path the new client does not consult" },
+        { "id": "d", "text": "The server is presenting a self-signed certificate" }
+      ],
+      "correct": ["c"],
+      "explanation": "Base-image upgrades are a top cause of `unknown authority` regressions. Different base images consult different trust paths (`/etc/ssl/certs/ca-certificates.crt` on Debian, `/etc/pki/tls/certs/ca-bundle.crt` on RHEL/UBI, language-specific stores in Java/Go). When you mount your CA at `/etc/ssl/certs/internal-ca.pem` and the new image only reads `/etc/pki/...`, your CA is invisible. CA root expiry is rare and would have been telegraphed for months. Permission errors usually surface as `permission denied`, not `unknown authority`."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "An engineer pages saying TLS broke. `openssl s_client -connect legacy.example.com:443 -servername legacy.example.com` returns:\n\n```\nCONNECTED(00000003)\n140012345:error:14094410:SSL routines:ssl3_read_bytes:sslv3 alert handshake failure:s3_pkt.c:1493:SSL alert number 40\n```\n\n**What is the most likely cause?**",
+      "options": [
+        { "id": "a", "text": "The server is offline" },
+        { "id": "b", "text": "The certificate expired" },
+        { "id": "c", "text": "Cipher or protocol version mismatch — the client and server share no common cipher suite or TLS version, often after a server hardening change disables old protocols" },
+        { "id": "d", "text": "DNS is broken" }
+      ],
+      "correct": ["c"],
+      "explanation": "TLS alert 40 is `handshake_failure`, which the server sends when no acceptable cipher suite or protocol version was offered by the client. This is exactly what you see after a server is hardened to remove TLS 1.0/1.1 and old cipher suites and an old client (legacy Java, an embedded device, or a container with an ancient OpenSSL) can no longer negotiate. The fact that `s_client` `CONNECTED` means TCP and SNI succeeded — the failure is purely in cipher/version negotiation."
+    },
+    {
+      "id": "q6",
+      "type": "multiple",
+      "scenario": "Your monitoring shows `certificate verify failed` errors spiking from a single client cluster. The server's certificate is valid for another 60 days according to `openssl x509 -enddate`. **Which root causes are consistent with this evidence?** (Select all that apply.)",
+      "options": [
+        { "id": "a", "text": "The server stopped serving the intermediate certificate, so the client can no longer build a chain to a trusted root" },
+        { "id": "b", "text": "The client cluster's system clock drifted significantly into the future, putting the cert outside its validity window from the client's perspective" },
+        { "id": "c", "text": "The server certificate expired" },
+        { "id": "d", "text": "The client is missing a newer root CA that recently re-signed the issuing intermediate" }
+      ],
+      "correct": ["a", "b", "d"],
+      "explanation": "(a) Missing intermediates is the single most common cause of cluster-wide `certificate verify failed` after a renewal — the leaf is fine, but the chain is broken. (b) Clock skew is sneaky: clients see the cert as `not yet valid` or `expired` purely because their clock is wrong; this is why NTP is a TLS dependency. (d) When a CA cross-signs or transitions to a new root (the famous Let's Encrypt DST Root CA X3 expiry of 2021 is the canonical example), older clients without the new root suddenly fail. (c) is ruled out by the explicit `openssl x509 -enddate` evidence that the cert has 60 days left."
+    },
+    {
+      "id": "q7",
+      "type": "single",
+      "scenario": "An iOS user reports your app gets `App Transport Security blocked a cleartext HTTP resource` even though your API is `https://api.example.com`. You confirm the API is HTTPS. The TLS certificate is valid. The cipher suite is modern. **Why is iOS still blocking it?**",
+      "options": [
+        { "id": "a", "text": "iOS does not trust the issuing CA" },
+        { "id": "b", "text": "iOS ATS requires forward secrecy — the server is offering only RSA key exchange, which ATS rejects even though TLS itself succeeds" },
+        { "id": "c", "text": "The certificate is using an EC key" },
+        { "id": "d", "text": "iOS only trusts certificates issued in the last 90 days" }
+      ],
+      "correct": ["b"],
+      "explanation": "Apple's App Transport Security has stricter requirements than baseline TLS. Even with a valid certificate, ATS requires TLS 1.2+, **forward-secret** key exchange (ECDHE/DHE), and AEAD ciphers. A server that still negotiates plain RSA key exchange will be blocked at the OS layer with the misleading `cleartext HTTP` error message — Apple uses one error string to cover all ATS rejections, which is why this confuses people. Switch the server to ECDHE-only cipher suites."
+    }
+  ]
+}

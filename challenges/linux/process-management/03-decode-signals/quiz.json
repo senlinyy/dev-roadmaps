@@ -1,0 +1,96 @@
+{
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A teammate runs `kill 4123` to stop a long-running data export, but the process keeps running. Frustrated, they run `kill -9 4123` and the process disappears. They conclude *plain `kill` is broken on this server*.\n\n**What actually happened?**",
+      "options": [
+        { "id": "a", "text": "`kill` defaults to `SIGTERM`, which the export had a handler for and chose to ignore (or it was mid-syscall and didn't service it). `SIGKILL` cannot be caught, so the kernel killed it unconditionally." },
+        { "id": "b", "text": "`kill` without `-9` only sends a request to the shell, not to the process" },
+        { "id": "c", "text": "The process was a zombie, and only `SIGKILL` reaps zombies" },
+        { "id": "d", "text": "`SIGTERM` requires root; `SIGKILL` does not" }
+      ],
+      "correct": ["a"],
+      "explanation": "`kill` with no signal sends `SIGTERM` (15), which is *catchable*. Well-behaved daemons trap it to flush, close connections, and exit cleanly — but they can also legitimately ignore it for a while (e.g. mid-transaction). `SIGKILL` (9) and `SIGSTOP` (19) are the only signals the kernel will not deliver to user-space handlers, so they always succeed. The lesson: `kill -9` is not *more powerful*; it is *non-negotiable*. Use it last, not first."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "Your service writes a large in-memory cache to disk during shutdown so it can warm-start next boot. Operations runs `systemctl stop myapp` and you notice the cache file is missing on restart.\n\n**Which is the most likely cause?**",
+      "options": [
+        { "id": "a", "text": "The service didn't trap `SIGTERM`, so systemd's default `SIGTERM` killed it before the shutdown handler ran" },
+        { "id": "b", "text": "The service did trap `SIGTERM`, but its flush took longer than `TimeoutStopSec` (90s default), so systemd escalated to `SIGKILL` and the write was aborted mid-way" },
+        { "id": "c", "text": "Either A or B — both manifest as a missing or truncated cache file on restart, and you cannot distinguish them without checking the journal for the `Killing process …` escalation message" },
+        { "id": "d", "text": "`systemctl stop` always sends `SIGKILL` first, so no graceful path is possible" }
+      ],
+      "correct": ["c"],
+      "explanation": "Both A and B cause the same symptom (no cache on restart) but have different fixes. A means *write a SIGTERM handler*; B means *raise `TimeoutStopSec=` in the unit file or speed up the flush*. The only way to tell which one bit you is the journal entry — systemd logs `Stopping…`, then either a clean `Deactivated successfully` (handler ran fine but didn't write) or `Killing process X (myapp) with signal SIGKILL` (timeout escalation). Always check the journal before guessing the fix."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "A Python service that intentionally writes `signal.signal(signal.SIGSTOP, custom_handler)` raises an exception on startup:\n\n```\nValueError: signal only works in main thread of the main interpreter\n```\n\nYou move it to the main thread and now get:\n\n```\nOSError: [Errno 22] Invalid argument\n```\n\n**Why?**",
+      "options": [
+        { "id": "a", "text": "Python's `signal` module does not support `SIGSTOP` on Linux; use `SIGTSTP` instead" },
+        { "id": "b", "text": "`SIGSTOP` cannot be caught, blocked, or handled by user code on any Unix — the kernel rejects the registration. Use `SIGTSTP` (Ctrl-Z) if you want a catchable 'pause' signal." },
+        { "id": "c", "text": "The process needs `CAP_KILL` to register handlers for stop signals" },
+        { "id": "d", "text": "Errno 22 means the signal table is full; restart the process" }
+      ],
+      "correct": ["b"],
+      "explanation": "`SIGKILL` and `SIGSTOP` are the two signals the POSIX kernel refuses to let user code interpose on. The kernel needs at least one always-works *kill* and one always-works *suspend* so an operator can never be locked out by a misbehaving program. `SIGTSTP` (terminal stop, what Ctrl-Z sends) *is* catchable and is the right signal for a graceful pause/resume hook."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "An nginx worker is hung. You run:\n\n```\n$ ps -o pid,stat,cmd -p 8112\n  PID STAT CMD\n 8112 D    nginx: worker process\n```\n\nYou send `kill -9 8112`. The PID does not go away.\n\n**Why doesn't `SIGKILL` work?**",
+      "options": [
+        { "id": "a", "text": "You need root; SIGKILL respects file permissions" },
+        { "id": "b", "text": "The `D` state means the process is in uninterruptible sleep waiting on the kernel (typically I/O). `SIGKILL` is delivered, but the kernel only acts on it when the process returns from kernel space — fix the underlying I/O (NFS, dying disk) and the kill will take effect." },
+        { "id": "c", "text": "nginx workers ignore SIGKILL by default; send the signal to the master instead" },
+        { "id": "d", "text": "PID 8112 is actually a thread, not a process, so SIGKILL is queued forever" }
+      ],
+      "correct": ["b"],
+      "explanation": "`D` state (uninterruptible sleep) is the one situation where even `SIGKILL` appears to do nothing. The kernel has the process blocked in a syscall (commonly NFS, a dying disk, or a misbehaving FUSE mount). Pending signals are checked when control returns to user space — if it never returns, the signal sits there. The actual fix is to unblock the I/O (kill the NFS server, remount, replace the disk). A long-lived `D` process is a system health signal, not a process problem."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A worker container has a child Python script that needs to clean up a tempdir on shutdown. The container's `ENTRYPOINT` is:\n\n```\nENTRYPOINT [\"/bin/bash\", \"-c\", \"python /app/worker.py\"]\n```\n\nWhen Kubernetes sends `SIGTERM`, the cleanup never runs.\n\n**What is the root cause?**",
+      "options": [
+        { "id": "a", "text": "Python ignores SIGTERM by default; you must register a handler" },
+        { "id": "b", "text": "The shell wrapper becomes PID 1 inside the container. PID 1 has special signal semantics: it does not get default handlers, and bash does not forward signals to its child. SIGTERM hits bash, which shrugs, and python is killed by the eventual SIGKILL." },
+        { "id": "c", "text": "Kubernetes sends SIGTERM to the container, not to the process; the container runtime is the bug" },
+        { "id": "d", "text": "Python on Linux requires `--init` flag to receive signals" }
+      ],
+      "correct": ["b"],
+      "explanation": "PID 1 is special: the kernel will not deliver any signal that PID 1 has not explicitly installed a handler for, including the *default* terminate behavior. So `SIGTERM` to a bash PID 1 does nothing because bash didn't trap it. Worse, bash does not forward signals to its child either. Fix options: (1) `ENTRYPOINT [\"python\", \"/app/worker.py\"]` so python is PID 1 and can register its own handler; (2) `exec python /app/worker.py` inside the shell so python *replaces* bash; (3) use `tini` / `--init` as an init that forwards signals."
+    },
+    {
+      "id": "q6",
+      "type": "single",
+      "scenario": "Your application writes `signal(SIGCHLD, SIG_IGN)` at startup *because* it forks short-lived helpers and you don't want to deal with reaping. Months later, someone tries `wait()` in a debug build and it always returns -1 with `errno=ECHILD`, even immediately after a fork.\n\n**Why?**",
+      "options": [
+        { "id": "a", "text": "Setting `SIGCHLD` to `SIG_IGN` tells the kernel to auto-reap children, which is exactly what you wanted — but it also means there are *no zombies for `wait()` to harvest*, hence ECHILD. The two behaviors are coupled." },
+        { "id": "b", "text": "`wait()` is broken on glibc when SIGCHLD is ignored; use `waitpid()` instead" },
+        { "id": "c", "text": "ECHILD means the child finished before the parent could call wait(); use `WNOHANG`" },
+        { "id": "d", "text": "Forking inside a signal handler is undefined behavior and corrupts the process table" }
+      ],
+      "correct": ["a"],
+      "explanation": "Linux gives `signal(SIGCHLD, SIG_IGN)` a special meaning: it instructs the kernel to auto-reap exited children so they never become zombies. The side effect is exactly what the question describes — `wait()` cannot find a child to harvest because there are none. If you also want `wait()` to work, the right primitive is `sigaction(SIGCHLD, ...)` with `SA_NOCLDWAIT` *or* an empty handler that just returns. `SIG_IGN` with the auto-reap behavior is a single-purpose tool."
+    },
+    {
+      "id": "q7",
+      "type": "multiple",
+      "scenario": "Your team is reviewing a service's signal handling design. The service: serializes a checkpoint to disk, has a 60s upper bound on that flush, runs as PID 1 in a container, and is started by Kubernetes.\n\n**Which design choices are correct? (Select all that apply.)**",
+      "options": [
+        { "id": "a", "text": "Trap `SIGTERM` and run the checkpoint flush" },
+        { "id": "b", "text": "Trap `SIGKILL` as a last-resort fast-flush path" },
+        { "id": "c", "text": "Set Kubernetes `terminationGracePeriodSeconds` to at least 60 (and ideally 90)" },
+        { "id": "d", "text": "Make sure the service binary is PID 1 itself, or use an init like `tini`, so the signal actually reaches it" },
+        { "id": "e", "text": "Trap `SIGINT` and treat it the same as `SIGTERM`, so `Ctrl-C` in a `kubectl exec -it` shell behaves predictably" }
+      ],
+      "correct": ["a", "c", "d", "e"],
+      "explanation": "(a) is the standard graceful-shutdown pattern. (c) gives the trap enough time to finish before Kubernetes escalates to SIGKILL. (d) avoids the PID-1-eats-signals trap covered in the previous question. (e) is good hygiene — many CLIs send SIGINT, and treating both the same makes behavior consistent. (b) is the only wrong answer: `SIGKILL` cannot be trapped on any POSIX system. Any code claiming to handle it is dead code."
+    }
+  ]
+}

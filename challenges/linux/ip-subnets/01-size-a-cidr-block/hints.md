@@ -1,1 +1,0 @@
-Start with the host requirement in the request, then compare it against the `usable_hosts` column in the IPAM export. You want the **smallest** free block that clears 4000, not the biggest block in the file.

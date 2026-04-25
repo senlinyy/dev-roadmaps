@@ -1,0 +1,1 @@
+One file tells you **what service is listening**; the other tells you **which IP, gateway, interface, and MAC** that service rides on. You only need to map the public HTTPS service, not every row in the inventory.

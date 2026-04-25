@@ -1,0 +1,1 @@
+`/etc/resolv.conf` tells you the **stub resolver** this machine asks first. The forwarder log tells you which **recursive resolver** it delegated to. The trace shows the recursive resolver's walk to the **authoritative** server and final answer.

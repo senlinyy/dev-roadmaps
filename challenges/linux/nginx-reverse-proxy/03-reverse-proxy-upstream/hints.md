@@ -1,1 +1,0 @@
-The v1 location proxies to `127.0.0.1:3000`; the v2 location proxies to `127.0.0.1:3001`. The saved `ss -tlnp` snapshot only shows port 3000 in `LISTEN` — port 3001 is missing, which is why nginx returns 502 for v2.

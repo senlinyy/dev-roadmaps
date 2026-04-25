@@ -1,1 +1,0 @@
-Each hardening rule maps to one directive in `sshd_config`. Grep the file by directive name (`PermitRootLogin`, `PasswordAuthentication`, `Port`) and the active line will show the value. Anchored grep like `grep "^Port"` avoids matching `PortForwarding` or comments.
