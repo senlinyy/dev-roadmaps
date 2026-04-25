@@ -92,6 +92,12 @@ RFC 1918 defines three private address blocks. Every home network, corporate LAN
 
 **`192.168.0.0/16`** provides 65,536 addresses. Home routers almost universally use `192.168.0.0/24` or `192.168.1.0/24`. This range is fine for small setups but too small for serious cloud architecture.
 
+A few other reserved ranges trip up audits because they look like normal IPs but cannot be used as private VPC space:
+
+- **`100.64.0.0/10`** is RFC 6598 "shared address space", carved out for carrier-grade NAT (CGNAT). ISPs use it between their NAT gateways and customer routers. AWS also uses it for some EKS pod networks. Do not allocate it to your own VPC; you will collide with the carrier or the cluster.
+- **`169.254.0.0/16`** is RFC 3927 link-local. Hosts auto-assign from it when DHCP fails, and cloud providers reserve specific addresses inside it for instance metadata (`169.254.169.254` is the AWS, GCP, and Azure metadata endpoint). Never route or allocate from this range.
+- **`192.0.2.0/24`**, **`198.51.100.0/24`**, and **`203.0.113.0/24`** are RFC 5737 documentation ranges (TEST-NET-1/2/3). They exist for examples and tutorials and must never appear in real config; if you see them in a production route table, someone copy-pasted from a docs page without changing the values.
+
 The critical rule with private ranges: when two networks need to talk to each other (VPC peering, VPN tunnels, on-premises to cloud connections), their CIDR blocks must not overlap. If VPC-A uses `10.0.0.0/16` and VPC-B also uses `10.0.0.0/16`, peering is impossible because the router cannot tell which network owns a given address. Plan your allocations before you build. Changing a VPC's CIDR block after deployment ranges from painful to impossible depending on your cloud provider.
 
 > Plan your CIDR allocations on paper before you create the first VPC. Renumbering later is the worst kind of infrastructure work.
@@ -155,6 +161,8 @@ Remaining: 49152
 ```
 
 That is 75% of the address space still available for future needs.
+
+Two practical constraints shape how small or large a subnet you should pick. AWS rejects anything smaller than `/28` (16 addresses, 11 usable after the 5 reserved), so a `/29` or `/30` you might draw on paper for a tiny tier is illegal in a VPC. At the other end, route tables on routers and cloud gateways have entry limits (AWS VPC route tables default to 50 routes), so carving a single `/16` into hundreds of tiny `/24`s is usually worse than carving it into a handful of `/20`s and letting hosts inside each subnet find each other locally. When you do hit a route-table limit, the answer is **route summarization** (also called supernetting): advertising one short prefix that covers many adjacent subnets, so the upstream router needs one entry instead of many. This is why per-region `/16`s aggregate cleanly into a `/12` at the inter-region boundary, and why allocating subnets in adjacent, power-of-two-aligned blocks pays off later.
 
 ## IPv6: What Changes
 

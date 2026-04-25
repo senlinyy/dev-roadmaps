@@ -9,4 +9,4 @@ $ echo "Port 22 -> 2222" >> /home/dev/reports/sshd-remediation.note
 $ cat /home/dev/reports/sshd-remediation.note
 ```
 
-The audit is not just to spot weak directives — it is to hand back the corrected values. Root login should be disabled, password authentication should be disabled, and the service should move off the default scanner port before the host is approved.
+The audit is not just to spot weak directives, it is to hand back the corrected values. Root login should be disabled, password authentication should be disabled, and the service should move off the default scanner port before the host is approved.

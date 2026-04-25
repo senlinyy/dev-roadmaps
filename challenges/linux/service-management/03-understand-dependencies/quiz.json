@@ -5,7 +5,7 @@
       "type": "single",
       "scenario": "A unit declares:\n\n```\n[Unit]\nRequires=postgres.service\n```\n\nNo `After=` is set. The host boots and `webapp.service` race-starts before `postgres.service`, then crashes because the database is not ready.\n\n**What did the author miss?**",
       "options": [
-        { "id": "a", "text": "`Requires=` only declares a *requirement* relationship — it does not declare *order*. Without `After=postgres.service`, systemd is free to start both in parallel, and the require relationship only kicks in if postgres is already in the queue or fails." },
+        { "id": "a", "text": "`Requires=` only declares a *requirement* relationship, it does not declare *order*. Without `After=postgres.service`, systemd is free to start both in parallel, and the require relationship only kicks in if postgres is already in the queue or fails." },
         { "id": "b", "text": "`Requires=` should always be paired with `Wants=` for it to take effect" },
         { "id": "c", "text": "The bug is that postgres should declare `Before=webapp.service`; webapp's unit is correct" },
         { "id": "d", "text": "`Requires=` is deprecated; the modern equivalent is `BindsTo=`" }
@@ -18,13 +18,13 @@
       "type": "single",
       "scenario": "Two unit definitions:\n\n```\n# webapp.service\n[Unit]\nRequires=cache.service\nAfter=cache.service\n```\n\nLater, `cache.service` is restarted while `webapp.service` is running.\n\n**What happens to `webapp.service`?**",
       "options": [
-        { "id": "a", "text": "Nothing — `Requires=` only matters at startup" },
+        { "id": "a", "text": "Nothing: `Requires=` only matters at startup" },
         { "id": "b", "text": "systemd restarts `webapp.service` automatically because the requirement was broken" },
         { "id": "c", "text": "systemd stops `webapp.service` (because cache stopped, breaking the requirement) but does not automatically restart it. To get tight coupling, use `BindsTo=` and `PartOf=` instead." },
         { "id": "d", "text": "`webapp.service` keeps running but is marked as `degraded`" }
       ],
       "correct": ["c"],
-      "explanation": "`Requires=` propagates *stops* but not *restarts*. When cache stops cleanly, webapp is stopped because its requirement is no longer satisfied — but systemd does not bring webapp back when cache returns. For tighter coupling: `BindsTo=` is `Requires=` plus *also stop me if the target enters a failed state*, and `PartOf=` propagates start/stop/restart of the target to this unit. Real-world: a sidecar service often uses `BindsTo=` + `After=` on its parent."
+      "explanation": "`Requires=` propagates *stops* but not *restarts*. When cache stops cleanly, webapp is stopped because its requirement is no longer satisfied, but systemd does not bring webapp back when cache returns. For tighter coupling: `BindsTo=` is `Requires=` plus *also stop me if the target enters a failed state*, and `PartOf=` propagates start/stop/restart of the target to this unit. Real-world: a sidecar service often uses `BindsTo=` + `After=` on its parent."
     },
     {
       "id": "q3",
@@ -37,7 +37,7 @@
         { "id": "d", "text": "It logs a warning and downgrades to `degraded` state" }
       ],
       "correct": ["b"],
-      "explanation": "`Wants=` is the right tool for non-critical add-ons (metrics, log shippers, telemetry). The unit will pull them into the boot transaction if they exist, but missing or failing dependencies do not block startup. Combine with `After=` to ensure ordering *if the wanted unit is present*. Use `Requires=` only when the dependency is genuinely load-bearing — otherwise you turn an optional sidecar into a single point of failure."
+      "explanation": "`Wants=` is the right tool for non-critical add-ons (metrics, log shippers, telemetry). The unit will pull them into the boot transaction if they exist, but missing or failing dependencies do not block startup. Combine with `After=` to ensure ordering *if the wanted unit is present*. Use `Requires=` only when the dependency is genuinely load-bearing, otherwise you turn an optional sidecar into a single point of failure."
     },
     {
       "id": "q4",
@@ -50,7 +50,7 @@
         { "id": "d", "text": "`After=network.target` is enough for any service that uses sockets" }
       ],
       "correct": ["b"],
-      "explanation": "This catches almost everyone once. `network.target` is a synchronization point that means *the network manager has been started*, not *the network is up*. Services that immediately make outbound calls must use `network-online.target` — and crucially, must also `Wants=network-online.target` so the target is actually pulled in (it isn't started by default on many distros). Forgetting the `Wants=` is a classic bug: your `After=` will be respected only when *something else* causes the target to be reached, otherwise it's silently a no-op."
+      "explanation": "This catches almost everyone once. `network.target` is a synchronization point that means *the network manager has been started*, not *the network is up*. Services that immediately make outbound calls must use `network-online.target`, and crucially, must also `Wants=network-online.target` so the target is actually pulled in (it isn't started by default on many distros). Forgetting the `Wants=` is a classic bug: your `After=` will be respected only when *something else* causes the target to be reached, otherwise it's silently a no-op."
     },
     {
       "id": "q5",
@@ -76,7 +76,7 @@
         { "id": "d", "text": "systemd recreates the file from `/etc/myapp/config.toml.default` and continues" }
       ],
       "correct": ["b"],
-      "explanation": "`Condition*=` is silent — the unit is *skipped*, not *failed*. The intent is *only run me if the precondition holds*, useful for hardware-specific units, optional features, or cloud-init-style fragments. `Assert*=` is the louder cousin: failed assertions cause the unit to *fail*, complete with a journal entry. If a missing config file should be a startup failure (almost always), use `AssertPathExists=` or just let the program fail to read the file. Knowing this distinction prevents the *why didn't my service start, and why is there no error?* mystery."
+      "explanation": "`Condition*=` is silent: the unit is *skipped*, not *failed*. The intent is *only run me if the precondition holds*, useful for hardware-specific units, optional features, or cloud-init-style fragments. `Assert*=` is the louder cousin: failed assertions cause the unit to *fail*, complete with a journal entry. If a missing config file should be a startup failure (almost always), use `AssertPathExists=` or just let the program fail to read the file. Knowing this distinction prevents the *why didn't my service start, and why is there no error?* mystery."
     },
     {
       "id": "q7",
@@ -84,9 +84,9 @@
       "scenario": "A teammate writes a unit and asks for review:\n\n```\n[Unit]\nDescription=Order processor\nRequires=postgres.service\nAfter=postgres.service\nRequires=kafka.service\nAfter=kafka.service\nWants=metrics-exporter.service\nAfter=metrics-exporter.service\nAfter=network-online.target\nWants=network-online.target\n```\n\n**Which review comments are correct? (Select all that apply.)**",
       "options": [
         { "id": "a", "text": "If postgres restarts, this service will be stopped (because of `Requires=`) but not restarted automatically. Consider `BindsTo=` + `PartOf=` if tight coupling is intended." },
-        { "id": "b", "text": "`metrics-exporter` being missing or failing will not prevent this service from starting — that is the whole point of `Wants=`." },
+        { "id": "b", "text": "`metrics-exporter` being missing or failing will not prevent this service from starting, that is the whole point of `Wants=`." },
         { "id": "c", "text": "The `Wants=network-online.target` is required, not just nice-to-have, because `network-online.target` is not started by default on many distros." },
-        { "id": "d", "text": "`Requires=` makes the order of `After=` lines matter — listing postgres first means it starts before kafka." },
+        { "id": "d", "text": "`Requires=` makes the order of `After=` lines matter, listing postgres first means it starts before kafka." },
         { "id": "e", "text": "Removing the `Requires=postgres.service` line and keeping just `After=` would make the service start even if postgres is masked or failed." }
       ],
       "correct": ["a", "b", "c", "e"],

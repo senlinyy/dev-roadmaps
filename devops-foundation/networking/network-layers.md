@@ -34,15 +34,12 @@ Each envelope layer was added by a different "layer" of the mail system, and eac
 
 On a network, this is exactly what happens. Each layer adds a header (and sometimes a trailer) to the data from the layer above, then passes the whole bundle downward. When it arrives at the destination, each layer strips off its header and hands the inner payload up to the next layer. The technical term for adding headers on the way down is **encapsulation**. Stripping them on the way up is **decapsulation**.
 
-```text
-┌────────────────────────────────────────────────────────┐
-│  Ethernet Header  │  IP Header  │ TCP Header │  Data  │
-│  (MAC addresses)  │ (IP addrs)  │  (ports)   │        │
-└────────────────────────────────────────────────────────┘
-       Layer 2           Layer 3      Layer 4     Layer 7
-   "Which device?"   "Which host?" "Which app?" "The actual
-                                                  content"
-```
+| Part | Contains | Layer | Question it answers |
+| --- | --- | --- | --- |
+| Ethernet header | MAC addresses | Layer 2 | Which device? |
+| IP header | IP addresses | Layer 3 | Which host? |
+| TCP header | Ports | Layer 4 | Which app? |
+| Data | The actual content | Layer 7 | What are we saying? |
 
 This nesting is why a network engineer can swap out the physical cable (fiber instead of copper) without changing anything about your HTTP request. The inner envelopes are untouched. It is the same reason you can switch from HTTP to WebSockets without changing the underlying IP routing. Each layer is independent.
 
@@ -271,7 +268,9 @@ LISTEN 0       128     0.0.0.0:443          0.0.0.0:*          users:(("nginx",p
 LISTEN 0       128     0.0.0.0:22           0.0.0.0:*          users:(("sshd",pid=567,fd=3))
 ```
 
-This shows that nginx is listening on port 443 and sshd on port 22. If the service you expect to see is missing from this list, the problem is not the network; the process is not running or is bound to the wrong address.
+This shows that nginx is listening on port 443 and sshd on port 22. If the service you expect to see is missing from this list, the problem is not the network; the process is not running or is bound to the wrong address. The classic version of "wrong address" is binding to `127.0.0.1` instead of `0.0.0.0`: the kernel will only ACK a SYN whose destination matches the bind address, so external clients see `Connection timed out` while a local `curl 127.0.0.1` works fine.
+
+Stateful middleboxes also break Layer 4 connections that look healthy. An NLB, NAT gateway, or stateful firewall keeps a connection-tracking entry per flow and silently evicts entries that go idle for too long (AWS NLB drops at 350s, AWS ALB at 60s by default). The next packet on either side hits a stale entry and the middlebox replies with a TCP RST, which the application sees as `Connection reset by peer` after a long quiet stretch. The fix is application or kernel TCP keepalives tuned below the middlebox's idle timeout. A related Layer 4 signature is a TCP RST that arrives *immediately* after a successful handshake (for example during SSH banner exchange): it usually means a connection-rate limiter or an `iptables -j REJECT --reject-with tcp-reset` rule fired right after `accept()`.
 
 ### Application layer failures (Layer 7)
 
@@ -286,6 +285,8 @@ curl: (60) SSL certificate problem: certificate has expired
 ```
 
 The connection succeeded at Layer 4 (TCP handshake completed), but the TLS handshake failed at Layer 7 because the certificate expired. The fix is not a network change; it is renewing the certificate.
+
+DNS lives at Layer 7 too, and its failures have a distinctive shape. `NXDOMAIN` means the resolver answered authoritatively that the name does not exist (typo, missing record, wrong zone). `SERVFAIL` means the resolver tried but could not get an answer (broken upstream, DNSSEC validation failure). A name that resolves on one host but not another usually points at split-horizon DNS (the same name returns different answers depending on which resolver or VPC view asks) or a stale `/etc/resolv.conf` pointing at a dead server. Compare `dig @8.8.8.8 name` against `dig @internal-resolver name` to tell them apart before blaming the application.
 
 The layer model gives you a systematic approach: start at the bottom (is the link up?), work your way up (can I reach the host? can I connect to the port?), and by the time you reach Layer 7 you have already ruled out every infrastructure problem below it.
 

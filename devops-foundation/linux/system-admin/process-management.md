@@ -85,7 +85,9 @@ systemd(1)─┬─NetworkManager(742)─┬─{NetworkManager}(768)
 
 Reading that output left-to-right gives you the parent-child chain. Your interactive shell exists because `sshd` accepted your connection, forked, and exec'd into another `sshd`, which forked and exec'd into `bash`, which forked and exec'd into `pstree`. Every command you type adds a new branch.
 
-Containers add a twist worth knowing about. A container does not have its own kernel (it shares the host's kernel), but it gets its own **PID namespace**. Inside the namespace, the first process the runtime starts gets PID 1 and its own private process tree. From the host, the same process has a completely different PID. So `kill 1` inside a container only signals the container's main process; from the host you would target a much larger PID. This is also why a container that runs a shell script as PID 1 often handles signals badly. Most shells were not designed to act as init.
+Containers add a twist worth knowing about. A container does not have its own kernel (it shares the host's kernel), but it gets its own **PID namespace**. Inside the namespace, the first process the runtime starts gets PID 1 and its own private process tree. From the host, the same process has a completely different PID. So `kill 1` inside a container only signals the container's main process; from the host you would target a much larger PID.
+
+PID 1 is also signal-special in a way that bites containers hard. The kernel will not deliver a signal to PID 1 unless that process has explicitly installed a handler for it. So a shell script running as PID 1 ignores `SIGTERM` by default, and the container takes the full grace period before being `SIGKILL`'d on shutdown. Worse, most shells do not forward signals to the children they spawn, so even if PID 1 catches `SIGTERM`, the actual workload underneath never hears about it. The two fixes are to use a tiny init like `tini` (which reaps zombies and forwards signals correctly), or to launch the workload with `exec` from your entrypoint script so the workload itself becomes PID 1 and can install its own handlers.
 
 ## Inspecting Processes with ps, top, and htop
 
@@ -315,6 +317,8 @@ $ ps -o pid,ppid,stat,comm -p 8421
 ```
 
 **Orphans.** An orphan is the opposite case: a child whose parent died first. Orphans are not a problem on a normal system, because the kernel re-parents them to PID 1, and PID 1's job description includes reaping them. The reason orphans matter is when a containerized application uses a shell as PID 1. Most shells were not written to act as init and do not reap children, so orphaned grandchildren inside the container become permanent zombies. The fix is to use a real init like `tini` or run the application directly as PID 1 with `exec`.
+
+There is one escape hatch worth knowing about. A parent can install `SIG_IGN` (or set the `SA_NOCLDWAIT` flag) for `SIGCHLD`, which tells the kernel "I will never call `wait()`, please reap children automatically." After that, exiting children skip the zombie state entirely and a later `wait()` call returns `ECHILD` instead of an exit code. This is how some long-running daemons sidestep the reaping problem when they spawn fire-and-forget helpers. It is the right fix only when the parent genuinely does not need its children's exit codes; otherwise it silently throws away every failure signal.
 
 **Runaway processes.** A process pinned at 100% CPU is sometimes legitimately busy and sometimes stuck in a tight loop. `top -p <pid>` confirms whether the CPU usage is sustained. To find out what it is actually doing, attach `strace` to inspect its system calls or `perf top -p <pid>` to sample where it is spending CPU time. If the process is yours to fix, that information goes back to the developer. If it is not, `renice` it out of the way and `kill -TERM` it during the next maintenance window.
 

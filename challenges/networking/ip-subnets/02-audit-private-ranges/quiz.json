@@ -37,7 +37,7 @@
         { "id": "d", "text": "Only 2" }
       ],
       "correct": ["b"],
-      "explanation": "RFC 1918 lists exactly: `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`. `192.0.2.0/24` is `TEST-NET-1` from RFC 5737, reserved for *documentation and examples*. It is not routable on the internet, but it is also not for production private use — many security tools and example configs assume traffic to it is fake, and using it internally produces confusing logs. The other documentation ranges (`198.51.100.0/24`, `203.0.113.0/24`) have the same status."
+      "explanation": "RFC 1918 lists exactly: `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`. `192.0.2.0/24` is `TEST-NET-1` from RFC 5737, reserved for *documentation and examples*. It is not routable on the internet, but it is also not for production private use, many security tools and example configs assume traffic to it is fake, and using it internally produces confusing logs. The other documentation ranges (`198.51.100.0/24`, `203.0.113.0/24`) have the same status."
     },
     {
       "id": "q4",
@@ -46,7 +46,7 @@
       "options": [
         { "id": "a", "text": "On-prem `10.0.0.0/8` is a *supernet* of all three VPCs. Once peered, the routing tables will contain an entry for `10.0.0.0/8`, which overlaps the more-specific VPC routes. Most routers prefer longest-prefix match so it 'works', but the on-prem network has nowhere left to grow without renumbering, and any host accidentally configured outside the VPC supernets routes to on-prem." },
         { "id": "b", "text": "There is no problem; AWS resolves overlap automatically" },
-        { "id": "c", "text": "The bug is `eu-west-1` — Europe must use `192.168.x.x`" },
+        { "id": "c", "text": "The bug is `eu-west-1`: Europe must use `192.168.x.x`" },
         { "id": "d", "text": "VPC peering does not support transitive routing across three regions" }
       ],
       "correct": ["a"],
@@ -58,25 +58,25 @@
       "scenario": "You see this in a security review:\n\n> *Allow inbound TCP/443 from 0.0.0.0/0; allow internal RDP from 10.0.0.0/8.*\n\n**Which is the most precise objection?**",
       "options": [
         { "id": "a", "text": "RDP should never be allowed from any range" },
-        { "id": "b", "text": "`0.0.0.0/0` is fine for HTTPS — it just means *any IPv4 source*. The real issue (if any) is whether 443 should be limited to a CDN range. The `10.0.0.0/8` for RDP is also fine *iff* the company actually owns and controls that entire supernet — which is the assumption you should verify before accepting the rule." },
+        { "id": "b", "text": "`0.0.0.0/0` is fine for HTTPS, it just means *any IPv4 source*. The real issue (if any) is whether 443 should be limited to a CDN range. The `10.0.0.0/8` for RDP is also fine *iff* the company actually owns and controls that entire supernet, which is the assumption you should verify before accepting the rule." },
         { "id": "c", "text": "`0.0.0.0/0` includes the broadcast address `255.255.255.255` and is therefore invalid as a source" },
         { "id": "d", "text": "RDP cannot use TCP" }
       ],
       "correct": ["b"],
-      "explanation": "`0.0.0.0/0` is the standard *match anything* CIDR — it's how you say public on edge ACLs and how the default route is expressed. It is not, by itself, a bug. The substantive question is whether the *trust boundary* matches the rule. Same with `10.0.0.0/8`: it's only safe if the operator is sure no untrusted networks share that supernet (think of merged companies, contractor VPNs, third-party VPCs). The audit posture is *what does this CIDR actually contain in our environment*, not *which letters are in it*."
+      "explanation": "`0.0.0.0/0` is the standard *match anything* CIDR, it's how you say public on edge ACLs and how the default route is expressed. It is not, by itself, a bug. The substantive question is whether the *trust boundary* matches the rule. Same with `10.0.0.0/8`: it's only safe if the operator is sure no untrusted networks share that supernet (think of merged companies, contractor VPNs, third-party VPCs). The audit posture is *what does this CIDR actually contain in our environment*, not *which letters are in it*."
     },
     {
       "id": "q6",
       "type": "single",
       "scenario": "An app team requests internal DNS for a name pointing at `169.254.1.5`. The networking team pushes back.\n\n**Why?**",
       "options": [
-        { "id": "a", "text": "`169.254.0.0/16` is the *link-local* range (RFC 3927). Each host autoconfigures addresses in it for local communication only — packets to link-local addresses do not cross routers. Putting a globally-resolvable DNS name in front of a link-local IP means clients on other subnets cannot reach it." },
+        { "id": "a", "text": "`169.254.0.0/16` is the *link-local* range (RFC 3927). Each host autoconfigures addresses in it for local communication only, packets to link-local addresses do not cross routers. Putting a globally-resolvable DNS name in front of a link-local IP means clients on other subnets cannot reach it." },
         { "id": "b", "text": "169.254 is reserved for IPv6 only" },
         { "id": "c", "text": "It is a Class C reserved for IANA experiments" },
         { "id": "d", "text": "The team should use `127.0.0.0/8` instead for internal services" }
       ],
       "correct": ["a"],
-      "explanation": "Link-local addresses are *per-segment* by definition — no router will forward them. They are useful for very specific things (cloud metadata services use `169.254.169.254`, IPv6 link-local for neighbor discovery), but giving one a DNS name implies global reachability and breaks for any client not on the same broadcast domain. (d) is also wrong for a different reason: `127.0.0.0/8` is loopback, only meaningful inside one host."
+      "explanation": "Link-local addresses are *per-segment* by definition, no router will forward them. They are useful for very specific things (cloud metadata services use `169.254.169.254`, IPv6 link-local for neighbor discovery), but giving one a DNS name implies global reachability and breaks for any client not on the same broadcast domain. (d) is also wrong for a different reason: `127.0.0.0/8` is loopback, only meaningful inside one host."
     },
     {
       "id": "q7",
@@ -91,7 +91,7 @@
         { "id": "f", "text": "203.0.113.0/24" }
       ],
       "correct": ["c", "d", "f"],
-      "explanation": "RFC 1918 covers `10.0.0.0/8` (so `10.255.0.0/16` is in), `172.16.0.0/12` (so `172.16.5.0/24` and `172.31.255.0/24` are both in — `172.31` is the upper edge), and `192.168.0.0/16`. Outside that: `100.64.0.0/10` is RFC 6598 CGNAT (reject for greenfield); `198.51.100.0/24` is `TEST-NET-2` (RFC 5737 docs); `203.0.113.0/24` is `TEST-NET-3` (RFC 5737 docs). Knowing the four common reservation buckets — RFC 1918 private, RFC 6598 CGNAT, RFC 5737 docs, RFC 3927 link-local — covers 95% of audit pushbacks."
+      "explanation": "RFC 1918 covers `10.0.0.0/8` (so `10.255.0.0/16` is in), `172.16.0.0/12` (so `172.16.5.0/24` and `172.31.255.0/24` are both in, `172.31` is the upper edge), and `192.168.0.0/16`. Outside that: `100.64.0.0/10` is RFC 6598 CGNAT (reject for greenfield); `198.51.100.0/24` is `TEST-NET-2` (RFC 5737 docs); `203.0.113.0/24` is `TEST-NET-3` (RFC 5737 docs). Knowing the four common reservation buckets, RFC 1918 private, RFC 6598 CGNAT, RFC 5737 docs, RFC 3927 link-local, covers 95% of audit pushbacks."
     }
   ]
 }

@@ -227,6 +227,8 @@ sequenceDiagram
 
 This diagram shows TLS 1.2, which requires two round trips before any data can flow. TLS 1.3 (the current standard) reduces this to one round trip by combining several of these steps, and it supports 0-RTT resumption for repeat connections. That difference matters at scale: shaving one round trip off every new connection translates to measurably faster page loads for users across the globe, especially those on high-latency mobile networks.
 
+One more handshake detail worth knowing: the client tells the server which hostname it is trying to reach using the TLS **SNI** (Server Name Indication) extension inside the unencrypted ClientHello. A single IP can host hundreds of HTTPS sites, and the server uses SNI to pick the matching certificate before the handshake continues. Old clients that omit SNI, or test commands like `openssl s_client` without `-servername example.com`, get the server's default vhost certificate instead of the one for the hostname they actually wanted, which then trips a "hostname mismatch" error that has nothing to do with the certificate itself.
+
 ## Certificates and the Chain of Trust
 
 The handshake proves you have a private channel. But a private channel to who? Without certificates, you could be having a perfectly encrypted conversation with an attacker who hijacked the connection. Certificates are how the client checks that the server on the other end is actually the one it meant to reach.
@@ -337,6 +339,16 @@ $ curl -v https://example.com
 ```
 
 If you are debugging a Stripe webhook that fails with a chain error while the same URL works in your browser, this is almost always the cause. Stripe (and most webhook providers) do not cache intermediates and will reject any endpoint that does not present the complete chain on its own.
+
+A related failure mode bites minimal container images. Distroless and Alpine images sometimes ship without the `ca-certificates` package, which means the system trust store is empty. Every outbound HTTPS call from inside the container fails with `unable to get local issuer certificate`, even though the same code on the host machine works fine. The fix is `apk add ca-certificates` (Alpine) or pulling in the `ca-certificates` layer in your Dockerfile. Test trust paths explicitly because they vary across base images: Debian uses `/etc/ssl/certs/ca-certificates.crt`, RHEL uses `/etc/pki/tls/certs/ca-bundle.crt`, and a base image upgrade can move the file out from under software that hardcoded the old path.
+
+### Cipher and Protocol Mismatches
+
+When the client and server cannot agree on a cipher suite or TLS version, the handshake aborts with a TLS alert. The most common is `alert 40 handshake_failure`, which `openssl s_client` reports as `sslv3 alert handshake failure`. Real-world causes: a hardened server that disabled everything below TLS 1.2 talking to an old client stuck on TLS 1.0, an old server that only offers RSA key exchange talking to a client that requires forward secrecy (ECDHE), or a middlebox stripping cipher suites. Diagnose by listing what each side supports: `openssl s_client -connect host:443 -tls1_2 -cipher ECDHE-RSA-AES128-GCM-SHA256` proves whether one specific cipher works, and `nmap --script ssl-enum-ciphers -p 443 host` enumerates everything the server will accept.
+
+### Clock Skew
+
+TLS validation checks the certificate's `notBefore` and `notAfter` against the local clock. A machine whose clock is wrong by more than the validity window's slack will reject every certificate as either "not yet valid" or "expired", even though the CA chain is fine. This is common on freshly booted VMs, IoT devices without a battery-backed RTC, and containers whose host has drifted. If `curl` works on one host and fails with cert errors on another against the same endpoint, run `date` and `timedatectl` on both before suspecting the certificate.
 
 ---
 

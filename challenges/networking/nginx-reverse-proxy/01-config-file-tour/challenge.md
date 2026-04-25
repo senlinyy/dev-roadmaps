@@ -4,7 +4,7 @@ sectionSlug: nginx-config-file-structure
 order: 1
 ---
 
-You're picking up the on-call rotation and have never looked at this box's nginx layout. Before any incident lands, walk the `/etc/nginx/` tree end-to-end so you know which file owns which behavior. The runtime here has no symlinks, so `sites-enabled/` holds plain copies of the live virtual hosts — treat them as the active set.
+You're picking up the on-call rotation and have never looked at this box's nginx layout. Before any incident lands, walk the `/etc/nginx/` tree end-to-end so you know which file owns which behavior. The runtime here has no symlinks, so `sites-enabled/` holds plain copies of the live virtual hosts, treat them as the active set.
 
 You start in `/home/dev`. Your job:
 

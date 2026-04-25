@@ -1,1 +1,1 @@
-`grep -c` prints just a count. `10.0.0.10` has `weight=3`, `10.0.0.12` has `weight=1`, and `10.0.0.11` is `down` — the access log will show the 3:1 traffic ratio between 10 and 12, and zero matches for 11.
+`grep -c` prints just a count. `10.0.0.10` has `weight=3`, `10.0.0.12` has `weight=1`, and `10.0.0.11` is `down`, the access log will show the 3:1 traffic ratio between 10 and 12, and zero matches for 11.

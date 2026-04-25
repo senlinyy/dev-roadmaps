@@ -6,8 +6,8 @@ order: 2
 
 A teammate still cannot reach the new app instance on port 8080 even though the Security Group was updated earlier today. They already exported both layers of the AWS firewall to text:
 
-- `/var/log/aws/security-group.describe` — output of `aws ec2 describe-security-groups` for the instance's SG.
-- `/var/log/aws/network-acl.describe` — output of `aws ec2 describe-network-acls` for the subnet's NACL.
+- `/var/log/aws/security-group.describe`, output of `aws ec2 describe-security-groups` for the instance's SG.
+- `/var/log/aws/network-acl.describe`, output of `aws ec2 describe-network-acls` for the subnet's NACL.
 
 Security Groups are stateful (return traffic is auto-allowed), but NACLs are stateless (you must allow ephemeral return traffic explicitly). Your job is to look at both files, identify the *remaining* blocker, and write the handoff note for the cloud team.
 

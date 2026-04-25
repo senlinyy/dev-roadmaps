@@ -11,7 +11,7 @@
         { "id": "d", "text": "The chain policy is ACCEPT, which overrides DROP rules" }
       ],
       "correct": ["a"],
-      "explanation": "iptables match logic is first-match-wins, top-down within a chain. The blanket `ACCEPT tcp dpt:80` at line 1 catches every port-80 packet — including those from 203.0.113.0/24 — so the DROP at line 3 is unreachable. Fix: insert the DROP *above* line 1 with `iptables -I INPUT 1 -s 203.0.113.0/24 -p tcp --dport 80 -j DROP`. Chain policies are only the fallback when no rule matches; they do not override explicit rules."
+      "explanation": "iptables match logic is first-match-wins, top-down within a chain. The blanket `ACCEPT tcp dpt:80` at line 1 catches every port-80 packet, including those from 203.0.113.0/24, so the DROP at line 3 is unreachable. Fix: insert the DROP *above* line 1 with `iptables -I INPUT 1 -s 203.0.113.0/24 -p tcp --dport 80 -j DROP`. Chain policies are only the fallback when no rule matches; they do not override explicit rules."
     },
     {
       "id": "q2",
@@ -24,25 +24,25 @@
         { "id": "d", "text": "The kernel's `tcp_fin_timeout` is set too low" }
       ],
       "correct": ["b"],
-      "explanation": "AWS NLB has a fixed 350-second TCP idle timeout (and ALB has 60s by default, configurable). After that, the NLB silently removes the flow from its connection table. Subsequent packets from either side hit a stale entry and the NLB sends RST. The standard mitigation is application-level keepalives or kernel TCP keepalives (`tcp_keepalive_time`) tuned below 350s. This is a stateful-middlebox timeout problem, not a database or kernel-side issue. `tcp_fin_timeout` only governs sockets in FIN-WAIT-2 — irrelevant here."
+      "explanation": "AWS NLB has a fixed 350-second TCP idle timeout (and ALB has 60s by default, configurable). After that, the NLB silently removes the flow from its connection table. Subsequent packets from either side hit a stale entry and the NLB sends RST. The standard mitigation is application-level keepalives or kernel TCP keepalives (`tcp_keepalive_time`) tuned below 350s. This is a stateful-middlebox timeout problem, not a database or kernel-side issue. `tcp_fin_timeout` only governs sockets in FIN-WAIT-2, irrelevant here."
     },
     {
       "id": "q3",
       "type": "single",
       "scenario": "An EC2 instance has a Security Group with a single inbound rule: `Allow TCP 22 from 10.0.0.0/8`. The instance is in a subnet whose Network ACL has `Allow All Inbound` and `Deny TCP 22 Outbound to 0.0.0.0/0` (everything else is allowed). An admin from `10.0.5.7` SSHes in. **Does it work, and why?**",
       "options": [
-        { "id": "a", "text": "Yes — Security Groups are stateful, so the inbound SSH connection's return traffic is automatically allowed regardless of outbound rules" },
-        { "id": "b", "text": "Yes — but only because Network ACLs do not apply to TCP traffic" },
-        { "id": "c", "text": "No — the NACL outbound deny on TCP/22 will block return traffic; NACLs are stateless and evaluate each direction independently" },
-        { "id": "d", "text": "No — the Security Group must also allow outbound for the response" }
+        { "id": "a", "text": "Yes: Security Groups are stateful, so the inbound SSH connection's return traffic is automatically allowed regardless of outbound rules" },
+        { "id": "b", "text": "Yes: but only because Network ACLs do not apply to TCP traffic" },
+        { "id": "c", "text": "No: the NACL outbound deny on TCP/22 will block return traffic; NACLs are stateless and evaluate each direction independently" },
+        { "id": "d", "text": "No: the Security Group must also allow outbound for the response" }
       ],
       "correct": ["c"],
-      "explanation": "This is the canonical SG-vs-NACL trap. Security Groups *are* stateful — return traffic for an allowed inbound connection is automatically permitted, so SG-only configs work fine. NACLs are *stateless* — every direction is evaluated independently, and ephemeral return ports must be explicitly allowed outbound. The outbound `Deny TCP 22` does not actually block anything (return traffic uses an ephemeral source port, not 22), but a real NACL deny on the ephemeral range (1024-65535) would silently break SSH. The correct fix when using NACLs is to allow ephemeral port ranges outbound."
+      "explanation": "This is the canonical SG-vs-NACL trap. Security Groups *are* stateful, return traffic for an allowed inbound connection is automatically permitted, so SG-only configs work fine. NACLs are *stateless*: every direction is evaluated independently, and ephemeral return ports must be explicitly allowed outbound. The outbound `Deny TCP 22` does not actually block anything (return traffic uses an ephemeral source port, not 22), but a real NACL deny on the ephemeral range (1024-65535) would silently break SSH. The correct fix when using NACLs is to allow ephemeral port ranges outbound."
     },
     {
       "id": "q4",
       "type": "single",
-      "scenario": "An engineer runs `iptables -A INPUT -p tcp --dport 80 -j DROP` on a busy web server — and existing browser sessions keep working for several minutes before slowly failing, while new connections are blocked immediately. **Why?**",
+      "scenario": "An engineer runs `iptables -A INPUT -p tcp --dport 80 -j DROP` on a busy web server, and existing browser sessions keep working for several minutes before slowly failing, while new connections are blocked immediately. **Why?**",
       "options": [
         { "id": "a", "text": "iptables rules apply only to new connections; existing sessions are tracked by conntrack and pass via the implicit `RELATED,ESTABLISHED` rule already present in the chain" },
         { "id": "b", "text": "iptables takes several minutes to propagate to the kernel" },
@@ -50,7 +50,7 @@
         { "id": "d", "text": "The DROP rule was inserted in the wrong chain" }
       ],
       "correct": ["a"],
-      "explanation": "Most production iptables rulesets begin with `-m state --state ESTABLISHED,RELATED -j ACCEPT`. That rule lets conntrack-tracked existing flows through *before* any later DROP can match them. New SYNs land in `NEW` state and hit the DROP. Old sessions trickle out as their TCP connections eventually fail keepalives or hit conntrack timeouts. This is exactly why you cannot rely on a DROP rule alone for emergency blocking — you must also flush conntrack (`conntrack -D -s <ip>`) to disconnect existing sessions immediately."
+      "explanation": "Most production iptables rulesets begin with `-m state --state ESTABLISHED,RELATED -j ACCEPT`. That rule lets conntrack-tracked existing flows through *before* any later DROP can match them. New SYNs land in `NEW` state and hit the DROP. Old sessions trickle out as their TCP connections eventually fail keepalives or hit conntrack timeouts. This is exactly why you cannot rely on a DROP rule alone for emergency blocking, you must also flush conntrack (`conntrack -D -s <ip>`) to disconnect existing sessions immediately."
     },
     {
       "id": "q5",
@@ -63,20 +63,20 @@
         { "id": "d", "text": "Disable conntrack on the host" }
       ],
       "correct": ["a", "b", "c"],
-      "explanation": "(a) Whitelisting trusted source IPs above the limit is a clean fix and common in CI/CD setups. (b) Tuning rate and burst to actual peak traffic is the right *measurement-driven* response — limits exist to stop abuse, not legitimate concurrency. (c) Failed-auth-based rate-limiting (fail2ban) is targeted at brute-force attempts and avoids penalizing successful logins, which matches the real threat better than blanket SYN limits. (d) Disabling conntrack would break almost all stateful firewall and NAT behavior — a wildly disproportionate response."
+      "explanation": "(a) Whitelisting trusted source IPs above the limit is a clean fix and common in CI/CD setups. (b) Tuning rate and burst to actual peak traffic is the right *measurement-driven* response, limits exist to stop abuse, not legitimate concurrency. (c) Failed-auth-based rate-limiting (fail2ban) is targeted at brute-force attempts and avoids penalizing successful logins, which matches the real threat better than blanket SYN limits. (d) Disabling conntrack would break almost all stateful firewall and NAT behavior, a wildly disproportionate response."
     },
     {
       "id": "q6",
       "type": "single",
-      "scenario": "An engineer SSHes into a bastion and from there SSHes into a private host. Both hops work. They then try `scp file.tar.gz private-host:/tmp/` from the bastion — the connection authenticates, then hangs at `0%` and eventually `Connection reset by peer`. From `dmesg` on the private host: `nf_conntrack: nf_conntrack: table full, dropping packet`. **What is the failure?**",
+      "scenario": "An engineer SSHes into a bastion and from there SSHes into a private host. Both hops work. They then try `scp file.tar.gz private-host:/tmp/` from the bastion, the connection authenticates, then hangs at `0%` and eventually `Connection reset by peer`. From `dmesg` on the private host: `nf_conntrack: nf_conntrack: table full, dropping packet`. **What is the failure?**",
       "options": [
         { "id": "a", "text": "SSH authentication is broken on the private host" },
-        { "id": "b", "text": "The conntrack table is exhausted, so new connection-state entries are dropped — including the data-channel packets of the scp transfer" },
+        { "id": "b", "text": "The conntrack table is exhausted, so new connection-state entries are dropped, including the data-channel packets of the scp transfer" },
         { "id": "c", "text": "The private host is out of disk space in `/tmp`" },
         { "id": "d", "text": "iptables is denying the scp port" }
       ],
       "correct": ["b"],
-      "explanation": "`nf_conntrack: table full` means the kernel's connection-tracking table is at capacity. Stateful firewalls *require* every connection to have an entry in this table, so when it fills up, new packets are dropped — including new data-channel packets and even existing flows that get evicted. The scp control channel may have established before exhaustion, but the data flow drops. The fix is to raise `nf_conntrack_max` and tune `nf_conntrack_tcp_timeout_*` values, and to investigate why the table filled (often from idle long-tail connections or a SYN flood). Disk-full would error with `No space left on device`, not reset."
+      "explanation": "`nf_conntrack: table full` means the kernel's connection-tracking table is at capacity. Stateful firewalls *require* every connection to have an entry in this table, so when it fills up, new packets are dropped, including new data-channel packets and even existing flows that get evicted. The scp control channel may have established before exhaustion, but the data flow drops. The fix is to raise `nf_conntrack_max` and tune `nf_conntrack_tcp_timeout_*` values, and to investigate why the table filled (often from idle long-tail connections or a SYN flood). Disk-full would error with `No space left on device`, not reset."
     },
     {
       "id": "q7",
@@ -89,7 +89,7 @@
         { "id": "d", "text": "The rule needs `-p tcp` to take effect" }
       ],
       "correct": ["a"],
-      "explanation": "iptables chains correspond to packet paths in the kernel: `INPUT` for packets destined to the local host, `OUTPUT` for packets the host originates, and `FORWARD` only for packets the host is *routing through* (i.e., it acts as a router/gateway). On an endpoint host that is not forwarding, the FORWARD chain is never traversed — the rule is a no-op. The correct chain is `INPUT`: `iptables -I INPUT -s 10.0.99.0/24 -j DROP`. Choosing the wrong chain is one of the most common iptables mistakes when people start from a router-config tutorial."
+      "explanation": "iptables chains correspond to packet paths in the kernel: `INPUT` for packets destined to the local host, `OUTPUT` for packets the host originates, and `FORWARD` only for packets the host is *routing through* (i.e., it acts as a router/gateway). On an endpoint host that is not forwarding, the FORWARD chain is never traversed, the rule is a no-op. The correct chain is `INPUT`: `iptables -I INPUT -s 10.0.99.0/24 -j DROP`. Choosing the wrong chain is one of the most common iptables mistakes when people start from a router-config tutorial."
     }
   ]
 }

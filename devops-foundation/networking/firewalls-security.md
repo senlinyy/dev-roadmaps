@@ -176,6 +176,8 @@ $ aws ec2 describe-network-acls \
 
 These AWS CLI commands let you inspect the actual rules in place. When something is not reachable and you cannot figure out why, check both the security group on the instance and the NACL on the subnet. It is almost always one of the two.
 
+One more cloud-firewall trap that does not look like a firewall at all: idle timeouts on managed load balancers. AWS NLB drops idle TCP flows after 350 seconds, ALB after 60 seconds, and most cloud NAT gateways sit somewhere in between. The connection is still open from your application's point of view, but the next packet hits a stale entry on the LB and gets a TCP RST. The fix is to enable TCP keepalives in the application or kernel (`net.ipv4.tcp_keepalive_time`) below the LB's idle timeout, or shorten your client-side connection pool's max idle time.
+
 ## SSH Hardening
 
 SSH is the remote access protocol for every Linux server. When you run `ssh user@your-server`, you are opening an encrypted tunnel that gives you a full shell on the remote machine. A default SSH configuration is functional but dangerously permissive: it accepts password logins, allows root to log in directly, and listens on the well-known port 22 where every bot on the internet expects to find it.
@@ -333,6 +335,18 @@ $ sudo iptables -I INPUT 1 -s 203.0.113.0/24 -p tcp --dport 80 -j DROP
 ```
 
 This inserts the rule at position 1, pushing all existing rules down by one.
+
+### Conntrack Table Overflow
+
+Stateful filtering needs a slot in the conntrack table for every active flow. The table has a hard ceiling (`net.netfilter.nf_conntrack_max`, often 65,536 or 262,144 by default). On a busy host (NAT gateway, reverse proxy, anything fronting a high-fanout service), bursts of new connections can fill the table and the kernel starts dropping new packets with `nf_conntrack: table full, dropping packet` in `dmesg`. The connection counter and the limit are visible directly:
+
+```bash
+$ sudo sysctl net.netfilter.nf_conntrack_count net.netfilter.nf_conntrack_max
+net.netfilter.nf_conntrack_count = 245112
+net.netfilter.nf_conntrack_max = 262144
+```
+
+The fix is either raising `nf_conntrack_max`, lowering `nf_conntrack_tcp_timeout_established` (default is 5 days, which holds entries forever), or marking high-volume non-stateful traffic with `-j CT --notrack` so it bypasses conntrack entirely. Symptoms look exactly like a firewall problem (random new connections fail while existing ones keep working) but no rule was changed.
 
 ### Forgot to save rules
 

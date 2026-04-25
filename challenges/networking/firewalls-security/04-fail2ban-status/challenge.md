@@ -6,9 +6,9 @@ order: 4
 
 The SOC asked you to confirm fail2ban is actively blocking SSH brute-force traffic on `polaris-bastion-03`. You have three artifacts:
 
-- `fail2ban-client status sshd` — the live jail status (run it directly, the runtime stubs the binary).
-- `/etc/fail2ban/jail.local` — the SSH jail configuration (so you can confirm `maxretry`, `bantime`, and `findtime`).
-- `/var/log/auth.log` — the syslog stream the jail watches.
+- `fail2ban-client status sshd`, the live jail status (run it directly, the runtime stubs the binary).
+- `/etc/fail2ban/jail.local`, the SSH jail configuration (so you can confirm `maxretry`, `bantime`, and `findtime`).
+- `/var/log/auth.log`: the syslog stream the jail watches.
 
 Your job is to read the jail status, then prove the currently-banned IP shows up in `auth.log` with multiple failed SSH logins, then read the jail config to record the active thresholds.
 

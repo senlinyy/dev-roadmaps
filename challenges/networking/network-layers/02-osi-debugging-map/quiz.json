@@ -5,10 +5,10 @@
       "type": "single",
       "scenario": "An EC2 instance in `us-east-1a` lost connectivity to its database. From the instance, `ip link show eth0` reports `state UP` and `ip addr` shows the expected `10.0.3.42/24`. `ping 10.0.3.1` (the subnet gateway) returns 100% packet loss. `arp -n` shows no entry for `10.0.3.1`. The hypervisor metrics show no NIC errors. **Which OSI layer should you investigate first?**",
       "options": [
-        { "id": "a", "text": "Layer 1 — the physical NIC or cable is dead" },
-        { "id": "b", "text": "Layer 2 — ARP cannot resolve the gateway MAC, so frames have nowhere to go" },
-        { "id": "c", "text": "Layer 3 — the routing table is missing a default route" },
-        { "id": "d", "text": "Layer 4 — the database TCP port is firewalled off" }
+        { "id": "a", "text": "Layer 1: the physical NIC or cable is dead" },
+        { "id": "b", "text": "Layer 2: ARP cannot resolve the gateway MAC, so frames have nowhere to go" },
+        { "id": "c", "text": "Layer 3: the routing table is missing a default route" },
+        { "id": "d", "text": "Layer 4: the database TCP port is firewalled off" }
       ],
       "correct": ["b"],
       "explanation": "The interface is `UP` (Layer 1 healthy) and the host has an IP in the right subnet (Layer 3 addressing is fine). What is missing is the ARP entry that maps the gateway's IP to a MAC address. Without that mapping, the kernel literally cannot build a frame to send the packet, so every ping silently disappears at Layer 2. This pattern is classic for VPC ENI MAC pinning issues, security-group rules dropping ARP-adjacent traffic, or a duplicate IP elsewhere in the subnet poisoning the ARP table."
@@ -18,62 +18,62 @@
       "type": "single",
       "scenario": "A user reports that `curl https://internal-api.example.com/health` from their laptop hangs and eventually returns `Operation timed out`. From the same laptop, `dig internal-api.example.com` resolves correctly and `traceroute` reaches the load balancer's public IP and then dies at the next hop. The internal-api LB shows zero new connections in CloudWatch during the same window. **Which layer best explains the symptom?**",
       "options": [
-        { "id": "a", "text": "Layer 3 — packets are reaching the LB hop and then being routed into a black hole" },
-        { "id": "b", "text": "Layer 4 — the SYN is reaching the LB but no SYN-ACK comes back, consistent with a stateful firewall drop" },
-        { "id": "c", "text": "Layer 7 — the HTTPS server is returning a 5xx that curl is misinterpreting as a hang" },
-        { "id": "d", "text": "Layer 6 — the TLS handshake is failing because of a presentation-layer cipher mismatch" }
+        { "id": "a", "text": "Layer 3: packets are reaching the LB hop and then being routed into a black hole" },
+        { "id": "b", "text": "Layer 4: the SYN is reaching the LB but no SYN-ACK comes back, consistent with a stateful firewall drop" },
+        { "id": "c", "text": "Layer 7: the HTTPS server is returning a 5xx that curl is misinterpreting as a hang" },
+        { "id": "d", "text": "Layer 6: the TLS handshake is failing because of a presentation-layer cipher mismatch" }
       ],
       "correct": ["b"],
-      "explanation": "DNS resolved, traceroute proves Layer 3 reachability all the way to the LB hop, and the LB sees zero new connections — meaning the SYN never produces a session. That signature (SYN out, no SYN-ACK back, no LB session) is a stateful firewall or security group silently dropping traffic at Layer 4, which is exactly the layer that owns connection setup. A Layer 7 issue would still show as a connection on the LB; a Layer 6 TLS error would close after the handshake byte exchange, not hang."
+      "explanation": "DNS resolved, traceroute proves Layer 3 reachability all the way to the LB hop, and the LB sees zero new connections, meaning the SYN never produces a session. That signature (SYN out, no SYN-ACK back, no LB session) is a stateful firewall or security group silently dropping traffic at Layer 4, which is exactly the layer that owns connection setup. A Layer 7 issue would still show as a connection on the LB; a Layer 6 TLS error would close after the handshake byte exchange, not hang."
     },
     {
       "id": "q3",
       "type": "single",
       "scenario": "After deploying a new firmware to a top-of-rack switch, several servers in the rack lose connectivity. On one of the affected servers, `ip link show eth0` reports `state DOWN` and `NO-CARRIER`. `ethtool eth0` shows `Link detected: no`. The cable was not touched and no config was changed on the host. **Which OSI layer is broken?**",
       "options": [
-        { "id": "a", "text": "Layer 1 — `NO-CARRIER` and `Link detected: no` are direct evidence the physical link signal is gone" },
-        { "id": "b", "text": "Layer 2 — the switch is dropping frames after MAC learning, so the link looks dead" },
-        { "id": "c", "text": "Layer 3 — DHCP failed after the firmware swap and the host has no IP" },
-        { "id": "d", "text": "Layer 7 — the management agent on the switch is unreachable from the orchestrator" }
+        { "id": "a", "text": "Layer 1: `NO-CARRIER` and `Link detected: no` are direct evidence the physical link signal is gone" },
+        { "id": "b", "text": "Layer 2: the switch is dropping frames after MAC learning, so the link looks dead" },
+        { "id": "c", "text": "Layer 3: DHCP failed after the firmware swap and the host has no IP" },
+        { "id": "d", "text": "Layer 7: the management agent on the switch is unreachable from the orchestrator" }
       ],
       "correct": ["a"],
-      "explanation": "`NO-CARRIER` is the kernel telling you the PHY is not seeing a link partner. `Link detected: no` from `ethtool` confirms the physical signal is missing — the optic, cable, or switch port is at fault. A Layer 2 issue would show the link `UP` but frames mis-forwarded. Layer 3 (DHCP) cannot run until carrier is established, so it is downstream of this symptom."
+      "explanation": "`NO-CARRIER` is the kernel telling you the PHY is not seeing a link partner. `Link detected: no` from `ethtool` confirms the physical signal is missing, the optic, cable, or switch port is at fault. A Layer 2 issue would show the link `UP` but frames mis-forwarded. Layer 3 (DHCP) cannot run until carrier is established, so it is downstream of this symptom."
     },
     {
       "id": "q4",
       "type": "multiple",
-      "scenario": "A nightly job that uploads a 4 GB backup to S3 has started failing at unpredictable byte offsets. `aws s3 cp` errors out with `An error occurred (RequestTimeoutException)` after 30–80% completion. The MTU on the EC2 instance is `9001`. The backup runs over an IPSec VPN tunnel to the S3 VPC endpoint. **Which layers could plausibly be the root cause? (Select all that apply.)**",
+      "scenario": "A nightly job that uploads a 4 GB backup to S3 has started failing at unpredictable byte offsets. `aws s3 cp` errors out with `An error occurred (RequestTimeoutException)` after 30-80% completion. The MTU on the EC2 instance is `9001`. The backup runs over an IPSec VPN tunnel to the S3 VPC endpoint. **Which layers could plausibly be the root cause? (Select all that apply.)**",
       "options": [
-        { "id": "a", "text": "Layer 3 — the IPSec encapsulation overhead pushes some fragments above the path MTU and they are silently dropped" },
-        { "id": "b", "text": "Layer 4 — the TCP window is being reset by an idle-timeout on a stateful middlebox during slow segments" },
-        { "id": "c", "text": "Layer 1 — a flaky NIC is corrupting frames at random byte offsets" },
-        { "id": "d", "text": "Layer 7 — S3 is rejecting the request because the IAM signature expired" }
+        { "id": "a", "text": "Layer 3: the IPSec encapsulation overhead pushes some fragments above the path MTU and they are silently dropped" },
+        { "id": "b", "text": "Layer 4: the TCP window is being reset by an idle-timeout on a stateful middlebox during slow segments" },
+        { "id": "c", "text": "Layer 1: a flaky NIC is corrupting frames at random byte offsets" },
+        { "id": "d", "text": "Layer 7: S3 is rejecting the request because the IAM signature expired" }
       ],
       "correct": ["a", "b"],
-      "explanation": "MTU mismatches caused by IPSec overhead are a textbook Layer 3 fragmentation problem — the inner packet plus ESP overhead exceeds the path MTU, and PMTU discovery is often broken across VPN endpoints, so packets are dropped silently. Layer 4 idle-timeout resets on long-running uploads are also extremely common, especially when a NAT or stateful firewall sits between the host and the endpoint. A flaky NIC would show consistent errors in `ethtool -S` counters; a signature expiry would surface as `403 SignatureDoesNotMatch`, not `RequestTimeoutException`."
+      "explanation": "MTU mismatches caused by IPSec overhead are a textbook Layer 3 fragmentation problem, the inner packet plus ESP overhead exceeds the path MTU, and PMTU discovery is often broken across VPN endpoints, so packets are dropped silently. Layer 4 idle-timeout resets on long-running uploads are also extremely common, especially when a NAT or stateful firewall sits between the host and the endpoint. A flaky NIC would show consistent errors in `ethtool -S` counters; a signature expiry would surface as `403 SignatureDoesNotMatch`, not `RequestTimeoutException`."
     },
     {
       "id": "q5",
       "type": "single",
       "scenario": "An engineer says “SSH to bastion is broken.” You run `ssh -v bastion.example.com` and see `debug1: Connection established` followed immediately by `kex_exchange_identification: read: Connection reset by peer`. **Which layer owns the failure?**",
       "options": [
-        { "id": "a", "text": "Layer 3 — the host route to the bastion is missing" },
-        { "id": "b", "text": "Layer 4 — the TCP connection was established and then forcibly reset, so the failure is at the transport layer or just above" },
-        { "id": "c", "text": "Layer 7 — the SSH server completed the key exchange but rejected the user" },
-        { "id": "d", "text": "Layer 6 — the cryptographic algorithm negotiation failed" }
+        { "id": "a", "text": "Layer 3: the host route to the bastion is missing" },
+        { "id": "b", "text": "Layer 4: the TCP connection was established and then forcibly reset, so the failure is at the transport layer or just above" },
+        { "id": "c", "text": "Layer 7: the SSH server completed the key exchange but rejected the user" },
+        { "id": "d", "text": "Layer 6: the cryptographic algorithm negotiation failed" }
       ],
       "correct": ["b"],
-      "explanation": "`Connection established` proves Layer 3 routing and Layer 4 SYN/SYN-ACK both succeeded. `Connection reset by peer` *during* `kex_exchange_identification` means the peer accepted the TCP connection and then sent a RST before exchanging the SSH banner. That points squarely at Layer 4 enforcement — typically TCP wrappers, fail2ban, or a connection-rate limit dropping the session right after `accept()`. A real Layer 7 failure (auth) would happen after banner exchange; a Layer 6 KEX mismatch would emit `no matching key exchange method`."
+      "explanation": "`Connection established` proves Layer 3 routing and Layer 4 SYN/SYN-ACK both succeeded. `Connection reset by peer` *during* `kex_exchange_identification` means the peer accepted the TCP connection and then sent a RST before exchanging the SSH banner. That points squarely at Layer 4 enforcement, typically TCP wrappers, fail2ban, or a connection-rate limit dropping the session right after `accept()`. A real Layer 7 failure (auth) would happen after banner exchange; a Layer 6 KEX mismatch would emit `no matching key exchange method`."
     },
     {
       "id": "q6",
       "type": "single",
-      "scenario": "A frontend service intermittently fails to reach an internal gRPC backend. Both run in the same Kubernetes cluster. `kubectl exec` into the frontend and run `curl -v http://backend:8080/health` — sometimes it returns 200 OK, sometimes it hangs for 10 seconds and returns `curl: (7) Failed to connect`. `kubectl get endpoints backend` shows three pod IPs, all marked Ready. **Which layer should you debug first?**",
+      "scenario": "A frontend service intermittently fails to reach an internal gRPC backend. Both run in the same Kubernetes cluster. `kubectl exec` into the frontend and run `curl -v http://backend:8080/health`, sometimes it returns 200 OK, sometimes it hangs for 10 seconds and returns `curl: (7) Failed to connect`. `kubectl get endpoints backend` shows three pod IPs, all marked Ready. **Which layer should you debug first?**",
       "options": [
-        { "id": "a", "text": "Layer 3 — kube-proxy has a stale iptables rule pointing at a dead pod IP, so 1/3 of requests go to a black hole" },
-        { "id": "b", "text": "Layer 7 — one of the backend pods is returning malformed HTTP" },
-        { "id": "c", "text": "Layer 4 — the load balancer is rejecting half the SYN packets" },
-        { "id": "d", "text": "Layer 1 — a node NIC is intermittently flapping" }
+        { "id": "a", "text": "Layer 3: kube-proxy has a stale iptables rule pointing at a dead pod IP, so 1/3 of requests go to a black hole" },
+        { "id": "b", "text": "Layer 7: one of the backend pods is returning malformed HTTP" },
+        { "id": "c", "text": "Layer 4: the load balancer is rejecting half the SYN packets" },
+        { "id": "d", "text": "Layer 1: a node NIC is intermittently flapping" }
       ],
       "correct": ["a"],
       "explanation": "Three endpoints, intermittent `Failed to connect` (= no SYN-ACK), and a rotating success rate is the classic signature of one stale endpoint in the Service's iptables/ipvs rules. kube-proxy programs the Service VIP at Layer 3/4 via DNAT, and if a pod's readiness flips faster than the rule sync, traffic round-robins into a dead IP. A malformed HTTP body would still produce a TCP connection, not `Failed to connect`. NIC flaps would affect the whole node, not 1-of-3 backends."
@@ -81,15 +81,15 @@
     {
       "id": "q7",
       "type": "single",
-      "scenario": "Users from one office cannot reach `app.example.com`, but users from every other office can. You SSH to a workstation in the affected office and run `dig app.example.com` — it returns `NXDOMAIN`. From a workstation in a working office, the same `dig` returns the correct A record. The application's authoritative DNS records are unchanged. **Which layer best owns this incident?**",
+      "scenario": "Users from one office cannot reach `app.example.com`, but users from every other office can. You SSH to a workstation in the affected office and run `dig app.example.com`, it returns `NXDOMAIN`. From a workstation in a working office, the same `dig` returns the correct A record. The application's authoritative DNS records are unchanged. **Which layer best owns this incident?**",
       "options": [
-        { "id": "a", "text": "Layer 7 — the office's local DNS resolver has a bad cache entry or split-horizon view returning NXDOMAIN" },
-        { "id": "b", "text": "Layer 3 — the office's router is dropping packets to the application's IP" },
-        { "id": "c", "text": "Layer 4 — the office's firewall is blocking port 443" },
-        { "id": "d", "text": "Layer 2 — a switch loop in the office is dropping ARP for the resolver" }
+        { "id": "a", "text": "Layer 7: the office's local DNS resolver has a bad cache entry or split-horizon view returning NXDOMAIN" },
+        { "id": "b", "text": "Layer 3: the office's router is dropping packets to the application's IP" },
+        { "id": "c", "text": "Layer 4: the office's firewall is blocking port 443" },
+        { "id": "d", "text": "Layer 2: a switch loop in the office is dropping ARP for the resolver" }
       ],
       "correct": ["a"],
-      "explanation": "DNS lives at Layer 7 in the OSI model. NXDOMAIN means the resolver actively answered `this name does not exist` — not a network drop. Different answers from different offices points at the resolver each office uses (different cache, different forwarder, or split-horizon view), which is a Layer 7 directory-service problem. Layers 3/4/2 would cause timeouts or `connection refused`, not NXDOMAIN."
+      "explanation": "DNS lives at Layer 7 in the OSI model. NXDOMAIN means the resolver actively answered `this name does not exist`, not a network drop. Different answers from different offices points at the resolver each office uses (different cache, different forwarder, or split-horizon view), which is a Layer 7 directory-service problem. Layers 3/4/2 would cause timeouts or `connection refused`, not NXDOMAIN."
     }
   ]
 }

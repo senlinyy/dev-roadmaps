@@ -11,7 +11,7 @@
         { "id": "d", "text": "/19 (8192 addresses)" }
       ],
       "correct": ["c"],
-      "explanation": "Host counts: /22 = 1024, /21 = 2048, /20 = 4096, /19 = 8192. 4000 fits in a /20 *barely* — and in AWS you actually lose 5 addresses per subnet (network, broadcast, VPC router, DNS, future), so the practical capacity of a /20 is 4091. The team is one hot quarter away from running out. In practice a /19 is a safer pick if the IPAM has one, but the question asks for the smallest that satisfies, which is /20. /22 and /21 are both too small."
+      "explanation": "Host counts: /22 = 1024, /21 = 2048, /20 = 4096, /19 = 8192. 4000 fits in a /20 *barely*, and in AWS you actually lose 5 addresses per subnet (network, broadcast, VPC router, DNS, future), so the practical capacity of a /20 is 4091. The team is one hot quarter away from running out. In practice a /19 is a safer pick if the IPAM has one, but the question asks for the smallest that satisfies, which is /20. /22 and /21 are both too small."
     },
     {
       "id": "q2",
@@ -24,7 +24,7 @@
         { "id": "d", "text": "The team forgot to enable IPv6" }
       ],
       "correct": ["a"],
-      "explanation": "AWS docs make this explicit: 5 addresses per subnet are reserved. Beyond that, every ENI of every pod (in `awsvpc` networking mode), every load balancer, and every NAT gateway in the same subnet consumes addresses. The general rule is plan capacity at *50–60%* of the nominal subnet size to leave room for ENIs and bursts. The fix here is migrate to a /22 or /21 for the node subnet, or move pods to a separate larger subnet via a CNI like Calico in VPC-native mode with secondary CIDRs."
+      "explanation": "AWS docs make this explicit: 5 addresses per subnet are reserved. Beyond that, every ENI of every pod (in `awsvpc` networking mode), every load balancer, and every NAT gateway in the same subnet consumes addresses. The general rule is plan capacity at *50-60%* of the nominal subnet size to leave room for ENIs and bursts. The fix here is migrate to a /22 or /21 for the node subnet, or move pods to a separate larger subnet via a CNI like Calico in VPC-native mode with secondary CIDRs."
     },
     {
       "id": "q3",
@@ -37,33 +37,33 @@
         { "id": "d", "text": "Network 10.50.4.64, broadcast 10.50.4.191" }
       ],
       "correct": ["b"],
-      "explanation": "A /25 splits a /24 in half. The two halves of `10.50.4.0/24` are `10.50.4.0/25` (covering .0–.127) and `10.50.4.128/25` (covering .128–.255). `10.50.4.130` falls in the second half, so the network address is `10.50.4.128` and the broadcast is `10.50.4.255`. Quick mental check: the prefix length 25 means the boundary moves into the last octet by one bit, so each subnet is 128 addresses wide, and the network addresses are multiples of 128 in the last octet (0 and 128). This kind of mental model — *the network address always aligns to the block size* — is what saves you in pager-mode."
+      "explanation": "A /25 splits a /24 in half. The two halves of `10.50.4.0/24` are `10.50.4.0/25` (covering .0-.127) and `10.50.4.128/25` (covering .128-.255). `10.50.4.130` falls in the second half, so the network address is `10.50.4.128` and the broadcast is `10.50.4.255`. Quick mental check: the prefix length 25 means the boundary moves into the last octet by one bit, so each subnet is 128 addresses wide, and the network addresses are multiples of 128 in the last octet (0 and 128). This kind of mental model: *the network address always aligns to the block size*, is what saves you in pager-mode."
     },
     {
       "id": "q4",
       "type": "single",
       "scenario": "Two CIDR blocks are proposed for separate workloads:\n\n```\nA: 10.20.0.0/22\nB: 10.20.4.0/23\n```\n\n**Do they overlap?**",
       "options": [
-        { "id": "a", "text": "Yes — any /22 and /23 starting in the same /16 overlap" },
-        { "id": "b", "text": "No — A covers 10.20.0.0–10.20.3.255 (1024 addresses) and B covers 10.20.4.0–10.20.5.255 (512 addresses). They are adjacent, not overlapping." },
-        { "id": "c", "text": "Yes — B is fully contained in A" },
+        { "id": "a", "text": "Yes: any /22 and /23 starting in the same /16 overlap" },
+        { "id": "b", "text": "No: A covers 10.20.0.0-10.20.3.255 (1024 addresses) and B covers 10.20.4.0-10.20.5.255 (512 addresses). They are adjacent, not overlapping." },
+        { "id": "c", "text": "Yes: B is fully contained in A" },
         { "id": "d", "text": "Cannot tell without a subnet calculator" }
       ],
       "correct": ["b"],
-      "explanation": "/22 = 1024 addresses, so `10.20.0.0/22` ends at `10.20.3.255`. /23 = 512 addresses, so `10.20.4.0/23` starts at `10.20.4.0` and ends at `10.20.5.255`. They are adjacent and could be summarized into a single `10.20.0.0/21` (2048 addresses), but they do not overlap. The rule of thumb: a block always aligns to its size — a /22 starts on a multiple of 1024 in the host portion (so the third octet is a multiple of 4: 0, 4, 8, …)."
+      "explanation": "/22 = 1024 addresses, so `10.20.0.0/22` ends at `10.20.3.255`. /23 = 512 addresses, so `10.20.4.0/23` starts at `10.20.4.0` and ends at `10.20.5.255`. They are adjacent and could be summarized into a single `10.20.0.0/21` (2048 addresses), but they do not overlap. The rule of thumb: a block always aligns to its size, a /22 starts on a multiple of 1024 in the host portion (so the third octet is a multiple of 4: 0, 4, 8, …)."
     },
     {
       "id": "q5",
       "type": "single",
       "scenario": "An infra plan splits a `/16` into eight `/19`s for eight environments. A team requests one of the /19s for production and wants to further split it for *web*, *app*, and *data* tiers, with **at least 1000 addresses per tier**.\n\n**What prefix length do you give each tier?**",
       "options": [
-        { "id": "a", "text": "/22 (1024 addresses) — exactly fits, but no headroom" },
-        { "id": "b", "text": "/21 (2048 addresses) — gives ~2× headroom and uses 6144 of the 8192 in the /19, leaving a /21 free for growth" },
-        { "id": "c", "text": "/24 (256 addresses) — small and tidy" },
-        { "id": "d", "text": "/20 (4096 addresses) — maximum room" }
+        { "id": "a", "text": "/22 (1024 addresses): exactly fits, but no headroom" },
+        { "id": "b", "text": "/21 (2048 addresses): gives ~2× headroom and uses 6144 of the 8192 in the /19, leaving a /21 free for growth" },
+        { "id": "c", "text": "/24 (256 addresses): small and tidy" },
+        { "id": "d", "text": "/20 (4096 addresses): maximum room" }
       ],
       "correct": ["b"],
-      "explanation": "The /19 has 8192 addresses. Three /22s (1024 each) = 3072 used, 5120 left, but each tier has zero growth room and AWS reserves eat in. Three /21s (2048 each) = 6144 used, 2048 left for growth — a clean /21 reserved. /20 would be too greedy: three /20s (4096 each) = 12288, doesn't fit in a /19. The general capacity-planning move: pick the prefix one or two steps larger than the strict minimum, and leave at least one same-sized block reserved for growth. (a) is the *just barely fits* trap that causes 18-month renumbering projects."
+      "explanation": "The /19 has 8192 addresses. Three /22s (1024 each) = 3072 used, 5120 left, but each tier has zero growth room and AWS reserves eat in. Three /21s (2048 each) = 6144 used, 2048 left for growth, a clean /21 reserved. /20 would be too greedy: three /20s (4096 each) = 12288, doesn't fit in a /19. The general capacity-planning move: pick the prefix one or two steps larger than the strict minimum, and leave at least one same-sized block reserved for growth. (a) is the *just barely fits* trap that causes 18-month renumbering projects."
     },
     {
       "id": "q6",
@@ -76,21 +76,21 @@
         { "id": "d", "text": "Use a different routing protocol than the cloud default" }
       ],
       "correct": ["b"],
-      "explanation": "Route table caps are real (AWS, GCP, Azure all have them) and the standard escape hatch is *summarize*. If the 12 /24s fall inside a `/20` (which holds 16 /24s) and that /20 is otherwise yours, you can add a single `10.30.X.0/20` route instead of 12 individual ones. This is exactly why allocating in aligned, contiguous blocks at the IPAM stage matters — non-contiguous /24s scattered across a /16 cannot be summarized. Asking to raise the limit is the last resort, not the first."
+      "explanation": "Route table caps are real (AWS, GCP, Azure all have them) and the standard escape hatch is *summarize*. If the 12 /24s fall inside a `/20` (which holds 16 /24s) and that /20 is otherwise yours, you can add a single `10.30.X.0/20` route instead of 12 individual ones. This is exactly why allocating in aligned, contiguous blocks at the IPAM stage matters, non-contiguous /24s scattered across a /16 cannot be summarized. Asking to raise the limit is the last resort, not the first."
     },
     {
       "id": "q7",
       "type": "multiple",
       "scenario": "Below are CIDR allocations from a real plan. **Which entries have a problem you would flag in review?** (Select all that apply.)\n\n```\nA: 10.10.0.0/24 for 50 hosts (50% utilization)\nB: 10.20.0.0/22 for 1500 hosts in AWS\nC: 10.30.4.0/23 for 200 hosts (10% utilization)\nD: 10.40.5.128/25 for 100 hosts\nE: 10.50.0.0/30 for 1 ELB ENI\n```",
       "options": [
-        { "id": "a", "text": "A — sized fine, no problem" },
-        { "id": "b", "text": "B — /22 has 1024 addresses; 1500 hosts will not fit" },
-        { "id": "c", "text": "C — /23 has 512 for 200 hosts is fine but very low utilization; consider /24 instead to free a /24 for adjacent use" },
-        { "id": "d", "text": "D — sized fine, no problem" },
-        { "id": "e", "text": "E — /30 has 4 addresses; in AWS that is 0 usable after the 5 reserved, so the ELB cannot get an ENI. Use at least /28." }
+        { "id": "a", "text": "A: sized fine, no problem" },
+        { "id": "b", "text": "B: /22 has 1024 addresses; 1500 hosts will not fit" },
+        { "id": "c", "text": "C: /23 has 512 for 200 hosts is fine but very low utilization; consider /24 instead to free a /24 for adjacent use" },
+        { "id": "d", "text": "D: sized fine, no problem" },
+        { "id": "e", "text": "E: /30 has 4 addresses; in AWS that is 0 usable after the 5 reserved, so the ELB cannot get an ENI. Use at least /28." }
       ],
       "correct": ["b", "c", "e"],
-      "explanation": "(B) is undersized: /22 only has 1024 addresses, can never hold 1500. Needs a /21 minimum. (C) is the wasteful-but-not-broken case worth flagging in review — 10% utilization is fine for a fast-growing tier, terrible for a stable one. (E) is the AWS minimum-subnet trap: AWS requires *at least a /28* for any subnet because of its 5 reserved addresses. /30 would have negative usable capacity. (A) at 50% is healthy. (D) is also fine: /25 has 128 addresses, 100 hosts fits with growth room."
+      "explanation": "(B) is undersized: /22 only has 1024 addresses, can never hold 1500. Needs a /21 minimum. (C) is the wasteful-but-not-broken case worth flagging in review, 10% utilization is fine for a fast-growing tier, terrible for a stable one. (E) is the AWS minimum-subnet trap: AWS requires *at least a /28* for any subnet because of its 5 reserved addresses. /30 would have negative usable capacity. (A) at 50% is healthy. (D) is also fine: /25 has 128 addresses, 100 hosts fits with growth room."
     }
   ]
 }
