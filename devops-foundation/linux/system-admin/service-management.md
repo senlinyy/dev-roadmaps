@@ -4,6 +4,7 @@ description: "Manage system services with systemd, write your own unit files, an
 overview: "Every Linux server runs a fleet of background processes: web servers, databases, agents, schedulers. systemd is the supervisor that decides what starts, in what order, what restarts on failure, and where the logs go. This article teaches you to drive it deliberately instead of poking at it until things work."
 tags: ["systemd", "systemctl", "units", "journalctl", "timers"]
 order: 2
+id: article-devops-foundation-linux-system-admin-service-management
 ---
 
 ## Table of Contents

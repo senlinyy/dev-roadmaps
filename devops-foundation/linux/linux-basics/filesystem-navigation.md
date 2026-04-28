@@ -4,6 +4,7 @@ description: "Navigate the Linux filesystem hierarchy, understand mount points, 
 overview: "Master the Linux Filesystem Hierarchy Standard, navigate directories with confidence, and understand where every critical file lives on a Linux system."
 tags: ["FHS", "cd", "ls", "find"]
 order: 1
+id: article-devops-foundation-linux-linux-basics-filesystem-navigation
 ---
 
 ## Table of Contents

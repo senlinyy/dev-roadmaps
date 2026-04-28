@@ -4,6 +4,7 @@ description: "Diagnose CPU saturation, memory pressure, and swap thrashing using
 overview: "When a Linux box feels slow, the answer almost always lives in two places: the CPU and RAM. This article teaches you to read the metrics that separate guessing from diagnosis."
 tags: ["top", "vmstat", "mpstat", "free", "swap"]
 order: 3
+id: article-devops-foundation-linux-system-admin-cpu-memory
 ---
 
 ## Table of Contents

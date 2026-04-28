@@ -4,6 +4,7 @@ description: "Trace the full DNS resolution chain from stub resolver to authorit
 overview: "Understand how DNS maps domain names to IP addresses, follow a query through the full resolution chain, and learn why stale caches are the number one cause of post-deploy confusion."
 tags: ["dns", "dig", "cname", "ttl", "nameserver"]
 order: 3
+id: article-devops-foundation-networking-dns-resolution
 ---
 
 ## Table of Contents

@@ -4,6 +4,7 @@ description: "Learn the Vim text editor from zero: modes, navigation, editing, s
 overview: "Navigate and edit files confidently with Vim, the terminal-based editor available on every Linux server, so you never feel stuck when SSH'd into a machine with no GUI."
 tags: ["vim", "editor", "modal", "config"]
 order: 2
+id: article-devops-foundation-linux-linux-basics-vim-essentials
 ---
 
 ## Table of Contents

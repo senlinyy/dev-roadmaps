@@ -4,6 +4,7 @@ description: "Inspect, signal, and supervise running processes on Linux, and dia
 overview: "Every program on a Linux box is a process with a lifecycle, a parent, and a way to die. Knowing how that lifecycle works is the difference between rebooting a server in panic and fixing the actual bug."
 tags: ["ps", "kill", "signals"]
 order: 1
+id: article-devops-foundation-linux-system-admin-process-management
 ---
 
 ## Table of Contents

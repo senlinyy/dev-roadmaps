@@ -39,7 +39,16 @@ type ChildModule = {
   color: string;
   description: string;
   contentPath: string;
+  aliases?: string[];
   tags: ContentTags;
+};
+
+type ArticleCatalogItem = {
+  id: string;
+  title: string;
+  slug: string;
+  contentPath: string | null;
+  aliases: string[];
 };
 
 type SubModule = {
@@ -147,6 +156,7 @@ type SectionPracticeLink = {
 type Manifest = {
   version: string;
   generatedAt: string;
+  articleCatalog: ArticleCatalogItem[];
   roadmapData: RootModule[];
   categories: ChallengeCategoryMeta[];
   groupsByCategory: Record<string, ChallengeGroupMeta[]>;
@@ -172,6 +182,32 @@ function asBoolean(value: unknown, fallback: boolean): boolean {
 
 function asStringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === 'string') : [];
+}
+
+function slugifyTitle(title: string): string {
+  return title
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
+function getFallbackArticleId(contentPath: string): string {
+  return `article-${contentPath
+    .replace(/\.md$/, '')
+    .replace(/[^a-zA-Z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .toLowerCase()}`;
+}
+
+function getLegacyGeneratedArticleId(contentPath: string): string | null {
+  const segments = contentPath.split('/').filter(Boolean);
+  if (segments.length < 2) return null;
+
+  const fileName = segments[segments.length - 1];
+  const subDir = segments[segments.length - 2];
+  const fileSlug = fileName.replace(/\.md$/, '');
+  return `child-${subDir}-${fileSlug}`;
 }
 
 function getRoadmapAccentColor(index: number): string {
@@ -240,15 +276,18 @@ function loadSubModule(rootDir: string, parentPath: string[], subDir: string): O
   for (const fileName of fs.readdirSync(subPath).filter((name) => name.endsWith('.md') && name !== '_index.md')) {
     const childMeta = readMeta(path.join(subPath, fileName));
     const slug = fileName.replace(/\.md$/, '');
+    const contentPath = [rootDir, ...parentPath, subDir, fileName].join('/');
+    const frontmatterId = asOptionalString(childMeta.id)?.trim();
     children.push({
       order: asNumber(childMeta.order, 99),
       module: {
-        id: `child-${subDir}-${slug}`,
+        id: frontmatterId || getFallbackArticleId(contentPath),
         title: asString(childMeta.title, slug),
         category: 'Child Module',
         color: COLORS.white,
         description: asString(childMeta.description, ''),
-        contentPath: [rootDir, ...parentPath, subDir, fileName].join('/'),
+        contentPath,
+        aliases: asStringArray(childMeta.aliases),
         tags: asStringArray(childMeta.tags),
       },
     });
@@ -593,6 +632,39 @@ function walkRoadmapArticles(roadmapData: RootModule[]): string[] {
   return contentPaths;
 }
 
+function buildArticleCatalog(roadmapData: RootModule[]): ArticleCatalogItem[] {
+  const catalog: ArticleCatalogItem[] = [];
+
+  for (const root of roadmapData) {
+    for (const child of root.subs) {
+      const subs = child.category === 'Group' ? child.subs : [child];
+
+      for (const sub of subs) {
+        for (const article of sub.children) {
+          const slug = slugifyTitle(article.title);
+          const aliases = new Set<string>();
+          aliases.add(slug);
+          aliases.add(article.contentPath);
+          const legacyGeneratedId = getLegacyGeneratedArticleId(article.contentPath);
+          if (legacyGeneratedId) aliases.add(legacyGeneratedId);
+          for (const alias of article.aliases ?? []) aliases.add(alias);
+          aliases.delete(article.id);
+
+          catalog.push({
+            id: article.id,
+            title: article.title,
+            slug,
+            contentPath: article.contentPath,
+            aliases: Array.from(aliases).sort(),
+          });
+        }
+      }
+    }
+  }
+
+  return catalog.sort((left, right) => left.id.localeCompare(right.id));
+}
+
 function writeArticleArtifacts(versionRoot: string, roadmapData: RootModule[]): void {
   for (const contentPath of walkRoadmapArticles(roadmapData)) {
     const sourcePath = path.join(ROOT_DIR, contentPath);
@@ -655,6 +727,7 @@ function buildManifest(): Manifest {
   return {
     version: VERSION,
     generatedAt: GENERATED_AT,
+    articleCatalog: buildArticleCatalog(roadmapData),
     roadmapData,
     categories,
     groupsByCategory,

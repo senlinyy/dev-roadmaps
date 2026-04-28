@@ -4,6 +4,7 @@ description: "Read, route, rotate, and ship Linux logs using journald, rsyslog, 
 overview: "When production breaks, logs are the only honest record of what happened. Learn how journald and rsyslog cooperate, how to query them, and how to keep them from eating the disk."
 tags: ["journalctl", "syslog", "logrotate", "rsyslog"]
 order: 5
+id: article-devops-foundation-linux-system-admin-log-management
 ---
 
 ## Table of Contents

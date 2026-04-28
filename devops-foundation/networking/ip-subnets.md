@@ -4,6 +4,7 @@ description: "Calculate subnets with CIDR notation, understand private vs public
 overview: "Learn how IP addresses and subnets work so you can confidently design VPC layouts, avoid overlapping ranges, and understand every CIDR block you encounter in cloud infrastructure."
 tags: ["cidr", "ipv4", "subnetting", "vpc", "ipv6"]
 order: 2
+id: article-devops-foundation-networking-ip-subnets
 ---
 
 ## Table of Contents

@@ -4,6 +4,7 @@ description: "Install, update, and manage software packages using apt, yum, and 
 overview: "Navigate the Linux package ecosystem with confidence: APT on Debian, DNF on RHEL, managing repositories, pinning versions, and knowing when to build from source."
 tags: ["apt", "yum", "dnf"]
 order: 6
+id: article-devops-foundation-linux-linux-basics-package-management
 ---
 
 ## Table of Contents

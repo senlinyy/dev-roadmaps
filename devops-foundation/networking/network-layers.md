@@ -4,6 +4,7 @@ description: "Trace what happens between fetch() and a server response by learni
 overview: "Understand how data travels across a network by learning the layered models that every protocol, firewall rule, and debugging tool is built around."
 tags: ["tcp/ip", "osi", "tcpdump", "encapsulation"]
 order: 1
+id: article-devops-foundation-networking-network-layers
 ---
 
 ## Table of Contents

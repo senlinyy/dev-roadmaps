@@ -4,6 +4,7 @@ description: "Write Bash scripts with variables, conditionals, loops, and functi
 overview: "Write robust, production-grade Bash scripts with proper error handling, safe variable expansion, and disciplined control flow that surfaces problems immediately instead of hiding them."
 tags: ["bash", "variables", "loops"]
 order: 3
+id: article-devops-foundation-linux-linux-basics-shell-scripting
 ---
 
 ## Table of Contents

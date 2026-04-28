@@ -4,6 +4,7 @@ description: "Configure iptables rules, understand cloud security groups, and ha
 overview: "Learn how firewalls filter traffic at every layer, from kernel-level iptables rules to cloud security groups, and apply SSH hardening to keep your servers safe."
 tags: ["iptables", "firewall", "ssh", "fail2ban", "security-groups"]
 order: 5
+id: article-devops-foundation-networking-firewalls-security
 ---
 
 ## Table of Contents

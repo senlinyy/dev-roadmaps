@@ -4,6 +4,7 @@ description: "Manage file permissions, ownership, user accounts, and groups to c
 overview: "Understand the Linux permission model from first principles: ownership, access bits, special flags, and user management that enforce the principle of least privilege."
 tags: ["chmod", "chown", "sudo"]
 order: 5
+id: article-devops-foundation-linux-linux-basics-permissions-users
 ---
 
 ## Table of Contents

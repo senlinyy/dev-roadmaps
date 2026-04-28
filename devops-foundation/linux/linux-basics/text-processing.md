@@ -4,6 +4,7 @@ description: "Use grep, sed, awk, and pipes to search, transform, and analyze te
 overview: "Master the Unix text processing toolkit: grep, sed, awk, and the supporting cast of utilities that turn raw log streams into actionable intelligence."
 tags: ["grep", "awk", "sed", "pipes"]
 order: 4
+id: article-devops-foundation-linux-linux-basics-text-processing
 ---
 
 ## Table of Contents

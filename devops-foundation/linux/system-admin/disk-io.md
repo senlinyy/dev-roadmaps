@@ -4,6 +4,7 @@ description: "Diagnose disk pressure, read filesystem and I/O metrics, and resiz
 overview: "Storage is where production incidents go to hide. This article walks through how Linux organizes block devices, filesystems, and the I/O stack, and how to read the tools that tell you something is wrong before users do."
 tags: ["iostat", "df", "lvm", "lsof"]
 order: 4
+id: article-devops-foundation-linux-system-admin-disk-io
 ---
 
 ## Table of Contents

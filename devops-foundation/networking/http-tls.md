@@ -4,6 +4,7 @@ description: "Follow the HTTP request lifecycle, understand status codes, and se
 overview: "Understand the protocol your code speaks every time it calls fetch() or axios.get(), from raw request/response structure through TLS encryption and real-world failure modes."
 tags: ["http", "tls", "curl", "certificates", "https"]
 order: 4
+id: article-devops-foundation-networking-http-tls
 ---
 
 ## Table of Contents

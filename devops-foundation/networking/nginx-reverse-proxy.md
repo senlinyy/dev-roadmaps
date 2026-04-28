@@ -4,6 +4,7 @@ description: "Configure Nginx as a web server and reverse proxy, set up virtual 
 overview: "Learn how Nginx sits between the internet and your application, serving static files, forwarding requests, and terminating TLS."
 tags: ["nginx", "reverse-proxy", "virtual-host", "tls", "load-balancing"]
 order: 6
+id: article-devops-foundation-networking-nginx-reverse-proxy
 ---
 
 ## Table of Contents
