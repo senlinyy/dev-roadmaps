@@ -22,7 +22,7 @@ id: article-cicd-github-actions-workflows-and-events
 
 ## The Event-Driven Mental Model
 
-Before GitHub Actions launched in 2018, the CI/CD landscape was highly fragmented. Developers wrote code on GitHub, but to test and deploy it, they usually had to connect third-party services like TravisCI, CircleCI, or a self-hosted Jenkins server. This required managing external credentials, stitching together complex webhooks, and jumping between entirely different websites just to see why a build failed.
+Before GitHub Actions arrived (announced as a beta in 2018, generally available in November 2019), the CI/CD landscape was highly fragmented. Developers wrote code on GitHub, but to test and deploy it, they usually had to connect third-party services like TravisCI, CircleCI, or a self-hosted Jenkins server. This required managing external credentials, stitching together complex webhooks, and jumping between entirely different websites just to see why a build failed.
 
 GitHub Actions changed the industry by building CI/CD directly into the version control platform itself. For many teams, this means there is no separate CI server to install, upgrade, or secure. The infrastructure still exists (GitHub provides hosted virtual machines called "runners" to execute the code), but the platform where your code lives is the exact same platform that orchestrates the builds.
 
@@ -320,8 +320,8 @@ Finally, be careful with PRs from forks. GitHub protects secrets in that situati
 ---
 
 **References**
-- [GitHub Actions: Events that trigger workflows](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows) - The official list of workflow trigger events, activity types, fork caveats, and schedule behavior.
-- [GitHub Actions: Workflow syntax](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax) - Defines `on`, `jobs`, `steps`, `needs`, `matrix`, `permissions`, and shell defaults.
-- [GitHub Actions: Contexts reference](https://docs.github.com/en/actions/reference/workflows-and-actions/contexts) - Shows how `github.event`, `github.event_path`, `github.head_ref`, and other contexts behave.
-- [GitHub Actions: GITHUB_TOKEN](https://docs.github.com/en/actions/concepts/security/github_token) - Explains how the per-job token is created, scoped, expired, and prevented from causing recursive workflow runs.
-- [GitHub Actions: GitHub-hosted runners](https://docs.github.com/actions/how-tos/using-github-hosted-runners/using-github-hosted-runners/about-github-hosted-runners) - Describes hosted runner machines, images, and when GitHub creates fresh runner environments.
+- [GitHub Docs: Events that trigger workflows](https://docs.github.com/en/actions/using-workflows/events-that-trigger-workflows) - The official list of workflow trigger events, activity types, fork caveats, and schedule behavior.
+- [GitHub Docs: Workflow syntax for GitHub Actions](https://docs.github.com/en/actions/using-workflows/workflow-syntax-for-github-actions) - Defines `on`, `jobs`, `steps`, `needs`, `matrix`, `permissions`, and shell defaults.
+- [GitHub Docs: Contexts reference](https://docs.github.com/en/actions/learn-github-actions/contexts) - Shows how `github.event`, `github.event_path`, `github.head_ref`, and other contexts behave.
+- [GitHub Docs: Automatic token authentication](https://docs.github.com/en/actions/security-guides/automatic-token-authentication) - Explains how the per-job GITHUB_TOKEN is created, scoped, expired, and prevented from causing recursive workflow runs.
+- [GitHub Docs: About GitHub-hosted runners](https://docs.github.com/en/actions/using-github-hosted-runners/about-github-hosted-runners) - Describes hosted runner machines, images, and when GitHub creates fresh runner environments.

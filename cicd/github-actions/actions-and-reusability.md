@@ -300,6 +300,8 @@ As a rule of thumb: do not create a reusable action until you have felt the pain
 ---
 
 **References**
-- [GitHub Actions: Creating a composite action](https://docs.github.com/en/actions/creating-actions/creating-a-composite-action) - The official guide on bundling steps and handling inputs/outputs.
-- [GitHub Actions: Reusing workflows](https://docs.github.com/en/actions/using-workflows/reusing-workflows) - Explains the `workflow_call` trigger and how to pass secrets to reusable jobs.
-- [GitHub Actions: Contexts (github.action_path)](https://docs.github.com/en/actions/learn-github-actions/contexts) - Documentation on resolving file paths inside custom action repositories.
+- [GitHub Docs: Creating a composite action](https://docs.github.com/en/actions/creating-actions/creating-a-composite-action) - The official guide on bundling steps, handling inputs/outputs, and shell requirements.
+- [GitHub Docs: Reusing workflows](https://docs.github.com/en/actions/using-workflows/reusing-workflows) - Explains the `workflow_call` trigger and how to pass secrets and inputs to reusable jobs.
+- [GitHub Docs: Contexts reference](https://docs.github.com/en/actions/learn-github-actions/contexts) - Documentation on `github.action_path`, `inputs.*`, and other contexts for resolving paths inside custom actions.
+- [GitHub Docs: Creating actions](https://docs.github.com/en/actions/creating-actions/about-custom-actions) - Covers the three action types (composite, JavaScript, Docker), when to use each, and how to publish them.
+- [GitHub Docs: Sharing actions and workflows](https://docs.github.com/en/actions/creating-actions/sharing-actions-and-workflows-with-your-organization) - Best practices for distributing reusable actions across an organization.

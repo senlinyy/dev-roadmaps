@@ -298,6 +298,8 @@ Always remember: the runner is just a server. Treat pipeline failures the exact 
 ---
 
 **References**
-- [GitHub Actions: About GitHub-hosted runners](https://docs.github.com/en/actions/using-github-hosted-runners/about-github-hosted-runners) - Details the exact hardware specifications and pre-installed software for hosted runners.
-- [GitHub Actions: About self-hosted runners](https://docs.github.com/en/actions/hosting-your-own-runners/managing-self-hosted-runners/about-self-hosted-runners) - Explains the architecture and security implications of managing your own agents.
-- [GitHub Actions: Default environment variables](https://docs.github.com/en/actions/learn-github-actions/variables#default-environment-variables) - Lists the default paths like `GITHUB_WORKSPACE` available during execution.
+- [GitHub Docs: About GitHub-hosted runners](https://docs.github.com/en/actions/using-github-hosted-runners/about-github-hosted-runners) - Details the exact hardware specifications, pre-installed software, and ephemeral lifecycle for hosted runners.
+- [GitHub Docs: About self-hosted runners](https://docs.github.com/en/actions/hosting-your-own-runners/managing-self-hosted-runners/about-self-hosted-runners) - Explains the architecture and security implications of managing your own runner agents.
+- [GitHub Docs: Default environment variables](https://docs.github.com/en/actions/learn-github-actions/variables#default-environment-variables) - Lists default paths like `GITHUB_WORKSPACE` and other variables available during execution.
+- [GitHub Docs: Using containerized services](https://docs.github.com/en/actions/using-containerized-services/about-service-containers) - Explains how Docker containers integrate with GitHub Actions jobs and steps.
+- [GitHub Docs: Runner images](https://github.com/actions/runner-images) - The open-source repository listing every pre-installed tool on each hosted runner image.
