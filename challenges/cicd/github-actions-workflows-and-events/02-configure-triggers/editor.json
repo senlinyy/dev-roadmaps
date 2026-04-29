@@ -1,0 +1,19 @@
+{
+  "language": "yaml",
+  "filename": ".github/workflows/ci.yml",
+  "completionProfile": "github-actions",
+  "initialValue": "name: CI\non:\n  # Configure event triggers with branch filters\n\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - run: npm ci\n      - run: npm test",
+  "grader": {
+    "strategy": "yaml-paths",
+    "expected": [
+      {
+        "path": ["on", "push", "branches"],
+        "type": "array"
+      },
+      {
+        "path": ["on", "pull_request", "branches"],
+        "type": "array"
+      }
+    ]
+  }
+}

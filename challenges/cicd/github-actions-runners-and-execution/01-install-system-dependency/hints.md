@@ -1,0 +1,1 @@
+Ubuntu runners use `apt-get` as their package manager. The package that provides `pg_config` for PostgreSQL C extensions is `libpq-dev`. Remember that you should update the package index first with `apt-get update` before installing.

@@ -1,0 +1,15 @@
+{
+  "language": "yaml",
+  "filename": "action.yml",
+  "completionProfile": "github-actions",
+  "initialValue": "name: Setup and Build\ndescription: Bundles Node setup and npm build\n\nruns:\n  using: \"composite\"\n  steps:\n    - name: Setup Node\n      uses: actions/setup-node@v4\n      with:\n        node-version: '22'\n    - name: Install Dependencies\n      run: npm ci\n      shell: bash",
+  "grader": {
+    "strategy": "yaml-paths",
+    "expected": [
+      {
+        "path": ["inputs"],
+        "type": "object"
+      }
+    ]
+  }
+}

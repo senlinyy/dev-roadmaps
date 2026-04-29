@@ -1,0 +1,19 @@
+{
+  "language": "yaml",
+  "filename": ".github/workflows/ci.yml",
+  "completionProfile": "github-actions",
+  "initialValue": "name: CI\non: [push]\n\njobs:\n  test:\n  steps:\n    - uses: actions/checkout@v4\n    - run: npm test",
+  "grader": {
+    "strategy": "yaml-paths",
+    "expected": [
+      {
+        "path": ["jobs", "test", "runs-on"],
+        "type": "string"
+      },
+      {
+        "path": ["jobs", "test", "steps"],
+        "type": "array"
+      }
+    ]
+  }
+}

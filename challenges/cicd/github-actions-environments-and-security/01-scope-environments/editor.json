@@ -1,0 +1,19 @@
+{
+  "language": "yaml",
+  "filename": ".github/workflows/deploy.yml",
+  "completionProfile": "github-actions",
+  "initialValue": "name: Deploy\non:\n  push:\n    branches: [main]\n\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - run: npm test\n\n  deploy-staging:\n    needs: test\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - run: ./deploy.sh staging\n\n  deploy-production:\n    needs: deploy-staging\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - run: ./deploy.sh production",
+  "grader": {
+    "strategy": "yaml-paths",
+    "expected": [
+      {
+        "path": ["jobs", "deploy-staging", "environment"],
+        "type": "string"
+      },
+      {
+        "path": ["jobs", "deploy-production", "environment"],
+        "type": "string"
+      }
+    ]
+  }
+}

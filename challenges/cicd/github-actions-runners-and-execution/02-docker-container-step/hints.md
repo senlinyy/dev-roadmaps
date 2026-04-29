@@ -1,0 +1,1 @@
+To use a Docker image directly in a step, use the `uses` key with the format `docker://<image>:<tag>`. This is different from using a GitHub Action (which uses `owner/repo@version`). You can set `entrypoint` and `args` under a `with` block to control what runs inside the container.

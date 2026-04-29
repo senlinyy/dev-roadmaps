@@ -1,0 +1,1 @@
+Composite actions use `using: "composite"` under the `runs` key. Unlike normal workflow steps, every `run` step in a composite action must explicitly declare which shell to use (e.g., `shell: bash`), because the action might be called from Ubuntu, macOS, or Windows runners.

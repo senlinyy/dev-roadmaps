@@ -1,0 +1,24 @@
+{
+  "language": "yaml",
+  "filename": "action.yml",
+  "completionProfile": "github-actions",
+  "initialValue": "name: Setup and Build\ndescription: Bundles Node setup and dependency installation\n\nruns:\n  steps:\n    - name: Install Dependencies\n      run: npm ci\n    - name: Run Build\n      run: npm run build",
+  "grader": {
+    "strategy": "yaml-paths",
+    "expected": [
+      {
+        "path": ["runs", "using"],
+        "type": "string",
+        "value": "composite"
+      },
+      {
+        "path": ["runs", "steps", 0, "shell"],
+        "type": "string"
+      },
+      {
+        "path": ["runs", "steps", 1, "shell"],
+        "type": "string"
+      }
+    ]
+  }
+}

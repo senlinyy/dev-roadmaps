@@ -1,0 +1,13 @@
+{
+  "language": "yaml",
+  "filename": ".github/workflows/ci.yml",
+  "completionProfile": "github-actions",
+  "initialValue": "name: CI\non: [push]\n\njobs:\n  build:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - uses: actions/setup-python@v5\n        with:\n          python-version: '3.12'\n      - run: pip install -r requirements.txt\n      - run: python -m pytest",
+  "grader": {
+    "strategy": "text-contains",
+    "expected": [
+      "apt-get install",
+      "libpq-dev"
+    ]
+  }
+}

@@ -1,0 +1,1 @@
+Look at the indentation. In YAML, indentation defines hierarchy. `steps` must be indented under the job name (`test`), not at the same level as `test`. Every job also needs a `runs-on` key to tell GitHub which VM image to provision.

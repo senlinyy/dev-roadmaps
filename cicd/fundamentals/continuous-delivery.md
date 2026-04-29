@@ -214,7 +214,7 @@ Historically, software engineering focused entirely on MTBF. Teams built massive
 
 Modern DevOps and Continuous Delivery optimize for MTTR instead. We accept that failures will happen. The goal of a CD pipeline is to make the recovery from a failure nearly instantaneous.
 
-If you follow the golden rule—build once, deploy everywhere—a rollback is trivial. The CD pipeline simply takes the artifact that was running perfectly an hour ago and re-deploys it. Because the artifact is an immutable image, and because the deployment process is fully automated, the system can be restored to a healthy state in seconds while the engineers investigate the root cause without the pressure of an ongoing outage.
+If you follow the golden rule (build once, deploy everywhere), a rollback is trivial. The CD pipeline simply takes the artifact that was running perfectly an hour ago and re-deploys it. Because the artifact is an immutable image, and because the deployment process is fully automated, the system can be restored to a healthy state in seconds while the engineers investigate the root cause without the pressure of an ongoing outage.
 
 ---
 

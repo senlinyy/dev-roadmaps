@@ -1,0 +1,21 @@
+{
+  "language": "yaml",
+  "filename": ".github/workflows/notify.yml",
+  "completionProfile": "github-actions",
+  "initialValue": "name: PR Coverage Report\non: [pull_request]\n\njobs:\n  comment:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - run: npm test -- --coverage\n      - run: echo \"Posting coverage comment...\"",
+  "grader": {
+    "strategy": "yaml-paths",
+    "expected": [
+      {
+        "path": ["jobs", "comment", "permissions", "pull-requests"],
+        "type": "string",
+        "value": "write"
+      },
+      {
+        "path": ["jobs", "comment", "permissions", "contents"],
+        "type": "string",
+        "value": "read"
+      }
+    ]
+  }
+}

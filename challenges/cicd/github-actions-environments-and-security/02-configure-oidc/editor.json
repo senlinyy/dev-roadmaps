@@ -1,0 +1,16 @@
+{
+  "language": "yaml",
+  "filename": ".github/workflows/deploy.yml",
+  "completionProfile": "github-actions",
+  "initialValue": "name: Deploy to Production\non:\n  push:\n    branches: [main]\n\njobs:\n  deploy:\n    runs-on: ubuntu-latest\n    environment: production\n    steps:\n      - uses: actions/checkout@v4\n      # Configure OIDC-based AWS authentication here\n      - run: aws s3 sync ./build s3://my-production-bucket",
+  "grader": {
+    "strategy": "yaml-paths",
+    "expected": [
+      {
+        "path": ["jobs", "deploy", "permissions", "id-token"],
+        "type": "string",
+        "value": "write"
+      }
+    ]
+  }
+}

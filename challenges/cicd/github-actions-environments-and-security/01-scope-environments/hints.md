@@ -1,0 +1,1 @@
+The `environment` key is a job-level property that associates the job with a named environment defined in Settings > Environments. Secrets attached to that environment are only available to jobs that declare it. The environment name is a string like `staging` or `production`.

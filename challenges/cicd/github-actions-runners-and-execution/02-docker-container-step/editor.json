@@ -1,0 +1,12 @@
+{
+  "language": "yaml",
+  "filename": ".github/workflows/scan.yml",
+  "completionProfile": "github-actions",
+  "initialValue": "name: Security Scan\non: [push]\n\njobs:\n  scan:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      # Add a step that runs inside a Docker container",
+  "grader": {
+    "strategy": "text-contains",
+    "expected": [
+      "docker://"
+    ]
+  }
+}

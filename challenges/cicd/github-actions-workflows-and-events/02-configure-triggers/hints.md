@@ -1,0 +1,1 @@
+Each event type in the `on` block can have a `branches` key that accepts an array of branch names or patterns. For `pull_request`, the branches filter refers to the base (target) branch, not the source branch.
