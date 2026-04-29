@@ -31,6 +31,14 @@ Imagine a pipeline with four jobs:
 3. `Integration Tests` (depends on `Lint` and `Unit Tests`)
 4. `Build Docker Image` (depends on `Integration Tests`)
 
+```mermaid
+%%{init: {"themeVariables": {"clusterBkg": "transparent"}}}%%
+graph TD
+    A[Lint] --> C[Integration Tests]
+    B[Unit Tests] --> C
+    C --> D[Build Docker Image]
+```
+
 When you push code, the CI system parses this DAG. It sees that `Lint` and `Unit Tests` have no dependencies, so it starts them both immediately, in parallel. Once both finish successfully, it starts `Integration Tests`. If `Unit Tests` fails, the pipeline halts; `Integration Tests` and `Build Docker Image` are immediately marked as "Skipped" or "Canceled" because their prerequisite failed.
 
 Understanding pipelines as a DAG is critical because it forces you to think about optimization. If you put all your tests into a single massive job, they run sequentially. If you split them into parallel nodes in the DAG, your pipeline finishes much faster.
@@ -61,6 +69,13 @@ When a job is dispatched, where does the Runner actually live? You have two choi
 **Self-Hosted Runners** are machines that you provision and maintain. You install a small agent program on an EC2 instance, a Raspberry Pi, or a Kubernetes cluster, and register it with the Controller.
 - **The Pros:** Cheaper if you run thousands of builds a day. You can provision massive 64-core machines for heavy C++ compilation. They sit inside your VPC, so they can easily query your private staging databases or internal APIs during integration tests.
 - **The Cons:** You are responsible for the machine. If a build downloads 50GB of Docker images and doesn't clean up, the next build will fail when the disk runs out of space. If a malicious script escapes the runner process, your internal network is compromised.
+
+| Feature | Hosted Runners | Self-Hosted Runners |
+| :--- | :--- | :--- |
+| **Maintenance** | None (Provider handles it) | High (You handle OS updates, disks) |
+| **Clean State** | Guaranteed pristine every run | Risky (Leftover files cause bugs) |
+| **Hardware** | Usually low/medium spec | Unlimited (Whatever you can provision) |
+| **Security** | Safe for public/untrusted PRs | Unsafe for public repos (Network access) |
 
 Self-hosted runners communicate with the Controller via **Long Polling**. They open an outbound HTTPS connection to the Controller and hold it open, asking "Do you have work for me?" When a job arrives, the Controller sends the payload down that open connection. This design means you never have to open inbound firewall ports to let the Controller reach into your private network.
 

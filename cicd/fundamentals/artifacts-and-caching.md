@@ -100,6 +100,12 @@ If your pipeline builds a Docker image, you do not use `upload-artifact` to save
 - **Pipeline Artifacts**: Temporary, tied to a specific run, used for inter-job communication and debugging.
 - **Registries**: Permanent, versioned, designed for deploying to production or sharing with other teams.
 
+| Feature | Pipeline Artifacts (Internal Storage) | Registries (Docker Hub, NPM, etc.) |
+| :--- | :--- | :--- |
+| **Lifespan** | Temporary (e.g. 30-90 days) | Permanent (Until explicitly deleted) |
+| **Scope** | Tied to a specific CI pipeline run | Available globally across environments |
+| **Primary Use** | Passing state between jobs, debugging | Deploying to production, library distribution |
+
 ## Caching: Speeding Up the Pipeline
 
 While artifacts store outputs, caching stores inputs.
@@ -122,6 +128,20 @@ Caching solves this by saving the downloaded files after the first run and resto
 When this runs, the CI system looks at the `key`. If it has never seen this key before (a **Cache Miss**), it skips the restore step, allows `npm ci` to download everything from the internet, and then saves the `~/.npm` folder to its internal storage under that key.
 
 On the next pipeline run, it checks the key again. If the key matches (a **Cache Hit**), the CI system instantly drops the 500MB folder onto the runner's disk before `npm ci` runs. When `npm ci` executes, it sees the files are already there and finishes in 2 seconds instead of 2 minutes.
+
+```mermaid
+%%{init: {"themeVariables": {"clusterBkg": "transparent"}}}%%
+flowchart TD
+    A[CI Job Starts] --> B{Check Cache Key}
+    
+    B -->|Cache Miss| C[Run npm ci<br/>Download from Internet]
+    C --> D[Save ~/.npm to Cache]
+    D --> E[Job Continues]
+    
+    B -->|Cache Hit| F[Restore ~/.npm<br/>from CI Storage]
+    F --> G[Run npm ci<br/>Fast/Offline]
+    G --> E
+```
 
 ## Cache Keys and Invalidation
 

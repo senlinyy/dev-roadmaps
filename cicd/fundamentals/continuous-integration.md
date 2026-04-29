@@ -32,9 +32,9 @@ Continuous Integration (CI) exists to solve this problem. It is the practice of 
 
 In this article, we will look at how this automated validation acts as a safety net, using a standard Node.js application and a pull request workflow as our running example.
 
-Think of software development like a team of chefs trying to cook a massive banquet. If every chef goes to their own kitchen, cooks for a week, and then brings all the dishes to the dining room at the exact same time, things will go wrong. Some dishes will be cold, flavors will clash, and there will not be enough table space. 
+Think of software development like building a complex machine, such as a car. If the engine team, the chassis team, and the electronics team all build their parts in completely separate factories for six months and only try to bolt them together on the final day, the car will not start. The wiring harnesses will not align, and the engine will not fit the mounts. 
 
-Instead, the chefs should bring their ingredients to the main kitchen constantly, tasting the combined dish as they add to it. If someone adds too much salt, they know immediately. In software, CI is that constant tasting process.
+Instead, the teams should bring their partially-completed parts to the main assembly line every single day to test how they fit together. If a bolt hole is off by a millimeter, they discover it immediately while it is still easy to fix. In software, Continuous Integration is that daily assembly line check.
 
 ## The Problem: Integration Hell
 
@@ -82,6 +82,17 @@ Because the feature flag is disabled in production, the incomplete code is compl
 What does this look like in practice? A modern CI workflow relies on a version control platform (like GitHub or GitLab) and a CI server (like GitHub Actions or Jenkins).
 
 Here is the operational spine of a standard CI process:
+
+```mermaid
+graph TD
+    A["Developer<br>Pushes Code"] --> B["Open Pull<br>Request"]
+    B --> C["Webhook Sent<br>to CI Server"]
+    C --> D["CI Boots Clean<br>Virtual Machine"]
+    D --> E["Run Tests<br>and Linters"]
+    E --> F{"Did Tests<br>Pass?"}
+    F -- "Yes" --> G["Status Check Green:<br>Merge Allowed"]
+    F -- "No" --> H["Status Check Red:<br>Merge Blocked"]
+```
 
 1. **You push code**: You finish a small feature and run `git push origin feature/cart` to push your branch to the remote repository.
 2. **A Pull Request is opened**: You open a Pull Request proposing to merge your code into `main`.
@@ -150,6 +161,12 @@ The CI server is a dumb machine executing a shell script. A robust CI pipeline u
 
 If speed and confidence are the two competing forces, the **Testing Pyramid** is how you balance them. The pyramid is a strategy for deciding what kinds of tests should run in your CI pipeline.
 
+| Test Type | Scope | Execution Speed | Confidence Level | Count in CI |
+| :--- | :--- | :--- | :--- | :--- |
+| **Unit Tests** | Single function or class | Milliseconds | Low (tests logic, not integration) | Thousands |
+| **Integration Tests** | Multiple components (e.g., API + DB) | Seconds to Minutes | Medium (tests boundaries) | Hundreds |
+| **End-to-End (E2E)** | Full browser or system | Minutes to Hours | High (tests real user flow) | Tens |
+
 At the bottom of the pyramid are **Unit Tests**. These test individual functions in isolation. They do not connect to databases or network APIs. Because they are isolated, they execute in milliseconds. A good CI pipeline might run 5,000 unit tests in under a minute. These should make up the vast majority of your test suite.
 
 In the middle are **Integration Tests**. These test how multiple components work together, such as your backend API connecting to an ephemeral database. Because they require spinning up containers and writing to disk, they are slower. A CI pipeline might run 200 integration tests in three minutes.
@@ -163,6 +180,24 @@ By keeping the pyramid bottom-heavy, your CI pipeline runs quickly while still p
 One of the most complex challenges in Continuous Integration is handling state. If your Node.js application needs to run tests against a PostgreSQL database, how do you provide that database?
 
 A junior mistake is pointing the CI pipeline to a persistent "staging" database that the whole team shares. This causes a disaster. If two developers open Pull Requests at the same time, the CI server will run two testing pipelines in parallel. Both pipelines will connect to the same staging database, insert conflicting test data, and cause both test suites to fail randomly.
+
+```mermaid
+%%{init: {"themeVariables": {"clusterBkg": "transparent"}}}%%
+graph TD
+    subgraph bad ["Bad Approach: Shared Database"]
+        A1["PR 1 Tests"] --> C1[("Shared<br>Staging DB")]
+        B1["PR 2 Tests"] --> C1
+        C1 -.-|"Data<br>Conflicts"| A1
+    end
+    
+    subgraph good ["Good Approach: Ephemeral Databases"]
+        A2["PR 1 Tests"] --> C2[("Ephemeral<br>DB Container")]
+        B2["PR 2 Tests"] --> C3[("Ephemeral<br>DB Container")]
+    end
+    
+    style bad fill:#fca5a5,stroke:#000000,stroke-width:2px,color:#000000
+    style good fill:#bbf7d0,stroke:#000000,stroke-width:2px,color:#000000
+```
 
 The solution is an **Ephemeral Database**. Because the CI runner is an isolated Virtual Machine, you can instruct it to spin up a completely fresh, empty database as a Docker container strictly for the duration of the test run. 
 
@@ -270,6 +305,12 @@ A CI server is a sterile, ephemeral environment. Every time a pipeline runs, the
 ## Tradeoffs: Speed vs. Confidence
 
 When designing a CI pipeline, engineers must constantly balance two competing forces: speed and confidence.
+
+| Strategy | CI Speed | Confidence | Developer Experience | Result |
+| :--- | :--- | :--- | :--- | :--- |
+| **Exhaustive E2E Suite** | 2 Hours | 99% | Frustrating | Developers hoard code, leading to Integration Hell. |
+| **Only Linting & Unit Tests** | 30 Seconds | 50% | Flow State | Fast merges, but frequent production bugs. |
+| **The Sweet Spot** | ~10 Minutes | 90% | Productive | Fast enough for frequent merges, safe enough for production. |
 
 If you want maximum confidence that your code is perfect, you might configure your CI pipeline to run an exhaustive suite of end-to-end browser tests against a real database. This guarantees you will not break production, but the pipeline takes two hours to run. When developers have to wait two hours for a green checkmark, they stop committing small changes. They hoard code for weeks to avoid waiting for the pipeline, which throws them right back into Integration Hell.
 

@@ -34,6 +34,11 @@ In the industry, you will see the acronym "CD" used interchangeably to mean two 
 - **Continuous Delivery**: Every change that passes the automated tests is packaged and *ready* to be deployed. The deployment process is fully automated, but a human must explicitly press the "Deploy to Production" button. This is common in highly regulated industries (like banking or healthcare) where a compliance officer or product manager needs to approve the release timing.
 - **Continuous Deployment**: Every change that passes the automated tests is deployed to production *automatically*, with zero human intervention. A developer merges a pull request, and 10 minutes later, those changes are live for customers.
 
+| Practice | Human Approval | Automation | Risk Tolerance |
+| :--- | :--- | :--- | :--- |
+| **Continuous Delivery** | Yes, explicit button click required | High, artifact is ready | Low, allows business logic/compliance checks |
+| **Continuous Deployment** | No human intervention | Complete, merge goes straight to prod | High, requires absolute trust in automated tests |
+
 Continuous Deployment requires a massive amount of trust in your test suite. If your tests are flaky or incomplete, a bad commit will instantly bring down production. Because of this risk, most organizations start with Continuous Delivery and stay there.
 
 ## The Problem with Manual Releases
@@ -60,22 +65,34 @@ Continuous Delivery solves this by forcing all deployments through an automated 
 
 If there is one absolute rule in Continuous Delivery, it is this: **never rebuild your artifact for a new environment.**
 
-A common mistake juniors make is creating a pipeline that looks like this:
+A common mistake is creating a pipeline that looks like this:
 1. Code pushed to `staging` branch -> Pipeline runs `npm build` -> Deploys to Staging.
 2. Code pushed to `main` branch -> Pipeline runs `npm build` again -> Deploys to Production.
 
-This is a critical error. The `npm build` command is non-deterministic. If you run it today, and run it again tomorrow, the resulting output might be different because a transitive dependency in your `package.json` updated overnight. 
+This is a serious mistake. Staging and production are no longer using the same artifact. Even if both builds come from the exact same source commit, the production build may differ because of dependency resolution, build-tool changes, environment variables, platform differences, timestamps, Docker base image updates, or other build-time inputs.
 
-If you build separately for staging and production, you are *not* deploying the code you tested. You are deploying a slightly different, newly compiled version of the code that has never been tested anywhere.
+If you build separately for staging and production, you are *not* deploying the code you tested. You are deploying a newly compiled version of the code that has never been tested anywhere.
 
-The correct CD flow looks like this:
-1. Pipeline compiles the code and creates a single artifact (like a Docker image).
-2. The pipeline runs tests against that exact artifact.
-3. The pipeline pushes that exact artifact to Staging.
-4. You test Staging.
-5. The pipeline pushes *that exact same artifact* to Production.
+The safer pattern is: build once, store the artifact, deploy that exact artifact to staging, validate it, then promote the exact same artifact to production.
 
-By promoting the artifact rather than the source code, you guarantee that the bytes running in production are identical to the bytes that passed your test suite.
+```mermaid
+%%{init: {"themeVariables": {"clusterBkg": "transparent"}}}%%
+graph TD
+    subgraph bad ["Bad Approach: Rebuilding"]
+        A1[Staging Branch] -->|npm build| B1(Staging Artifact)
+        B1 --> C1[Deploy Staging]
+        A2[Main Branch] -->|npm build| B2(Prod Artifact)
+        B2 --> C2[Deploy Prod]
+    end
+    
+    subgraph good ["Good Approach: Promote Artifact"]
+        D[Source Commit] -->|build once| E(Immutable Artifact)
+        E --> F[Deploy to Staging]
+        F --> G[Promote to Prod]
+    end
+```
+
+One more nuance: the "staging branch" versus "main branch" setup is also a smell. In strong CD setups, environments are usually not represented by long-lived branches. You build from a commit, produce an immutable artifact, and promote that artifact between environments. Branches represent code history; environments represent deployment state. Those are different things.
 
 ## Anatomy of a Deployment Pipeline
 
