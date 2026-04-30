@@ -1,0 +1,70 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "Your Jenkins controller deploys to three AWS accounts: dev, staging, prod. Every account has a long-lived IAM user named `jenkins-deploy` with an access key the security team rotates every 90 days. A static-key audit shows two of the keys have been valid for 412 days.\n\nWhat is the cleanest fix?",
+      "options": [
+        { "id": "a", "text": "Use short-lived AWS credentials through an instance role or OIDC federation so Jenkins does not store long-lived AWS keys." },
+        { "id": "b", "text": "Tighten the rotation cadence to 30 days." },
+        { "id": "c", "text": "Move the same keys to another secret store and fetch them at build time." },
+        { "id": "d", "text": "Disable the dev and staging keys and only keep prod." }
+      ],
+      "correct": ["a"],
+      "explanation": "The article's hardening path ends with short-lived credentials. Rotating static keys more often reduces the window but leaves the same operational and leakage problem in place."
+    },
+    {
+      "id": "q2",
+      "type": "multiple",
+      "scenario": "Which benefits come from replacing static IAM keys with the short-lived patterns in the article?",
+      "options": [
+        { "id": "a", "text": "No long-lived AWS secret sits in the Jenkins credential store." },
+        { "id": "b", "text": "The AWS session expires automatically after the build or role session lifetime." },
+        { "id": "c", "text": "Trust can be scoped to a specific controller, job, branch, or role path depending on the mechanism." },
+        { "id": "d", "text": "The build no longer needs IAM permissions on the target AWS resources." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "Instance-role chaining and OIDC federation remove the static secret and produce short-lived sessions. The IAM role still needs the permissions required by the deploy, so least privilege still matters."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "A platform team configures OIDC trust between a Jenkins controller and an AWS account. After running a deploy, CloudTrail shows the role was assumed, but the build still fails to upload to S3 with `AccessDenied`.\n\nWhich is the most likely cause?",
+      "options": [
+        { "id": "a", "text": "Federation succeeded. The assumed role does not have the S3 permissions the build needs, or the bucket policy does not grant it access." },
+        { "id": "b", "text": "OIDC and S3 are incompatible." },
+        { "id": "c", "text": "The build must use a static key for S3 uploads." },
+        { "id": "d", "text": "The Jenkinsfile syntax decides S3 authorization." }
+      ],
+      "correct": ["a"],
+      "explanation": "CloudTrail evidence that the role was assumed means the trust path worked. An S3 `AccessDenied` after that is an IAM role or bucket-policy problem, not proof that Jenkins needs static keys again."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "Jenkins agents run on EC2 instances with an instance profile attached. The deploy stage needs to assume a narrower role in the target AWS account. Which path from the article is the simpler fit?",
+      "options": [
+        { "id": "a", "text": "Use the AWS Credentials Plugin plus `withAWS` to assume the deploy role from the agent's instance profile." },
+        { "id": "b", "text": "Create a new IAM user and paste its access key into the Jenkinsfile." },
+        { "id": "c", "text": "Use a static key because instance profiles cannot assume roles." },
+        { "id": "d", "text": "Move the controller to GitHub Actions." }
+      ],
+      "correct": ["a"],
+      "explanation": "The article calls this Path A. If the controller or agents already run on EC2 with an IAM role, the build can use that role as the source identity and assume a narrower deploy role without storing a static key."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "Jenkins runs outside AWS, but the organization can expose a publicly verifiable OIDC issuer for Jenkins workload identities. Which hardening path does the article describe?",
+      "options": [
+        { "id": "a", "text": "Register Jenkins as an IAM federated identity provider and use `sts:AssumeRoleWithWebIdentity` with claim restrictions." },
+        { "id": "b", "text": "Store one static AWS key per job because OIDC only works inside GitHub Actions." },
+        { "id": "c", "text": "Use the controller's SSH host key as an AWS credential." },
+        { "id": "d", "text": "Disable branch checks because OIDC tokens are automatically safe for every job." }
+      ],
+      "correct": ["a"],
+      "explanation": "The article calls this true OIDC federation. AWS trusts the Jenkins issuer, checks claims such as audience and subject, and returns short-lived credentials only when the policy matches."
+    }
+  ]
+}

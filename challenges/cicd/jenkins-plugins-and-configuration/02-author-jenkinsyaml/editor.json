@@ -1,0 +1,36 @@
+{
+  "language": "yaml",
+  "filename": "jenkins.yaml",
+  "completionProfile": "yaml",
+  "initialValue": "jenkins:\n  systemMessage: \"polaris-jenkins (managed by CasC)\"\n",
+  "grader": {
+    "strategy": "yaml-paths",
+    "expected": [
+      { "path": ["jenkins", "systemMessage"], "type": "string", "label": "systemMessage stays" },
+      { "path": ["jenkins", "numExecutors"], "type": "number", "equals": 0, "label": "numExecutors is 0" },
+      { "path": ["jenkins", "mode"], "equals": "EXCLUSIVE", "label": "mode is EXCLUSIVE" },
+      { "path": ["jenkins", "securityRealm", "local", "allowsSignup"], "equals": false, "label": "local realm disables signup" },
+      { "path": ["jenkins", "securityRealm", "local", "users"], "type": "array", "minItems": 1, "label": "local realm has at least one user" },
+      {
+        "path": ["jenkins", "securityRealm", "local", "users"],
+        "containsObject": { "id": "polaris-admin", "password": "${POLARIS_ADMIN_PASSWORD}" },
+        "label": "polaris-admin user with env-var password"
+      },
+      {
+        "path": ["jenkins", "authorizationStrategy", "roleBased", "roles", "global"],
+        "type": "array",
+        "minItems": 1,
+        "label": "roleBased global role list"
+      },
+      {
+        "path": ["jenkins", "authorizationStrategy", "roleBased", "roles", "global"],
+        "containsObject": {
+          "name": "admin",
+          "permissions": ["Overall/Administer"],
+          "assignments": ["polaris-admin"]
+        },
+        "label": "admin role grants Overall/Administer to polaris-admin"
+      }
+    ]
+  }
+}

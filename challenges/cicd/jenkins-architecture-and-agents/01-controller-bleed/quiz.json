@@ -1,0 +1,70 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A newly installed Jenkins controller has `Number of executors` set to 2 on the built-in node. The team also has three Linux agents connected. What is the safest production setting for the controller?",
+      "options": [
+        { "id": "a", "text": "Leave the controller at 2 executors so small jobs can run there when agents are busy." },
+        { "id": "b", "text": "Set the controller's executor count to 0 so builds only run on agents." },
+        { "id": "c", "text": "Set every agent to 0 executors and run all jobs on the controller." },
+        { "id": "d", "text": "Keep one controller executor only for deploy jobs because they are important." }
+      ],
+      "correct": ["b"],
+      "explanation": "The article's central rule is that the controller coordinates work but should not execute builds. Setting the built-in node to 0 executors keeps CPU, memory, workspace files, and build artifacts away from the controller process."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A Jenkins build runs `npm ci && npm test`. Which part of the Jenkins architecture should execute those commands?",
+      "options": [
+        { "id": "a", "text": "The controller JVM, because it owns the build queue." },
+        { "id": "b", "text": "An agent workspace, after the controller dispatches the job to an available executor." },
+        { "id": "c", "text": "`$JENKINS_HOME/jobs/`, because that is where job configuration lives." },
+        { "id": "d", "text": "The browser session of the user who clicked Build Now." }
+      ],
+      "correct": ["b"],
+      "explanation": "Agents execute shell commands, Docker builds, and test suites in their workspaces. The controller decides which executor gets the job and streams logs, but the build steps belong on agents."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "An operator notices build artifacts collecting under `$JENKINS_HOME/workspace/` on the controller. Why is that a serious warning sign?",
+      "options": [
+        { "id": "a", "text": "It means Jenkins has no agents configured and is storing normal controller metadata." },
+        { "id": "b", "text": "It suggests jobs are running on the built-in node, sharing disk with job configs, plugins, secrets, and build history." },
+        { "id": "c", "text": "It means every agent workspace is backed up automatically." },
+        { "id": "d", "text": "It proves the controller has too many labels." }
+      ],
+      "correct": ["b"],
+      "explanation": "`$JENKINS_HOME` holds the controller's critical state. If build workspaces appear there, build output is competing with controller state for disk and increases the blast radius of a bad build script."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "Which responsibilities belong to the Jenkins controller rather than to an agent?",
+      "options": [
+        { "id": "a", "text": "Manage the web UI and job queue." },
+        { "id": "b", "text": "Store credentials, plugin state, and job configuration." },
+        { "id": "c", "text": "Run `docker build` for application images." },
+        { "id": "d", "text": "Dispatch build instructions to available executors." }
+      ],
+      "correct": ["a", "b", "d"],
+      "explanation": "The controller is the coordinator: UI, queue, credentials, plugins, job config, and dispatch. Heavy build commands such as `docker build` should run on agents."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A controller crashes during the workday. Agents were running several builds, and `$JENKINS_HOME` is intact on disk. What should you expect?",
+      "options": [
+        { "id": "a", "text": "All agents keep running builds independently and report results later." },
+        { "id": "b", "text": "Agents lose their coordinator, but job configs, build history, credentials, and node definitions can be recovered from `$JENKINS_HOME`." },
+        { "id": "c", "text": "The agents automatically become temporary controllers." },
+        { "id": "d", "text": "All Jenkins state is lost because agents own job configuration." }
+      ],
+      "correct": ["b"],
+      "explanation": "The article stresses that `$JENKINS_HOME` is the controller's source of truth. Agents execute work, but the controller owns the persistent Jenkins state and coordination."
+    }
+  ]
+}

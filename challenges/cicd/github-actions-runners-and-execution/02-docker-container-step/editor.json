@@ -4,9 +4,16 @@
   "completionProfile": "github-actions",
   "initialValue": "name: Security Scan\non: [push]\n\njobs:\n  scan:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      # Add a step that runs inside a Docker container",
   "grader": {
-    "strategy": "text-contains",
+    "strategy": "regex-all",
     "expected": [
-      "docker://"
+      {
+        "pattern": "uses:\\s*docker://[^\\s]+",
+        "label": "a step uses a Docker container image"
+      },
+      {
+        "pattern": "with:\\s*[\\s\\S]*(entrypoint|args):",
+        "label": "container step provides a command via with"
+      }
     ]
   }
 }

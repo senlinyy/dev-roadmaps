@@ -69,15 +69,15 @@
     {
       "id": "q6",
       "type": "multiple",
-      "scenario": "A team is hardening their self-hosted runner setup for a private repository. Which of the following measures reduce the attack surface?",
+      "scenario": "A team is hardening their self-hosted runner setup for a private repository. Which of the following measures reduce the attack surface while staying close to the article's guidance?",
       "options": [
         { "id": "a", "text": "Run the runner inside an ephemeral container or VM that is destroyed after each job." },
         { "id": "b", "text": "Restrict the runner to private repositories only, never attach it to public repos." },
         { "id": "c", "text": "Give the runner machine root-level access to the production database for convenience." },
-        { "id": "d", "text": "Use runner groups with repository-level access controls to limit which repos can target the runner." }
+        { "id": "d", "text": "Use strict manual approval gates before untrusted pull requests can execute on the self-hosted runner." }
       ],
       "correct": ["a", "b", "d"],
-      "explanation": "Ephemeral runners (option A) prevent state leakage between jobs. Restricting to private repos (option B) prevents fork-based RCE attacks. Runner groups (option D) enforce access control. Option C is the opposite of hardening and would massively increase the blast radius of any compromise."
+      "explanation": "The article's warning is that self-hosted runners execute code on infrastructure you own. Ephemeral machines reduce state leakage, private-only attachment avoids public-fork RCE, and strict manual approval gates are one of the advanced isolation controls the article names. Root database access expands the blast radius."
     }
   ]
 }

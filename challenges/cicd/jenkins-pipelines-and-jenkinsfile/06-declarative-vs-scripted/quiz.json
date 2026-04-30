@@ -1,0 +1,70 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A team is writing their first Jenkinsfile for a Java microservice. The pipeline needs Build, Test, Package, and Deploy stages with a `post.failure` Slack notification. Stages are linear with no dynamic branching.\n\nWhich form fits best?",
+      "options": [
+        { "id": "a", "text": "Declarative pipeline (`pipeline { ... }`)." },
+        { "id": "b", "text": "Scripted pipeline (`node { ... }` with imperative Groovy)." },
+        { "id": "c", "text": "A Freestyle job, since Jenkinsfiles are overkill." },
+        { "id": "d", "text": "A YAML pipeline using a community plugin." }
+      ],
+      "correct": ["a"],
+      "explanation": "Linear stages with declared `post`, `options`, and `parameters` blocks are the article's core declarative use case. Scripted can work, but it gives up the rigid structure that makes Jenkinsfiles easier to review."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A pipeline needs to dynamically generate a stage list from a YAML file checked out at build time. The number of services changes weekly and is not known when the Jenkinsfile is written. Which form fits the dynamic part?",
+      "options": [
+        { "id": "a", "text": "A pure declarative `stages` list written out ahead of time." },
+        { "id": "b", "text": "Scripted Groovy, usually isolated inside a shared library or a small `script { ... }` block." },
+        { "id": "c", "text": "A `post` block, because it can create new stages." },
+        { "id": "d", "text": "A `parameters` block, because parameters dynamically generate stages." }
+      ],
+      "correct": ["b"],
+      "explanation": "The article's tradeoff section says scripted pipelines can use `if`, `for`, functions, file reads, and dynamic stage lists. The practical advice is to keep application Jenkinsfiles declarative and move dynamic Groovy into a narrow script block or shared library when needed."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "Which reasons does the article give for preferring declarative pipelines at platform scale?",
+      "options": [
+        { "id": "a", "text": "The declarative linter can catch syntax errors before a branch indexing run breaks a branch." },
+        { "id": "b", "text": "Named structural blocks make pull-request review easier for people who are not Jenkins experts." },
+        { "id": "c", "text": "Built-in blocks like `post`, `parameters`, and `options` make common pipeline behavior explicit." },
+        { "id": "d", "text": "Declarative pipelines skip Groovy entirely and are therefore not code." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "The article emphasizes validation, reviewability, and fixed structure. Declarative is still Groovy-backed Jenkins Pipeline syntax, but its constraints make the file a clearer long-term interface."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "A developer commits a Jenkinsfile with `paralel` instead of `parallel`. The next branch indexing run fails to parse the file. What safeguard should catch this before merge?",
+      "options": [
+        { "id": "a", "text": "Run the Jenkins declarative linter in a fast PR check or pre-commit hook." },
+        { "id": "b", "text": "Wait for the next production branch indexing run." },
+        { "id": "c", "text": "Increase the controller heap." },
+        { "id": "d", "text": "Move the typo into a scripted pipeline." }
+      ],
+      "correct": ["a"],
+      "explanation": "The article has a dedicated section on linting the Jenkinsfile in CI. A syntax check costs seconds and prevents typo-driven pipeline outages from reaching branch indexing."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A Jenkinsfile has a `script { ... }` block with loops and helper functions inside an otherwise declarative pipeline. How should a reviewer think about it?",
+      "options": [
+        { "id": "a", "text": "It is an escape hatch for dynamic Groovy. Keep it small, and consider moving repeated logic into a shared library." },
+        { "id": "b", "text": "It means the file is no longer a Jenkinsfile." },
+        { "id": "c", "text": "It is required around every `sh` step." },
+        { "id": "d", "text": "It makes `post` and `options` blocks stop working." }
+      ],
+      "correct": ["a"],
+      "explanation": "The article's practical advice is to write declarative pipelines for application code and put complex Groovy in shared library functions. A small `script` block can be appropriate, but large hidden logic erodes declarative's reviewability."
+    }
+  ]
+}

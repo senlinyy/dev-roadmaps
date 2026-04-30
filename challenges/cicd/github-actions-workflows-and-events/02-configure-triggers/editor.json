@@ -8,11 +8,15 @@
     "expected": [
       {
         "path": ["on", "push", "branches"],
-        "type": "array"
+        "type": "array",
+        "equals": ["main"],
+        "label": "push runs only for main"
       },
       {
         "path": ["on", "pull_request", "branches"],
-        "type": "array"
+        "type": "array",
+        "equals": ["main"],
+        "label": "pull_request targets main"
       }
     ]
   }

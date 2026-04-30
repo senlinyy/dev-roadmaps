@@ -1,0 +1,71 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "The controller restarts twice a day with this in `/var/log/jenkins/jenkins.log` shortly before each restart:\n\n```\njava.lang.OutOfMemoryError: Java heap space\n```\n\n`-Xmx` is set to 1g. The controller has 80 jobs and is not running builds on the built-in node.\n\nWhat is the most accurate diagnosis?",
+      "options": [
+        { "id": "a", "text": "The controller heap is too small for the controller's own workload. Increase `-Xmx` into the article's medium-installation range and keep builds on agents." },
+        { "id": "b", "text": "A plugin has a memory leak; the heap size is irrelevant." },
+        { "id": "c", "text": "Disk I/O is slow, which is why GC is taking long." },
+        { "id": "d", "text": "Builds are running on the controller and consuming the heap." }
+      ],
+      "correct": ["a"],
+      "explanation": "The article gives 4 to 8 GB as a typical heap range for a medium installation and stresses that JVM tuning is for controller overhead: plugins, metadata, queue management, and UI sessions. If the controller is not running builds, raising `-Xmx` is the right first move. If it is running builds, move those builds first."
+    },
+    {
+      "id": "q2",
+      "type": "multiple",
+      "scenario": "Which settings match the JVM tuning guidance in the article for a moderately-sized Jenkins controller?",
+      "options": [
+        { "id": "a", "text": "`-Xmx4g` or higher when job count and plugin overhead justify it." },
+        { "id": "b", "text": "`-Xms` set to a reasonable initial heap so the JVM does not grow repeatedly during startup." },
+        { "id": "c", "text": "`-XX:+UseG1GC` as the collector named in the article's example." },
+        { "id": "d", "text": "`-Xmx64g` on every controller because larger heaps always make Jenkins faster." },
+        { "id": "e", "text": "Leaving the built-in node executors above zero and relying on heap tuning to absorb build load." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "The article's example uses `-Xmx`, `-Xms`, and G1GC. The key habit is sizing the controller heap for controller overhead, not using heap as a substitute for agents. A very large heap can create its own operational problems, and controller executors should still be zero."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "The Jenkins UI is slow, and operators suspect memory pressure. Which evidence should they collect before blindly changing JVM flags?",
+      "options": [
+        { "id": "a", "text": "Check Manage Jenkins > System Information for heap usage and enable GC logging to inspect pause frequency." },
+        { "id": "b", "text": "Delete build history until the UI feels faster." },
+        { "id": "c", "text": "Increase every agent's executor count." },
+        { "id": "d", "text": "Move `$JENKINS_HOME` to `/tmp` to make the JVM collect faster." }
+      ],
+      "correct": ["a"],
+      "explanation": "The article names two practical checks: the Memory Usage section in System Information and GC logs under `/var/log/jenkins/gc.log`. Used heap consistently above 85%, pauses above 500ms, or frequent full GC events are evidence for heap tuning."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "A junior operator argues that since the controller has 64 GB of RAM, Jenkins should get a 60 GB heap and run a few Docker builds on the built-in node.\n\nWhat is wrong with that?",
+      "options": [
+        { "id": "a", "text": "Nothing: more heap is always better." },
+        { "id": "b", "text": "Heap tuning is for controller overhead, not build execution. Docker builds belong on agents, and very large heaps should be justified by monitoring rather than guessed." },
+        { "id": "c", "text": "G1 cannot manage heaps larger than 32 GB." },
+        { "id": "d", "text": "The controller refuses to start with `-Xmx` greater than half the system memory." }
+      ],
+      "correct": ["b"],
+      "explanation": "The article draws a hard boundary: build execution belongs on agents. Increasing `-Xmx` can help the controller manage plugins, metadata, queue state, and UI sessions, but it does not make the controller a safe place for Docker builds."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A small team with fewer than 50 jobs and fewer than 10 agents asks where to start sizing the controller heap. They are not running builds on the controller. Which starting point best matches the article?",
+      "options": [
+        { "id": "a", "text": "Start around 2 GB of heap, monitor usage and pause behavior, and adjust if evidence shows pressure." },
+        { "id": "b", "text": "Start at 16 GB because all Jenkins controllers need enterprise-scale memory." },
+        { "id": "c", "text": "Start at 512 MB and rely on agents to supply heap to the controller." },
+        { "id": "d", "text": "Skip heap sizing entirely because Jenkins always auto-tunes the best value." }
+      ],
+      "correct": ["a"],
+      "explanation": "The article gives 2 GB as a typical small-team starting point when builds are not running on the controller. The important practice is to monitor heap usage and GC behavior, then resize based on evidence."
+    }
+  ]
+}

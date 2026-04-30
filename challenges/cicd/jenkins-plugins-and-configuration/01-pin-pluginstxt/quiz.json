@@ -1,0 +1,70 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A production controller image is built from this `plugins.txt`:\n\n```text\ngit:5.4.0\nworkflow-aggregator:600.vb_57cdd26fdfb_\nconfiguration-as-code:1932.v75d6b_d987932\n```\n\nThe next rebuild happens a week later. No one edits the file, but the image now contains newer versions of `git-client` and `ssh-credentials` than last week's image.\n\nWhat was wrong with the pinning strategy?",
+      "options": [
+        { "id": "a", "text": "Only top-level plugins were pinned. Transitive dependencies were left for `jenkins-plugin-cli` to resolve from the current Update Center metadata." },
+        { "id": "b", "text": "The file used exact versions, but Jenkins only supports version ranges in `plugins.txt`." },
+        { "id": "c", "text": "`workflow-aggregator` should never be pinned because it expands to many Pipeline plugins." },
+        { "id": "d", "text": "The Dockerfile should copy plugins into `$JENKINS_HOME/jobs/` instead of `/usr/share/jenkins/ref/plugins/`." }
+      ],
+      "correct": ["a"],
+      "explanation": "The article says reproducibility requires flattening the entire resolved dependency tree into `plugins.txt`, not just pinning the plugins humans remember installing. Otherwise transitive dependencies can move between rebuilds."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A team wants Jenkins plugin installation to be rebuildable from Git. Which file pair from the article creates that pattern?",
+      "options": [
+        { "id": "a", "text": "A Dockerfile that copies `plugins.txt` into the image and runs `jenkins-plugin-cli --plugin-file` during the build." },
+        { "id": "b", "text": "`config.xml` and `credentials.xml` copied from the current `$JENKINS_HOME` volume." },
+        { "id": "c", "text": "A monthly screenshot of the Plugin Manager's Installed tab and a backup tarball." },
+        { "id": "d", "text": "`jenkins.yaml` alone, because JCasC downloads all plugin binaries automatically." }
+      ],
+      "correct": ["a"],
+      "explanation": "The article's reproducible plugin path is a controller image built from a Dockerfile plus a pinned `plugins.txt`. JCasC configures Jenkins after plugins load; it does not replace the plugin installation step."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "Which entries belong in a production `plugins.txt` when the goal is deterministic rebuilds?",
+      "options": [
+        { "id": "a", "text": "Directly requested plugins with exact versions, such as `git:5.4.0`." },
+        { "id": "b", "text": "Transitive dependencies with exact versions, such as `git-client:4.7.0` and `ssh-credentials:343.v884f71d78167`." },
+        { "id": "c", "text": "Plugin names without versions so the Update Center can choose the safest current release." },
+        { "id": "d", "text": "The resolved plugin set printed by the plugin installation tool after dependency resolution." }
+      ],
+      "correct": ["a", "b", "d"],
+      "explanation": "A deterministic plugin list includes exact versions for both direct and transitive plugins. Unversioned names make each rebuild depend on whatever the Update Center advertises that day."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "A rebuild with the same controller Dockerfile and the same flattened `plugins.txt` should produce the same plugin layout. What is the main reason that matters operationally?",
+      "options": [
+        { "id": "a", "text": "Rollback and staging tests become meaningful because the image is defined by reviewable files rather than by previous UI clicks." },
+        { "id": "b", "text": "It lets Jenkins skip `$JENKINS_HOME` backups entirely." },
+        { "id": "c", "text": "It prevents every possible plugin compatibility bug." },
+        { "id": "d", "text": "It makes the Plugin Manager Updates tab safe to use directly in production." }
+      ],
+      "correct": ["a"],
+      "explanation": "Pinning does not guarantee compatibility. It gives you a repeatable artifact that can be reviewed, tested in staging, rolled forward, and rolled back without guessing what UI actions happened on production."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "After a sandbox install, `jenkins-plugin-cli` resolves a larger plugin set than the team wrote by hand. What should happen before this plugin set becomes the production controller image?",
+      "options": [
+        { "id": "a", "text": "Commit the flattened resolved plugin list and rebuild the image from that committed file." },
+        { "id": "b", "text": "Keep only the original short list so future rebuilds stay flexible." },
+        { "id": "c", "text": "Copy the downloaded `.jpi` files from the sandbox controller into production by hand." },
+        { "id": "d", "text": "Delete `plugins.txt` after the first successful build because the image already contains the plugins." }
+      ],
+      "correct": ["a"],
+      "explanation": "The article's convention is to commit the resolved set. That turns dependency resolution into a reviewed change instead of a hidden side effect of the next image build."
+    }
+  ]
+}

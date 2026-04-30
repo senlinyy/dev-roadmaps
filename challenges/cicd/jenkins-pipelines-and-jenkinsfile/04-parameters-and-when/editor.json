@@ -1,0 +1,81 @@
+{
+  "language": "groovy",
+  "filename": "Jenkinsfile",
+  "completionProfile": "jenkinsfile",
+  "initialValue": "pipeline {\n  agent any\n\n  stages {\n    stage('Build') {\n      steps {\n        sh 'mvn -B package'\n      }\n    }\n    stage('Deploy') {\n      steps {\n        sh './deploy.sh'\n      }\n    }\n  }\n}\n",
+  "grader": {
+    "strategy": "groovy-structure",
+    "expected": [
+      {
+        "path": ["pipeline", "parameters"],
+        "exists": true,
+        "label": "parameters block on the pipeline"
+      },
+      {
+        "path": ["pipeline", "parameters"],
+        "bodyMatches": "choice\\s*\\(",
+        "label": "parameters declares a choice() parameter"
+      },
+      {
+        "path": ["pipeline", "parameters"],
+        "bodyMatches": "name:\\s*['\"]DEPLOY_ENV['\"]",
+        "label": "choice parameter is named DEPLOY_ENV"
+      },
+      {
+        "path": ["pipeline", "parameters"],
+        "bodyMatches": "['\"]staging['\"]",
+        "label": "DEPLOY_ENV choices include 'staging'"
+      },
+      {
+        "path": ["pipeline", "parameters"],
+        "bodyMatches": "['\"]production['\"]",
+        "label": "DEPLOY_ENV choices include 'production'"
+      },
+      {
+        "path": ["pipeline", "parameters"],
+        "bodyMatches": "booleanParam\\s*\\(",
+        "label": "parameters declares a booleanParam() parameter"
+      },
+      {
+        "path": ["pipeline", "parameters"],
+        "bodyMatches": "name:\\s*['\"]RUN_INTEGRATION_TESTS['\"]",
+        "label": "booleanParam is named RUN_INTEGRATION_TESTS"
+      },
+      {
+        "path": ["pipeline", "parameters"],
+        "bodyMatches": "defaultValue:\\s*true",
+        "label": "RUN_INTEGRATION_TESTS defaults to true"
+      },
+      {
+        "path": ["pipeline", "stages", "stage", "when"],
+        "pathArgs": [null, null, "Deploy", null],
+        "exists": true,
+        "label": "Deploy stage has a when block"
+      },
+      {
+        "path": ["pipeline", "stages", "stage", "when", "allOf"],
+        "pathArgs": [null, null, "Deploy", null, null],
+        "exists": true,
+        "label": "Deploy when uses allOf"
+      },
+      {
+        "path": ["pipeline", "stages", "stage", "when", "allOf"],
+        "pathArgs": [null, null, "Deploy", null, null],
+        "bodyMatches": "branch\\s+['\"]main['\"]",
+        "label": "allOf includes branch 'main'"
+      },
+      {
+        "path": ["pipeline", "stages", "stage", "when", "allOf", "expression"],
+        "pathArgs": [null, null, "Deploy", null, null, null],
+        "bodyContains": "params.DEPLOY_ENV",
+        "label": "allOf includes expression on params.DEPLOY_ENV"
+      },
+      {
+        "path": ["pipeline", "stages", "stage", "steps"],
+        "pathArgs": [null, null, "Build", null],
+        "bodyContains": "mvn -B package",
+        "label": "Build stage still runs mvn -B package"
+      }
+    ]
+  }
+}

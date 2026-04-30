@@ -1,0 +1,70 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "You want to add a step that any Jenkinsfile can call as `buildJavaService(...)`. The step renders an entire declarative pipeline.\n\nWhere does it go?",
+      "options": [
+        { "id": "a", "text": "`vars/buildJavaService.groovy` with a `def call(Map config = [:]) { pipeline { ... } }` entry point." },
+        { "id": "b", "text": "`src/com/example/BuildJavaService.groovy` as a class." },
+        { "id": "c", "text": "`resources/build-java-service.yaml`." },
+        { "id": "d", "text": "Inlined into every Jenkinsfile that needs it." }
+      ],
+      "correct": ["a"],
+      "explanation": "Global steps callable as a top-level identifier from a Jenkinsfile live in `vars/`. The filename is the step name. The `def call(...)` form is what makes `buildJavaService(...)` work as a method call. `src/` is for helper classes that you import; you cannot directly call a `src/` class as a top-level step. `resources/` is for non-code template files."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "You want to extract a `SemverHelper` class that parses and compares version strings, then call it from several `vars/` steps.\n\nWhere does the class go?",
+      "options": [
+        { "id": "a", "text": "`vars/SemverHelper.groovy`." },
+        { "id": "b", "text": "`src/com/polaris/SemverHelper.groovy` with a package declaration; import from the global step via `import com.polaris.SemverHelper`." },
+        { "id": "c", "text": "`resources/SemverHelper.txt`." },
+        { "id": "d", "text": "Helpers cannot be reused across `vars/` steps." }
+      ],
+      "correct": ["b"],
+      "explanation": "`src/` is the standard Java/Groovy source tree for the shared library: real classes with packages and imports. Global steps in `vars/` then `import com.polaris.SemverHelper` like any other class. Putting the class under `vars/` would expose it as a top-level step (callable as `SemverHelper(...)` from a Jenkinsfile), which is rarely what you want."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "You want to ship a default `kustomization.yaml` template that pipeline steps can render with build-time substitutions, instead of inlining the YAML in Groovy strings.\n\nWhere does the template go?",
+      "options": [
+        { "id": "a", "text": "`resources/templates/kustomization.yaml`. Read it from `vars/` with `libraryResource('templates/kustomization.yaml')`." },
+        { "id": "b", "text": "`vars/kustomization.yaml`." },
+        { "id": "c", "text": "`src/templates/kustomization.yaml`." },
+        { "id": "d", "text": "Templates must be inlined as Groovy strings." }
+      ],
+      "correct": ["a"],
+      "explanation": "`resources/` is exactly for non-code files (templates, default configs, generated test data). The `libraryResource(path)` step reads them at runtime. Putting non-code under `vars/` or `src/` does not work because those trees are compiled. Inlining as Groovy strings is fine for short snippets but unwieldy for full configs."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "Which of these are real reasons to keep most logic in `src/` classes rather than directly in `vars/` global steps?",
+      "options": [
+        { "id": "a", "text": "Classes can be unit-tested with JenkinsPipelineUnit or similar; `vars/` steps are harder to mock." },
+        { "id": "b", "text": "Classes can have private methods; `vars/` exposes everything as top-level callable." },
+        { "id": "c", "text": "Classes can extend each other and use polymorphism; `vars/` steps cannot." },
+        { "id": "d", "text": "`src/` classes load faster than `vars/` steps." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "Testability, encapsulation, and composability are the load-bearing reasons. Load time is not a meaningful difference. The pattern: thin `vars/` steps that delegate to classes in `src/`, with templates in `resources/`. This is also how the article's `polaris-pipeline` library is structured."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A junior engineer puts a 600-line `def call(Map config = [:]) { ... }` in `vars/buildJavaService.groovy` with all the helper functions defined as nested closures inside `call`.\n\nWhat is the right refactor recommendation?",
+      "options": [
+        { "id": "a", "text": "Extract helpers to `src/com/polaris/Build.groovy` (or similar) as proper class methods, leave `vars/buildJavaService.groovy` as a thin wrapper that constructs the helper and orchestrates." },
+        { "id": "b", "text": "Leave it; nested closures are idiomatic." },
+        { "id": "c", "text": "Move everything to `resources/` as a template." },
+        { "id": "d", "text": "Convert the file to Java." }
+      ],
+      "correct": ["a"],
+      "explanation": "Nested closures inside `call` are the classic shape of a `vars/` step that has outgrown itself. The refactor is to pull helpers into a `src/` class with real methods (testable, reusable, namespaced), then keep the global step as the thin entry point. Templates under `resources/` are for non-code. Java would lose Groovy's pipeline-step DSL."
+    }
+  ]
+}

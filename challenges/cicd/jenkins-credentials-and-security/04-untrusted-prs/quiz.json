@@ -1,0 +1,70 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A public repository accepts pull requests from forks. A contributor modifies the Jenkinsfile so a deploy stage posts `$AWS_SECRET_ACCESS_KEY` to an external URL. Which Trust setting is the dangerous one?",
+      "options": [
+        { "id": "a", "text": "Nobody, because Jenkins replaces fork PR Jenkinsfiles with the target branch's Jenkinsfile." },
+        { "id": "b", "text": "From users with Admin or Write permission, because random external contributors remain untrusted." },
+        { "id": "c", "text": "Everyone, because every fork PR Jenkinsfile is trusted and can control what the build runs." },
+        { "id": "d", "text": "Forks in the same account, because it blocks forks from personal accounts." }
+      ],
+      "correct": ["c"],
+      "explanation": "The article's table says Everyone trusts all fork PR Jenkinsfiles and should never be used on a public repo. That setting gives an arbitrary contributor control over the pipeline code that might reach credentials."
+    },
+    {
+      "id": "q2",
+      "type": "multiple",
+      "scenario": "Which defenses match the article's guidance for fork pull requests?",
+      "options": [
+        { "id": "a", "text": "Use a Trust level such as Nobody or From users with Admin or Write permission." },
+        { "id": "b", "text": "Gate deploy credentials behind `when { branch 'main' }` or an equivalent PR-safe condition." },
+        { "id": "c", "text": "Audit old multibranch projects so inherited settings are not trusting Everyone." },
+        { "id": "d", "text": "Rely on masking alone, because masking blocks network exfiltration." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "Trust settings decide whose Jenkinsfile may run, and pipeline-level gates keep credentials out of PR-time stages. Masking only redacts log output. It does not stop a malicious Jenkinsfile from sending data over the network."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "A maintainer wants every pull request to compile and test, but deployments should run only after reviewed code reaches `main`. Which Jenkinsfile pattern fits?",
+      "options": [
+        { "id": "a", "text": "Keep Test ungated and gate Deploy with `when { branch 'main' }` before binding any deploy credentials." },
+        { "id": "b", "text": "Bind deploy credentials at the top level and let every stage decide whether to use them." },
+        { "id": "c", "text": "Trust Everyone so PR contributors can debug deploy failures themselves." },
+        { "id": "d", "text": "Disable PR builds entirely." }
+      ],
+      "correct": ["a"],
+      "explanation": "The article's example keeps the test stage available to PRs and gates the deploy stage on `branch 'main'`. The credential binding lives inside the gated stage, so PR builds never receive the secret."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "A fork PR is configured with Trust set to Nobody. What Jenkinsfile should the PR build run?",
+      "options": [
+        { "id": "a", "text": "The Jenkinsfile from the target branch on the origin repository." },
+        { "id": "b", "text": "The Jenkinsfile from the fork, because that is what the contributor edited." },
+        { "id": "c", "text": "No Jenkinsfile, because Nobody disables all PR feedback." },
+        { "id": "d", "text": "A Jenkinsfile generated from `$JENKINS_HOME/config.xml`." }
+      ],
+      "correct": ["a"],
+      "explanation": "The article's Trust table says Nobody treats all fork PRs as untrusted and replaces their Jenkinsfile with the maintainer-controlled Jenkinsfile from the target branch."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A legacy multibranch project was created years ago. No one remembers which fork Trust level it uses. What is the right maintenance action?",
+      "options": [
+        { "id": "a", "text": "Audit Configure > Branch Sources > Discover pull requests from forks > Trust, and move public repos away from Everyone." },
+        { "id": "b", "text": "Ignore it because modern Jenkins forces every old job to the safest setting automatically." },
+        { "id": "c", "text": "Delete all fork PR support permanently." },
+        { "id": "d", "text": "Move all secrets to repository-level credentials so Trust no longer matters." }
+      ],
+      "correct": ["a"],
+      "explanation": "The article explicitly recommends auditing inherited multibranch projects. Older setups may have unsafe Trust settings, and the fix is configuration, not moving secrets into a broader scope."
+    }
+  ]
+}

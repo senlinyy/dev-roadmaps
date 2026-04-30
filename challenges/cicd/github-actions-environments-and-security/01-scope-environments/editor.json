@@ -8,11 +8,15 @@
     "expected": [
       {
         "path": ["jobs", "deploy-staging", "environment"],
-        "type": "string"
+        "type": "string",
+        "equals": "staging",
+        "label": "deploy-staging uses the staging environment"
       },
       {
         "path": ["jobs", "deploy-production", "environment"],
-        "type": "string"
+        "type": "string",
+        "equals": "production",
+        "label": "deploy-production uses the production environment"
       }
     ]
   }

@@ -1,0 +1,48 @@
+{
+  "language": "groovy",
+  "filename": "Jenkinsfile",
+  "completionProfile": "jenkinsfile",
+  "initialValue": "pipeline {\n  agent {\n    label 'linux-jdk21'\n  }\n  stages {\n    stage('Build') {\n      steps {\n        sh 'mvn -B package'\n      }\n    }\n    stage('Verify') {\n      steps {\n        sh 'mvn -B verify'\n      }\n    }\n    stage('Integration Test') {\n      steps {\n        sh 'mvn -B integration-test'\n      }\n    }\n  }\n  post {\n    failure {\n      error 'orders failed'\n    }\n  }\n}\n",
+  "grader": {
+    "strategy": "regex-all",
+    "expected": [
+      {
+        "pattern": "@Library\\s*\\(\\s*['\"]polaris-pipeline@v1\\.4\\.2['\"]\\s*\\)\\s*_",
+        "label": "@Library('polaris-pipeline@v1.4.2') _ at top"
+      },
+      {
+        "pattern": "buildJavaService\\s*\\(",
+        "label": "calls buildJavaService(...)"
+      },
+      {
+        "pattern": "service\\s*:\\s*['\"]orders['\"]",
+        "label": "passes service: 'orders'"
+      },
+      {
+        "pattern": "mavenGoals\\s*:\\s*\\[",
+        "label": "passes mavenGoals as a list"
+      },
+      {
+        "pattern": "['\"]package['\"]",
+        "label": "mavenGoals includes 'package'"
+      },
+      {
+        "pattern": "['\"]verify['\"]",
+        "label": "mavenGoals includes 'verify'"
+      },
+      {
+        "pattern": "['\"]integration-test['\"]",
+        "label": "mavenGoals includes 'integration-test'"
+      },
+      {
+        "pattern": "agentLabel\\s*:\\s*['\"]linux-jdk21['\"]",
+        "label": "passes agentLabel: 'linux-jdk21'"
+      },
+      {
+        "pattern": "^(?![\\s\\S]*\\bpipeline\\s*\\{)[\\s\\S]*$",
+        "label": "the inline pipeline { ... } block is removed",
+        "flags": "s"
+      }
+    ]
+  }
+}

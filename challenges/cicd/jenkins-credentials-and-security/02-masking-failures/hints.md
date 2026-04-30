@@ -1,0 +1,1 @@
+Masking only replaces strings the masker observed when the credential was bound. A `sh 'echo "raw substitution check: dpop_..."'` writes a literal-string argument that the masker never saw, so it sails through the log. `grep dpop_` will surface the leaking line. `grep credentialsId` (or grep `polaris-deploy-token`) shows which credential was supposed to be masked.

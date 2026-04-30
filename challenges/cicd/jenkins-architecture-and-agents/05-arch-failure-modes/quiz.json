@@ -1,0 +1,70 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "The Jenkins web UI freezes during a build storm. SSH access to the server shows high memory usage, and the log contains `java.lang.OutOfMemoryError: Java heap space`. Several jobs are running on the built-in node.\n\nWhich response matches the article?",
+      "options": [
+        { "id": "a", "text": "Set the controller's executor count to 0 and add dedicated agents, using a temporary heap increase only to buy time." },
+        { "id": "b", "text": "Add more built-in-node executors so the controller can finish the queued builds faster." },
+        { "id": "c", "text": "Delete `$JENKINS_HOME/secrets` so the controller starts clean." },
+        { "id": "d", "text": "Disable the web UI because agents can coordinate builds themselves." }
+      ],
+      "correct": ["a"],
+      "explanation": "This is the article's controller-running-builds failure mode. Raising heap may stabilize the service briefly, but the architectural fix is zero executors on the controller plus dedicated agents."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A build fails halfway through with:\n\n```text\nERROR: hudson.remoting.RequestAbortedException: java.io.IOException:\n  Unexpected termination of the channel\n```\n\nThe node page shows the agent as Offline with a red X. Which failure mode is this?",
+      "options": [
+        { "id": "a", "text": "The agent went offline mid-build because the network, host, or agent process broke the remoting channel." },
+        { "id": "b", "text": "Executor starvation, because there were not enough idle agents before the build started." },
+        { "id": "c", "text": "A static secret leaked into the console output." },
+        { "id": "d", "text": "A matrix build cancelled sibling jobs." }
+      ],
+      "correct": ["a"],
+      "explanation": "The article names this exact remoting error under Agent Goes Offline Mid-Build. The immediate response is to investigate the agent host, network stability, SSH session, or agent process, then add health monitoring so Jenkins can take unhealthy agents offline before they break builds."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "Which of these are real failure modes that come from running builds on the controller's built-in node?",
+      "options": [
+        { "id": "a", "text": "A misbehaving build can starve the JVM of CPU and slow every other pipeline run." },
+        { "id": "b", "text": "A build script that runs `rm -rf /` (intentionally or by accident) wipes Jenkins state because the controller's filesystem is also the build workspace." },
+        { "id": "c", "text": "Build artifacts accumulate under `JENKINS_HOME/workspace/` and consume disk needed for plugin caches and config persistence." },
+        { "id": "d", "text": "The controller automatically scales to handle concurrent builds." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "The first three are exactly why the canonical advice is `agent any` should never resolve to the built-in node in production: shared CPU, shared filesystem (with all the security and state risks), and shared disk are real and routine. Controllers do not auto-scale to handle build concurrency."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "Developers wait 30 minutes before builds start. The Jenkins dashboard shows a long Build Queue. Every queued item says it is waiting for the next available executor on a matching agent label.\n\nWhat is the most likely problem?",
+      "options": [
+        { "id": "a", "text": "Executor starvation: there are not enough matching executors for the jobs being triggered." },
+        { "id": "b", "text": "The controller is missing a favicon." },
+        { "id": "c", "text": "Every agent is too new and needs to be downgraded." },
+        { "id": "d", "text": "The build queue is expected to stay deep even when capacity is healthy." }
+      ],
+      "correct": ["a"],
+      "explanation": "Executor starvation is the article's queue-depth failure mode. The fix is to add agents, increase executor count on hardware that can handle it, or adjust labels so the right capacity exists for the jobs being queued."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "Two teams share permanent agents. One job leaves a `.env` file in its workspace. A later job from another team lands on the same agent and can read leftover files.\n\nWhich control best matches the article's recommendation?",
+      "options": [
+        { "id": "a", "text": "Use ephemeral Docker or Kubernetes agents so each build gets an isolated filesystem that is destroyed afterward." },
+        { "id": "b", "text": "Put all teams on the controller's built-in node because it is easier to audit." },
+        { "id": "c", "text": "Rely on file names starting with a dot to hide secrets from later builds." },
+        { "id": "d", "text": "Increase the controller heap so old workspaces are ignored." }
+      ],
+      "correct": ["a"],
+      "explanation": "The article calls out untrusted builds on shared agents as a security failure mode. Ephemeral containers or Kubernetes agents isolate builds and remove leftover workspace state at the end of the run."
+    }
+  ]
+}

@@ -9,12 +9,14 @@
       {
         "path": ["jobs", "comment", "permissions", "pull-requests"],
         "type": "string",
-        "value": "write"
+        "equals": "write",
+        "label": "pull-requests permission is write"
       },
       {
         "path": ["jobs", "comment", "permissions", "contents"],
         "type": "string",
-        "value": "read"
+        "equals": "read",
+        "label": "contents permission is read"
       }
     ]
   }

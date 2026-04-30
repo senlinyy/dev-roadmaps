@@ -1,0 +1,70 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "Within four minutes, every production pipeline that loads `@Library('polaris-pipeline@main') _` is failing. Builds report `MissingMethodException` after a merge changed the `deployToS3` signature.\n\nWhat is the fastest mitigation while a proper release fix is prepared?",
+      "options": [
+        { "id": "a", "text": "Revert the offending commit on `main` so branch-pinned consumers pick up the old behavior on their next build." },
+        { "id": "b", "text": "Ask every consumer team to edit their Jenkinsfile before doing anything else." },
+        { "id": "c", "text": "Restart the Jenkins controller." },
+        { "id": "d", "text": "Delete the shared library from Jenkins." }
+      ],
+      "correct": ["a"],
+      "explanation": "When consumers are pinned to a moving branch, the fastest restore is to fix the moving branch. The article's real solution is to stop production consumers from depending on `main`, but during the incident the revert restores service quickly."
+    },
+    {
+      "id": "q2",
+      "type": "multiple",
+      "scenario": "Which controls would have reduced the chance that this library change reached production consumers?",
+      "options": [
+        { "id": "a", "text": "Run the library's own tests on every pull request." },
+        { "id": "b", "text": "Run a smoke build against a sentinel consumer repository before cutting a tag." },
+        { "id": "c", "text": "Pin production consumers to immutable tags instead of `main`." },
+        { "id": "d", "text": "Let humans push directly to `main` to speed up fixes." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "The article's prevention plan is tests, a sentinel smoke build, immutable tag pins, and protected release flow. Direct pushes to `main` are part of the failure mode."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "Postmortem reveals the breaking signature change had a deprecation comment in the diff, but existing consumers were never migrated. What is the right takeaway?",
+      "options": [
+        { "id": "a", "text": "A comment is not a migration. Keep the old signature working, add the new signature, give consumers time to move, and remove the old form only in a major release." },
+        { "id": "b", "text": "A deprecation comment is enough because developers should read every library diff." },
+        { "id": "c", "text": "Consumers should stay on `main` so they discover deprecations early." },
+        { "id": "d", "text": "The library should never change signatures under any circumstances." }
+      ],
+      "correct": ["a"],
+      "explanation": "Shared-library consumers need a compatibility window. The article's point is that a platform library is production infrastructure, so breaking changes need release discipline, tags, and migration time."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "The platform team wants to move 130 repositories from `@Library('polaris-pipeline@main') _` to a released tag. They cannot hand-edit every Jenkinsfile. Which approach scales?",
+      "options": [
+        { "id": "a", "text": "Open coordinated pull requests that pin each repository to the released tag, then let service owners review and merge." },
+        { "id": "b", "text": "Send a chat message asking every team to remember the change." },
+        { "id": "c", "text": "Force-push `main` to match the tag and call it immutable." },
+        { "id": "d", "text": "Remove the library from Jenkins so repositories fail until they update." }
+      ],
+      "correct": ["a"],
+      "explanation": "The article's fix requires consumers to pin immutable refs. Coordinated PRs turn that migration into reviewable repo changes while preserving each service team's ownership."
+    },
+    {
+      "id": "q5",
+      "type": "multiple",
+      "scenario": "After the migration, the team adds CI to the shared-library repository. Which checks belong in that CI?",
+      "options": [
+        { "id": "a", "text": "Unit tests for `vars/` and `src/` library code." },
+        { "id": "b", "text": "A smoke build that runs a representative consumer pipeline against the candidate library ref." },
+        { "id": "c", "text": "A release script that tags only after tests and smoke builds pass." },
+        { "id": "d", "text": "Automatic rebuilds of production consumers against unmerged library PRs." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "The article names unit tests, smoke builds, and a guarded release script as the safety net. Production consumers should stay on pinned tags until a vetted release exists."
+    }
+  ]
+}

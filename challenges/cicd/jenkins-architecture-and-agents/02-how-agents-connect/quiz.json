@@ -1,0 +1,83 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "You are connecting a fleet of long-lived Linux build VMs to a Jenkins controller running in the same VPC. The security team controls the SSH config and key rotation centrally. Builds are heavy (Maven, Gradle) and need to keep running across controller restarts.\n\nWhich agent connection method fits best?",
+      "options": [
+        { "id": "a", "text": "Inbound agents launched manually on each VM with a copied secret in `/etc/systemd/system/jenkins-agent.service`." },
+        { "id": "b", "text": "Outbound SSH connection from the controller, with the controller holding the SSH key in its credential store." },
+        { "id": "c", "text": "Kubernetes plugin spawning ephemeral pods per build." },
+        { "id": "d", "text": "Webhook-driven worker that polls the controller every 10 seconds for queued builds." }
+      ],
+      "correct": ["b"],
+      "explanation": "SSH agents fit long-lived VMs the controller can reach directly: Jenkins connects over SSH, uploads `remoting.jar`, and starts the agent process. Inbound agents are useful when the agent must initiate the connection, but this scenario says the security team already manages SSH centrally. Kubernetes pods are ephemeral and do not match a persistent VM fleet. Polling-based workers are not a Jenkins connection method."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A new build fleet runs in a private subnet. The build hosts can open outbound HTTPS connections to `https://jenkins.example.com`, but the controller cannot initiate SSH connections into the subnet.\n\nWhich agent connection works in this topology?",
+      "options": [
+        { "id": "a", "text": "SSH-launched agents from the controller to each host." },
+        { "id": "b", "text": "Inbound agents that start `agent.jar` on each host and connect outward to the controller." },
+        { "id": "c", "text": "Ephemeral Kubernetes pods on a cluster the controller manages directly." },
+        { "id": "d", "text": "Static-IP agent pool registered in `jenkins.yaml`." }
+      ],
+      "correct": ["b"],
+      "explanation": "Inbound agents flip the connection direction: the agent starts `agent.jar`, connects outward to the controller, authenticates, and waits for instructions. SSH agents require the controller to reach the host. Docker agents are about per-build execution containers, not connecting to a private VM over the network. `jenkins.yaml` is a config format, not a connection method."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "Your team is adopting Kubernetes-spawned ephemeral agents. Which of the following are real benefits of this model compared to a static long-lived agent fleet?",
+      "options": [
+        { "id": "a", "text": "Each build starts with a clean filesystem, so leaked state from a previous build cannot influence the current one." },
+        { "id": "b", "text": "Capacity scales to queue depth automatically because pods are created on demand." },
+        { "id": "c", "text": "Agents come up faster than long-lived VMs because no pod-image pull or container start is involved." },
+        { "id": "d", "text": "The controller no longer needs to be sized for peak load because the work runs on the cluster." }
+      ],
+      "correct": ["a", "b", "d"],
+      "explanation": "Clean filesystems per build, on-demand scaling tied to queue depth, and offloading work from the controller are the canonical reasons teams adopt the Kubernetes plugin. Pod startup is not faster than a warm VM: image pulls and pod scheduling add seconds to minutes per build, which is the main downside of the model and the reason teams sometimes keep a small static pool for fast feedback."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "An operator finds an agent host where `jenkins-agent.service` keeps restarting. Logs show `WARNING: Failed to login: Invalid agent secret`.\n\nWhich is the most likely root cause?",
+      "options": [
+        { "id": "a", "text": "The controller's certificate has expired." },
+        { "id": "b", "text": "The agent secret on the host no longer matches the secret the controller has on file for that agent name." },
+        { "id": "c", "text": "The controller has run out of executors." },
+        { "id": "d", "text": "The Kubernetes plugin is misconfigured." }
+      ],
+      "correct": ["b"],
+      "explanation": "`Invalid agent secret` is an inbound-agent authentication failure: the controller compares the secret the agent presents against the one stored under that node's configuration. The common cause is a recreated node or a broken environment substitution on the agent host. Certificate problems show TLS errors, executor exhaustion affects scheduling, and Kubernetes plugin issues do not explain a static inbound agent."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "You want every agent connection to authenticate with TLS that the controller verifies, no shared secrets sitting in service files, and central key rotation. Which connection method gets you there with the smallest operational change?",
+      "options": [
+        { "id": "a", "text": "Inbound agents with secrets stored in each host's `/etc/systemd/system/jenkins-agent.service`." },
+        { "id": "b", "text": "SSH-launched agents using SSH host keys plus a credential the controller pulls from a secret store." },
+        { "id": "c", "text": "Anonymous TCP connection on port 50000 with a shared password." },
+        { "id": "d", "text": "Inline `agent { docker { ... } }` with no credentials needed." }
+      ],
+      "correct": ["b"],
+      "explanation": "SSH gives host-key verification and keeps the credential in the controller's credential store, which the security team already rotates. Inbound agent secrets live on the agent host, which this scenario rules out. Anonymous TCP is not a real connection mode. Inline `agent { docker { ... } }` describes where a build runs, not how a separate host connects."
+    },
+    {
+      "id": "q6",
+      "type": "single",
+      "scenario": "A build fleet uses inbound agents in WebSocket mode. After a reverse-proxy change, three agents reconnect but remain marked offline in the UI. Logs show `WebSocket connection refused`.\n\nWhich is the most accurate diagnosis?",
+      "options": [
+        { "id": "a", "text": "WebSocket support is disabled at the controller's reverse proxy: the upstream nginx or ALB is not forwarding the WebSocket Upgrade headers." },
+        { "id": "b", "text": "The controller has an expired Let's Encrypt cert and is rejecting all connections." },
+        { "id": "c", "text": "The agents are out of disk space." },
+        { "id": "d", "text": "The Jenkins admin disabled the agent." }
+      ],
+      "correct": ["a"],
+      "explanation": "Inbound WebSocket agents connect over the same HTTPS path as the Jenkins UI and rely on the proxy forwarding WebSocket upgrade headers. If that support is removed, the agents can reach the controller URL but the connection cannot upgrade. Certificate failures, disk pressure, and disabled nodes produce different symptoms."
+    }
+  ]
+}

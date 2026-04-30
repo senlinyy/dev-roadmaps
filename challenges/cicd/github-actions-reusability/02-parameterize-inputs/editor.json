@@ -7,8 +7,21 @@
     "strategy": "yaml-paths",
     "expected": [
       {
-        "path": ["inputs"],
-        "type": "object"
+        "path": ["inputs", "node-version"],
+        "type": "object",
+        "label": "node-version input exists"
+      },
+      {
+        "path": ["inputs", "node-version", "default"],
+        "type": "string",
+        "equals": "22",
+        "label": "node-version input keeps default 22"
+      },
+      {
+        "path": ["runs", "steps", 0, "with", "node-version"],
+        "type": "string",
+        "contains": "inputs.node-version",
+        "label": "setup-node consumes the node-version input"
       }
     ]
   }

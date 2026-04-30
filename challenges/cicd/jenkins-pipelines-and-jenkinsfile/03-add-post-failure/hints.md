@@ -1,0 +1,1 @@
+A `post` block sits as a sibling of `stages` inside `pipeline`. Inside it, named conditions like `failure { ... }`, `success { ... }`, and `always { ... }` each contain the steps that run when that condition is met.

@@ -1,0 +1,1 @@
+Each `stage` is its own block: `stage('Build') { steps { sh '...' } }`. Drop the `Everything` stage, then add three new ones inside `stages { ... }`. Each stage needs exactly one `steps { sh '...' }` block.

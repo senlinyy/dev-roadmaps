@@ -1,0 +1,70 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A pipeline using `new java.io.File('/etc/passwd').text` fails with `RejectedAccessException: Scripts not permitted to use new java.io.File java.lang.String`.\n\nWhat is happening, and what is the right next step?",
+      "options": [
+        { "id": "a", "text": "The Groovy sandbox is blocking arbitrary controller-side file access. Ask why the pipeline needs the file and use an approved workspace-safe alternative instead." },
+        { "id": "b", "text": "Approve the call immediately in In-process Script Approval so the build proceeds." },
+        { "id": "c", "text": "Switch the Jenkinsfile from declarative to scripted syntax." },
+        { "id": "d", "text": "Disable the sandbox for this pipeline." }
+      ],
+      "correct": ["a"],
+      "explanation": "The article explains that Groovy can do anything Java can do, including reading arbitrary controller files. The sandbox blocks that on purpose. An approval is global risk, so the first response is to redesign the step around approved pipeline behavior, usually reading workspace files or running a shell command on an agent."
+    },
+    {
+      "id": "q2",
+      "type": "multiple",
+      "scenario": "Which statements about In-process Script Approval match the article?",
+      "options": [
+        { "id": "a", "text": "Approving a signature is a deliberate admin action, not something a junior developer can self-approve." },
+        { "id": "b", "text": "An approved signature becomes available broadly, so the admin is accepting risk for more than one build." },
+        { "id": "c", "text": "The approval queue exists because some Groovy calls are outside the sandbox allowlist." },
+        { "id": "d", "text": "Approving a signature only affects the next run of the single job that requested it." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "The article's key point is that script approval is an audited global concession. Calls outside the allowlist queue for an administrator, and approving one should be treated like a security review."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "A folder-scoped shared library calls a Java method that the sandbox rejects. A developer says, \"But this is a shared library, so it should be trusted.\" What is the best correction?",
+      "options": [
+        { "id": "a", "text": "Only globally configured shared libraries can be marked trusted. Folder-scoped libraries run inside the sandbox like Jenkinsfiles." },
+        { "id": "b", "text": "All shared libraries are trusted by default." },
+        { "id": "c", "text": "Shared libraries never run Groovy code on the controller." },
+        { "id": "d", "text": "Switching from declarative to scripted syntax would make the library trusted." }
+      ],
+      "correct": ["a"],
+      "explanation": "The article says shared library code can be marked trusted when configured globally, while folder-scoped libraries run through the sandbox. The distinction is about library configuration and trust, not about declarative versus scripted syntax."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "An admin sees this pending approval:\n\n```text\nstaticMethod java.lang.Runtime getRuntime\n```\n\nWhy is approving it dangerous?",
+      "options": [
+        { "id": "a", "text": "It allows pipelines to reach Java runtime execution paths on the controller, which could be used to run arbitrary commands." },
+        { "id": "b", "text": "It only lets the current build print the Java version." },
+        { "id": "c", "text": "It is safe because Jenkins generated the approval request automatically." },
+        { "id": "d", "text": "It affects only agents, not the controller." }
+      ],
+      "correct": ["a"],
+      "explanation": "The article uses `Runtime.getRuntime` as the example of a dangerous call that the sandbox blocks. Admins should treat approvals as security decisions because unsafe Groovy can affect the controller itself."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A team's pipeline often hits new sandbox rejections after small refactors. They are tempted to disable the sandbox globally.\n\nWhat is the right argument against doing that?",
+      "options": [
+        { "id": "a", "text": "Disabling the sandbox lets pipeline Groovy call arbitrary Java APIs on the controller. Approval friction is cheaper than losing that boundary." },
+        { "id": "b", "text": "Disabling the sandbox slows builds." },
+        { "id": "c", "text": "Disabling the sandbox is incompatible with multibranch pipelines." },
+        { "id": "d", "text": "Disabling the sandbox makes the linter slower." }
+      ],
+      "correct": ["a"],
+      "explanation": "The sandbox exists because Jenkinsfiles can be edited by non-admins but execute in part on the controller. Disabling it globally trades review friction for the ability of any pipeline to read files, call Java APIs, and mutate controller state."
+    }
+  ]
+}

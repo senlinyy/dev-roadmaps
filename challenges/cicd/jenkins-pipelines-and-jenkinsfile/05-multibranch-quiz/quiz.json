@@ -1,0 +1,70 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A team has one Pipeline job pointed at `main`. Feature branches do not get their own CI jobs, and pull requests are easy to miss. What does a Multibranch Pipeline add?",
+      "options": [
+        { "id": "a", "text": "It scans the Git source, finds branches and pull requests with a Jenkinsfile, and creates a job for each one." },
+        { "id": "b", "text": "It moves all Jenkinsfiles into `$JENKINS_HOME` so branches no longer need one." },
+        { "id": "c", "text": "It runs every branch on the controller so agents are not needed." },
+        { "id": "d", "text": "It replaces Git webhooks with manual Build Now clicks." }
+      ],
+      "correct": ["a"],
+      "explanation": "The article defines Multibranch Pipeline as the job type that scans a source repository and creates branch or PR sub-jobs for every branch or pull request that has a Jenkinsfile."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A long-lived feature branch stops getting CI after the team added a Jenkinsfile on `main`. The branch still exists on GitHub, but the multibranch project does not list it. What is the most likely explanation?",
+      "options": [
+        { "id": "a", "text": "The feature branch does not contain the Jenkinsfile at the configured path, so branch indexing skips it." },
+        { "id": "b", "text": "Jenkins never builds branches with slashes in their names." },
+        { "id": "c", "text": "Only `main` can use declarative pipelines." },
+        { "id": "d", "text": "The branch needs a production deploy before it can appear." }
+      ],
+      "correct": ["a"],
+      "explanation": "The article calls this out directly: the Jenkinsfile must exist on every branch you want built. If a branch does not have the file yet, indexing has no pipeline entry point to create."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "Which considerations belong in a review of fork pull-request builds?",
+      "options": [
+        { "id": "a", "text": "A malicious fork can modify the Jenkinsfile, so deploy credentials must not be exposed to arbitrary PR builds." },
+        { "id": "b", "text": "The safer default is to keep untrusted fork PRs away from privileged deploy stages." },
+        { "id": "c", "text": "The detailed trust model is security-sensitive enough that the credentials article covers it separately." },
+        { "id": "d", "text": "HTTPS cloning makes secrets safe to inject into every fork PR." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "The article says fork PRs are sandboxed by default and points to the credentials article for the trust model. The core principle is still visible here: PRs from forks are untrusted, so deploy credentials need stronger gates than ordinary branch builds."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "A repository has thousands of stale branches. Branch indexing now consumes noticeable controller memory and time. Which practice best fits the article?",
+      "options": [
+        { "id": "a", "text": "Configure stale-branch retention to a short, intentional window and prune old branches." },
+        { "id": "b", "text": "Disable branch indexing forever." },
+        { "id": "c", "text": "Move branch indexing onto agents." },
+        { "id": "d", "text": "Put every branch's Jenkinsfile in a different directory." }
+      ],
+      "correct": ["a"],
+      "explanation": "The article names branch indexing cost as an operational concern and recommends configuring stale-branch retention to a few weeks for large repositories."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A multibranch project builds every branch, but all branches share almost identical Jenkinsfile logic. The team wants less duplication while keeping Jenkinsfile as the branch entry point. Which boundary is reasonable?",
+      "options": [
+        { "id": "a", "text": "Keep a thin Jenkinsfile in each branch and move repeated pipeline logic into a shared library global step." },
+        { "id": "b", "text": "Delete every Jenkinsfile because shared libraries replace multibranch discovery." },
+        { "id": "c", "text": "Copy the same 200-line Jenkinsfile into every branch and accept the duplication." },
+        { "id": "d", "text": "Store the Jenkinsfile in the Jenkins UI instead of Git." }
+      ],
+      "correct": ["a"],
+      "explanation": "The article frames the Jenkinsfile as the branch's pipeline contract. A thin wrapper can preserve that contract while delegating repeatable logic to a shared library, which the shared-libraries article expands in detail."
+    }
+  ]
+}

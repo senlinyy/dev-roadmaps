@@ -1,0 +1,70 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "Your Jenkinsfile starts with `agent any`. The controller has six agents: three labeled `linux-jdk21`, two labeled `linux-jdk17`, and one labeled `windows-msbuild`. The build needs JDK 21 to compile.\n\nWhat happens?",
+      "options": [
+        { "id": "a", "text": "Jenkins picks the agent whose label matches the project's required JDK." },
+        { "id": "b", "text": "Jenkins picks any free agent, including the JDK 17 hosts and the Windows host, and the build fails on the wrong ones." },
+        { "id": "c", "text": "Jenkins runs the build on the controller because no label matches." },
+        { "id": "d", "text": "Jenkins waits for an agent that explicitly declares JDK 21 to be free." }
+      ],
+      "correct": ["b"],
+      "explanation": "`agent any` literally means any agent. There is no negotiation about JDK version, OS, or capability: the first free executor wins. That is fine when every agent in the pool can run every build, but it is the wrong default the moment you have heterogeneous hosts. Use `agent { label 'linux-jdk21' }` to constrain placement."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "Two teams share a controller. The platform team wants Maven builds to run only on agents labeled `linux-jdk21 maven-cache`. The mobile team wants iOS builds to run only on agents labeled `macos-xcode15`.\n\nWhich pipeline directive enforces both rules at the stage level so a single Jenkinsfile can use multiple agents in one run?",
+      "options": [
+        { "id": "a", "text": "A top-level `agent any` plus per-stage `agent { label 'linux-jdk21 && maven-cache' }` and `agent { label 'macos-xcode15' }` blocks." },
+        { "id": "b", "text": "Top-level `agent { label 'linux-jdk21' }` with no per-stage overrides." },
+        { "id": "c", "text": "Top-level `agent none` plus per-stage `agent { label 'linux-jdk21 && maven-cache' }` and `agent { label 'macos-xcode15' }` blocks." },
+        { "id": "d", "text": "A `parallel` block with no `agent` directives, since stages run on the controller by default." }
+      ],
+      "correct": ["c"],
+      "explanation": "`agent none` at the top tells Jenkins not to claim a workspace for the whole pipeline; each stage then declares its own agent. That is the canonical pattern for cross-platform pipelines. Top-level `agent any` would still claim a workspace for setup work that no stage needs. A single top-level label cannot satisfy both teams. Stages without an `agent` directive do not run on the controller; they inherit the parent agent (which is `none` here, hence the requirement for per-stage agents)."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "The `Build Image` stage needs Docker. The Jenkinsfile currently uses a top-level `agent { label 'linux' }`, and the fleet has some Linux agents without Docker installed. What is the safest routing change?",
+      "options": [
+        { "id": "a", "text": "Use `agent any` so Jenkins can find a free executor faster." },
+        { "id": "b", "text": "Put `agent { label 'linux-docker' }` on the Docker build stage so Jenkins only chooses agents with Docker installed." },
+        { "id": "c", "text": "Leave the label broad and install Docker inside the stage every time." },
+        { "id": "d", "text": "Run the Docker build on the controller because it has the web UI." }
+      ],
+      "correct": ["b"],
+      "explanation": "Labels describe agent capability. The article's example uses a `linux-docker` label for image builds because not every Linux agent necessarily has Docker. Narrowing the stage label preserves correctness without sending work to the controller or relying on repeated setup."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "Build queue depth has been growing all morning. Six builds are queued, all targeting the label `linux-jdk21`. There are three `linux-jdk21` agents, all busy. There are also two idle `linux-jdk17` agents.\n\nWhat is the right operational fix to drain the queue without changing build correctness?",
+      "options": [
+        { "id": "a", "text": "Add the label `linux-jdk21` to the two `linux-jdk17` agents." },
+        { "id": "b", "text": "Install JDK 21 on the two idle agents and add `linux-jdk21` to their labels." },
+        { "id": "c", "text": "Switch the affected pipelines to `agent any` so they pick up any free executor." },
+        { "id": "d", "text": "Add more executors per agent on the busy hosts." }
+      ],
+      "correct": ["b"],
+      "explanation": "Labels describe capability, not capacity. Adding `linux-jdk21` to an agent that does not actually have JDK 21 will route builds to a host that fails to compile. Installing JDK 21 first, then adding the label, is the correct sequence. `agent any` would route to the wrong hosts. Adding more executors per host increases the contention on already-saturated machines and rarely helps."
+    },
+    {
+      "id": "q5",
+      "type": "multiple",
+      "scenario": "Which of these are good reasons to keep label expressions narrow rather than using `agent any`?",
+      "options": [
+        { "id": "a", "text": "Heterogeneous fleets where not every agent has every dependency installed." },
+        { "id": "b", "text": "Compliance constraints where some builds must run only on hosts in a particular network zone." },
+        { "id": "c", "text": "Cost: a build that needs an expensive GPU host should not run on a general-purpose pool." },
+        { "id": "d", "text": "It removes the need to write `agent` at all because labels imply the directive." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "Capability mismatches are the main reason the article introduces labels. Compliance placement and expensive hardware are natural extensions of the same idea: labels should describe where a build is allowed to run. Labels do not imply an `agent` directive: a Jenkinsfile still has to ask for an agent."
+    }
+  ]
+}

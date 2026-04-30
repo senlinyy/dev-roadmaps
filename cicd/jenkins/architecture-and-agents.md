@@ -10,13 +10,12 @@ id: article-cicd-jenkins-architecture-and-agents
 ## Table of Contents
 
 1. [The Self-Hosted CI/CD Model](#the-self-hosted-cicd-model)
-2. [The Operational Spine: A Controller in Distress](#the-operational-spine-a-controller-in-distress)
-3. [Controller and Agent Architecture](#controller-and-agent-architecture)
-4. [How Agents Connect](#how-agents-connect)
-5. [Labels and Agent Selection](#labels-and-agent-selection)
-6. [JVM Tuning for the Controller](#jvm-tuning-for-the-controller)
-7. [Failure Modes](#failure-modes)
-8. [The Self-Hosted Tradeoff](#the-self-hosted-tradeoff)
+2. [Controller and Agent Architecture](#controller-and-agent-architecture)
+3. [How Agents Connect](#how-agents-connect)
+4. [Labels and Agent Selection](#labels-and-agent-selection)
+5. [JVM Tuning for the Controller](#jvm-tuning-for-the-controller)
+6. [Failure Modes](#failure-modes)
+7. [The Self-Hosted Tradeoff](#the-self-hosted-tradeoff)
 
 ## The Self-Hosted CI/CD Model
 
@@ -28,24 +27,6 @@ Today, Jenkins is a self-hosted automation server written in Java. "Self-hosted"
 
 If you have already read the GitHub Actions module, think of Jenkins as the other end of the spectrum. GitHub Actions is a fully managed service: you never see the runner until your workflow starts, and the runner is destroyed after it finishes. Jenkins is the opposite: you see everything. You own the server. You manage the disk. You decide how much memory the process gets. This control is both the main advantage and the main burden of running Jenkins.
 
-## The Operational Spine: A Controller in Distress
-
-A small engineering team is building a Node.js API. They spin up a single `t3.medium` EC2 instance (2 vCPUs, 4 GB RAM), install Jenkins, and start creating jobs. At first, everything works. The team has five pipelines that run `npm ci`, `npm test`, and `docker build`. Each pipeline takes about three minutes.
-
-Six months later, the team has grown. There are now 50 jobs, and builds run every few minutes as developers push code. One Monday morning, the Jenkins web UI stops responding. An engineer SSHs into the EC2 instance, checks the process status, and finds that the Jenkins process has crashed. The log at `/var/log/jenkins/jenkins.log` shows this:
-
-```text
-java.lang.OutOfMemoryError: Java heap space
-    at java.base/java.util.Arrays.copyOf(Arrays.java:3541)
-    at hudson.model.Queue.maintain(Queue.java:1432)
-    at hudson.model.Queue$MaintainTask.run(Queue.java:1568)
-```
-
-The root cause is not the number of jobs. It is the fact that the controller process, the single Jenkins server that manages the web UI, the job queue, the plugin system, and the credential store, is also executing all 50 builds on itself. Every `npm ci` and `docker build` runs inside the same JVM that is trying to serve the web UI and schedule jobs. The build processes compete with the Jenkins core for memory, and the JVM heap runs out.
-
-This is the most common Jenkins failure in small teams, and it exists because Jenkins ships with its default number of executors set to a value greater than zero. That means the controller is willing to run builds on itself out of the box, which works for a demo but fails under real load.
-
-The fix is architectural: stop running builds on the controller and instead dispatch them to separate machines called agents. That is what the rest of this article teaches.
 
 ## Controller and Agent Architecture
 
@@ -279,6 +260,17 @@ If multiple teams share the same Jenkins agents, a build from one team can poten
 The safest approach is to use ephemeral Docker or Kubernetes agents so that each build runs in an isolated container that is destroyed after the build finishes. If you must use permanent agents, restrict Docker socket access and ensure workspaces are cleaned between jobs.
 
 This is the same class of problem that GitHub Actions solves by provisioning a fresh virtual machine for every workflow run. In Jenkins, you have to solve it yourself.
+
+### Mastering the Build Queue
+
+The build queue is the brain of the Jenkins controller's orchestration. Every time a job is triggered—whether by a Git push, a timer, or a manual click—it enters the queue. The controller then scans all available agents to find one with an executor that matches the job's required labels.
+
+If no executor is free, the job waits. You can see these waiting jobs in the "Build Queue" sidebar. Clicking on a waiting job reveals why it is stuck. Common reasons include:
+- "All nodes of label 'docker' are offline"
+- "Waiting for next available executor on 'agent-01'"
+- "Build #42 is already in progress" (if the job is configured to not run concurrent builds)
+
+Monitoring the "Build Queue" is the primary way to determine if you need to scale your infrastructure. If your queue is consistently deep during core working hours, it is time to add more agents or increase executor counts on existing ones.
 
 ## The Self-Hosted Tradeoff
 

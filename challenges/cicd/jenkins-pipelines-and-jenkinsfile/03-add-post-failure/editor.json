@@ -1,0 +1,44 @@
+{
+  "language": "groovy",
+  "filename": "Jenkinsfile",
+  "completionProfile": "jenkinsfile",
+  "initialValue": "pipeline {\n  agent any\n\n  stages {\n    stage('Build') {\n      steps {\n        sh 'mvn -B -DskipTests package'\n      }\n    }\n    stage('Test') {\n      steps {\n        sh 'mvn -B test'\n      }\n    }\n    stage('Package') {\n      steps {\n        sh 'docker build -t polaris-orders:${BUILD_NUMBER} .'\n      }\n    }\n  }\n}\n",
+  "grader": {
+    "strategy": "groovy-structure",
+    "expected": [
+      {
+        "path": ["pipeline", "stages", "stage", "steps"],
+        "pathArgs": [null, null, "Build", null],
+        "bodyContains": "mvn -B -DskipTests package",
+        "label": "Build stage still runs the maven package step"
+      },
+      {
+        "path": ["pipeline", "stages", "stage", "steps"],
+        "pathArgs": [null, null, "Test", null],
+        "bodyContains": "mvn -B test",
+        "label": "Test stage still runs the maven test step"
+      },
+      {
+        "path": ["pipeline", "stages", "stage", "steps"],
+        "pathArgs": [null, null, "Package", null],
+        "bodyContains": "docker build",
+        "label": "Package stage still runs the docker build step"
+      },
+      {
+        "path": ["pipeline", "post", "failure"],
+        "exists": true,
+        "label": "post.failure block on the pipeline"
+      },
+      {
+        "path": ["pipeline", "post", "failure"],
+        "bodyMatches": "slackSend\\b",
+        "label": "post.failure body calls slackSend"
+      },
+      {
+        "path": ["pipeline", "post", "failure"],
+        "bodyContains": "#orders-ci",
+        "label": "slackSend targets the #orders-ci channel"
+      }
+    ]
+  }
+}

@@ -1,0 +1,1 @@
+`agent`, `environment`, and `options` are all peers of `stages` directly inside the `pipeline { ... }` block. Order does not matter to Jenkins. `environment` uses `KEY = "value"` (no `def`), and `options` is filled with method-call statements like `timeout(...)` and `disableConcurrentBuilds()`.

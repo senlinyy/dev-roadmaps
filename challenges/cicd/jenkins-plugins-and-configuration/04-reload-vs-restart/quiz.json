@@ -1,0 +1,70 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "An operator edits `jenkins.yaml` to add a new credential and update the system message. They want the change live without a controller restart.\n\nWhat is the right action?",
+      "options": [
+        { "id": "a", "text": "Trigger a CasC reload from Manage Jenkins > Configuration as Code > Reload existing configuration." },
+        { "id": "b", "text": "Restart the controller because every YAML edit requires a JVM restart." },
+        { "id": "c", "text": "Edit the same values through the UI and leave the YAML stale." },
+        { "id": "d", "text": "Write directly to `$JENKINS_HOME/config.xml`." }
+      ],
+      "correct": ["a"],
+      "explanation": "The article says a CasC reload re-reads the YAML and applies most day-to-day config changes live, including credentials and system settings. UI edits compete with CasC because the next reload overwrites them."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "The team adds `git-client:5.0.0` to `plugins.txt` and runs `jenkins-plugin-cli`. The plugin file is now under `$JENKINS_HOME/plugins/`.\n\nWhich action makes the new plugin classes available?",
+      "options": [
+        { "id": "a", "text": "Restart the controller so the JVM classloader picks up the plugin JAR." },
+        { "id": "b", "text": "Reload CasC." },
+        { "id": "c", "text": "Trigger any build to load the plugin lazily." },
+        { "id": "d", "text": "Nothing. Jenkins hot-loads every plugin version bump." }
+      ],
+      "correct": ["a"],
+      "explanation": "The article distinguishes config reload from plugin bytecode loading. Adding or changing plugin JARs needs a restart because the JVM classloader has to load the new classes."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "Which changes are good candidates for a CasC reload rather than a restart?",
+      "options": [
+        { "id": "a", "text": "Adding a new credential in YAML." },
+        { "id": "b", "text": "Updating the controller system message." },
+        { "id": "c", "text": "Adding a new agent definition." },
+        { "id": "d", "text": "Installing a plugin that was not previously present." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "The article names credentials, system settings, and agent definitions as reload-friendly examples. New plugins require a restart because they introduce new classes."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "An operator changes the configured security realm in `jenkins.yaml`. CasC applies part of the file but reports that the change requires a restart. What should the operator do?",
+      "options": [
+        { "id": "a", "text": "Plan a clean controller restart instead of leaving the controller in a half-applied state." },
+        { "id": "b", "text": "Keep reloading until the warning disappears." },
+        { "id": "c", "text": "Delete the security realm from YAML and configure it only through the UI." },
+        { "id": "d", "text": "Ignore it because security realm changes are cosmetic." }
+      ],
+      "correct": ["a"],
+      "explanation": "The article explicitly lists switching the security realm as a change that can require a full restart. If JCasC says a restart is required, restarting cleanly is easier to reason about than a half-applied controller."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "After a Jenkins LTS upgrade, the controller boots but the System Configuration page shows `Some plugins are missing dependencies`. Reloading CasC does nothing.\n\nWhat is the right next step?",
+      "options": [
+        { "id": "a", "text": "Read the missing-dependency warning, fix `plugins.txt`, run the plugin installer, and restart the controller." },
+        { "id": "b", "text": "Force-reload CasC several times." },
+        { "id": "c", "text": "Delete `$JENKINS_HOME/plugins/` and start fresh." },
+        { "id": "d", "text": "Ignore the warning until the next monthly upgrade." }
+      ],
+      "correct": ["a"],
+      "explanation": "Missing plugin dependencies are a plugin-set problem, not a CasC problem. The fix lives in the pinned plugin list and the plugin installer, followed by a restart."
+    }
+  ]
+}

@@ -1,0 +1,59 @@
+{
+  "language": "groovy",
+  "filename": "vars/buildJavaService.groovy",
+  "completionProfile": "jenkins-shared-library",
+  "initialValue": "// Define `def call(Map config = [:])` and render a declarative pipeline.\n",
+  "grader": {
+    "strategy": "groovy-structure",
+    "expected": [
+      {
+        "path": ["call"],
+        "exists": true,
+        "label": "call(Map config) entry point exists"
+      },
+      {
+        "path": ["call", "pipeline"],
+        "exists": true,
+        "label": "call body contains a pipeline block"
+      },
+      {
+        "path": ["call", "pipeline", "agent"],
+        "bodyContains": "config.agentLabel",
+        "label": "agent uses config.agentLabel"
+      },
+      {
+        "path": ["call", "pipeline", "stages", "stage", "steps"],
+        "pathArgs": [null, null, null, "Build", null],
+        "exists": true,
+        "label": "Build stage with steps"
+      },
+      {
+        "path": ["call", "pipeline", "stages", "stage", "steps"],
+        "pathArgs": [null, null, null, "Build", null],
+        "bodyContains": "config.mavenGoals",
+        "label": "Build sh references config.mavenGoals"
+      },
+      {
+        "path": ["call", "pipeline", "stages", "stage", "steps"],
+        "pathArgs": [null, null, null, "Build", null],
+        "bodyMatches": "mvn\\s+-B",
+        "label": "Build sh runs mvn -B"
+      },
+      {
+        "path": ["call", "pipeline", "post", "failure"],
+        "exists": true,
+        "label": "post.failure exists"
+      },
+      {
+        "path": ["call", "pipeline", "post", "failure"],
+        "bodyContains": "error",
+        "label": "post.failure calls error"
+      },
+      {
+        "path": ["call", "pipeline", "post", "failure"],
+        "bodyContains": "config.service",
+        "label": "post.failure error references config.service"
+      }
+    ]
+  }
+}

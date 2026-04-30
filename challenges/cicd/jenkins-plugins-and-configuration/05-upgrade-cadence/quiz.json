@@ -1,0 +1,70 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "Your platform team runs one production Jenkins controller. Plugin updates ship daily. Last quarter, two plugin auto-upgrades broke the credentials store mid-day.\n\nWhich cadence balances safety with staying current?",
+      "options": [
+        { "id": "a", "text": "Use a defined cadence: weekly update PRs to staging, monthly promotion after soak, and emergency changes for security advisories." },
+        { "id": "b", "text": "Auto-upgrade everything in production every day." },
+        { "id": "c", "text": "Never upgrade; pinned versions should stay frozen forever." },
+        { "id": "d", "text": "Upgrade only after a production outage proves something is broken." }
+      ],
+      "correct": ["a"],
+      "explanation": "The article's middle path is a cadence with staging, smoke tests, review, and emergency lanes. It avoids daily surprise breakage without letting CVEs and old plugin APIs pile up indefinitely."
+    },
+    {
+      "id": "q2",
+      "type": "multiple",
+      "scenario": "Which components belong in the survivable upgrade workflow described in the article?",
+      "options": [
+        { "id": "a", "text": "A staging controller that mirrors production's plugin set and representative jobs." },
+        { "id": "b", "text": "Pinned `plugins.txt`, Dockerfile, `jenkins.yaml`, and environment file under version control." },
+        { "id": "c", "text": "Smoke-test jobs that exercise representative pipelines before production promotion." },
+        { "id": "d", "text": "Clicking Select All in production Plugin Manager when updates appear." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "The article moves upgrades into reviewable files and validates them on staging with representative smoke tests. The production Plugin Manager Select All path is the outage story the article is trying to prevent."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "The security team flags a `git-client` CVE that needs action within 24 hours. Which lane fits?",
+      "options": [
+        { "id": "a", "text": "Emergency lane: bump only the affected plugin, deploy to staging, run a targeted smoke test, then promote the same day if it passes." },
+        { "id": "b", "text": "Wait for the next monthly promotion no matter how severe the advisory is." },
+        { "id": "c", "text": "Click Update All in production to get every security fix at once." },
+        { "id": "d", "text": "Disable all jobs until the next LTS release." }
+      ],
+      "correct": ["a"],
+      "explanation": "The article's cadence includes an emergency lane for advisories that cannot wait. It is still staged and tested, but the scope is deliberately narrow."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "A weekly Jenkins job checks for available plugin updates. What should it do with the update set?",
+      "options": [
+        { "id": "a", "text": "Open a pull request against the controller image repository with the new pinned plugin set and trigger a staging deploy." },
+        { "id": "b", "text": "Apply the updates directly to production because the job is automated." },
+        { "id": "c", "text": "Print the update list to a console log that nobody reviews." },
+        { "id": "d", "text": "Delete old pins so the plugin installer resolves current versions at every build." }
+      ],
+      "correct": ["a"],
+      "explanation": "The article's weekly job turns plugin updates into a pull request. That keeps the plugin set reproducible and gives staging a chance to prove the update is safe."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "After a plugin update, builds fail with `NoSuchMethodError` naming a method on `git-client`. The UI still loads, and the failure appears only when checkout runs.\n\nWhat does this most likely mean?",
+      "options": [
+        { "id": "a", "text": "A plugin dependency drifted: one plugin is calling an API that the installed dependency version no longer provides." },
+        { "id": "b", "text": "The controller heap is too small." },
+        { "id": "c", "text": "The agent label is missing." },
+        { "id": "d", "text": "The Jenkinsfile has no `stages` block." }
+      ],
+      "correct": ["a"],
+      "explanation": "The article's failed-upgrade story centers on `NoSuchMethodError`: the plugin installs and the UI looks fine, but a runtime code path calls a method that no longer exists. Staging smoke tests catch this before production users do."
+    }
+  ]
+}

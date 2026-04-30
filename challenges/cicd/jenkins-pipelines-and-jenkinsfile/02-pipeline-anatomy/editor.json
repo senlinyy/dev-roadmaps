@@ -1,0 +1,45 @@
+{
+  "language": "groovy",
+  "filename": "Jenkinsfile",
+  "completionProfile": "jenkinsfile",
+  "initialValue": "pipeline {\n  stages {\n    stage('Verify') {\n      steps {\n        sh 'mvn -B verify'\n      }\n    }\n  }\n}\n",
+  "grader": {
+    "strategy": "groovy-structure",
+    "expected": [
+      {
+        "path": ["pipeline", "agent"],
+        "exists": true,
+        "bodyMatches": "label\\s+['\"]linux-jdk21['\"]",
+        "label": "pipeline agent pins label 'linux-jdk21'"
+      },
+      {
+        "path": ["pipeline", "environment"],
+        "exists": true,
+        "bodyMatches": "MAVEN_OPTS\\s*=\\s*['\"]-Xmx1g['\"]",
+        "label": "environment block sets MAVEN_OPTS=-Xmx1g"
+      },
+      {
+        "path": ["pipeline", "options"],
+        "exists": true,
+        "bodyContains": "timeout",
+        "label": "options block exists"
+      },
+      {
+        "path": ["pipeline", "options"],
+        "bodyMatches": "timeout\\s*\\(\\s*time:\\s*30",
+        "label": "options sets timeout(time: 30, ...)"
+      },
+      {
+        "path": ["pipeline", "options"],
+        "bodyContains": "disableConcurrentBuilds",
+        "label": "options sets disableConcurrentBuilds()"
+      },
+      {
+        "path": ["pipeline", "stages", "stage", "steps"],
+        "pathArgs": [null, null, "Verify", null],
+        "bodyContains": "mvn -B verify",
+        "label": "Verify stage still runs the maven verify step"
+      }
+    ]
+  }
+}

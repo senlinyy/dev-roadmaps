@@ -1,0 +1,71 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "Three repos use `@Library('polaris-pipeline@main') _`. The platform team merges a refactor to `main`. The next build of any of those three repos picks up the new code without any change to their Jenkinsfiles.\n\nWhich is the most accurate description of this trade-off?",
+      "options": [
+        { "id": "a", "text": "Pinning to a branch is convenient (changes propagate instantly) but unsafe: a bad merge to `main` breaks every consumer at once. Use tags or SHAs in production." },
+        { "id": "b", "text": "Pinning to a branch is the recommended best practice." },
+        { "id": "c", "text": "Pinning to `main` automatically rolls back if the build fails." },
+        { "id": "d", "text": "Branch pins do not actually update; you have to restart the controller." },
+        { "id": "e", "text": "Branch pins only work on multibranch pipelines." }
+      ],
+      "correct": ["a"],
+      "explanation": "Branch pins fan out instantly: that is convenient but turns the platform team's merge into a fleet-wide deploy. The standard remediation is tags (immutable) or commit SHAs (also immutable) for any pipeline that runs in production. Branch pins are fine for the platform team's own staging pipelines and library iteration."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "Your team standardizes on `@Library('polaris-pipeline@v1.4.2') _` for production and `@Library('polaris-pipeline@main') _` on a couple of opt-in `staging-libraries` consumer repos. A platform-team engineer merges a breaking change to `main`.\n\nWhat happens?",
+      "options": [
+        { "id": "a", "text": "Production repos keep building against v1.4.2 and are unaffected. The staging-library repos break and surface the regression before the platform team cuts a v1.4.3 tag." },
+        { "id": "b", "text": "All repos break because library updates apply globally." },
+        { "id": "c", "text": "Only the controller breaks." },
+        { "id": "d", "text": "Production repos break because tags resolve to branch HEAD." }
+      ],
+      "correct": ["a"],
+      "explanation": "Pinning to a tag freezes that consumer at that commit; the tag does not move. The staging-library opt-in pattern is exactly how platform teams get fast feedback on breaking changes without taking down production: a small set of consumers track `main`, surface bugs early, and the rest of the org stays on tags."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "An auditor asks: 'Can you reproduce the exact pipeline code that ran for production deploy build #4413 from six months ago?' The Jenkinsfile pinned `@Library('polaris-pipeline@v1.4.2') _` but v1.4.2 was force-pushed by a platform engineer last week.\n\nWhat is the actual reproducibility status?",
+      "options": [
+        { "id": "a", "text": "Reproducible: tags are immutable so v1.4.2 still points to the same SHA." },
+        { "id": "b", "text": "Not reproducible: tags can be force-pushed in Git, and `@Library('...@tag')` resolves to whatever the tag points to NOW. The audit needs SHA pins or a tag-protection policy." },
+        { "id": "c", "text": "Not reproducible because Jenkins does not record which SHA was used." },
+        { "id": "d", "text": "Reproducible only if the original build is still in the build history." }
+      ],
+      "correct": ["b"],
+      "explanation": "Tags are by convention immutable but Git allows force-pushing tags. The right defenses are: (1) a tag-protection policy on the library repo, (2) pin to a SHA in highly-regulated pipelines, (3) Jenkins build-history captures the resolved SHA, so even after force-push the audit can read it from `build.xml` of the historical build. The naive 'tags are immutable' assumption is what bites."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "The platform team rolls out a new major version `v2.0.0` of the shared library that changes the signature of `buildJavaService` (the Map keys are renamed). They want production repos to opt in one at a time.\n\nWhat is the right migration mechanism?",
+      "options": [
+        { "id": "a", "text": "Keep `v1.4.x` tags maintained on the library and let consumer repos bump to `v2.0.0` at their own pace by editing their `@Library` line." },
+        { "id": "b", "text": "Force-push `v1.4.2` to point at `v2.0.0`'s commit." },
+        { "id": "c", "text": "Delete `v1.4.x` tags so everyone has to migrate." },
+        { "id": "d", "text": "Set the controller's default library version to `v2.0.0` so everyone migrates immediately." }
+      ],
+      "correct": ["a"],
+      "explanation": "Maintain both major lines, let consumers migrate when they have capacity. That is also how every major library handles the breaking-change problem. Force-pushing or deleting tags breaks reproducibility and trust. Setting the controller default to `v2.0.0` is the same as forced migration. The whole point of explicit `@Library` pinning is to give consumers control over their upgrade timing."
+    },
+    {
+      "id": "q5",
+      "type": "multiple",
+      "scenario": "Which of these are real reasons platform teams pin to immutable refs in production pipelines?",
+      "options": [
+        { "id": "a", "text": "Reproducibility: a build six months ago should produce the same artifact today." },
+        { "id": "b", "text": "Audit: regulated environments need to prove which code ran for which deploy." },
+        { "id": "c", "text": "Blast radius: a bad library merge cannot take down every pipeline at once." },
+        { "id": "d", "text": "Performance: pinned refs build faster than branch refs." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "Reproducibility, audit, and blast-radius are the real reasons. Performance is unrelated: Jenkins resolves the ref once per build and caches the library workspace either way."
+    }
+  ]
+}

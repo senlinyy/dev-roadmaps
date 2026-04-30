@@ -9,7 +9,8 @@
       {
         "path": ["runs", "using"],
         "type": "string",
-        "value": "composite"
+        "equals": "composite",
+        "label": "runs.using is composite"
       },
       {
         "path": ["runs", "steps", 0, "shell"],

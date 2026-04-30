@@ -1,0 +1,70 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "The Plugin Manager shows this warning before an upgrade:\n\n```text\ngit 5.5.0 requires ssh-credentials version 350.v2c0c6fea_a_22b_\nbut you have version 343.v884f71d78167 installed.\nssh-credentials will be upgraded automatically.\n```\n\nHow should you interpret it?",
+      "options": [
+        { "id": "a", "text": "This is a minimum-version dependency bump. Jenkins can resolve it by installing the newer `ssh-credentials`, but the changed plugin set still belongs on staging first." },
+        { "id": "b", "text": "This means `git` and `ssh-credentials` cannot ever be installed together." },
+        { "id": "c", "text": "This proves the running controller is already broken before the restart." },
+        { "id": "d", "text": "This can be ignored because transitive dependencies never affect runtime behavior." }
+      ],
+      "correct": ["a"],
+      "explanation": "The article calls this kind of warning mostly benign compared with API-removal warnings: Jenkins can pick the higher minimum version. It is still a plugin-set change that should be tested away from production."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A second warning appears in the same upgrade:\n\n```text\ngit-client 6.0.0 drops support for the deprecated\nGitClient.fetch(String, RefSpec) method. Plugins that call this method\nwill fail at runtime.\n```\n\nWhy is this more dangerous than a normal minimum-version bump?",
+      "options": [
+        { "id": "a", "text": "The install can succeed and the UI can look healthy, but a plugin that still calls the removed method may fail only when a build reaches that code path." },
+        { "id": "b", "text": "It means Jenkins will refuse to start until every Pipeline is deleted." },
+        { "id": "c", "text": "It only affects plugins that are missing from `plugins.txt`, not plugins already installed." },
+        { "id": "d", "text": "It is dangerous only for controllers that use JCasC." }
+      ],
+      "correct": ["a"],
+      "explanation": "The article's failure story is exactly this shape: the controller starts, the UI looks fine, and checkout fails later with `NoSuchMethodError` when an older plugin calls a method removed by `git-client`."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "A checkout fails after a plugin upgrade with this console fragment:\n\n```text\nCaused by: java.lang.NoSuchMethodError:\n  org.jenkinsci.plugins.gitclient.GitClient.fetch(...)\n  at hudson.plugins.git.GitSCM.fetchFrom(GitSCM.java:1052)\n```\n\nWhich investigation steps match the article's diagnosis path?",
+      "options": [
+        { "id": "a", "text": "Search the controller log for `NoSuchMethodError` or the failing class name." },
+        { "id": "b", "text": "Check Manage Jenkins > System Information > Plugins to identify the installed plugin versions." },
+        { "id": "c", "text": "Compare the plugin that called the missing method with the plugin that owns the method." },
+        { "id": "d", "text": "Immediately reload JCasC because dependency conflicts are YAML syntax errors." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "The article separates plugin runtime failures from configuration reloads. Logs and plugin inventory help identify the caller and owner. JCasC reload does not fix an API mismatch between plugin versions."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "Two plugins depend on `ssh-credentials`:\n\n```text\ngit 5.4.0 requires ssh-credentials >= 305.v8f4381501156\nkubernetes 4296.v20a_3a_3aff5e1 requires ssh-credentials >= 343.v884f71d78167\n```\n\nWhat version can satisfy both minimums?",
+      "options": [
+        { "id": "a", "text": "`343.v884f71d78167` or newer, because it satisfies both minimum-version requirements." },
+        { "id": "b", "text": "`305.v8f4381501156` exactly, because it is the first dependency listed." },
+        { "id": "c", "text": "No version can satisfy two Jenkins plugins at the same time." },
+        { "id": "d", "text": "Whichever version is already in `$JENKINS_HOME/plugins/`, even if it is lower than both minimums." }
+      ],
+      "correct": ["a"],
+      "explanation": "For normal minimum-version dependencies, Jenkins needs a version at least as high as the strictest requirement. The harder failure is when a newer dependency removes an API that another plugin still calls."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A staging controller reproduces the article's failure: an old third-party branch-source plugin calls a method removed from the new `git-client`. There is no compatible release of the third-party plugin.\n\nWhat is the safest production response?",
+      "options": [
+        { "id": "a", "text": "Block the promotion and either pin `git-client` to the compatible version for now or replace the unmaintained plugin." },
+        { "id": "b", "text": "Promote anyway because production might not hit that checkout path." },
+        { "id": "c", "text": "Click Update All again in production so Jenkins can find a better combination automatically." },
+        { "id": "d", "text": "Remove `plugins.txt` so dependencies resolve dynamically on every controller start." }
+      ],
+      "correct": ["a"],
+      "explanation": "The point of staging is to catch exactly this runtime break before users do. If no compatible third-party plugin exists, you either hold the dependency at a compatible version temporarily or replace the stale plugin."
+    }
+  ]
+}

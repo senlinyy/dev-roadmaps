@@ -1,0 +1,35 @@
+{
+  "language": "groovy",
+  "filename": "Jenkinsfile",
+  "completionProfile": "jenkinsfile",
+  "initialValue": "pipeline {\n  agent any\n\n  stages {\n    stage('Everything') {\n      steps {\n        sh '''\n          mvn -B -DskipTests package\n          mvn -B test\n          docker build -t polaris-orders:${BUILD_NUMBER} .\n        '''\n      }\n    }\n  }\n}\n",
+  "grader": {
+    "strategy": "groovy-structure",
+    "expected": [
+      {
+        "path": ["pipeline", "stages", "stage", "steps"],
+        "pathArgs": [null, null, "Build", null],
+        "bodyContains": "mvn -B -DskipTests package",
+        "label": "Build stage runs the maven package step"
+      },
+      {
+        "path": ["pipeline", "stages", "stage", "steps"],
+        "pathArgs": [null, null, "Test", null],
+        "bodyContains": "mvn -B test",
+        "label": "Test stage runs the maven test step"
+      },
+      {
+        "path": ["pipeline", "stages", "stage", "steps"],
+        "pathArgs": [null, null, "Package", null],
+        "bodyContains": "docker build",
+        "label": "Package stage runs the docker build step"
+      },
+      {
+        "path": ["pipeline", "stages", "stage"],
+        "pathArgs": [null, null, "Everything"],
+        "exists": false,
+        "label": "the original 'Everything' stage is removed"
+      }
+    ]
+  }
+}

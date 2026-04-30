@@ -4,10 +4,16 @@
   "completionProfile": "github-actions",
   "initialValue": "name: CI\non: [push]\n\njobs:\n  build:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - uses: actions/setup-python@v5\n        with:\n          python-version: '3.12'\n      - run: pip install -r requirements.txt\n      - run: python -m pytest",
   "grader": {
-    "strategy": "text-contains",
+    "strategy": "regex-all",
     "expected": [
-      "apt-get install",
-      "libpq-dev"
+      {
+        "pattern": "apt-get\\s+update[\\s\\S]*apt-get\\s+install[\\s\\S]*libpq-dev",
+        "label": "system dependency step updates apt and installs libpq-dev"
+      },
+      {
+        "pattern": "libpq-dev[\\s\\S]*pip\\s+install\\s+-r\\s+requirements\\.txt",
+        "label": "libpq-dev install appears before pip install"
+      }
     ]
   }
 }
