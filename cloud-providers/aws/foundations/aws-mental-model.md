@@ -107,20 +107,24 @@ With that translation in mind, the first AWS mental model looks like this:
 
 ```mermaid
 graph TD
-    TEAM["Team owns an app"] --> ACCOUNT["Workspace<br/>AWS account"]
-    ACCOUNT --> REGION["Location<br/>Region"]
-    ACCOUNT --> IAM["Access rules<br/>IAM permissions"]
-    REGION --> NETWORK["Private traffic area<br/>Network boundary"]
-    NETWORK --> RESOURCES["Created things<br/>AWS resources"]
-    IAM --> RESOURCES
-    RESOURCES --> APP["App<br/>DevPolaris Orders API"]
-    RESOURCES --> DATA["Data<br/>orders database"]
-    RESOURCES --> SIGNALS["Signals<br/>logs and metrics"]
+    TEAM["Team owns an app"] --> ACCOUNT["Workspace<br/>(AWS account)"]
+    ACCOUNT --> REGION["Where it runs<br/>(Region)"]
+    REGION --> NETWORK["Private traffic area<br/>(network boundary)"]
+    NETWORK --> RESOURCES["Things the team creates<br/>(AWS resources)"]
+    RESOURCES --> APP["App<br/>(DevPolaris Orders API)"]
+    RESOURCES --> DATA["Data<br/>(orders database)"]
+    RESOURCES --> SIGNALS["Signals<br/>(logs and metrics)"]
+    IAM["Access check<br/>Who can touch it?<br/>(IAM permissions)"] -.-> RESOURCES
 ```
 
-Read the diagram from top to bottom.
+Read the main line from top to bottom.
 The team does not throw the app into a vague cloud.
-The team chooses a workspace, chooses a location, gives people and services the right access rules, then creates resources inside a network boundary.
+The team gets a workspace, chooses where the service runs, puts traffic inside a network boundary, then creates the things the service needs.
+
+The side box is different.
+`IAM permissions` are not another place where the app runs.
+They are the rules AWS checks when a person, script, or service tries to touch a resource.
+That is why the side box points at resources with a dotted arrow.
 
 That is all the diagram is saying.
 It is not trying to teach every AWS service at once.
