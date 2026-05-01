@@ -12,13 +12,13 @@ pipeline {
       steps {
         withCredentials([
           [$class: 'AmazonWebServicesCredentialsBinding',
-           credentialsId: 'polaris-aws-deploy',
+           credentialsId: 'devpolaris-aws-deploy',
            accessKeyVariable: 'AWS_ACCESS_KEY_ID',
            secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'],
-          string(credentialsId: 'polaris-slack-webhook', variable: 'SLACK_WEBHOOK')
+          string(credentialsId: 'devpolaris-slack-webhook', variable: 'SLACK_WEBHOOK')
         ]) {
           sh '''
-            aws s3 cp target/orders.jar s3://polaris-artifacts/
+            aws s3 cp target/orders.jar s3://devpolaris-artifacts/
             curl -X POST -d 'deployed' $SLACK_WEBHOOK
           '''
         }

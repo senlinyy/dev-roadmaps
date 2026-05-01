@@ -6,12 +6,12 @@
     "/var/log/jenkins/builds": { "type": "dir" },
     "/var/log/jenkins/builds/orders-api-12483.log": {
       "type": "file",
-      "content": "Started by user senlin\nRunning on linux-jdk21-2 in /home/jenkins/workspace/orders-api\n[Pipeline] Start of Pipeline\n[Pipeline] node\n[Pipeline] withCredentials\nMasking supported pattern matches of $POLARIS_DEPLOY_TOKEN (credentialsId: polaris-deploy-token)\n[Pipeline] {\n[Pipeline] sh\n+ env | sort\nGITHUB_RUN_ID=12483\nHOME=/home/jenkins\nMAVEN_OPTS=-Xmx1g\nPATH=/usr/local/bin:/usr/bin\nPOLARIS_DEPLOY_TOKEN=********\nUSER=jenkins\n+ echo deploy token is ${POLARIS_DEPLOY_TOKEN}\ndeploy token is ********\n+ echo \"raw substitution check: dpop_a3f29c4b9d77\"\nraw substitution check: dpop_a3f29c4b9d77\n+ curl -fsS -H 'Authorization: Bearer ********' https://deploy.polaris.example/api/release\n{\"status\":\"ok\",\"release\":\"r-887\"}\n+ echo done\ndone\n[Pipeline] }\n[Pipeline] // withCredentials\n[Pipeline] End of Pipeline\nFinished: SUCCESS\n"
+      "content": "Started by user senlin\nRunning on linux-jdk21-2 in /home/jenkins/workspace/orders-api\n[Pipeline] Start of Pipeline\n[Pipeline] node\n[Pipeline] withCredentials\nMasking supported pattern matches of $POLARIS_DEPLOY_TOKEN (credentialsId: devpolaris-deploy-token)\n[Pipeline] {\n[Pipeline] sh\n+ env | sort\nGITHUB_RUN_ID=12483\nHOME=/home/jenkins\nMAVEN_OPTS=-Xmx1g\nPATH=/usr/local/bin:/usr/bin\nPOLARIS_DEPLOY_TOKEN=********\nUSER=jenkins\n+ echo deploy token is ${POLARIS_DEPLOY_TOKEN}\ndeploy token is ********\n+ echo \"raw substitution check: dpop_a3f29c4b9d77\"\nraw substitution check: dpop_a3f29c4b9d77\n+ curl -fsS -H 'Authorization: Bearer ********' https://deploy.devpolaris.example/api/release\n{\"status\":\"ok\",\"release\":\"r-887\"}\n+ echo done\ndone\n[Pipeline] }\n[Pipeline] // withCredentials\n[Pipeline] End of Pipeline\nFinished: SUCCESS\n"
     }
   },
   "grader": {
     "strategy": "contains",
-    "expected": ["dpop_a3f29c4b9d77", "polaris-deploy-token"],
+    "expected": ["dpop_a3f29c4b9d77", "devpolaris-deploy-token"],
     "loose": true,
     "source": "all-stdout",
     "requireCommands": ["cat", "grep"]

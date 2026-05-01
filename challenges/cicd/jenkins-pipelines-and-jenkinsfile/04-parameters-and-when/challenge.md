@@ -4,7 +4,7 @@ sectionSlug: parameters-environment-and-when-gating
 order: 4
 ---
 
-The polaris-orders pipeline always deploys to staging on every push to `main`, then waits for a manual `Promote` button before production. The team wants two changes:
+The devpolaris-orders pipeline always deploys to staging on every push to `main`, then waits for a manual `Promote` button before production. The team wants two changes:
 
 1. The pipeline should accept a `DEPLOY_ENV` parameter (`staging` or `production`) and a `RUN_INTEGRATION_TESTS` boolean parameter (default `true`).
 2. The `Deploy` stage should only run when `DEPLOY_ENV` equals `production` AND the build is on the `main` branch.

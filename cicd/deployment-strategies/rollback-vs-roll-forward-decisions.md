@@ -41,7 +41,7 @@ Roll forward feels risky because it changes production again while production is
 But it can be safer when the fix is tiny, the cause is clear, and going backward would make the system more confused.
 
 This article teaches the decision, not just the command.
-We will keep using `polaris-orders-api`, a Node.js backend deployed to Amazon ECS.
+We will keep using `devpolaris-orders-api`, a Node.js backend deployed to Amazon ECS.
 The service is rolling out version `1.8.4`.
 The new ECS task set reaches ten percent traffic through CodeDeploy, then checkout errors rise.
 
@@ -70,13 +70,13 @@ The release record looks like this:
 ```text
 release:
   id: rel-2026-04-30-184
-  service: polaris-orders-api
-  repository: github.com/polaris/orders-api
+  service: devpolaris-orders-api
+  repository: github.com/devpolaris/orders-api
   commit: 8f3a12c6
   image: 123456789012.dkr.ecr.us-east-1.amazonaws.com/orders-api@sha256:9c1cfbb322f6f2b8f8cc4d2b9f9e6b77c92c8da7ad9226110f0cf0c30a2a7f54
 
 production:
-  ecs_cluster: polaris-prod
+  ecs_cluster: devpolaris-prod
   ecs_service: orders-api-prod
   stable_task_definition: orders-api:41
   canary_task_definition: orders-api:42
@@ -147,7 +147,7 @@ A good release lead asks a slower question:
 
 > Which layer created the bad behavior, and which layer can remove it with the least extra risk?
 
-For `polaris-orders-api`, the layers look like this:
+For `devpolaris-orders-api`, the layers look like this:
 
 | Layer | What It Controls |
 |-------|------------------|
@@ -340,7 +340,7 @@ Flags are useful because they separate deployment from exposure.
 You can deploy code today and turn the behavior on later.
 You can also turn behavior off without rebuilding the application.
 
-For `polaris-orders-api`, imagine the canary is not crashing.
+For `devpolaris-orders-api`, imagine the canary is not crashing.
 The service is healthy.
 Only checkout requests that use the new discount engine fail.
 
@@ -508,7 +508,7 @@ Write it during the event, not after everyone forgets.
 
 ```text
 release: rel-2026-04-30-184
-service: polaris-orders-api
+service: devpolaris-orders-api
 version: 1.8.4
 commit: 8f3a12c6
 image: sha256:9c1cfbb322f6f2b8f8cc4d2b9f9e6b77c92c8da7ad9226110f0cf0c30a2a7f54

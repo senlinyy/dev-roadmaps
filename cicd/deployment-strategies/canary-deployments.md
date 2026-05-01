@@ -44,7 +44,7 @@ It is a release pattern:
 
 > Let the new version meet a small amount of real traffic before you trust it with all traffic.
 
-In this article, the service is `polaris-orders-api`, a Node.js backend deployed to Amazon ECS.
+In this article, the service is `devpolaris-orders-api`, a Node.js backend deployed to Amazon ECS.
 The current task definition runs version `1.8.3`.
 The new task definition runs version `1.8.4`.
 AWS CodeDeploy can shift traffic between ECS task sets through an Application Load Balancer, which lets us send ten percent of requests to the new release and keep the other ninety percent on the old release.
@@ -54,7 +54,7 @@ For example, a slow-starting service may need a longer warmup window before you 
 
 ## The Example: A New Task Set With Ten Percent Traffic
 
-`polaris-orders-api` handles checkout requests.
+`devpolaris-orders-api` handles checkout requests.
 The new release changes discount validation.
 The code passed CI.
 The image passed staging.
@@ -70,7 +70,7 @@ service:
   orders-api-prod
 
 public URL:
-  https://orders-api.polaris.example
+  https://orders-api.devpolaris.example
 
 stable task set:
   task definition: orders-api:41
@@ -130,7 +130,7 @@ The first slice should match traffic volume, user impact, and the kind of change
 | Risky data behavior | Named internal accounts first | Random traffic may be too dangerous |
 | Very low traffic service | Synthetic requests plus one test account | Percentages may not produce signal |
 
-For `polaris-orders-api`, the team chooses this plan:
+For `devpolaris-orders-api`, the team chooses this plan:
 
 ```text
 stage 1:
@@ -240,7 +240,7 @@ A canary that stays slow after the normal warmup window is telling you something
 Promotion means increasing trust gradually.
 It does not have to mean "jump from the first canary slice to everyone without watching."
 
-For `polaris-orders-api`, the promotion plan is:
+For `devpolaris-orders-api`, the promotion plan is:
 
 ```text
 10% canary:
@@ -265,7 +265,7 @@ jobs:
   canary:
     environment:
       name: production
-      url: https://orders-api.polaris.example
+      url: https://orders-api.devpolaris.example
     steps:
       - run: ./scripts/create-codedeploy-canary.sh "$IMAGE_DIGEST"
       - run: ./scripts/watch-canary.sh "$DEPLOYMENT_ID" --minutes 5
@@ -518,7 +518,7 @@ That tradeoff only pays off when the team can answer three questions:
 2. How much traffic is enough to trust that signal?
 3. What exact condition makes us stop?
 
-For `polaris-orders-api`, a healthy canary policy can stay plain:
+For `devpolaris-orders-api`, a healthy canary policy can stay plain:
 
 ```text
 canary default:

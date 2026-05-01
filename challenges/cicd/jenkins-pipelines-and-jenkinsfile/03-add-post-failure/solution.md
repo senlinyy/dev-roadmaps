@@ -15,14 +15,14 @@ pipeline {
     }
     stage('Package') {
       steps {
-        sh 'docker build -t polaris-orders:${BUILD_NUMBER} .'
+        sh 'docker build -t devpolaris-orders:${BUILD_NUMBER} .'
       }
     }
   }
 
   post {
     failure {
-      slackSend channel: '#orders-ci', message: "polaris-orders ${env.BUILD_NUMBER} failed"
+      slackSend channel: '#orders-ci', message: "devpolaris-orders ${env.BUILD_NUMBER} failed"
     }
   }
 }

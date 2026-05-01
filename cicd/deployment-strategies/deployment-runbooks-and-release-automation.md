@@ -40,7 +40,7 @@ That is why runbooks and automation belong together.
 The runbook explains the human judgment.
 The automation performs the repeatable work.
 
-In this article, the service is still `polaris-orders-api`, a Node.js backend deployed to Amazon ECS.
+In this article, the service is still `devpolaris-orders-api`, a Node.js backend deployed to Amazon ECS.
 The runbook will take one tested image digest and move it through production using the ideas from the earlier articles:
 
 - environment promotion
@@ -61,13 +61,13 @@ The runbook starts with a release record.
 Without a release record, the workflow has to ask humans for too many details.
 That is how mistakes enter the process.
 
-For `polaris-orders-api`, the release record is a small text file committed or attached to the deployment run.
+For `devpolaris-orders-api`, the release record is a small text file committed or attached to the deployment run.
 
 ```text
 release:
   id: rel-2026-04-30-184
-  service: polaris-orders-api
-  repository: github.com/polaris/orders-api
+  service: devpolaris-orders-api
+  repository: github.com/devpolaris/orders-api
   commit: 8f3a12c6
   version: 1.8.4
   image_digest: sha256:9c1cfbb322f6f2b8f8cc4d2b9f9e6b77c92c8da7ad9226110f0cf0c30a2a7f54
@@ -75,7 +75,7 @@ release:
 environments:
   staging_service: orders-api-staging
   production_service: orders-api-prod
-  production_url: https://orders-api.polaris.example
+  production_url: https://orders-api.devpolaris.example
 
 rollback:
   previous_release: rel-2026-04-28-183
@@ -156,7 +156,7 @@ This section should stay small.
 If the pre-checks become a long ceremony, people will skip them.
 Choose checks that catch real release mistakes.
 
-For `polaris-orders-api`, the important ones are:
+For `devpolaris-orders-api`, the important ones are:
 
 | Pre-Check | Why It Exists |
 |-----------|---------------|
@@ -230,7 +230,7 @@ If the rule is not written before the release starts, the team may negotiate wit
 Sometimes those sentences are true.
 Sometimes they are how a small canary becomes a full outage.
 
-For `polaris-orders-api`, the runbook writes stop rules like this:
+For `devpolaris-orders-api`, the runbook writes stop rules like this:
 
 ```text
 stop rules:
@@ -336,7 +336,7 @@ It is not the same as a smoke test.
 A smoke test asks, "Can one important path work once?"
 Post-release verification asks, "Does the live service still behave normally under real traffic?"
 
-For `polaris-orders-api`, the runbook watches:
+For `devpolaris-orders-api`, the runbook watches:
 
 - HTTP `5xx` error rate
 - checkout success rate
@@ -451,7 +451,7 @@ image_digest=sha256:9c1cfbb322f6f2b8f8cc4d2b9f9e6b77c92c8da7ad9226110f0cf0c30a2a
 rollback_task_definition=orders-api:41
 
 codedeploy_deployment=d-7A4Q9B2KD
-test_listener=https://orders-api-test.polaris.example
+test_listener=https://orders-api-test.devpolaris.example
 readyz=pass
 smoke_checkout=pass
 traffic=orders-api:42:10,orders-api:41:90
@@ -520,7 +520,7 @@ If a team deploys the jar directly, the runbook should record the jar checksum t
 
 ```text
 runtime-specific artifact record:
-  service: polaris-orders-api
+  service: devpolaris-orders-api
   version: 1.8.4
   commit: 8f3a12c6
   artifact:

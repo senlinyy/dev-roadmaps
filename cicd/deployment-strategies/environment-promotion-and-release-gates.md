@@ -44,7 +44,7 @@ It does not know whether the payment sandbox changed.
 It does not know whether the team is in the middle of a customer event.
 Promotion gives the team a clean place to ask those questions before users are affected.
 
-In this module, we will follow one service: a Node.js backend called `polaris-orders-api`.
+In this module, we will follow one service: a Node.js backend called `devpolaris-orders-api`.
 It is deployed to a managed container service, using Amazon ECS as the concrete example.
 Amazon ECS runs the service as tasks on Fargate, stores each container setup as a task definition revision, and lets the service replace old tasks with new tasks during a deployment.
 That makes the release mechanics easy to see without asking you to manage servers by hand.
@@ -53,7 +53,7 @@ That makes the release mechanics easy to see without asking you to manage server
 
 ## The Example: A Node Orders API
 
-Imagine `polaris-orders-api` handles checkout requests.
+Imagine `devpolaris-orders-api` handles checkout requests.
 It validates carts, applies discount codes, writes order records, and publishes order events.
 If this API is down, users can browse products but cannot finish checkout.
 
@@ -78,7 +78,7 @@ Without them, the pipeline can only say "AWS accepted the deploy request."
 That is not the same as "the checkout API is healthy."
 
 The setup has four named pieces.
-The code lives in `github.com/polaris/orders-api`.
+The code lives in `github.com/devpolaris/orders-api`.
 The container image lives in Amazon ECR (Elastic Container Registry, AWS's image registry).
 Staging runs an ECS (Elastic Container Service) service named `orders-api-staging`.
 Production runs a separate ECS service named `orders-api-prod`.
@@ -170,7 +170,7 @@ the production job should not receive production access until the production gat
 ```yaml
 environment:
   name: production
-  url: https://orders-api.polaris.example
+  url: https://orders-api.devpolaris.example
 ```
 
 For this example, staging has an AWS role that can update `orders-api-staging`.
@@ -234,7 +234,7 @@ deploy-production:
   needs: [build, deploy-staging]
   environment:
     name: production
-    url: https://orders-api.polaris.example
+    url: https://orders-api.devpolaris.example
 ```
 
 Those few lines teach three ideas.
@@ -247,7 +247,7 @@ The URL tells reviewers which real service the job is touching.
 A gate should answer a concrete question.
 If nobody can explain what a gate proves, the gate is probably just ceremony.
 
-For `polaris-orders-api`, the gates are small and practical:
+For `devpolaris-orders-api`, the gates are small and practical:
 
 | Gate | Question It Answers | Evidence |
 |------|---------------------|----------|
@@ -276,7 +276,7 @@ A smoke test is a small test that proves the service can breathe in its target e
 It should not replay the entire test suite.
 It should check the few things that would embarrass the release if they were broken.
 
-For `polaris-orders-api`, the staging smoke test does three things:
+For `devpolaris-orders-api`, the staging smoke test does three things:
 
 1. Calls `/readyz`.
 2. Calls `/version` and checks the image digest.
@@ -285,7 +285,7 @@ For `polaris-orders-api`, the staging smoke test does three things:
 The output should be short enough for a reviewer to understand:
 
 ```bash
-$ ./scripts/smoke-test.sh https://orders-api-staging.polaris.example
+$ ./scripts/smoke-test.sh https://orders-api-staging.devpolaris.example
 checking /readyz
 ready: true
 
@@ -417,7 +417,7 @@ The mistake is using the same gate for every change.
 Too little control makes production fragile.
 Too much control makes teams avoid deploying, which creates bigger releases and more fear.
 
-For `polaris-orders-api`, the first version of the policy can stay simple:
+For `devpolaris-orders-api`, the first version of the policy can stay simple:
 
 ```text
 default path:

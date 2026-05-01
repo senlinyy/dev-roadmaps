@@ -10,7 +10,7 @@
   },
   "customCommands": {
     "systemctl": {
-      "stdout": "● nginx.service - A high performance web server\n     Loaded: loaded (/etc/systemd/system/nginx.service; enabled)\n     Active: active (running) since Mon 2025-01-15 10:03:12 UTC; 3h ago\n   Main PID: 1234 (nginx)\n      Tasks: 5 (limit: 4915)\n     Memory: 12.4M\n        CPU: 320ms\n   CGroup: /system.slice/nginx.service\n           ├─1234 nginx: master process /usr/sbin/nginx\n           └─1235 nginx: worker process\n\nJan 15 10:03:12 polaris systemd[1]: Starting A high performance web server...\nJan 15 10:03:12 polaris systemd[1]: Started A high performance web server.\n",
+      "stdout": "● nginx.service - A high performance web server\n     Loaded: loaded (/etc/systemd/system/nginx.service; enabled)\n     Active: active (running) since Mon 2025-01-15 10:03:12 UTC; 3h ago\n   Main PID: 1234 (nginx)\n      Tasks: 5 (limit: 4915)\n     Memory: 12.4M\n        CPU: 320ms\n   CGroup: /system.slice/nginx.service\n           ├─1234 nginx: master process /usr/sbin/nginx\n           └─1235 nginx: worker process\n\nJan 15 10:03:12 devpolaris systemd[1]: Starting A high performance web server...\nJan 15 10:03:12 devpolaris systemd[1]: Started A high performance web server.\n",
       "exitCode": 0
     }
   },

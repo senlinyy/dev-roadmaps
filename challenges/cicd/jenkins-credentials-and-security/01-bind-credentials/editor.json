@@ -2,7 +2,7 @@
   "language": "groovy",
   "filename": "Jenkinsfile",
   "completionProfile": "jenkinsfile",
-  "initialValue": "pipeline {\n  agent any\n\n  environment {\n    AWS_ACCESS_KEY_ID = 'AKIAIOSFODNN7EXAMPLE'\n    AWS_SECRET_ACCESS_KEY = 'wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY'\n    SLACK_WEBHOOK = 'https://hooks.slack.com/services/T000/B000/XXXXX'\n  }\n\n  stages {\n    stage('Build') {\n      steps {\n        sh 'mvn -B package'\n      }\n    }\n    stage('Deploy') {\n      steps {\n        sh '''\n          aws s3 cp target/orders.jar s3://polaris-artifacts/\n          curl -X POST -d 'deployed' $SLACK_WEBHOOK\n        '''\n      }\n    }\n  }\n}\n",
+  "initialValue": "pipeline {\n  agent any\n\n  environment {\n    AWS_ACCESS_KEY_ID = 'AKIAIOSFODNN7EXAMPLE'\n    AWS_SECRET_ACCESS_KEY = 'wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY'\n    SLACK_WEBHOOK = 'https://hooks.slack.com/services/T000/B000/XXXXX'\n  }\n\n  stages {\n    stage('Build') {\n      steps {\n        sh 'mvn -B package'\n      }\n    }\n    stage('Deploy') {\n      steps {\n        sh '''\n          aws s3 cp target/orders.jar s3://devpolaris-artifacts/\n          curl -X POST -d 'deployed' $SLACK_WEBHOOK\n        '''\n      }\n    }\n  }\n}\n",
   "grader": {
     "strategy": "regex-all",
     "expected": [
@@ -11,12 +11,12 @@
         "label": "Deploy stage uses withCredentials(...)"
       },
       {
-        "pattern": "credentialsId\\s*:\\s*['\"]polaris-aws-deploy['\"]",
-        "label": "withCredentials references credentialsId 'polaris-aws-deploy'"
+        "pattern": "credentialsId\\s*:\\s*['\"]devpolaris-aws-deploy['\"]",
+        "label": "withCredentials references credentialsId 'devpolaris-aws-deploy'"
       },
       {
-        "pattern": "credentialsId\\s*:\\s*['\"]polaris-slack-webhook['\"]",
-        "label": "withCredentials references credentialsId 'polaris-slack-webhook'"
+        "pattern": "credentialsId\\s*:\\s*['\"]devpolaris-slack-webhook['\"]",
+        "label": "withCredentials references credentialsId 'devpolaris-slack-webhook'"
       },
       {
         "pattern": "variable\\s*:\\s*['\"]SLACK_WEBHOOK['\"]",

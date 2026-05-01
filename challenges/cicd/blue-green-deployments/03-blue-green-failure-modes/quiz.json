@@ -4,7 +4,7 @@
     {
       "id": "q1",
       "type": "single",
-      "scenario": "A pre-switch validation report says:\n\n```text\nURL tested: https://orders-api.polaris.example/version\ntask definition: orders-api:41\nexpected green task definition: orders-api:42\n```\n\nThe report marks the test as passed because the endpoint returned 200. What is the correct review response?",
+      "scenario": "A pre-switch validation report says:\n\n```text\nURL tested: https://orders-api.devpolaris.example/version\ntask definition: orders-api:41\nexpected green task definition: orders-api:42\n```\n\nThe report marks the test as passed because the endpoint returned 200. What is the correct review response?",
       "options": [
         { "id": "a", "text": "Reject the result because the test hit the public blue URL, not the green test listener." },
         { "id": "b", "text": "Accept the result because any 200 response proves green is healthy." },
@@ -69,7 +69,7 @@
     {
       "id": "q6",
       "type": "multiple",
-      "scenario": "Which checks belong before or immediately after a blue-green traffic switch for `polaris-orders-api`?",
+      "scenario": "Which checks belong before or immediately after a blue-green traffic switch for `devpolaris-orders-api`?",
       "options": [
         { "id": "a", "text": "Before switch: test listener `/readyz` returns ready for green." },
         { "id": "b", "text": "Before switch: test listener `/version` reports `orders-api:42`." },

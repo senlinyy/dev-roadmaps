@@ -43,7 +43,7 @@ The key idea is simple:
 
 > Build the next production beside the current production, then switch which one receives users.
 
-In this article, the target is a Node.js backend called `polaris-orders-api`.
+In this article, the target is a Node.js backend called `devpolaris-orders-api`.
 We use Amazon ECS on Fargate with AWS CodeDeploy as the concrete deployment surface.
 CodeDeploy can create a replacement ECS task set, connect it to a second Application Load Balancer target group, test it through a test listener, and then move production traffic.
 The same pattern also works on many app platforms:
@@ -54,7 +54,7 @@ For example, a Spring Boot app may need the JVM, application context, and databa
 
 ## The Example: Blue and Green Task Sets
 
-`polaris-orders-api` handles checkout requests.
+`devpolaris-orders-api` handles checkout requests.
 The current production version is `1.8.3`.
 The new release, `1.8.4`, changes discount validation and adds a new response field for order totals.
 
@@ -65,7 +65,7 @@ service:
   orders-api-prod
 
 public URL:
-  https://orders-api.polaris.example
+  https://orders-api.devpolaris.example
 
 blue task set:
   task definition: orders-api:41
@@ -142,14 +142,14 @@ blue:
   target group: orders-api-blue-tg
   version: 1.8.3
   traffic: 100%
-  public URL: https://orders-api.polaris.example
+  public URL: https://orders-api.devpolaris.example
 
 green:
   task definition: orders-api:42
   target group: orders-api-green-tg
   version: 1.8.4
   traffic: 0%
-  test URL: https://orders-api-test.polaris.example
+  test URL: https://orders-api-test.devpolaris.example
 ```
 
 The green smoke test checks the same small workflow you care about in production.
@@ -259,7 +259,7 @@ The most embarrassing blue-green mistake is testing the old task set while belie
 The test output may look fine:
 
 ```text
-URL tested: https://orders-api.polaris.example/version
+URL tested: https://orders-api.devpolaris.example/version
 release: 2026-04-27-2b91fe0a
 task definition: orders-api:41
 ```
@@ -343,7 +343,7 @@ Blue-green buys speed at the switching moment.
 It also buys a fast traffic rollback path.
 The cost is that you need two production-ready targets for a while.
 
-For `polaris-orders-api`, that means:
+For `devpolaris-orders-api`, that means:
 
 Blue is not just an old copy.
 It is a living rollback path.

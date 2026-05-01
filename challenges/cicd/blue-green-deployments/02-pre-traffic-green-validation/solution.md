@@ -1,6 +1,6 @@
 ```yaml
 env:
-  TEST_URL: https://orders-api-test.polaris.example
+  TEST_URL: https://orders-api-test.devpolaris.example
   EXPECTED_TASK_DEFINITION: orders-api:42
 
 jobs:

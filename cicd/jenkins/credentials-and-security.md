@@ -10,7 +10,7 @@ id: article-cicd-jenkins-credentials-and-security
 ## Table of Contents
 
 1. [The Secret Problem on a Self-Hosted Server](#the-secret-problem-on-a-self-hosted-server)
-2. [The Operational Spine: polaris-orders Deploys to AWS](#the-operational-spine-polaris-orders-deploys-to-aws)
+2. [The Operational Spine: devpolaris-orders Deploys to AWS](#the-operational-spine-devpolaris-orders-deploys-to-aws)
 3. [The Credentials Store](#the-credentials-store)
 4. [Binding Credentials into Builds](#binding-credentials-into-builds)
 5. [How Masking Actually Works (and Where It Fails)](#how-masking-actually-works-and-where-it-fails)
@@ -36,9 +36,9 @@ That changes how we think about three things this article covers:
 
 The goal of this article is to walk one realistic deploy pipeline through four stages of hardening, ending at short-lived federated credentials that look almost identical to the OIDC pattern from the GitHub Actions article.
 
-## The Operational Spine: polaris-orders Deploys to AWS
+## The Operational Spine: devpolaris-orders Deploys to AWS
 
-The team behind `polaris-orders` (a Node.js order-management service) has just moved their build off a developer's laptop and onto a fresh Jenkins controller. They need their pipeline to upload a built tarball to an S3 bucket called `polaris-orders-staging-artifacts` and then trigger an ECS deploy. Both of those calls need AWS credentials.
+The team behind `devpolaris-orders` (a Node.js order-management service) has just moved their build off a developer's laptop and onto a fresh Jenkins controller. They need their pipeline to upload a built tarball to an S3 bucket called `devpolaris-orders-staging-artifacts` and then trigger an ECS deploy. Both of those calls need AWS credentials.
 
 We will follow this pipeline through four phases:
 
@@ -86,7 +86,7 @@ There are two ways to inject a stored credential into a build step. They look sl
 
 ### Phase 1: The Hardcoded Disaster
 
-Before we look at the right answer, here is what `polaris-orders` originally shipped:
+Before we look at the right answer, here is what `devpolaris-orders` originally shipped:
 
 ```groovy
 pipeline {
@@ -97,7 +97,7 @@ pipeline {
                 sh '''
                     export AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE
                     export AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
-                    aws s3 cp build/orders-1.4.2.tar.gz s3://polaris-orders-staging-artifacts/
+                    aws s3 cp build/orders-1.4.2.tar.gz s3://devpolaris-orders-staging-artifacts/
                 '''
             }
         }
@@ -111,8 +111,8 @@ The build log is straightforward and very, very bad:
 [Pipeline] sh
 + export AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE
 + export AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
-+ aws s3 cp build/orders-1.4.2.tar.gz s3://polaris-orders-staging-artifacts/
-upload: build/orders-1.4.2.tar.gz to s3://polaris-orders-staging-artifacts/orders-1.4.2.tar.gz
++ aws s3 cp build/orders-1.4.2.tar.gz s3://devpolaris-orders-staging-artifacts/
+upload: build/orders-1.4.2.tar.gz to s3://devpolaris-orders-staging-artifacts/orders-1.4.2.tar.gz
 ```
 
 That key is now in the build log, the Jenkinsfile, the Git history of the repo, every developer's laptop with a clone, every fork, every search-indexed mirror, and the controller's archived build records under `$JENKINS_HOME/jobs/<job>/builds/<n>/log`. Anyone with Read permission on this Jenkins job (which, on a fresh install, often means "logged-in users") can fetch it. Treat it as compromised the moment you save the file.
@@ -131,7 +131,7 @@ pipeline {
                     string(credentialsId: 'aws-staging-key-id',   variable: 'AWS_ACCESS_KEY_ID'),
                     string(credentialsId: 'aws-staging-secret',   variable: 'AWS_SECRET_ACCESS_KEY')
                 ]) {
-                    sh 'aws s3 cp build/orders-1.4.2.tar.gz s3://polaris-orders-staging-artifacts/'
+                    sh 'aws s3 cp build/orders-1.4.2.tar.gz s3://devpolaris-orders-staging-artifacts/'
                 }
             }
         }
@@ -147,8 +147,8 @@ The build log of the Phase 2 job is dramatically calmer:
 [Pipeline] withCredentials
 [Pipeline] {
 [Pipeline] sh
-+ aws s3 cp build/orders-1.4.2.tar.gz s3://polaris-orders-staging-artifacts/
-upload: build/orders-1.4.2.tar.gz to s3://polaris-orders-staging-artifacts/orders-1.4.2.tar.gz
++ aws s3 cp build/orders-1.4.2.tar.gz s3://devpolaris-orders-staging-artifacts/
+upload: build/orders-1.4.2.tar.gz to s3://devpolaris-orders-staging-artifacts/orders-1.4.2.tar.gz
 [Pipeline] }
 [Pipeline] // withCredentials
 ```
@@ -169,7 +169,7 @@ pipeline {
                 AWS_SECRET_ACCESS_KEY = credentials('aws-staging-secret')
             }
             steps {
-                sh 'aws s3 cp build/orders-1.4.2.tar.gz s3://polaris-orders-staging-artifacts/'
+                sh 'aws s3 cp build/orders-1.4.2.tar.gz s3://devpolaris-orders-staging-artifacts/'
             }
         }
     }
@@ -303,13 +303,13 @@ Two plugins do almost all the real work in production:
 
 The **Matrix Authorization Strategy** plugin (version 3.2.8 at the time of writing, requires Jenkins 2.479.3 or newer) gives you a permission matrix: a grid of users/groups across the top and permissions down the side. You tick the boxes you want each principal to have.
 
-A small worked example for `polaris-orders`:
+A small worked example for `devpolaris-orders`:
 
 | User / Group         | Overall Read | Job Read | Job Build | Job Configure | Job Delete | Job Workspace | Job Cancel |
 | :------------------- | :----------: | :------: | :-------: | :-----------: | :--------: | :-----------: | :--------: |
-| `@polaris-platform`  | y            | y        | y         | y             | y          | y             | y          |
-| `@polaris-orders`    | y            | y        | y         | y             |            | y             | y          |
-| `@polaris-readonly`  | y            | y        |           |               |            | y             |            |
+| `@devpolaris-platform`  | y            | y        | y         | y             | y          | y             | y          |
+| `@devpolaris-orders`    | y            | y        | y         | y             |            | y             | y          |
+| `@devpolaris-readonly`  | y            | y        |           |               |            | y             |            |
 | `anonymous`          |              |          |           |               |            |               |            |
 
 This is enough on a small team but does not scale. With 30 services and 100 engineers, the matrix becomes unmanageable.
@@ -422,8 +422,8 @@ pipeline {
         stage('Deploy to Staging') {
             when { branch 'main' }
             steps {
-                withAWS(role: 'polaris-orders-staging-deploy', roleAccount: '123456789012', region: 'us-east-1') {
-                    sh 'aws s3 cp build/orders-1.4.2.tar.gz s3://polaris-orders-staging-artifacts/'
+                withAWS(role: 'devpolaris-orders-staging-deploy', roleAccount: '123456789012', region: 'us-east-1') {
+                    sh 'aws s3 cp build/orders-1.4.2.tar.gz s3://devpolaris-orders-staging-artifacts/'
                 }
             }
         }
@@ -442,14 +442,14 @@ If your Jenkins is running anywhere with a publicly verifiable JWT issuer (EKS w
   "Version": "2012-10-17",
   "Statement": [{
     "Effect": "Allow",
-    "Principal": { "Federated": "arn:aws:iam::123456789012:oidc-provider/jenkins.polaris.example.com" },
+    "Principal": { "Federated": "arn:aws:iam::123456789012:oidc-provider/jenkins.devpolaris.example.com" },
     "Action": "sts:AssumeRoleWithWebIdentity",
     "Condition": {
       "StringEquals": {
-        "jenkins.polaris.example.com:aud": "sts.amazonaws.com"
+        "jenkins.devpolaris.example.com:aud": "sts.amazonaws.com"
       },
       "StringLike": {
-        "jenkins.polaris.example.com:sub": "job/polaris-orders/main:*"
+        "jenkins.devpolaris.example.com:sub": "job/devpolaris-orders/main:*"
       }
     }
   }]

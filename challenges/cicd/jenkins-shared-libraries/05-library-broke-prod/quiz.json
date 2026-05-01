@@ -4,7 +4,7 @@
     {
       "id": "q1",
       "type": "single",
-      "scenario": "Within four minutes, every production pipeline that loads `@Library('polaris-pipeline@main') _` is failing. Builds report `MissingMethodException` after a merge changed the `deployToS3` signature.\n\nWhat is the fastest mitigation while a proper release fix is prepared?",
+      "scenario": "Within four minutes, every production pipeline that loads `@Library('devpolaris-pipeline@main') _` is failing. Builds report `MissingMethodException` after a merge changed the `deployToS3` signature.\n\nWhat is the fastest mitigation while a proper release fix is prepared?",
       "options": [
         { "id": "a", "text": "Revert the offending commit on `main` so branch-pinned consumers pick up the old behavior on their next build." },
         { "id": "b", "text": "Ask every consumer team to edit their Jenkinsfile before doing anything else." },
@@ -43,7 +43,7 @@
     {
       "id": "q4",
       "type": "single",
-      "scenario": "The platform team wants to move 130 repositories from `@Library('polaris-pipeline@main') _` to a released tag. They cannot hand-edit every Jenkinsfile. Which approach scales?",
+      "scenario": "The platform team wants to move 130 repositories from `@Library('devpolaris-pipeline@main') _` to a released tag. They cannot hand-edit every Jenkinsfile. Which approach scales?",
       "options": [
         { "id": "a", "text": "Open coordinated pull requests that pin each repository to the released tag, then let service owners review and merge." },
         { "id": "b", "text": "Send a chat message asking every team to remember the change." },

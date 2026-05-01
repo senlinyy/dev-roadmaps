@@ -1,6 +1,6 @@
 ```yaml
 production:
-  service: polaris-orders-api
+  service: devpolaris-orders-api
   flags:
     FEATURE_DISCOUNT_V1: true
     FEATURE_DISCOUNT_V2: false

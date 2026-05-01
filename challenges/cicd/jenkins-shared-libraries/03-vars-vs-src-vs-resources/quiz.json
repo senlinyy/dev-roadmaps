@@ -20,12 +20,12 @@
       "scenario": "You want to extract a `SemverHelper` class that parses and compares version strings, then call it from several `vars/` steps.\n\nWhere does the class go?",
       "options": [
         { "id": "a", "text": "`vars/SemverHelper.groovy`." },
-        { "id": "b", "text": "`src/com/polaris/SemverHelper.groovy` with a package declaration; import from the global step via `import com.polaris.SemverHelper`." },
+        { "id": "b", "text": "`src/com/devpolaris/SemverHelper.groovy` with a package declaration; import from the global step via `import com.devpolaris.SemverHelper`." },
         { "id": "c", "text": "`resources/SemverHelper.txt`." },
         { "id": "d", "text": "Helpers cannot be reused across `vars/` steps." }
       ],
       "correct": ["b"],
-      "explanation": "`src/` is the standard Java/Groovy source tree for the shared library: real classes with packages and imports. Global steps in `vars/` then `import com.polaris.SemverHelper` like any other class. Putting the class under `vars/` would expose it as a top-level step (callable as `SemverHelper(...)` from a Jenkinsfile), which is rarely what you want."
+      "explanation": "`src/` is the standard Java/Groovy source tree for the shared library: real classes with packages and imports. Global steps in `vars/` then `import com.devpolaris.SemverHelper` like any other class. Putting the class under `vars/` would expose it as a top-level step (callable as `SemverHelper(...)` from a Jenkinsfile), which is rarely what you want."
     },
     {
       "id": "q3",
@@ -51,14 +51,14 @@
         { "id": "d", "text": "`src/` classes load faster than `vars/` steps." }
       ],
       "correct": ["a", "b", "c"],
-      "explanation": "Testability, encapsulation, and composability are the load-bearing reasons. Load time is not a meaningful difference. The pattern: thin `vars/` steps that delegate to classes in `src/`, with templates in `resources/`. This is also how the article's `polaris-pipeline` library is structured."
+      "explanation": "Testability, encapsulation, and composability are the load-bearing reasons. Load time is not a meaningful difference. The pattern: thin `vars/` steps that delegate to classes in `src/`, with templates in `resources/`. This is also how the article's `devpolaris-pipeline` library is structured."
     },
     {
       "id": "q5",
       "type": "single",
       "scenario": "A junior engineer puts a 600-line `def call(Map config = [:]) { ... }` in `vars/buildJavaService.groovy` with all the helper functions defined as nested closures inside `call`.\n\nWhat is the right refactor recommendation?",
       "options": [
-        { "id": "a", "text": "Extract helpers to `src/com/polaris/Build.groovy` (or similar) as proper class methods, leave `vars/buildJavaService.groovy` as a thin wrapper that constructs the helper and orchestrates." },
+        { "id": "a", "text": "Extract helpers to `src/com/devpolaris/Build.groovy` (or similar) as proper class methods, leave `vars/buildJavaService.groovy` as a thin wrapper that constructs the helper and orchestrates." },
         { "id": "b", "text": "Leave it; nested closures are idiomatic." },
         { "id": "c", "text": "Move everything to `resources/` as a template." },
         { "id": "d", "text": "Convert the file to Java." }

@@ -45,7 +45,7 @@ Mobile apps keep retrying API calls.
 Background workers keep sending events.
 The release process has to work while production is alive.
 
-In this article, we will use a Node.js backend called `polaris-orders-api`.
+In this article, we will use a Node.js backend called `devpolaris-orders-api`.
 It runs on a managed container service, using Amazon ECS as the concrete example.
 The deployment platform hides the individual machines, but it exposes things app developers can reason about:
 task definitions, running tasks, target group health, service events, logs, and rollback.
@@ -56,7 +56,7 @@ That matters because the rollout should wait for the service to be truly ready, 
 
 ## The Example: One ECS Service, Two Task Definitions
 
-`polaris-orders-api` handles checkout requests.
+`devpolaris-orders-api` handles checkout requests.
 The current production release is `1.8.3`.
 The new release, `1.8.4`, changes discount validation.
 
@@ -67,7 +67,7 @@ service:
   orders-api-prod
 
 public URL:
-  https://orders-api.polaris.example
+  https://orders-api.devpolaris.example
 
 current production task definition:
   task definition: orders-api:41
@@ -274,7 +274,7 @@ jobs:
   rollout:
     environment:
       name: production
-      url: https://orders-api.polaris.example
+      url: https://orders-api.devpolaris.example
     steps:
       - run: ./scripts/register-task-definition.sh "$IMAGE_DIGEST"
       - run: ./scripts/update-ecs-service.sh orders-api-prod
@@ -309,7 +309,7 @@ That status means the load balancer asked the health endpoint a question and did
 Now the app log gives the human reason:
 
 ```text
-2026-04-30T18:23:09Z booting polaris-orders-api version=1.8.4
+2026-04-30T18:23:09Z booting devpolaris-orders-api version=1.8.4
 2026-04-30T18:23:10Z readiness failed reason="missing ORDERS_TOPIC"
 2026-04-30T18:23:15Z readiness failed reason="missing ORDERS_TOPIC"
 ```
@@ -418,7 +418,7 @@ The next engineer can see what changed, when it stopped, and what to inspect fir
 Rolling deployments trade speed for safety.
 You spend more time watching the release, but each step has a smaller blast radius.
 
-For `polaris-orders-api`, the team chooses this default:
+For `devpolaris-orders-api`, the team chooses this default:
 
 ```text
 default production rollout:

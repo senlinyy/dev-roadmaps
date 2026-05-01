@@ -1,5 +1,5 @@
 ```groovy
-@Library('polaris-pipeline@v1.4.2') _
+@Library('devpolaris-pipeline@v1.4.2') _
 
 buildJavaService(
   service: 'orders',

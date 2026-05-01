@@ -2,14 +2,14 @@
   "language": "yaml",
   "filename": ".github/workflows/blue-green.yml",
   "completionProfile": "github-actions",
-  "initialValue": "name: Blue Green Deploy\non:\n  workflow_dispatch:\n\nenv:\n  TEST_URL: https://orders-api.polaris.example\n  EXPECTED_TASK_DEFINITION: orders-api:42\n\njobs:\n  validate-green:\n    runs-on: ubuntu-latest\n    steps:\n      - run: ./scripts/check-ready.sh \"$TEST_URL/readyz\"\n      - run: ./scripts/check-version.sh \"$TEST_URL\" \"$EXPECTED_TASK_DEFINITION\"\n      - run: ./scripts/smoke-checkout.sh \"$TEST_URL\"\n",
+  "initialValue": "name: Blue Green Deploy\non:\n  workflow_dispatch:\n\nenv:\n  TEST_URL: https://orders-api.devpolaris.example\n  EXPECTED_TASK_DEFINITION: orders-api:42\n\njobs:\n  validate-green:\n    runs-on: ubuntu-latest\n    steps:\n      - run: ./scripts/check-ready.sh \"$TEST_URL/readyz\"\n      - run: ./scripts/check-version.sh \"$TEST_URL\" \"$EXPECTED_TASK_DEFINITION\"\n      - run: ./scripts/smoke-checkout.sh \"$TEST_URL\"\n",
   "grader": {
     "strategy": "yaml-paths",
     "expected": [
       {
         "path": ["env", "TEST_URL"],
         "type": "string",
-        "equals": "https://orders-api-test.polaris.example",
+        "equals": "https://orders-api-test.devpolaris.example",
         "label": "validation uses the test listener URL"
       },
       {

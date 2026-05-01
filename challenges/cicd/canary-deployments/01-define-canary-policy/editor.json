@@ -2,7 +2,7 @@
   "language": "yaml",
   "filename": "canary-policy.yml",
   "completionProfile": "yaml",
-  "initialValue": "service: polaris-orders-api\nrelease: rel-2026-04-30-184\nchange: discount validation rewrite\ncanary:\n  first_slice_percent: 10\n  watch_window_minutes: 5\n  metrics_by_release: false\n  stop_rules:\n    - stop if the team feels uncomfortable\npromotion:\n  keep_previous_task_set: true\n",
+  "initialValue": "service: devpolaris-orders-api\nrelease: rel-2026-04-30-184\nchange: discount validation rewrite\ncanary:\n  first_slice_percent: 10\n  watch_window_minutes: 5\n  metrics_by_release: false\n  stop_rules:\n    - stop if the team feels uncomfortable\npromotion:\n  keep_previous_task_set: true\n",
   "grader": {
     "strategy": "yaml-paths",
     "expected": [

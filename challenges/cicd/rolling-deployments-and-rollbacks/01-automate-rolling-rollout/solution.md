@@ -4,7 +4,7 @@ jobs:
     runs-on: ubuntu-latest
     environment:
       name: production
-      url: https://orders-api.polaris.example
+      url: https://orders-api.devpolaris.example
     steps:
       - run: ./scripts/register-task-definition.sh "${{ inputs.image_digest }}"
       - run: ./scripts/update-ecs-service.sh orders-api-prod

@@ -7,8 +7,8 @@
     "strategy": "regex-all",
     "expected": [
       {
-        "pattern": "@Library\\s*\\(\\s*['\"]polaris-pipeline@v1\\.4\\.2['\"]\\s*\\)\\s*_",
-        "label": "@Library('polaris-pipeline@v1.4.2') _ at top"
+        "pattern": "@Library\\s*\\(\\s*['\"]devpolaris-pipeline@v1\\.4\\.2['\"]\\s*\\)\\s*_",
+        "label": "@Library('devpolaris-pipeline@v1.4.2') _ at top"
       },
       {
         "pattern": "buildJavaService\\s*\\(",

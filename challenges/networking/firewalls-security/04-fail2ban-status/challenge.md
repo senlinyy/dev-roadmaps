@@ -4,7 +4,7 @@ sectionSlug: automated-defense-with-fail2ban
 order: 4
 ---
 
-The SOC asked you to confirm fail2ban is actively blocking SSH brute-force traffic on `polaris-bastion-03`. You have three artifacts:
+The SOC asked you to confirm fail2ban is actively blocking SSH brute-force traffic on `devpolaris-bastion-03`. You have three artifacts:
 
 - `fail2ban-client status sshd`, the live jail status (run it directly, the runtime stubs the binary).
 - `/etc/fail2ban/jail.local`, the SSH jail configuration (so you can confirm `maxretry`, `bantime`, and `findtime`).

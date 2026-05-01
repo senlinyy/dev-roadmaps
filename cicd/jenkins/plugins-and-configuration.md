@@ -163,7 +163,7 @@ $ docker run -d \
     -e CASC_JENKINS_CONFIG=/var/jenkins_home/casc_configs \
     -e GITHUB_TOKEN=ghp_xxx \
     -e ADMIN_PASSWORD=changeit \
-    polaris/jenkins-controller:2.555.1
+    devpolaris/jenkins-controller:2.555.1
 ```
 
 The architectural picture, end to end, looks like this. The image build bakes plugins from `plugins.txt`. The container starts. Jenkins core boots. JCasC loads `jenkins.yaml`. Within a few seconds, you have a controller that is byte-for-byte identical to every other controller built from the same Dockerfile and the same YAML.
@@ -198,7 +198,7 @@ Here is a starter `jenkins.yaml` for a small team. It enforces zero executors on
 
 ```yaml
 jenkins:
-  systemMessage: "Polaris CI controller. Runbook: https://wiki.polaris.dev/jenkins"
+  systemMessage: "DevPolaris CI controller. Runbook: https://wiki.devpolaris.dev/jenkins"
   numExecutors: 0
   mode: EXCLUSIVE
   labelString: "controller"
@@ -248,17 +248,17 @@ credentials:
 
 unclassified:
   location:
-    url: "https://jenkins.polaris.dev/"
-    adminAddress: "platform-team@polaris.dev"
+    url: "https://jenkins.devpolaris.dev/"
+    adminAddress: "platform-team@devpolaris.dev"
   globalLibraries:
     libraries:
-      - name: "polaris-pipeline"
+      - name: "devpolaris-pipeline"
         defaultVersion: "v1.4.2"
         retriever:
           modernSCM:
             scm:
               git:
-                remote: "https://github.com/polaris/jenkins-shared-library.git"
+                remote: "https://github.com/devpolaris/jenkins-shared-library.git"
 ```
 
 Two details to notice. First, `numExecutors: 0` is the controller's executor count, so builds will never run on the controller itself, only on agents. Second, every secret value uses `${ENV_VAR}` syntax. JCasC reads these from the controller's process environment at startup. The actual values come from the orchestrator (Docker Compose, Kubernetes Secrets, AWS Secrets Manager) so they never sit in the YAML file or in version control.
@@ -289,21 +289,21 @@ will fail at runtime. Affected: git, github, github-branch-source.
 
 The engineer assumes the affected plugins are also in the upgrade list and have already been adapted. They click "Download now and install after restart." Jenkins downloads 47 plugin updates and triggers a restart. The controller comes back up in 90 seconds. The web UI looks fine. The engineer calls it a day.
 
-Wednesday morning, the first commit lands on the `polaris-api` repository. The pipeline triggers, an agent picks up the build, and 30 seconds later the build fails. The console log shows:
+Wednesday morning, the first commit lands on the `devpolaris-api` repository. The pipeline triggers, an agent picks up the build, and 30 seconds later the build fails. The console log shows:
 
 ```text
 Started by GitHub push by ci-bot
 Running in Durability level: MAX_SURVIVABILITY
 [Pipeline] Start of Pipeline
 [Pipeline] node
-Running on linux-docker-02 in /var/lib/jenkins/workspace/polaris-api
+Running on linux-docker-02 in /var/lib/jenkins/workspace/devpolaris-api
 [Pipeline] {
 [Pipeline] stage
 [Pipeline] { (Checkout)
 [Pipeline] checkout
 ERROR: Error fetching remote repo 'origin'
 hudson.plugins.git.GitException: Failed to fetch from
-  https://github.com/polaris/polaris-api.git
+  https://github.com/devpolaris/devpolaris-api.git
   at org.jenkinsci.plugins.gitclient.CliGitAPIImpl.execute(CliGitAPIImpl.java:2683)
   ...
 Caused by: java.lang.NoSuchMethodError: 'org.jenkinsci.plugins.gitclient.FetchCommand

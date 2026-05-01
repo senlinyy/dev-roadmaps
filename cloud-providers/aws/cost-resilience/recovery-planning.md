@@ -4,4 +4,7 @@ description: "Design backups and failover plans to reduce downtime and data loss
 tags: ["RTO", "RPO", "Failover"]
 order: 2
 id: article-cloud-iac-finops-resilience-recovery-planning
+aliases:
+  - cloud-iac/finops-resilience/recovery-planning.md
+  - child-finops-resilience-recovery-planning
 ---

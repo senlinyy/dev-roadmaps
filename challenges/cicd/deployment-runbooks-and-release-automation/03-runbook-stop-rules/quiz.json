@@ -69,7 +69,7 @@
     {
       "id": "q6",
       "type": "multiple",
-      "scenario": "Which items belong in a practical runbook for `polaris-orders-api`?",
+      "scenario": "Which items belong in a practical runbook for `devpolaris-orders-api`?",
       "options": [
         { "id": "a", "text": "Pre-check that staging runs the same image digest." },
         { "id": "b", "text": "Stop rules with first action and owner." },

@@ -2,7 +2,7 @@
   "language": "yaml",
   "filename": "runbook.yml",
   "completionProfile": "yaml",
-  "initialValue": "runbook:\n  service: polaris-orders-api\n  release_id: rel-2026-04-30-184\n  pre_checks:\n    - staging looks fine\n  owners: {}\n  stop_rules: []\n  rollback_target:\n    task_definition: previous\n",
+  "initialValue": "runbook:\n  service: devpolaris-orders-api\n  release_id: rel-2026-04-30-184\n  pre_checks:\n    - staging looks fine\n  owners: {}\n  stop_rules: []\n  rollback_target:\n    task_definition: previous\n",
   "grader": {
     "strategy": "yaml-paths",
     "expected": [

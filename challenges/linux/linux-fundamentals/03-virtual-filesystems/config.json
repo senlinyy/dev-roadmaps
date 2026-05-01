@@ -6,7 +6,7 @@
     "/proc": { "type": "dir" },
     "/proc/cpuinfo": { "type": "file", "content": "processor\t: 0\nvendor_id\t: GenuineIntel\ncpu family\t: 6\nmodel\t\t: 142\nmodel name\t: Intel(R) Core(TM) i7-8550U CPU @ 1.80GHz\nstepping\t: 10\ncpu MHz\t\t: 1992.000\ncache size\t: 8192 KB\ncpu cores\t: 4\n" },
     "/proc/meminfo": { "type": "file", "content": "MemTotal:        8052432 kB\nMemFree:         2145680 kB\nMemAvailable:    4832100 kB\nBuffers:          284512 kB\nCached:          2401908 kB\nSwapTotal:       2097148 kB\nSwapFree:        2097148 kB\n" },
-    "/proc/version": { "type": "file", "content": "Linux version 5.15.0-91-generic (buildd@polaris) (gcc (Ubuntu 11.4.0) 11.4.0) #101-Ubuntu SMP\n" },
+    "/proc/version": { "type": "file", "content": "Linux version 5.15.0-91-generic (buildd@devpolaris) (gcc (Ubuntu 11.4.0) 11.4.0) #101-Ubuntu SMP\n" },
     "/proc/loadavg": { "type": "file", "content": "0.42 0.38 0.35 2/312 4821\n" },
     "/proc/uptime": { "type": "file", "content": "86423.17 341256.89\n" },
     "/proc/self": { "type": "dir" },

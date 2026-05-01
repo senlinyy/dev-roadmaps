@@ -2,7 +2,7 @@
   "language": "yaml",
   "filename": "release-decision.yml",
   "completionProfile": "yaml",
-  "initialValue": "release: rel-2026-04-30-184\nservice: polaris-orders-api\ntimeline:\n  - 19:05 canary moved to ten percent\n  - 19:11 canary 5xx rate reached 6.8 percent\n\ndecision:\n  type: unknown\n  reason: needs follow-up\n  evidence: []\n  rejected_options: []\n",
+  "initialValue": "release: rel-2026-04-30-184\nservice: devpolaris-orders-api\ntimeline:\n  - 19:05 canary moved to ten percent\n  - 19:11 canary 5xx rate reached 6.8 percent\n\ndecision:\n  type: unknown\n  reason: needs follow-up\n  evidence: []\n  rejected_options: []\n",
   "grader": {
     "strategy": "yaml-paths",
     "expected": [

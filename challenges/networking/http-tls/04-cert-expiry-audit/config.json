@@ -10,7 +10,7 @@
     },
     "/etc/ssl/audit/internal-ca.peminfo": {
       "type": "file",
-      "content": "Certificate:\n    Data:\n        Version: 3 (0x2)\n        Serial Number: 1 (0x1)\n        Signature Algorithm: sha256WithRSAEncryption\n        Issuer: C=US, O=Polaris Internal, CN=Polaris Root CA\n        Validity\n            Not Before: Jan  1 00:00:00 2023 GMT\n            Not After : Jan  1 00:00:00 2033 GMT\n        Subject: C=US, O=Polaris Internal, CN=Polaris Root CA\n        X509v3 extensions:\n            X509v3 Basic Constraints: critical\n                CA:TRUE\n            X509v3 Key Usage: critical\n                Certificate Sign, CRL Sign\n"
+      "content": "Certificate:\n    Data:\n        Version: 3 (0x2)\n        Serial Number: 1 (0x1)\n        Signature Algorithm: sha256WithRSAEncryption\n        Issuer: C=US, O=DevPolaris Internal, CN=DevPolaris Root CA\n        Validity\n            Not Before: Jan  1 00:00:00 2023 GMT\n            Not After : Jan  1 00:00:00 2033 GMT\n        Subject: C=US, O=DevPolaris Internal, CN=DevPolaris Root CA\n        X509v3 extensions:\n            X509v3 Basic Constraints: critical\n                CA:TRUE\n            X509v3 Key Usage: critical\n                Certificate Sign, CRL Sign\n"
     }
   },
   "grader": {

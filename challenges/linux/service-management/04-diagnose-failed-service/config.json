@@ -9,7 +9,7 @@
     },
     "/var/log/broken-journal.log": {
       "type": "file",
-      "content": "Jan 15 10:05:30 polaris systemd[1]: Starting Broken Application Service...\nJan 15 10:05:30 polaris systemd[1]: broken.service: Failed to execute /usr/bin/myapp: No such file or directory\nJan 15 10:05:30 polaris systemd[1]: broken.service: Main process exited, code=exited, status=203/EXEC\nJan 15 10:05:30 polaris systemd[1]: broken.service: Failed with result 'exit-code'.\nJan 15 10:05:30 polaris systemd[1]: Failed to start Broken Application Service.\n"
+      "content": "Jan 15 10:05:30 devpolaris systemd[1]: Starting Broken Application Service...\nJan 15 10:05:30 devpolaris systemd[1]: broken.service: Failed to execute /usr/bin/myapp: No such file or directory\nJan 15 10:05:30 devpolaris systemd[1]: broken.service: Main process exited, code=exited, status=203/EXEC\nJan 15 10:05:30 devpolaris systemd[1]: broken.service: Failed with result 'exit-code'.\nJan 15 10:05:30 devpolaris systemd[1]: Failed to start Broken Application Service.\n"
     }
   },
   "grader": {

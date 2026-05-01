@@ -1,6 +1,6 @@
 ```yaml
 runbook:
-  service: polaris-orders-api
+  service: devpolaris-orders-api
   release_id: rel-2026-04-30-184
   pre_checks:
     - artifact digest exists

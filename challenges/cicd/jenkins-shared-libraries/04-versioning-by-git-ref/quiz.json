@@ -4,7 +4,7 @@
     {
       "id": "q1",
       "type": "single",
-      "scenario": "Three repos use `@Library('polaris-pipeline@main') _`. The platform team merges a refactor to `main`. The next build of any of those three repos picks up the new code without any change to their Jenkinsfiles.\n\nWhich is the most accurate description of this trade-off?",
+      "scenario": "Three repos use `@Library('devpolaris-pipeline@main') _`. The platform team merges a refactor to `main`. The next build of any of those three repos picks up the new code without any change to their Jenkinsfiles.\n\nWhich is the most accurate description of this trade-off?",
       "options": [
         { "id": "a", "text": "Pinning to a branch is convenient (changes propagate instantly) but unsafe: a bad merge to `main` breaks every consumer at once. Use tags or SHAs in production." },
         { "id": "b", "text": "Pinning to a branch is the recommended best practice." },
@@ -18,7 +18,7 @@
     {
       "id": "q2",
       "type": "single",
-      "scenario": "Your team standardizes on `@Library('polaris-pipeline@v1.4.2') _` for production and `@Library('polaris-pipeline@main') _` on a couple of opt-in `staging-libraries` consumer repos. A platform-team engineer merges a breaking change to `main`.\n\nWhat happens?",
+      "scenario": "Your team standardizes on `@Library('devpolaris-pipeline@v1.4.2') _` for production and `@Library('devpolaris-pipeline@main') _` on a couple of opt-in `staging-libraries` consumer repos. A platform-team engineer merges a breaking change to `main`.\n\nWhat happens?",
       "options": [
         { "id": "a", "text": "Production repos keep building against v1.4.2 and are unaffected. The staging-library repos break and surface the regression before the platform team cuts a v1.4.3 tag." },
         { "id": "b", "text": "All repos break because library updates apply globally." },
@@ -31,7 +31,7 @@
     {
       "id": "q3",
       "type": "single",
-      "scenario": "An auditor asks: 'Can you reproduce the exact pipeline code that ran for production deploy build #4413 from six months ago?' The Jenkinsfile pinned `@Library('polaris-pipeline@v1.4.2') _` but v1.4.2 was force-pushed by a platform engineer last week.\n\nWhat is the actual reproducibility status?",
+      "scenario": "An auditor asks: 'Can you reproduce the exact pipeline code that ran for production deploy build #4413 from six months ago?' The Jenkinsfile pinned `@Library('devpolaris-pipeline@v1.4.2') _` but v1.4.2 was force-pushed by a platform engineer last week.\n\nWhat is the actual reproducibility status?",
       "options": [
         { "id": "a", "text": "Reproducible: tags are immutable so v1.4.2 still points to the same SHA." },
         { "id": "b", "text": "Not reproducible: tags can be force-pushed in Git, and `@Library('...@tag')` resolves to whatever the tag points to NOW. The audit needs SHA pins or a tag-protection policy." },

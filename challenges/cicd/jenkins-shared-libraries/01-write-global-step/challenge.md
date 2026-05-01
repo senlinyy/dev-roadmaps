@@ -4,7 +4,7 @@ sectionSlug: the-global-step-in-vars
 order: 1
 ---
 
-The polaris-pipeline shared library needs a new global step `buildJavaService` that every Java microservice can call from a one-line Jenkinsfile. The contract is: the caller passes a `Map config` with `service` (string), `mavenGoals` (list of strings, default `['package', 'verify']`), and `agentLabel` (string, default `'linux-jdk21'`). The step renders the full pipeline.
+The devpolaris-pipeline shared library needs a new global step `buildJavaService` that every Java microservice can call from a one-line Jenkinsfile. The contract is: the caller passes a `Map config` with `service` (string), `mavenGoals` (list of strings, default `['package', 'verify']`), and `agentLabel` (string, default `'linux-jdk21'`). The step renders the full pipeline.
 
 You are editing `vars/buildJavaService.groovy`. Your job:
 

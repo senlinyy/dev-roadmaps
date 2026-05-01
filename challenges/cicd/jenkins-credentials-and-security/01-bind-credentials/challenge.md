@@ -9,8 +9,8 @@ A Jenkinsfile from a contractor came in with the AWS access key and Slack webhoo
 The current Jenkinsfile is in the editor. Your job:
 
 1. **Remove the inline `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` env entries**.
-2. **Wrap the deploy `sh` call in `withCredentials([...])`** that binds an AWS-credentials credential id `polaris-aws-deploy` into `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`.
-3. **Bind the Slack webhook** as a `string(credentialsId: 'polaris-slack-webhook', variable: 'SLACK_WEBHOOK')` in the same `withCredentials` list.
+2. **Wrap the deploy `sh` call in `withCredentials([...])`** that binds an AWS-credentials credential id `devpolaris-aws-deploy` into `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`.
+3. **Bind the Slack webhook** as a `string(credentialsId: 'devpolaris-slack-webhook', variable: 'SLACK_WEBHOOK')` in the same `withCredentials` list.
 4. **Leave the `Build` stage and the `agent any` directive** untouched.
 
 The grader checks the structure: no inline secrets, a `withCredentials` block exists in the deploy stage, and the right credential ids and variable names are bound.

@@ -32,7 +32,7 @@ There are two flavors of pipeline syntax. **Declarative** is the structured, opi
 
 ## The Naive Single-Stage Build
 
-To make this concrete, follow a small Node.js TypeScript service called `polaris-orders` through three versions of its Jenkinsfile. The team's first attempt was the version that anyone with a working local build can write in five minutes:
+To make this concrete, follow a small Node.js TypeScript service called `devpolaris-orders` through three versions of its Jenkinsfile. The team's first attempt was the version that anyone with a working local build can write in five minutes:
 
 ```groovy
 pipeline {
@@ -43,9 +43,9 @@ pipeline {
                 sh 'npm ci'
                 sh 'npm run lint'
                 sh 'npm test'
-                sh 'docker build -t polaris-orders:${BUILD_NUMBER} .'
-                sh 'docker push 123.dkr.ecr.us-east-1.amazonaws.com/polaris-orders:${BUILD_NUMBER}'
-                sh 'kubectl set image deploy/polaris-orders orders=polaris-orders:${BUILD_NUMBER} -n staging'
+                sh 'docker build -t devpolaris-orders:${BUILD_NUMBER} .'
+                sh 'docker push 123.dkr.ecr.us-east-1.amazonaws.com/devpolaris-orders:${BUILD_NUMBER}'
+                sh 'kubectl set image deploy/devpolaris-orders orders=devpolaris-orders:${BUILD_NUMBER} -n staging'
             }
         }
     }
@@ -98,7 +98,7 @@ That diagram is what the team is aiming for. The current Jenkinsfile is one box 
 
 ## Refactoring Into Real Stages
 
-The first refactor splits `polaris-orders` into the six stages the team actually cares about: checkout, lint, test, build image, push, deploy. Each one becomes a real `stage`, and each acquires its own pill in the Stage View.
+The first refactor splits `devpolaris-orders` into the six stages the team actually cares about: checkout, lint, test, build image, push, deploy. Each one becomes a real `stage`, and each acquires its own pill in the Stage View.
 
 ```groovy
 pipeline {
@@ -123,7 +123,7 @@ pipeline {
         }
         stage('Build Image') {
             steps {
-                sh 'docker build -t polaris-orders:${BUILD_NUMBER} .'
+                sh 'docker build -t devpolaris-orders:${BUILD_NUMBER} .'
             }
         }
         stage('Push to ECR') {
@@ -131,15 +131,15 @@ pipeline {
                 sh '''
                     aws ecr get-login-password --region us-east-1 \
                         | docker login --username AWS --password-stdin 123.dkr.ecr.us-east-1.amazonaws.com
-                    docker tag polaris-orders:${BUILD_NUMBER} \
-                        123.dkr.ecr.us-east-1.amazonaws.com/polaris-orders:${BUILD_NUMBER}
-                    docker push 123.dkr.ecr.us-east-1.amazonaws.com/polaris-orders:${BUILD_NUMBER}
+                    docker tag devpolaris-orders:${BUILD_NUMBER} \
+                        123.dkr.ecr.us-east-1.amazonaws.com/devpolaris-orders:${BUILD_NUMBER}
+                    docker push 123.dkr.ecr.us-east-1.amazonaws.com/devpolaris-orders:${BUILD_NUMBER}
                 '''
             }
         }
         stage('Deploy to staging') {
             steps {
-                sh 'kubectl set image deploy/polaris-orders orders=polaris-orders:${BUILD_NUMBER} -n staging'
+                sh 'kubectl set image deploy/devpolaris-orders orders=devpolaris-orders:${BUILD_NUMBER} -n staging'
             }
         }
     }
@@ -159,7 +159,7 @@ A note on the agent: the pipeline-level `agent { label 'linux-docker' }` reserve
 
 ## Parallel Branches, Post Conditions, and Options
 
-The refactored pipeline still runs the unit and integration tests one after the other. On `polaris-orders`, unit tests take 30 seconds and integration tests take 90 seconds. Running them in parallel cuts the test stage from two minutes to ninety seconds. Declarative supports parallel branches inside a stage natively (the syntax has been stable since the Pipeline Plugin's declarative engine landed it years ago):
+The refactored pipeline still runs the unit and integration tests one after the other. On `devpolaris-orders`, unit tests take 30 seconds and integration tests take 90 seconds. Running them in parallel cuts the test stage from two minutes to ninety seconds. Declarative supports parallel branches inside a stage natively (the syntax has been stable since the Pipeline Plugin's declarative engine landed it years ago):
 
 ```groovy
 stage('Test') {
@@ -197,12 +197,12 @@ post {
     }
     success {
         slackSend channel: '#builds', color: 'good',
-            message: "polaris-orders #${env.BUILD_NUMBER} succeeded"
+            message: "devpolaris-orders #${env.BUILD_NUMBER} succeeded"
     }
     failure {
         slackSend channel: '#builds', color: 'danger',
-            message: "polaris-orders #${env.BUILD_NUMBER} FAILED on ${env.GIT_BRANCH}"
-        emailext to: 'platform@polaris.dev',
+            message: "devpolaris-orders #${env.BUILD_NUMBER} FAILED on ${env.GIT_BRANCH}"
+        emailext to: 'platform@devpolaris.dev',
             subject: "Build failed: ${env.JOB_NAME} #${env.BUILD_NUMBER}",
             body: "See ${env.BUILD_URL}"
     }
@@ -211,7 +211,7 @@ post {
     }
     unstable {
         slackSend channel: '#builds', color: 'warning',
-            message: "polaris-orders #${env.BUILD_NUMBER} unstable: tests failed but build kept going"
+            message: "devpolaris-orders #${env.BUILD_NUMBER} unstable: tests failed but build kept going"
     }
 }
 ```
@@ -255,7 +255,7 @@ Inside the pipeline, `params.TARGET_ENV` reads back as a string (or boolean, dep
 environment {
     AWS_REGION  = 'us-east-1'
     ECR_HOST    = '123.dkr.ecr.us-east-1.amazonaws.com'
-    IMAGE_NAME  = 'polaris-orders'
+    IMAGE_NAME  = 'devpolaris-orders'
     NODE_ENV    = 'test'
 }
 ```
@@ -274,7 +274,7 @@ stage('Deploy to staging') {
         }
     }
     steps {
-        sh "kubectl set image deploy/polaris-orders orders=${ECR_HOST}/${IMAGE_NAME}:${BUILD_NUMBER} -n ${params.TARGET_ENV}"
+        sh "kubectl set image deploy/devpolaris-orders orders=${ECR_HOST}/${IMAGE_NAME}:${BUILD_NUMBER} -n ${params.TARGET_ENV}"
     }
 }
 ```
@@ -294,7 +294,7 @@ When you create a Multibranch Pipeline, you give it a Git source (a GitHub org, 
 The folder structure in the UI ends up looking like:
 
 ```text
-polaris-orders (Multibranch Pipeline)
+devpolaris-orders (Multibranch Pipeline)
 ├── main                  (last build #142 - SUCCESS)
 ├── feature/order-cancel  (last build #8 - SUCCESS)
 ├── feature/refund-flow   (last build #3 - FAILED on Test)
@@ -332,7 +332,7 @@ Wire this into a pre-commit hook or a fast lint job that runs on every PR. The c
 
 ### The Flaky Integration Test
 
-`polaris-orders` integration tests spin up a Postgres container and wait for it to accept connections. Roughly 1 in 30 builds fails because the container takes longer to come up than the wait loop allows. The "fix" some teams reach for is `retry`:
+`devpolaris-orders` integration tests spin up a Postgres container and wait for it to accept connections. Roughly 1 in 30 builds fails because the container takes longer to come up than the wait loop allows. The "fix" some teams reach for is `retry`:
 
 ```groovy
 stage('Integration') {
@@ -357,8 +357,8 @@ The pipeline-level `timeout(30, MINUTES)` from the `options` block protects you,
 stage('Deploy to staging') {
     options { timeout(time: 10, unit: 'MINUTES') }
     steps {
-        sh 'kubectl set image deploy/polaris-orders orders=${ECR_HOST}/${IMAGE_NAME}:${BUILD_NUMBER} -n staging'
-        sh 'kubectl rollout status deploy/polaris-orders -n staging'
+        sh 'kubectl set image deploy/devpolaris-orders orders=${ECR_HOST}/${IMAGE_NAME}:${BUILD_NUMBER} -n staging'
+        sh 'kubectl rollout status deploy/devpolaris-orders -n staging'
     }
 }
 ```
@@ -370,8 +370,8 @@ When the timeout fires, the console log shows:
 Timeout set to expire after 10 min
 [Pipeline] {
 [Pipeline] sh
-+ kubectl rollout status deploy/polaris-orders -n staging
-Waiting for deployment "polaris-orders" rollout to finish: 0 of 1 updated replicas are available...
++ kubectl rollout status deploy/devpolaris-orders -n staging
+Waiting for deployment "devpolaris-orders" rollout to finish: 0 of 1 updated replicas are available...
 Sending interrupt signal to process
 script returned exit code 143
 [Pipeline] // timeout

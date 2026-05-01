@@ -2,7 +2,7 @@
   "language": "groovy",
   "filename": "Jenkinsfile",
   "completionProfile": "jenkinsfile",
-  "initialValue": "pipeline {\n  agent any\n\n  stages {\n    stage('Everything') {\n      steps {\n        sh '''\n          mvn -B -DskipTests package\n          mvn -B test\n          docker build -t polaris-orders:${BUILD_NUMBER} .\n        '''\n      }\n    }\n  }\n}\n",
+  "initialValue": "pipeline {\n  agent any\n\n  stages {\n    stage('Everything') {\n      steps {\n        sh '''\n          mvn -B -DskipTests package\n          mvn -B test\n          docker build -t devpolaris-orders:${BUILD_NUMBER} .\n        '''\n      }\n    }\n  }\n}\n",
   "grader": {
     "strategy": "groovy-structure",
     "expected": [

@@ -4,7 +4,7 @@ sectionSlug: iptables-the-linux-packet-filter
 order: 1
 ---
 
-The on-call engineer says inbound port 80 is being silently dropped on `polaris-web-02`, and external health checks are failing. The active firewall was saved with `iptables-save > /etc/iptables/rules.v4` ten minutes ago. Your job is to open that file and prove which rule blocks port 80, then sanity-check the chain policies and count how many `ACCEPT` rules are currently in place.
+The on-call engineer says inbound port 80 is being silently dropped on `devpolaris-web-02`, and external health checks are failing. The active firewall was saved with `iptables-save > /etc/iptables/rules.v4` ten minutes ago. Your job is to open that file and prove which rule blocks port 80, then sanity-check the chain policies and count how many `ACCEPT` rules are currently in place.
 
 You start in `/home/dev`. Your job:
 

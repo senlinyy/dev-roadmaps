@@ -2,7 +2,7 @@
   "language": "yaml",
   "filename": "feature-flags.yml",
   "completionProfile": "yaml",
-  "initialValue": "production:\n  service: polaris-orders-api\n  flags:\n    FEATURE_DISCOUNT_V1: true\n    FEATURE_DISCOUNT_V2: true\n  audit: {}\n",
+  "initialValue": "production:\n  service: devpolaris-orders-api\n  flags:\n    FEATURE_DISCOUNT_V1: true\n    FEATURE_DISCOUNT_V2: true\n  audit: {}\n",
   "grader": {
     "strategy": "yaml-paths",
     "expected": [

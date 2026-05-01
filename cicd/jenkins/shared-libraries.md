@@ -33,13 +33,13 @@ If you have read the GitHub Actions article on actions and reusability, the *ide
 
 ## What a Shared Library Actually Is
 
-A Jenkins shared library is a Git repository with a specific directory layout that the Jenkins controller knows how to load. When a Jenkinsfile says `@Library('polaris-pipeline@v1.4.2') _`, the controller does three things:
+A Jenkins shared library is a Git repository with a specific directory layout that the Jenkins controller knows how to load. When a Jenkinsfile says `@Library('devpolaris-pipeline@v1.4.2') _`, the controller does three things:
 
-1. Looks up "polaris-pipeline" in its library configuration to find the Git URL.
+1. Looks up "devpolaris-pipeline" in its library configuration to find the Git URL.
 2. Fetches the `v1.4.2` ref from that repository into a controller-side cache.
 3. Compiles every `.groovy` file under the library's `vars/` and `src/` directories and adds them to the classpath of the running pipeline.
 
-After that, anything the library exposes is callable from your Jenkinsfile as if it were a built-in step. A file at `vars/buildJavaService.groovy` becomes a top-level step named `buildJavaService(...)`. A class at `src/com/polaris/pipeline/Sbom.groovy` becomes importable as `import com.polaris.pipeline.Sbom`.
+After that, anything the library exposes is callable from your Jenkinsfile as if it were a built-in step. A file at `vars/buildJavaService.groovy` becomes a top-level step named `buildJavaService(...)`. A class at `src/com/devpolaris/pipeline/Sbom.groovy` becomes importable as `import com.devpolaris.pipeline.Sbom`.
 
 The important conceptual point is that all of this runs on the controller. Library code is part of the pipeline definition, not the build itself. Your `sh` and `docker` steps still execute on agents, but the Groovy logic that decides *which* shell commands to issue, in what order, with what arguments, runs inside the controller's JVM. That is why library code has to be safe to run on the controller, why it is subject to Script Security on untrusted libraries, and why heavy file-processing belongs inside an `sh` step on an agent rather than in Groovy on the controller.
 
@@ -59,7 +59,7 @@ pipeline {
         buildDiscarder(logRotator(numToKeepStr: '50'))
     }
     environment {
-        IMAGE_REGISTRY = 'ghcr.io/polaris-corp'
+        IMAGE_REGISTRY = 'ghcr.io/devpolaris-corp'
         IMAGE_NAME     = 'orders'
         TRIVY_SEVERITY = 'CRITICAL,HIGH'
     }
@@ -89,7 +89,7 @@ The goal of the refactor is to replace those 200 lines with this:
 
 ```groovy
 // orders-service/Jenkinsfile (after refactor)
-@Library('polaris-pipeline@v1.4.2') _
+@Library('devpolaris-pipeline@v1.4.2') _
 
 buildJavaService(
     name:        'orders',
@@ -105,14 +105,14 @@ Eight lines, one function call, one library version pinned. The Sonar token, the
 Every shared library follows the same three-directory layout. Jenkins is opinionated about these names; you cannot rename them.
 
 ```text
-polaris-pipeline/
+devpolaris-pipeline/
 ├── vars/
 │   ├── buildJavaService.groovy
 │   ├── buildJavaService.txt
 │   └── notifySlack.groovy
 ├── src/
 │   └── com/
-│       └── polaris/
+│       └── devpolaris/
 │           └── pipeline/
 │               ├── Sbom.groovy
 │               └── ImageTag.groovy
@@ -126,7 +126,7 @@ Each directory plays a different role:
 | Directory | Purpose | When to use it | Naming convention |
 | :--- | :--- | :--- | :--- |
 | `vars/` | Global steps callable directly from a Jenkinsfile. | Top-level workflows that consumers invoke by name. | `vars/buildJavaService.groovy` exposes a step named `buildJavaService(...)`. The optional `.txt` file beside it is rendered as inline help in the Pipeline Snippet Generator. |
-| `src/` | Plain Groovy classes in standard package layout. | Reusable logic shared between multiple `vars/` scripts, complex parsing, anything that benefits from being a real class. | `src/com/polaris/pipeline/Sbom.groovy` declares `package com.polaris.pipeline; class Sbom { ... }`. |
+| `src/` | Plain Groovy classes in standard package layout. | Reusable logic shared between multiple `vars/` scripts, complex parsing, anything that benefits from being a real class. | `src/com/devpolaris/pipeline/Sbom.groovy` declares `package com.devpolaris.pipeline; class Sbom { ... }`. |
 | `resources/` | Static text files (templates, config snippets) loaded via the `libraryResource` step. | Dockerfiles, Helm values, JSON templates, anything you want the library to ship alongside its code. | `resources/templates/Dockerfile.tmpl` is loaded as `libraryResource('templates/Dockerfile.tmpl')`. |
 
 The split between `vars/` and `src/` is the part that confuses newcomers. Think of it this way: `vars/` is the public API. Everything in `vars/` is a verb the consumer types into a Jenkinsfile. `src/` is the implementation. It is where you put the noun classes (`Sbom`, `ImageTag`, `KubeClient`) that those verbs use internally.
@@ -137,14 +137,14 @@ The shape of a `vars/` file is: define a `call(...)` method, and that method bec
 
 ```groovy
 // vars/buildJavaService.groovy
-import com.polaris.pipeline.Sbom
+import com.devpolaris.pipeline.Sbom
 
 def call(Map config) {
     def name           = config.name           ?: error('buildJavaService: "name" is required')
     def javaVersion    = config.javaVersion    ?: '21'
     def deployTo       = config.deployTo       ?: []
     def trivySeverity  = config.trivySeverity  ?: 'CRITICAL,HIGH'
-    def registry       = config.registry       ?: 'ghcr.io/polaris-corp'
+    def registry       = config.registry       ?: 'ghcr.io/devpolaris-corp'
 
     pipeline {
         agent { label 'linux-docker' }
@@ -209,8 +209,8 @@ If you also create `vars/buildJavaService.txt` next to the Groovy file, its cont
 Once a `vars/` file gets long, you want to extract logic into normal Groovy classes. The `Sbom.generate(this, env.IMAGE_TAG)` call above lives in `src/`:
 
 ```groovy
-// src/com/polaris/pipeline/Sbom.groovy
-package com.polaris.pipeline
+// src/com/devpolaris/pipeline/Sbom.groovy
+package com.devpolaris.pipeline
 
 class Sbom implements Serializable {
 
@@ -252,7 +252,7 @@ Jenkins offers three places to configure a shared library, and each one correspo
 ```mermaid
 %%{init: {"themeVariables": {"clusterBkg": "transparent"}}}%%
 graph TD
-    A["Jenkinsfile<br/>@Library 'polaris-pipeline@v1.4.2' _"] --> B[Controller looks up<br/>'polaris-pipeline' name]
+    A["Jenkinsfile<br/>@Library 'devpolaris-pipeline@v1.4.2' _"] --> B[Controller looks up<br/>'devpolaris-pipeline' name]
     B --> C{Where is it<br/>configured?}
     C --> D[Global Pipeline Libraries<br/>Manage Jenkins → System]
     C --> E[Folder-scoped library<br/>Folder → Configure]
@@ -274,17 +274,17 @@ The three paths are:
 **Dynamic loading via the `library` step**, which lets a Jenkinsfile load a library on demand inside the script body:
 
 ```groovy
-def lib = library('polaris-pipeline@v1.4.2')
-lib.com.polaris.pipeline.Sbom.generate(this, 'orders:abc1234')
+def lib = library('devpolaris-pipeline@v1.4.2')
+lib.com.devpolaris.pipeline.Sbom.generate(this, 'orders:abc1234')
 ```
 
-The difference between `@Library('polaris-pipeline@v1.4.2') _` and the dynamic `library('polaris-pipeline@v1.4.2')` is *when* the library loads. The annotation is resolved at compile time, before the pipeline starts, so the `vars/` steps are available throughout the file. The `library()` step loads at runtime, so the steps only become available after that line executes. The annotation is what you want for the common case. The trailing underscore (`_`) on the annotation form is a Groovy quirk: annotations have to attach to *something*, and the underscore is a valid throwaway variable name. You can chain multiple libraries with `@Library(['polaris-pipeline@v1.4.2', 'security-shared@v0.9']) _`.
+The difference between `@Library('devpolaris-pipeline@v1.4.2') _` and the dynamic `library('devpolaris-pipeline@v1.4.2')` is *when* the library loads. The annotation is resolved at compile time, before the pipeline starts, so the `vars/` steps are available throughout the file. The `library()` step loads at runtime, so the steps only become available after that line executes. The annotation is what you want for the common case. The trailing underscore (`_`) on the annotation form is a Groovy quirk: annotations have to attach to *something*, and the underscore is a valid throwaway variable name. You can chain multiple libraries with `@Library(['devpolaris-pipeline@v1.4.2', 'security-shared@v0.9']) _`.
 
 The "trusted" checkbox is the most important security knob in the library configuration. A **trusted library** runs unsandboxed: its code can call any Java or Groovy API, mutate the controller, even read `JENKINS_HOME`. A **non-trusted library** runs through the Groovy sandbox, the same script-security mechanism that gates user-written Jenkinsfiles, and any non-whitelisted API call requires manual approval by an admin. Folder-scoped libraries default to non-trusted; global libraries default to trusted. The rule of thumb is: if your platform team owns the library and the Git history is auditable, leave it trusted. If the library can be edited by people you would not let SSH to the controller, untrust it.
 
 ## Versioning by Git Ref
 
-The string after the `@` in `@Library('polaris-pipeline@v1.4.2')` is a Git ref. Jenkins resolves it the same way `git checkout` would: branch, tag, or full commit SHA. All three work. Only one of them is a good idea in production.
+The string after the `@` in `@Library('devpolaris-pipeline@v1.4.2')` is a Git ref. Jenkins resolves it the same way `git checkout` would: branch, tag, or full commit SHA. All three work. Only one of them is a good idea in production.
 
 | Ref style | Example | Mutability | When to use |
 | :--- | :--- | :--- | :--- |
@@ -294,7 +294,7 @@ The string after the `@` in `@Library('polaris-pipeline@v1.4.2')` is a Git ref. 
 
 The reason tags win for production is simple: if a consumer's pipeline reproduces from history six months from now, you want the library it loaded to be the same code that ran the first time. A branch ref makes that impossible. A tag ref, combined with a release process where humans never force-push tags, gives you reproducible builds.
 
-The library configuration in Manage Jenkins includes a "Default version" field. This is the ref Jenkins uses when a Jenkinsfile says `@Library('polaris-pipeline') _` without specifying a version. **Set this to a tag, not to `main`.** A surprising amount of "the pipeline broke and we did not change anything" trouble traces back to a default version that points at a moving branch, which means the controller silently picked up a new library commit overnight when someone merged to `main`.
+The library configuration in Manage Jenkins includes a "Default version" field. This is the ref Jenkins uses when a Jenkinsfile says `@Library('devpolaris-pipeline') _` without specifying a version. **Set this to a tag, not to `main`.** A surprising amount of "the pipeline broke and we did not change anything" trouble traces back to a default version that points at a moving branch, which means the controller silently picked up a new library commit overnight when someone merged to `main`.
 
 ## Testing the Library
 
@@ -303,7 +303,7 @@ The same library that runs your 30 production pipelines deserves the same testin
 A typical test looks like this:
 
 ```groovy
-// test/com/polaris/pipeline/BuildJavaServiceTest.groovy
+// test/com/devpolaris/pipeline/BuildJavaServiceTest.groovy
 import com.lesfurets.jenkins.unit.BasePipelineTest
 import org.junit.Before
 import org.junit.Test
@@ -336,9 +336,9 @@ The discipline that turns this into a safety net is to wire the library's own CI
 
 Here is the failure mode that every platform team eventually meets. It is what motivated everything in the previous section.
 
-A platform engineer pushes a "small refactor" to `polaris-pipeline`'s `main` branch. The change splits the SBOM stage into two: one to generate, one to publish. The split breaks artifact archiving in a subtle way (the new code archives `sbom.json` from the wrong working directory). The change passes review because the diff looks innocent. No tag is cut; `main` is updated.
+A platform engineer pushes a "small refactor" to `devpolaris-pipeline`'s `main` branch. The change splits the SBOM stage into two: one to generate, one to publish. The split breaks artifact archiving in a subtle way (the new code archives `sbom.json` from the wrong working directory). The change passes review because the diff looks innocent. No tag is cut; `main` is updated.
 
-Twenty-six of the 30 consumer Jenkinsfiles are using `@Library('polaris-pipeline') _` (no `@version`). Their library default version is `main`. Within the next four hours, every push from those 26 services triggers a build that fails at the SBOM stage. The on-call channel fills up with reports.
+Twenty-six of the 30 consumer Jenkinsfiles are using `@Library('devpolaris-pipeline') _` (no `@version`). Their library default version is `main`. Within the next four hours, every push from those 26 services triggers a build that fails at the SBOM stage. The on-call channel fills up with reports.
 
 The Stage View under Manage Jenkins → Build History looks like this:
 
@@ -357,7 +357,7 @@ The four services that pinned to `@v1.3.8` are unaffected. They are the diagnost
 The immediate fix is to revert the bad commit on `main`. The post-mortem fix has four parts, each one closing a gap in the release process:
 
 1. **The library now has CI on every PR.** `jenkins-pipeline-unit` tests run on the PR branch, plus a smoke build that points a sentinel consumer repo at the PR's commit SHA. A green CI is required before merge.
-2. **All consumer Jenkinsfiles must pin to immutable tags.** A linter enforces this in the central monorepo of pipeline configs. `@Library('polaris-pipeline') _` (no version) fails CI.
+2. **All consumer Jenkinsfiles must pin to immutable tags.** A linter enforces this in the central monorepo of pipeline configs. `@Library('devpolaris-pipeline') _` (no version) fails CI.
 3. **The library's "Default version" in Manage Jenkins is set to the latest tag**, not `main`. Even if a consumer slips past the linter, the worst that happens is they get the previous good release, not whatever is on `main` right now.
 4. **`main` is build-only by the library's own CI.** Humans cannot push to `main` directly; they merge PRs. Tags are cut by a release script (`scripts/release.sh`) that runs the test suite, runs the smoke build, then `git tag -a vX.Y.Z` and `git push --tags`.
 

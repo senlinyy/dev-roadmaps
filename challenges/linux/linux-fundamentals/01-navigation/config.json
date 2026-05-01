@@ -9,9 +9,9 @@
     "/home/dev/.bashrc": { "type": "file", "content": "export PS1='$ '\n" },
     "/home/dev/.config": { "type": "dir" },
     "/etc": { "type": "dir" },
-    "/etc/hostname": { "type": "file", "content": "polaris\n" },
+    "/etc/hostname": { "type": "file", "content": "devpolaris\n" },
     "/etc/hosts": { "type": "file", "content": "127.0.0.1 localhost\n" },
-    "/etc/os-release": { "type": "file", "content": "NAME=Polaris\n" }
+    "/etc/os-release": { "type": "file", "content": "NAME=DevPolaris\n" }
   },
   "grader": {
     "strategy": "contains",

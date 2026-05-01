@@ -11,7 +11,7 @@ jobs:
     environment: staging
     steps:
       - run: ./scripts/deploy-ecs.sh orders-api-staging "${{ needs.build.outputs.image_digest }}"
-      - run: ./scripts/smoke.sh https://orders-api-staging.polaris.example
+      - run: ./scripts/smoke.sh https://orders-api-staging.devpolaris.example
 
   deploy-production:
     needs: [build, deploy-staging]

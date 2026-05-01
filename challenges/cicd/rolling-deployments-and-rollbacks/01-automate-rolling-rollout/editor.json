@@ -15,7 +15,7 @@
       {
         "path": ["jobs", "rollout", "environment", "url"],
         "type": "string",
-        "equals": "https://orders-api.polaris.example",
+        "equals": "https://orders-api.devpolaris.example",
         "label": "production environment has the service URL"
       },
       {

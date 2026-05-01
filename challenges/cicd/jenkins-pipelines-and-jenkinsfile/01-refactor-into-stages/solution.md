@@ -15,7 +15,7 @@ pipeline {
     }
     stage('Package') {
       steps {
-        sh 'docker build -t polaris-orders:${BUILD_NUMBER} .'
+        sh 'docker build -t devpolaris-orders:${BUILD_NUMBER} .'
       }
     }
   }

@@ -2,7 +2,7 @@
   "language": "yaml",
   "filename": "release-record.yml",
   "completionProfile": "yaml",
-  "initialValue": "release:\n  id: rel-2026-04-30-184\n  service: polaris-orders-api\n  new_task_definition: orders-api:42\n  version: 1.8.4\n  image_digest: sha256:9c1cfbb322f6f2b8f8cc4d2b9f9e6b77c92c8da7ad9226110f0cf0c30a2a7f54\n\nrollback:\n  target: previous version\n  verification: []\n",
+  "initialValue": "release:\n  id: rel-2026-04-30-184\n  service: devpolaris-orders-api\n  new_task_definition: orders-api:42\n  version: 1.8.4\n  image_digest: sha256:9c1cfbb322f6f2b8f8cc4d2b9f9e6b77c92c8da7ad9226110f0cf0c30a2a7f54\n\nrollback:\n  target: previous version\n  verification: []\n",
   "grader": {
     "strategy": "yaml-paths",
     "expected": [
