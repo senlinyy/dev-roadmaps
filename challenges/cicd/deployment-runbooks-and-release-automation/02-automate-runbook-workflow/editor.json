@@ -1,0 +1,88 @@
+{
+  "language": "yaml",
+  "filename": ".github/workflows/deploy-orders-api.yml",
+  "completionProfile": "github-actions",
+  "initialValue": "name: Deploy Orders API\non: [push]\n\njobs:\n  deploy:\n    runs-on: ubuntu-latest\n    steps:\n      - run: ./scripts/deploy-orders-api.sh\n",
+  "grader": {
+    "strategy": "yaml-paths",
+    "expected": [
+      {
+        "path": ["on", "workflow_dispatch", "inputs", "release_id", "required"],
+        "type": "boolean",
+        "equals": true,
+        "label": "workflow requires release_id input"
+      },
+      {
+        "path": ["on", "workflow_dispatch", "inputs", "image_digest", "required"],
+        "type": "boolean",
+        "equals": true,
+        "label": "workflow requires image_digest input"
+      },
+      {
+        "path": ["on", "workflow_dispatch", "inputs", "rollback_task_definition", "required"],
+        "type": "boolean",
+        "equals": true,
+        "label": "workflow requires rollback task definition input"
+      },
+      {
+        "path": ["concurrency", "group"],
+        "type": "string",
+        "equals": "production-orders-api",
+        "label": "workflow serializes production deploys"
+      },
+      {
+        "path": ["concurrency", "cancel-in-progress"],
+        "type": "boolean",
+        "equals": false,
+        "label": "workflow does not cancel an in-flight deploy"
+      },
+      {
+        "path": ["jobs", "deploy", "environment"],
+        "type": "string",
+        "equals": "production",
+        "label": "deploy job uses production environment"
+      },
+      {
+        "path": ["jobs", "deploy", "permissions", "contents"],
+        "type": "string",
+        "equals": "read",
+        "label": "contents permission is read"
+      },
+      {
+        "path": ["jobs", "deploy", "permissions", "id-token"],
+        "type": "string",
+        "equals": "write",
+        "label": "id-token permission is write"
+      },
+      {
+        "path": ["jobs", "deploy", "steps"],
+        "containsObject": {
+          "run": "./scripts/precheck-release.sh"
+        },
+        "label": "workflow runs prechecks"
+      },
+      {
+        "path": ["jobs", "deploy", "steps"],
+        "containsObject": {
+          "run": "./scripts/deploy-orders-api.sh"
+        },
+        "label": "workflow runs deploy script"
+      },
+      {
+        "path": ["jobs", "deploy", "steps"],
+        "containsObject": {
+          "run": "./scripts/smoke-orders-api.sh"
+        },
+        "label": "workflow runs smoke test"
+      },
+      {
+        "path": ["jobs", "deploy", "steps"],
+        "containsObject": {
+          "run": "./scripts/watch-canary.sh"
+        },
+        "label": "workflow watches canary"
+      }
+    ]
+  }
+}
+

@@ -1,0 +1,85 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A release passed CI and staging. The release record says staging ran image digest `sha256:9c1c...7f54`, but the production workflow builds a new image from `main` at deploy time and pushes the tag `orders-api:latest`. What is the core release risk?",
+      "options": [
+        { "id": "a", "text": "Production may run different bytes than staging tested, because the workflow rebuilt instead of promoting the recorded digest." },
+        { "id": "b", "text": "The production deploy will always fail because ECS cannot run images built by GitHub Actions." },
+        { "id": "c", "text": "The release is safe as long as the tag name is the same in staging and production." },
+        { "id": "d", "text": "The only risk is that the Docker build takes longer than the staging deploy." }
+      ],
+      "correct": ["a"],
+      "explanation": "The article's promotion rule is build once, promote one immutable artifact. A tag can move, and a rebuild can produce different bytes. Production should deploy the digest that staging tested. Matching tag names do not prove matching image content."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "The production gate receives this staging evidence before approval:\n\n```text\n/version: version=1.8.4 commit=8f3a12c6 imageDigest=sha256:9c1c...7f54\n/readyz: 200 ready=true\n/smoke/checkout: accepted orderId=test-442\nrelease record image digest: sha256:9c1c...7f54\n```\n\nWhat does this evidence prove best?",
+      "options": [
+        { "id": "a", "text": "Staging ran the release record digest and the smallest checkout path worked there." },
+        { "id": "b", "text": "Production will never fail after approval." },
+        { "id": "c", "text": "The production secrets are correct because staging returned 200." },
+        { "id": "d", "text": "The checkout API has no possible data compatibility risk." }
+      ],
+      "correct": ["a"],
+      "explanation": "The evidence proves the release artifact identity and a narrow staging behavior check. It does not prove production secrets, full production traffic behavior, or every data compatibility case."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "A workflow has `deploy-production` with `needs: build`, but not `needs: deploy-staging`. The staging job can fail while production still starts after build. Which review comment is most accurate?",
+      "options": [
+        { "id": "a", "text": "Production should depend on the staging gate so a failed staging deploy stops the release before users are affected." },
+        { "id": "b", "text": "Production should run first because production has more realistic traffic." },
+        { "id": "c", "text": "The dependency does not matter if both jobs use the same runner image." },
+        { "id": "d", "text": "The staging job should be removed because approvals are enough." }
+      ],
+      "correct": ["a"],
+      "explanation": "The promotion path is build, deploy staging, check staging, then production approval and deploy. If production only depends on build, the staging gate cannot block it. Approval is a separate gate, not a replacement for staging evidence."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "The staging job and production job both use `environment: production` because the team wants both jobs to read the same AWS role. Why is this a bad design?",
+      "options": [
+        { "id": "a", "text": "Staging should use production credentials only when the app is stateless." },
+        { "id": "b", "text": "Staging and production have different blast radius and should receive separate environment-scoped access." },
+        { "id": "c", "text": "GitHub Actions environments cannot be used with deployment jobs." },
+        { "id": "d", "text": "The staging job will run slower because production environments require more CPU." }
+      ],
+      "correct": ["b"],
+      "explanation": "The article separates staging and production because they touch different data and have different consequences. Environment-scoped secrets and roles keep staging access away from production credentials. This is about blast radius, not runner performance."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A release manager approves production after seeing this staging check:\n\n```text\n/readyz: 200\n/version: version=1.8.4 commit=8f3a12c6 imageDigest=sha256:aaaa\nrelease record image digest: sha256:bbbb\n```\n\nWhat should happen next?",
+      "options": [
+        { "id": "a", "text": "Continue, because `/readyz` returned 200." },
+        { "id": "b", "text": "Stop the promotion because staging is not running the digest recorded for this release." },
+        { "id": "c", "text": "Deploy production with the digest from staging and update the release record later." },
+        { "id": "d", "text": "Skip the version check because commit is more important than image digest." }
+      ],
+      "correct": ["b"],
+      "explanation": "The digest mismatch breaks the build once, promote once chain. `/readyz` proves the service is ready, but it does not prove the right artifact is being promoted. The release record should remain the source of truth."
+    },
+    {
+      "id": "q6",
+      "type": "multiple",
+      "scenario": "A production deployment job for a checkout API is being reviewed. Which changes strengthen the release gate design?",
+      "options": [
+        { "id": "a", "text": "Use a production environment with required reviewers before production credentials are available." },
+        { "id": "b", "text": "Add concurrency so only one production deployment for `orders-api` can run at a time." },
+        { "id": "c", "text": "Let production rebuild from the default branch so it always has the newest code." },
+        { "id": "d", "text": "Require production to depend on a successful staging deploy and smoke test." },
+        { "id": "e", "text": "Store the rollback task definition in the release record before production changes." }
+      ],
+      "correct": ["a", "b", "d", "e"],
+      "explanation": "Required reviewers, concurrency, staging dependency, and a named rollback target all support controlled promotion. Rebuilding from the default branch weakens the artifact chain because production may not run what staging tested."
+    }
+  ]
+}
+

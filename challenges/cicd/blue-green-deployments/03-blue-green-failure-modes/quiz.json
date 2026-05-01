@@ -1,0 +1,85 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A pre-switch validation report says:\n\n```text\nURL tested: https://orders-api.polaris.example/version\ntask definition: orders-api:41\nexpected green task definition: orders-api:42\n```\n\nThe report marks the test as passed because the endpoint returned 200. What is the correct review response?",
+      "options": [
+        { "id": "a", "text": "Reject the result because the test hit the public blue URL, not the green test listener." },
+        { "id": "b", "text": "Accept the result because any 200 response proves green is healthy." },
+        { "id": "c", "text": "Switch traffic because blue and green always share the same task definition before the switch." },
+        { "id": "d", "text": "Delete blue so the public URL must hit green next time." }
+      ],
+      "correct": ["a"],
+      "explanation": "Before the switch, the public URL points to blue. The task definition `orders-api:41` confirms the test did not exercise green. The validation must use the test listener and prove `orders-api:42` answered."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "After a blue-green traffic switch, CodeDeploy reports routing completed. The public `/version` endpoint still reports `orders-api:41`. What is the most likely release concern?",
+      "options": [
+        { "id": "a", "text": "The production listener may still point at blue or the wrong target group." },
+        { "id": "b", "text": "This is expected because blue-green always leaves public traffic on blue for one hour." },
+        { "id": "c", "text": "The version endpoint is never useful after a traffic switch." },
+        { "id": "d", "text": "The checkout smoke test should be skipped because CodeDeploy already succeeded." }
+      ],
+      "correct": ["a"],
+      "explanation": "The platform status is one signal, but the public version endpoint proves what users are actually hitting. If it still reports blue, inspect the deployment and target groups before continuing."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "Green receives 100 percent production traffic and checkout starts returning 500s. Blue is still healthy and compatible with current data. What is the first recovery move?",
+      "options": [
+        { "id": "a", "text": "Send traffic back to blue, then debug green after users are protected." },
+        { "id": "b", "text": "Keep traffic on green and inspect logs until root cause is fully known." },
+        { "id": "c", "text": "Rebuild the image from main and deploy it to green immediately." },
+        { "id": "d", "text": "Delete green and blue so CodeDeploy recreates both target groups." }
+      ],
+      "correct": ["a"],
+      "explanation": "The article frames blue-green rollback as a traffic decision. If blue is still healthy and data-compatible, moving users back to blue protects them first. Deep debugging can happen after the traffic state is safe."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "Green writes a new field named `discountRulesV2`. Blue can only read `discountRules`. Green served traffic for ten minutes before errors started. Why might a traffic rollback to blue be unsafe?",
+      "options": [
+        { "id": "a", "text": "Blue may fail when it reads records that green already wrote in the new shape." },
+        { "id": "b", "text": "Traffic rollback always deletes data written by green." },
+        { "id": "c", "text": "CodeDeploy prevents rollback after ten minutes." },
+        { "id": "d", "text": "Blue-green deployments cannot be used with databases at all." }
+      ],
+      "correct": ["a"],
+      "explanation": "Blue-green can make traffic movement easy, but it does not undo data writes. If green wrote data blue cannot read, rollback can create a second failure. The article points to expand-and-contract compatibility as the safer pattern."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A team wants to fully warm a replacement Spring service, verify readiness through a private URL, and then make a single production switch. Which deployment style fits best?",
+      "options": [
+        { "id": "a", "text": "Blue-green, because it prepares a complete replacement before users reach it." },
+        { "id": "b", "text": "Rolling, because it always gives a private URL for the new version." },
+        { "id": "c", "text": "Canary, because it never sends real traffic to the new version." },
+        { "id": "d", "text": "Manual deploy, because automated release patterns cannot handle warmup." }
+      ],
+      "correct": ["a"],
+      "explanation": "Blue-green is useful when the team wants to prepare and test a full replacement before moving public traffic. Rolling changes production gradually and usually does not provide a separate pre-switch public path for the full replacement."
+    },
+    {
+      "id": "q6",
+      "type": "multiple",
+      "scenario": "Which checks belong before or immediately after a blue-green traffic switch for `polaris-orders-api`?",
+      "options": [
+        { "id": "a", "text": "Before switch: test listener `/readyz` returns ready for green." },
+        { "id": "b", "text": "Before switch: test listener `/version` reports `orders-api:42`." },
+        { "id": "c", "text": "After switch: public `/version` reports `orders-api:42`." },
+        { "id": "d", "text": "After switch: public smoke checkout succeeds." },
+        { "id": "e", "text": "Before switch: public `/version` reports `orders-api:41` and that is accepted as green validation." }
+      ],
+      "correct": ["a", "b", "c", "d"],
+      "explanation": "Green must be tested through the test listener before users reach it. After the switch, the public URL should prove users are on green and checkout still works. A public blue response before the switch is not green validation."
+    }
+  ]
+}
+

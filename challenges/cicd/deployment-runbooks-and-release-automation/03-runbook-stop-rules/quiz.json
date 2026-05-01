@@ -1,0 +1,85 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "During a canary, checkout success drops below the runbook threshold for five minutes. A teammate says, \"Let's wait because maybe it recovers.\" What is the purpose of the stop rule?",
+      "options": [
+        { "id": "a", "text": "It prevents the team from negotiating with bad release evidence during the release." },
+        { "id": "b", "text": "It guarantees that every checkout failure is caused by the new release." },
+        { "id": "c", "text": "It replaces the need for a release lead." },
+        { "id": "d", "text": "It means the workflow should delete the canary immediately without recording evidence." }
+      ],
+      "correct": ["a"],
+      "explanation": "Stop rules are decided before production changes so the team does not explain away a bad graph under pressure. They do not prove root cause by themselves and do not remove the need for an owner."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A runbook says `rollback if needed`, but does not name task definition, digest, or data compatibility. What is the strongest review comment?",
+      "options": [
+        { "id": "a", "text": "Name the rollback target before production changes, including task definition, image digest, and data compatibility assumption." },
+        { "id": "b", "text": "The phrase `rollback if needed` is enough because ECS remembers the previous task." },
+        { "id": "c", "text": "Rollback targets should be chosen after the outage starts." },
+        { "id": "d", "text": "Remove rollback from the runbook so the deploy is faster." }
+      ],
+      "correct": ["a"],
+      "explanation": "A rollback target must be the exact state to return to. Naming it before the release prevents the team from discovering too late that rollback is ambiguous or unsafe."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "The app engineer sees a new error pattern, the platform engineer sees traffic at the intended canary slice, and the product owner asks whether users are affected. Nobody knows who decides the next move. Which runbook section is missing?",
+      "options": [
+        { "id": "a", "text": "Owner handoff, because the person who owns the next decision should be clear before the release starts." },
+        { "id": "b", "text": "A longer deploy command, because ownership comes from command syntax." },
+        { "id": "c", "text": "A bigger runner, because decision confusion is a performance issue." },
+        { "id": "d", "text": "A new artifact tag, because tags assign ownership." }
+      ],
+      "correct": ["a"],
+      "explanation": "The owner handoff section names who owns go, pause, rollback, or roll-forward decisions, and when incident ownership takes over. It prevents everyone from watching while nobody decides."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "The workflow prints only `deployment complete`. The runbook article says scripts should print evidence. Which output is more useful?",
+      "options": [
+        { "id": "a", "text": "`release_id`, `image_digest`, deployment id, test listener, smoke result, and traffic split." },
+        { "id": "b", "text": "Only `done`, because short logs are always safer." },
+        { "id": "c", "text": "Only the GitHub run id, because every other detail can be inferred later." },
+        { "id": "d", "text": "No output, because deployment logs are not part of the release record." }
+      ],
+      "correct": ["a"],
+      "explanation": "Automation should print release evidence. The release id, digest, deployment id, test listener checks, and traffic split help the team prove what changed and what was verified."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A smoke checkout passes once immediately after deployment. The release lead wants to finish the release without watching metrics. What is the most accurate response?",
+      "options": [
+        { "id": "a", "text": "A smoke test proves one important path once, but post-release verification checks real traffic health over a window." },
+        { "id": "b", "text": "A smoke test is stronger than post-release verification because it is faster." },
+        { "id": "c", "text": "Post-release verification is only needed for failed releases." },
+        { "id": "d", "text": "Metrics are less useful than whether the deploy command exited." }
+      ],
+      "correct": ["a"],
+      "explanation": "The article distinguishes smoke tests from post-release verification. Smoke proves a narrow path can work once. Verification checks live behavior such as 5xx, checkout success, latency, payment provider errors, and version."
+    },
+    {
+      "id": "q6",
+      "type": "multiple",
+      "scenario": "Which items belong in a practical runbook for `polaris-orders-api`?",
+      "options": [
+        { "id": "a", "text": "Pre-check that staging runs the same image digest." },
+        { "id": "b", "text": "Stop rules with first action and owner." },
+        { "id": "c", "text": "Rollback target with task definition and image digest." },
+        { "id": "d", "text": "Post-release verification window with observed metrics." },
+        { "id": "e", "text": "A note that says the senior engineer will remember the command." }
+      ],
+      "correct": ["a", "b", "c", "d"],
+      "explanation": "The runbook should reduce memory work: pre-checks, stop rules, rollback target, and verification evidence all belong. Relying on one person's memory is exactly what the runbook replaces."
+    }
+  ]
+}
+

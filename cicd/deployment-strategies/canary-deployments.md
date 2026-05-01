@@ -16,10 +16,9 @@ id: article-cicd-deployment-strategies-canary-deployments
 5. [Watching the Canary](#watching-the-canary)
 6. [Promoting the Canary](#promoting-the-canary)
 7. [Rolling Back the Canary](#rolling-back-the-canary)
-8. [What Java Changes in the Same Pattern](#what-java-changes-in-the-same-pattern)
-9. [Failure Modes to Watch](#failure-modes-to-watch)
-10. [Canary vs. Rolling vs. Blue-Green](#canary-vs-rolling-vs-blue-green)
-11. [Speed vs. Signal](#speed-vs-signal)
+8. [Failure Modes to Watch](#failure-modes-to-watch)
+9. [Canary vs. Rolling vs. Blue-Green](#canary-vs-rolling-vs-blue-green)
+10. [Speed vs. Signal](#speed-vs-signal)
 
 ## What a Canary Deployment Proves
 
@@ -50,9 +49,8 @@ The current task definition runs version `1.8.3`.
 The new task definition runs version `1.8.4`.
 AWS CodeDeploy can shift traffic between ECS task sets through an Application Load Balancer, which lets us send ten percent of requests to the new release and keep the other ninety percent on the old release.
 
-Java maps to the same pattern.
-A Spring Boot service may warm up more slowly and expose `/actuator/health/readiness`, but the canary question is the same:
-does the new task set behave well when a small amount of real traffic reaches it?
+Runtime details only matter when they change how you read the signal.
+For example, a slow-starting service may need a longer warmup window before you judge canary latency.
 
 ## The Example: A New Task Set With Ten Percent Traffic
 
@@ -232,6 +230,11 @@ For a real team, those numbers usually come from an observability system.
 The beginner lesson is the same even if the tool changes:
 split the signal by release, compare it to stable, and use a time window with enough traffic to mean something.
 
+Warmup can change the watch window.
+If a runtime normally runs slower for the first minute after startup, do not judge the canary from that first minute alone.
+But do not ignore the signal either.
+A canary that stays slow after the normal warmup window is telling you something real.
+
 ## Promoting the Canary
 
 Promotion means increasing trust gradually.
@@ -338,28 +341,6 @@ next action: fix discount timeout and add pre-release load check
 That record helps the next person.
 They do not need to search logs from scratch.
 They can see what happened, what was protected, and where to look next.
-
-## What Java Changes in the Same Pattern
-
-The canary pattern is the same for Java, but the runtime signals need a little more care.
-
-A Spring Boot service may pass readiness only after the application context, database pool, and background startup tasks are ready.
-That is good.
-Do not route traffic to a Java canary only because the JVM process exists.
-
-Here is the rough translation:
-
-| Concern | Node.js API | Spring Boot API |
-|---------|-------------|-----------------|
-| Build command | `npm ci`, `npm test`, `npm run build` | `./gradlew test bootJar` |
-| Readiness endpoint | `/readyz` | `/actuator/health/readiness` |
-| Common canary signal | route errors, latency, checkout success | same, plus warmup behavior |
-| Common failure | missing `process.env` value | wrong Spring profile or heap setting |
-| Watch window | can often be shorter | may need warmup time before judging latency |
-
-The last row matters.
-If a Java canary looks slow for the first minute because the JVM is warming up, that is different from a Java canary that stays slow for twenty minutes.
-Your watch window should match the runtime.
 
 ## Failure Modes to Watch
 
@@ -564,4 +545,3 @@ It is the discipline of making one small promise, watching whether production ag
 - [AWS CodeDeploy Docs: Stop a deployment](https://docs.aws.amazon.com/codedeploy/latest/userguide/deployments-stop.html) - Shows how to stop a deployment and request rollback.
 - [Elastic Load Balancing Docs: Target group health checks](https://docs.aws.amazon.com/elasticloadbalancing/latest/application/target-group-health-checks.html) - Explains target health for load-balanced ECS services.
 - [GitHub Docs: Deploying with GitHub Actions](https://docs.github.com/en/actions/concepts/use-cases/deploying-with-github-actions) - Shows how deployment workflows fit into GitHub Actions.
-- [Spring Boot Docs: Actuator Endpoints](https://docs.spring.io/spring-boot/reference/actuator/endpoints.html) - Documents health and readiness endpoints for Java services.

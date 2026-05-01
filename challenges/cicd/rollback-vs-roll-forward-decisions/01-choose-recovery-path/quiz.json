@@ -1,0 +1,85 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A canary at ten percent returns 6.8 percent 5xx. Stable remains healthy, still serves ninety percent of traffic, and can read all current order rows. What is the smallest safe first move?",
+      "options": [
+        { "id": "a", "text": "Revert traffic so users go back to the healthy stable task set." },
+        { "id": "b", "text": "Patch forward immediately before changing traffic." },
+        { "id": "c", "text": "Redeploy the previous artifact even though the old task set is already healthy." },
+        { "id": "d", "text": "Promote the canary so the team has more failure data." }
+      ],
+      "correct": ["a"],
+      "explanation": "When stable is healthy, available, and data-compatible, traffic revert protects users with the smallest change. Redeploying the old artifact is heavier, patching forward comes later if needed, and promotion spreads the impact."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "Both the new and old running task sets now fail readiness because a production secret version was manually replaced during the release. The release record still has the last known-good image digest and config version. Which path fits best?",
+      "options": [
+        { "id": "a", "text": "Redeploy the previous artifact with known-good config because the current running platform state is not trustworthy." },
+        { "id": "b", "text": "Revert traffic to the old task set because old always means healthy." },
+        { "id": "c", "text": "Disable the discount feature flag because all readiness failures are feature flag failures." },
+        { "id": "d", "text": "Promote the release so ECS replaces the broken tasks faster." }
+      ],
+      "correct": ["a"],
+      "explanation": "Redeploying the previous artifact is useful when the running platform state cannot be trusted. A traffic revert does not help if the old running task set is also broken. A flag change only helps when the bad behavior is isolated behind that flag."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "The new artifact is healthy. Only checkout requests with the new discount engine fail, and the behavior is controlled by `FEATURE_DISCOUNT_V2`. The old discount engine is known to work. Which recovery move is most targeted?",
+      "options": [
+        { "id": "a", "text": "Disable `FEATURE_DISCOUNT_V2` and verify checkout uses the known-good discount path." },
+        { "id": "b", "text": "Redeploy the previous artifact because flags should never be changed during incidents." },
+        { "id": "c", "text": "Keep the flag enabled and wait for more failures." },
+        { "id": "d", "text": "Stop the rollout forever because one feature path failed." }
+      ],
+      "correct": ["a"],
+      "explanation": "A flag recovery is appropriate when the bad behavior is isolated and the fallback path is known to work. It changes runtime behavior without moving traffic or rebuilding."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "Version `1.8.4` already wrote data that `1.8.3` cannot read. The root cause is a missing default value, and the fix is one small code change that can pass CI quickly. Which path is most defensible?",
+      "options": [
+        { "id": "a", "text": "Patch forward because moving traffic back to `1.8.3` may fail on the new data shape." },
+        { "id": "b", "text": "Always roll back because older code is automatically safer." },
+        { "id": "c", "text": "Disable every feature flag, even unrelated ones." },
+        { "id": "d", "text": "Delete the release record because it no longer matches production." }
+      ],
+      "correct": ["a"],
+      "explanation": "Rollback can be dangerous when the previous artifact cannot read data already written by the failed release. Patch forward is defensible when the cause and fix are narrow and going backward is riskier."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "Canary 5xx is normal, checkout success is lower than stable, payment provider timeouts also increased, and database write latency is elevated. The team cannot yet tell whether the release or a dependency caused the issue. What should the release lead do?",
+      "options": [
+        { "id": "a", "text": "Stop automatic promotion, hold or reduce traffic based on user impact, name an owner, and set the next decision time." },
+        { "id": "b", "text": "Promote to 100 percent so the signal becomes clearer." },
+        { "id": "c", "text": "Patch forward without knowing the cause." },
+        { "id": "d", "text": "Delete the canary task set so evidence disappears." }
+      ],
+      "correct": ["a"],
+      "explanation": "Stopping the rollout is an action. When signals are unclear, the safe move is to pause promotion, reduce impact if needed, assign ownership, and decide what evidence will drive the next move."
+    },
+    {
+      "id": "q6",
+      "type": "multiple",
+      "scenario": "Which facts should be captured in the release record after a failed canary?",
+      "options": [
+        { "id": "a", "text": "The recovery action that was taken." },
+        { "id": "b", "text": "The evidence that led to that action." },
+        { "id": "c", "text": "The rejected options and why they were not chosen." },
+        { "id": "d", "text": "The owner for follow-up." },
+        { "id": "e", "text": "A vague note that says 'rollback happened' without task definitions or cause." }
+      ],
+      "correct": ["a", "b", "c", "d"],
+      "explanation": "A useful release record names the action, evidence, rejected paths, and owner. A vague note is exactly what the article tries to avoid, because it does not help the next engineer understand what happened."
+    }
+  ]
+}
+

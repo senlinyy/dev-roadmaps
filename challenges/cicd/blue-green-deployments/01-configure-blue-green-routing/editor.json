@@ -1,0 +1,30 @@
+{
+  "language": "yaml",
+  "filename": "appspec.yml",
+  "completionProfile": "yaml",
+  "initialValue": "version: 1\nResources:\n  - TargetService:\n      Type: AWS::ECS::Service\n      Properties:\n        TaskDefinition: arn:aws:ecs:us-east-1:123456789012:task-definition/orders-api:41\n        LoadBalancerInfo:\n          ContainerName: api\n          ContainerPort: 3000\n",
+  "grader": {
+    "strategy": "yaml-paths",
+    "expected": [
+      {
+        "path": ["Resources", 0, "TargetService", "Properties", "TaskDefinition"],
+        "type": "string",
+        "contains": "task-definition/orders-api:42",
+        "label": "AppSpec targets orders-api:42"
+      },
+      {
+        "path": ["Resources", 0, "TargetService", "Properties", "LoadBalancerInfo", "ContainerName"],
+        "type": "string",
+        "equals": "orders-api",
+        "label": "load balancer routes to the orders-api container"
+      },
+      {
+        "path": ["Resources", 0, "TargetService", "Properties", "LoadBalancerInfo", "ContainerPort"],
+        "type": "number",
+        "equals": 8080,
+        "label": "load balancer routes to container port 8080"
+      }
+    ]
+  }
+}
+

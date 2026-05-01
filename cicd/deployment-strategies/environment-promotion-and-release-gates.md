@@ -1,7 +1,7 @@
 ---
 title: "Environment Promotion and Release Gates"
 description: "Promote one tested Node.js backend release through staging and production using image digests, health checks, approvals, and clear release evidence."
-overview: "A green build only means the code passed CI. Learn how one Node.js API image moves from staging to production, what each gate should prove, and how Java services map to the same release path."
+overview: "A green build only means the code passed CI. Learn how one Node.js API image moves from staging to production, what each gate should prove, and how the team records evidence."
 tags: ["promotion", "environments", "gates", "artifacts"]
 order: 1
 id: article-cicd-deployment-strategies-environment-promotion-and-release-gates
@@ -93,11 +93,6 @@ If production is broken, customers feel it.
 The Node detail matters because the examples should feel familiar.
 The build starts with `npm ci`, runs tests, compiles TypeScript, builds a container image, and deploys that image.
 
-The Java version of the same story is close, but the build and health endpoints have different names.
-A Spring Boot service might run `./gradlew test bootJar`, build an image that contains the `.jar`, and expose readiness through `/actuator/health/readiness`.
-The release idea is the same:
-build one artifact, deploy it to staging, prove it, then promote the same artifact to production.
-
 ## Build Once, Promote One Image Digest
 
 The safest promotion rule is simple:
@@ -147,11 +142,6 @@ When someone asks "what do we roll back to?", the same record should answer that
 Production should deploy the digest, not rebuild from source.
 If staging and production both point to the same digest, you can say with confidence:
 "Production is running the thing staging tested."
-
-For a Java service, replace the Node build commands with the Java build commands, but keep the artifact rule.
-The `.jar` may be built by Gradle, then copied into a container image.
-Production still promotes the image digest.
-It should not rebuild the JAR during the production deployment.
 
 ## Why Staging and Production Stay Separate
 
@@ -252,11 +242,6 @@ Those few lines teach three ideas.
 `environment` says production has its own gate and credentials.
 The URL tells reviewers which real service the job is touching.
 
-For a Spring Boot app, the workflow changes in the build job.
-You might replace `npm ci`, `npm test`, and `npm run build` with `./gradlew test bootJar`.
-The promotion path should not change.
-The same image digest still moves from staging to production.
-
 ## What Each Gate Should Prove
 
 A gate should answer a concrete question.
@@ -317,7 +302,8 @@ status: accepted
 That output gives the reviewer three signals:
 the app is ready, the right image is running, and the smallest checkout flow works.
 
-For Java, the first check is often `/actuator/health/readiness`.
+Some frameworks expose readiness through a different path.
+For example, Spring Boot services often use `/actuator/health/readiness`.
 The smoke test should still include a business-level check.
 A green readiness endpoint only says the service thinks it can receive traffic.
 It does not prove checkout works.
@@ -458,4 +444,4 @@ It teaches the team to keep release identity, environment access, checks, approv
 - [Amazon ECS Docs: Deploy Amazon ECS services by replacing tasks](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/deployment-type-ecs.html) - Explains the rolling deployment model used when an ECS service replaces old tasks with new ones.
 - [AWS CLI Docs: ecr describe-images](https://docs.aws.amazon.com/cli/latest/reference/ecr/describe-images.html) - Shows how to read image digests from Amazon ECR.
 - [npm Docs: npm ci](https://docs.npmjs.com/cli/v10/commands/npm-ci) - Documents clean dependency installs for CI and deployment pipelines.
-- [Spring Boot Docs: Actuator Endpoints](https://docs.spring.io/spring-boot/reference/actuator/endpoints.html) - Explains health and readiness endpoints used by many Java services.
+- [Spring Boot Docs: Actuator Endpoints](https://docs.spring.io/spring-boot/reference/actuator/endpoints.html) - Explains the framework-specific readiness endpoint mentioned in the smoke test section.

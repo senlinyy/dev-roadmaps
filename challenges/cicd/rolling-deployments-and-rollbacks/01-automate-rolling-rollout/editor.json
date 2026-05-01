@@ -1,0 +1,48 @@
+{
+  "language": "yaml",
+  "filename": ".github/workflows/rolling-deploy.yml",
+  "completionProfile": "github-actions",
+  "initialValue": "name: Rolling Deploy Orders API\non:\n  workflow_dispatch:\n    inputs:\n      image_digest:\n        description: Tested image digest\n        required: true\n        type: string\n\njobs:\n  rollout:\n    runs-on: ubuntu-latest\n    steps:\n      - run: ./scripts/update-ecs-service.sh orders-api-prod\n      - run: ./scripts/register-task-definition.sh \"${{ inputs.image_digest }}\"\n      - run: ./scripts/check-public-version.sh orders-api:42",
+  "grader": {
+    "strategy": "yaml-paths",
+    "expected": [
+      {
+        "path": ["jobs", "rollout", "environment", "name"],
+        "type": "string",
+        "equals": "production",
+        "label": "rollout uses the production environment"
+      },
+      {
+        "path": ["jobs", "rollout", "environment", "url"],
+        "type": "string",
+        "equals": "https://orders-api.polaris.example",
+        "label": "production environment has the service URL"
+      },
+      {
+        "path": ["jobs", "rollout", "steps", 0, "run"],
+        "type": "string",
+        "equals": "./scripts/register-task-definition.sh \"${{ inputs.image_digest }}\"",
+        "label": "first step registers the task definition"
+      },
+      {
+        "path": ["jobs", "rollout", "steps", 1, "run"],
+        "type": "string",
+        "equals": "./scripts/update-ecs-service.sh orders-api-prod",
+        "label": "second step updates the ECS service"
+      },
+      {
+        "path": ["jobs", "rollout", "steps", 2, "run"],
+        "type": "string",
+        "equals": "./scripts/wait-target-health.sh orders-api-prod",
+        "label": "third step waits for target health"
+      },
+      {
+        "path": ["jobs", "rollout", "steps", 3, "run"],
+        "type": "string",
+        "equals": "./scripts/watch-rollout.sh orders-api-prod --minutes 15",
+        "label": "fourth step watches rollout signals"
+      }
+    ]
+  }
+}
+

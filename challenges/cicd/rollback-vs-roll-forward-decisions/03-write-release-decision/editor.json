@@ -1,0 +1,51 @@
+{
+  "language": "yaml",
+  "filename": "release-decision.yml",
+  "completionProfile": "yaml",
+  "initialValue": "release: rel-2026-04-30-184\nservice: polaris-orders-api\ntimeline:\n  - 19:05 canary moved to ten percent\n  - 19:11 canary 5xx rate reached 6.8 percent\n\ndecision:\n  type: unknown\n  reason: needs follow-up\n  evidence: []\n  rejected_options: []\n",
+  "grader": {
+    "strategy": "yaml-paths",
+    "expected": [
+      {
+        "path": ["decision", "type"],
+        "type": "string",
+        "equals": "traffic revert",
+        "label": "decision type is traffic revert"
+      },
+      {
+        "path": ["decision", "reason"],
+        "type": "string",
+        "contains": "previous task set healthy",
+        "label": "reason explains why traffic revert fit"
+      },
+      {
+        "path": ["decision", "evidence"],
+        "type": "array",
+        "includes": "canary missing DISCOUNT_RULES_URL",
+        "label": "evidence includes missing DISCOUNT_RULES_URL"
+      },
+      {
+        "path": ["decision", "evidence"],
+        "type": "array",
+        "includes": "stable task set orders-api:41 stayed healthy",
+        "label": "evidence includes healthy stable task set"
+      },
+      {
+        "path": ["decision", "rejected_options"],
+        "type": "array",
+        "containsObject": {
+          "option": "patch_forward",
+          "reason": "not needed because artifact code was not the first cause"
+        },
+        "label": "patch forward rejection is recorded"
+      },
+      {
+        "path": ["decision", "owner"],
+        "type": "string",
+        "equals": "Maya",
+        "label": "decision owner is recorded"
+      }
+    ]
+  }
+}
+

@@ -1,0 +1,38 @@
+{
+  "language": "yaml",
+  "filename": ".github/workflows/promote.yml",
+  "completionProfile": "github-actions",
+  "initialValue": "name: Promote Orders API\non:\n  workflow_dispatch:\n    inputs:\n      commit:\n        description: Commit sha to release\n        required: true\n        type: string\n\njobs:\n  build:\n    runs-on: ubuntu-latest\n    outputs:\n      image_tag: ${{ steps.meta.outputs.image_tag }}\n    steps:\n      - uses: actions/checkout@v4\n      - run: npm ci\n      - run: npm test\n      - run: docker build -t orders-api:${{ inputs.commit }} .\n      - id: meta\n        run: echo \"image_tag=orders-api:${{ inputs.commit }}\" >> \"$GITHUB_OUTPUT\"\n      - id: digest\n        run: echo \"image_digest=sha256:9c1cfbb322f6f2b8f8cc4d2b9f9e6b77c92c8da7ad9226110f0cf0c30a2a7f54\" >> \"$GITHUB_OUTPUT\"\n\n  deploy-staging:\n    needs: build\n    runs-on: ubuntu-latest\n    environment: staging\n    steps:\n      - run: ./scripts/deploy-ecs.sh orders-api-staging \"${{ needs.build.outputs.image_tag }}\"\n      - run: ./scripts/smoke.sh https://orders-api-staging.polaris.example\n\n  deploy-production:\n    needs: deploy-staging\n    runs-on: ubuntu-latest\n    environment: production\n    steps:\n      - uses: actions/checkout@v4\n      - run: npm ci && npm test && docker build -t orders-api:${{ github.sha }} .\n      - run: ./scripts/deploy-ecs.sh orders-api-prod \"orders-api:${{ github.sha }}\"",
+  "grader": {
+    "strategy": "yaml-paths",
+    "expected": [
+      {
+        "path": ["jobs", "build", "outputs", "image_digest"],
+        "type": "string",
+        "equals": "${{ steps.digest.outputs.image_digest }}",
+        "label": "build exposes image_digest from the digest step"
+      },
+      {
+        "path": ["jobs", "deploy-staging", "steps"],
+        "containsObject": {
+          "run": "./scripts/deploy-ecs.sh orders-api-staging \"${{ needs.build.outputs.image_digest }}\""
+        },
+        "label": "staging deploys the build digest"
+      },
+      {
+        "path": ["jobs", "deploy-production", "needs"],
+        "type": "array",
+        "equals": ["build", "deploy-staging"],
+        "label": "production depends on build and staging"
+      },
+      {
+        "path": ["jobs", "deploy-production", "steps"],
+        "containsObject": {
+          "run": "./scripts/deploy-ecs.sh orders-api-prod \"${{ needs.build.outputs.image_digest }}\""
+        },
+        "label": "production deploys the same build digest"
+      }
+    ]
+  }
+}
+

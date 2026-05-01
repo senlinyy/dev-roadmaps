@@ -1,0 +1,42 @@
+{
+  "language": "yaml",
+  "filename": "feature-flags.yml",
+  "completionProfile": "yaml",
+  "initialValue": "production:\n  service: polaris-orders-api\n  flags:\n    FEATURE_DISCOUNT_V1: true\n    FEATURE_DISCOUNT_V2: true\n  audit: {}\n",
+  "grader": {
+    "strategy": "yaml-paths",
+    "expected": [
+      {
+        "path": ["production", "flags", "FEATURE_DISCOUNT_V2"],
+        "type": "boolean",
+        "equals": false,
+        "label": "FEATURE_DISCOUNT_V2 is disabled"
+      },
+      {
+        "path": ["production", "flags", "FEATURE_DISCOUNT_V1"],
+        "type": "boolean",
+        "equals": true,
+        "label": "FEATURE_DISCOUNT_V1 remains enabled"
+      },
+      {
+        "path": ["production", "audit", "release_id"],
+        "type": "string",
+        "equals": "rel-2026-04-30-184",
+        "label": "audit entry names the release"
+      },
+      {
+        "path": ["production", "audit", "updated_by"],
+        "type": "string",
+        "equals": "maya",
+        "label": "audit entry names the owner"
+      },
+      {
+        "path": ["production", "audit", "reason"],
+        "type": "string",
+        "contains": "canary discount errors",
+        "label": "audit entry explains the recovery reason"
+      }
+    ]
+  }
+}
+

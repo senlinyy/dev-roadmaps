@@ -1,0 +1,85 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "The failed release added `discount_rule_version` and already wrote rows with value `v2`. Version `1.8.3` assumes that field does not exist and crashes when reading it. What should the release lead conclude before rolling back traffic?",
+      "options": [
+        { "id": "a", "text": "Rollback may be more dangerous than patching forward because old code cannot read new data." },
+        { "id": "b", "text": "Rollback is always safe because old code once worked." },
+        { "id": "c", "text": "Data compatibility only matters for database migrations, not application fields." },
+        { "id": "d", "text": "The release record should be ignored because the service is already failing." }
+      ],
+      "correct": ["a"],
+      "explanation": "The article emphasizes that rollback can fail if the previous artifact cannot read current data. In that case, a narrow patch forward may protect users better than moving traffic back."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A hotfix changes one default value in the discount parser. The cause is clear, the fix is small, and rollback would break rows already written by the failed release. What should still happen before the patch gets full traffic?",
+      "options": [
+        { "id": "a", "text": "Run it through CI and release it through a small deployment gate, such as a new canary." },
+        { "id": "b", "text": "Skip CI because emergency patches are safer when they are faster." },
+        { "id": "c", "text": "Deploy it directly to 100 percent traffic because the fix is small." },
+        { "id": "d", "text": "Delete the failing release logs so the dashboard resets." }
+      ],
+      "correct": ["a"],
+      "explanation": "Patch forward still needs trust. The article says emergency does not make untested code safer. A small, clear fix should still pass CI and earn traffic through a gate."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "The team is unsure whether checkout failures come from the canary, the payment provider, or database latency. Promotion is still scheduled to continue automatically in two minutes. What is the safest release action?",
+      "options": [
+        { "id": "a", "text": "Stop automatic promotion and assign owners for the next decision." },
+        { "id": "b", "text": "Let promotion continue because the cause may not be the release." },
+        { "id": "c", "text": "Patch forward immediately with the first idea suggested in chat." },
+        { "id": "d", "text": "Redeploy the previous artifact without checking data compatibility." }
+      ],
+      "correct": ["a"],
+      "explanation": "When the signal is unclear, stopping is an action. It prevents the release from spreading while the team names owners and collects the evidence needed for a defensible decision."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "A teammate says, \"We turned off the flag, so we rolled back.\" The new artifact is still serving traffic, but `FEATURE_DISCOUNT_V2` is false. What is the most accurate correction?",
+      "options": [
+        { "id": "a", "text": "The recovery disabled a feature flag. The artifact did not roll back." },
+        { "id": "b", "text": "A flag change is the same as redeploying the previous artifact." },
+        { "id": "c", "text": "The distinction does not matter for release records." },
+        { "id": "d", "text": "If the new artifact is running, no recovery happened." }
+      ],
+      "correct": ["a"],
+      "explanation": "The article separates recovery paths by what they change. A flag change modifies runtime behavior while the artifact can remain the same. That distinction belongs in the release record."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A previous image tag `orders-api:1.8.3` exists, but the release record has the exact digest for the last known-good artifact. Which should a redeploy use?",
+      "options": [
+        { "id": "a", "text": "Use the digest from the release record because it identifies exact image content." },
+        { "id": "b", "text": "Use the tag because tags are more human-readable and cannot move." },
+        { "id": "c", "text": "Use whichever image was pushed most recently." },
+        { "id": "d", "text": "Do not record image identity during rollback." }
+      ],
+      "correct": ["a"],
+      "explanation": "The article treats the artifact as the built thing you deploy and recommends checksums or digests over friendly names. Tags can move, while digests identify exact content."
+    },
+    {
+      "id": "q6",
+      "type": "multiple",
+      "scenario": "Which conditions make patch forward more defensible than traffic rollback?",
+      "options": [
+        { "id": "a", "text": "The previous artifact cannot safely read data already written by the failed release." },
+        { "id": "b", "text": "The root cause is narrow and the fix is clear." },
+        { "id": "c", "text": "The patch can pass CI and a small release gate." },
+        { "id": "d", "text": "The team cannot explain the failure yet." },
+        { "id": "e", "text": "Rolling back would be slower or riskier than the patch." }
+      ],
+      "correct": ["a", "b", "c", "e"],
+      "explanation": "Patch forward is strongest when going backward is risky, the cause is narrow, the fix is clear, and the patch can still earn trust. If the team cannot explain the failure, stopping the rollout is safer than guessing."
+    }
+  ]
+}
+

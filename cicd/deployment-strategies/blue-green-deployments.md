@@ -14,10 +14,9 @@ id: article-cicd-deployment-strategies-blue-green-deployments
 3. [Testing Green Before Users Reach It](#testing-green-before-users-reach-it)
 4. [Switching Traffic](#switching-traffic)
 5. [Rollback Is a Traffic Decision](#rollback-is-a-traffic-decision)
-6. [What Java Changes in the Same Pattern](#what-java-changes-in-the-same-pattern)
-7. [Failure Modes to Watch](#failure-modes-to-watch)
-8. [Blue-Green vs. Rolling](#blue-green-vs-rolling)
-9. [Speed vs. Cost](#speed-vs-cost)
+6. [Failure Modes to Watch](#failure-modes-to-watch)
+7. [Blue-Green vs. Rolling](#blue-green-vs-rolling)
+8. [Speed vs. Cost](#speed-vs-cost)
 
 ## What Blue-Green Solves
 
@@ -50,8 +49,8 @@ CodeDeploy can create a replacement ECS task set, connect it to a second Applica
 The same pattern also works on many app platforms:
 one task set, service, or environment is live while another one is prepared.
 
-Java maps to the same shape.
-A Spring Boot app may need more startup time and may use `/actuator/health/readiness`, but blue-green is still about preparing a full replacement before the traffic switch.
+Some runtimes need more time before the replacement is trustworthy.
+For example, a Spring Boot app may need the JVM, application context, and database pool to finish warming up before the green side should receive public traffic.
 
 ## The Example: Blue and Green Task Sets
 
@@ -164,8 +163,8 @@ It prevents a very specific mistake:
 switching users to a target that nobody actually tested.
 It also proves you are testing green, not accidentally testing the public blue URL.
 
-For a Java service, the readiness endpoint may be `/actuator/health/readiness`.
-That changes the first check, not the release idea.
+For a Spring Boot service, the readiness endpoint may be `/actuator/health/readiness`.
+That changes the first check, not the release decision.
 
 The business smoke test should still exist.
 Readiness says the app can receive traffic.
@@ -238,34 +237,6 @@ It did not remove bad emails that were already sent.
 
 Blue-green makes traffic rollback easier.
 It does not remove the need for data compatibility.
-
-## What Java Changes in the Same Pattern
-
-The release pattern is the same for Java, but the runtime details change.
-
-With Node.js, startup is often quick.
-A missing environment variable may fail immediately when `node dist/server.js` starts.
-
-With Spring Boot, startup can take longer.
-The JVM starts, Spring creates the application context, database connections initialize, and only then should readiness pass.
-
-That changes the checks:
-
-| Concern | Node.js API | Spring Boot API |
-|---------|-------------|-----------------|
-| Build command | `npm ci`, `npm test`, `npm run build` | `./gradlew test bootJar` |
-| Runtime command | `node dist/server.js` | `java -jar orders-api.jar` |
-| Readiness endpoint | `/readyz` | `/actuator/health/readiness` |
-| Common deploy failure | Missing `process.env` value | Wrong Spring profile or missing property |
-| Warmup concern | Usually short | JVM and framework startup can be longer |
-
-Do not let the runtime details distract from the deployment idea.
-Blue-green asks:
-can the replacement receive traffic safely before we make it live?
-
-For Java, give green enough time to become ready before the switch.
-For Node, make sure `/readyz` checks more than "the process exists."
-Both services need a business smoke test.
 
 ## Failure Modes to Watch
 
@@ -416,4 +387,4 @@ blue serves users, green proves it is ready, traffic moves, blue stays ready unt
 - [AWS CodeDeploy Docs: Stop a deployment](https://docs.aws.amazon.com/codedeploy/latest/userguide/deployments-stop.html) - Shows how to stop a deployment and request rollback.
 - [Elastic Load Balancing Docs: Target group health checks](https://docs.aws.amazon.com/elasticloadbalancing/latest/application/target-group-health-checks.html) - Explains how the load balancer decides whether targets are healthy.
 - [GitHub Docs: Deploying with GitHub Actions](https://docs.github.com/en/actions/concepts/use-cases/deploying-with-github-actions) - Shows how deployment workflows fit into GitHub Actions.
-- [Spring Boot Docs: Actuator Endpoints](https://docs.spring.io/spring-boot/reference/actuator/endpoints.html) - Documents health and readiness endpoints for Java services.
+- [Spring Boot Docs: Actuator Endpoints](https://docs.spring.io/spring-boot/reference/actuator/endpoints.html) - Documents the readiness endpoint used in the Spring Boot warmup example.

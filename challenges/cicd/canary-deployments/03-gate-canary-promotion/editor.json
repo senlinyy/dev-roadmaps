@@ -1,0 +1,48 @@
+{
+  "language": "yaml",
+  "filename": ".github/workflows/canary.yml",
+  "completionProfile": "github-actions",
+  "initialValue": "name: Canary Orders API\non:\n  workflow_dispatch:\n    inputs:\n      image_digest:\n        description: Tested image digest\n        required: true\n        type: string\n\njobs:\n  canary:\n    runs-on: ubuntu-latest\n    environment: production\n    steps:\n      - run: ./scripts/create-codedeploy-canary.sh \"${{ inputs.image_digest }}\"\n      - run: ./scripts/check-codedeploy-success.sh \"$DEPLOYMENT_ID\"\n      - run: ./scripts/watch-canary.sh \"$DEPLOYMENT_ID\" --minutes 5\n",
+  "grader": {
+    "strategy": "yaml-paths",
+    "expected": [
+      {
+        "path": ["concurrency", "group"],
+        "type": "string",
+        "equals": "orders-api-canary",
+        "label": "workflow serializes canaries for orders-api"
+      },
+      {
+        "path": ["concurrency", "cancel-in-progress"],
+        "type": "boolean",
+        "equals": false,
+        "label": "workflow does not cancel an in-flight canary"
+      },
+      {
+        "path": ["jobs", "canary", "environment", "name"],
+        "type": "string",
+        "equals": "production",
+        "label": "canary runs under the production environment"
+      },
+      {
+        "path": ["jobs", "canary", "steps", 0, "run"],
+        "type": "string",
+        "equals": "./scripts/create-codedeploy-canary.sh \"${{ inputs.image_digest }}\"",
+        "label": "first step creates the canary deployment"
+      },
+      {
+        "path": ["jobs", "canary", "steps", 1, "run"],
+        "type": "string",
+        "equals": "./scripts/watch-canary.sh \"$DEPLOYMENT_ID\" --minutes 5",
+        "label": "second step watches the canary"
+      },
+      {
+        "path": ["jobs", "canary", "steps", 2, "run"],
+        "type": "string",
+        "equals": "./scripts/check-codedeploy-success.sh \"$DEPLOYMENT_ID\"",
+        "label": "third step checks CodeDeploy success"
+      }
+    ]
+  }
+}
+

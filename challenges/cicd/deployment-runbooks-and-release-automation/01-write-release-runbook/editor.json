@@ -1,0 +1,72 @@
+{
+  "language": "yaml",
+  "filename": "runbook.yml",
+  "completionProfile": "yaml",
+  "initialValue": "runbook:\n  service: polaris-orders-api\n  release_id: rel-2026-04-30-184\n  pre_checks:\n    - staging looks fine\n  owners: {}\n  stop_rules: []\n  rollback_target:\n    task_definition: previous\n",
+  "grader": {
+    "strategy": "yaml-paths",
+    "expected": [
+      {
+        "path": ["runbook", "pre_checks"],
+        "type": "array",
+        "includes": "artifact digest exists",
+        "label": "pre-checks include artifact digest"
+      },
+      {
+        "path": ["runbook", "pre_checks"],
+        "type": "array",
+        "includes": "staging runs same digest",
+        "label": "pre-checks include staging digest match"
+      },
+      {
+        "path": ["runbook", "pre_checks"],
+        "type": "array",
+        "includes": "production is healthy",
+        "label": "pre-checks include production health"
+      },
+      {
+        "path": ["runbook", "pre_checks"],
+        "type": "array",
+        "includes": "required env vars exist",
+        "label": "pre-checks include required env vars"
+      },
+      {
+        "path": ["runbook", "owners", "release_lead"],
+        "type": "string",
+        "equals": "Maya",
+        "label": "release lead is named"
+      },
+      {
+        "path": ["runbook", "owners", "app_engineer"],
+        "type": "string",
+        "equals": "Theo",
+        "label": "app engineer is named"
+      },
+      {
+        "path": ["runbook", "owners", "platform_engineer"],
+        "type": "string",
+        "equals": "Iris",
+        "label": "platform engineer is named"
+      },
+      {
+        "path": ["runbook", "stop_rules"],
+        "type": "array",
+        "minItems": 4,
+        "label": "runbook has at least four stop rules"
+      },
+      {
+        "path": ["runbook", "rollback_target", "task_definition"],
+        "type": "string",
+        "equals": "orders-api:41",
+        "label": "rollback target task definition is named"
+      },
+      {
+        "path": ["runbook", "rollback_target", "image_digest"],
+        "type": "string",
+        "equals": "sha256:6447f5a96a80a87f19f6a6549e6dc03f63a2b8124c9d1c2f4a71f5b95ab9a621",
+        "label": "rollback target image digest is named"
+      }
+    ]
+  }
+}
+

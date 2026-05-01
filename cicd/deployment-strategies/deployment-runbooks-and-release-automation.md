@@ -19,7 +19,7 @@ id: article-cicd-deployment-strategies-deployment-runbooks-and-release-automatio
 8. [Post-Release Verification](#post-release-verification)
 9. [Automating the Runbook in GitHub Actions](#automating-the-runbook-in-github-actions)
 10. [Failure Modes in Runbooks](#failure-modes-in-runbooks)
-11. [What Java Changes in the Same Runbook](#what-java-changes-in-the-same-runbook)
+11. [Runtime-Specific Notes](#runtime-specific-notes)
 12. [Speed vs. Discipline](#speed-vs-discipline)
 
 ## What a Deployment Runbook Does
@@ -54,11 +54,6 @@ The goal is not to create a giant document.
 The goal is to make the safe path easy to follow.
 
 > A good runbook lets a careful junior engineer run a normal release without guessing.
-
-For Java, the same runbook works.
-The checks change a little.
-A Spring Boot service may use `/actuator/health/readiness`, a Gradle build, and JVM warmup notes.
-The release shape is the same.
 
 ## The Example: One Release Record Drives the Run
 
@@ -513,21 +508,18 @@ That is the level of detail you want.
 Specific enough to guide action.
 Short enough that people will actually read it.
 
-## What Java Changes in the Same Runbook
+## Runtime-Specific Notes
 
-For a Java backend, the runbook stays the same at the decision level.
-The checks and artifacts change.
+Most runtimes do not need their own paragraph in every deployment article.
+Build, test, deploy, smoke test, and rollback are the same release ideas.
+Mention a runtime only when it changes the runbook decision.
 
-The build may produce a Spring Boot jar with `./gradlew clean test bootJar`.
-The runbook should not stop at "the build passed."
-It should record the exact jar checksum or the exact image digest that contains the jar.
-
-The deployed artifact should still be recorded exactly.
-If the Java service is containerized, use the image digest.
-If the team deploys a jar directly, record the checksum.
+For example, a Spring Boot service may be packaged as a jar before it is copied into an image.
+If the service is containerized, the runbook should still record the image digest.
+If a team deploys the jar directly, the runbook should record the jar checksum too.
 
 ```text
-java release record:
+runtime-specific artifact record:
   service: polaris-orders-api
   version: 1.8.4
   commit: 8f3a12c6
@@ -536,20 +528,20 @@ java release record:
     jar_checksum: sha256:74ad3b8f7ad39f2a2c6c...
     image_digest: sha256:9c1cfbb322f6f2b8f8cc...
 
-readiness:
-  endpoint: /actuator/health/readiness
-  expected: UP
+readiness note:
+  Spring Boot endpoint: /actuator/health/readiness
+  expected result: UP
 ```
 
 The smoke test may use the same checkout endpoint.
-The readiness check may change to `/actuator/health/readiness`, and the expected result may be `UP`.
+The readiness check may change to a framework-specific path.
 
-Java services may need a warmup note.
+Some runtimes also need a warmup note.
 If normal p95 latency is high for the first two minutes after startup, write that down.
 Do not let every release rediscover it.
 
 ```text
-java warmup note:
+runtime warmup note:
   first 2 minutes after new task set starts:
     p95 latency can reach 600 ms
   after 5 minutes:
@@ -610,4 +602,4 @@ But the team will fail in a controlled way, with evidence, owners, and a clear p
 - [Amazon ECS Docs: CodeDeploy blue/green deployments](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/deployment-type-bluegreen.html) - Explains ECS task sets and load balancer traffic shifting used by the runbook.
 - [AWS CodeDeploy Docs: Deployment configurations](https://docs.aws.amazon.com/codedeploy/latest/userguide/deployment-configurations.html) - Documents canary and linear deployment configurations.
 - [Elastic Load Balancing Docs: Target group health checks](https://docs.aws.amazon.com/elasticloadbalancing/latest/application/target-group-health-checks.html) - Explains how load balancer health checks protect the traffic path.
-- [Spring Boot Actuator endpoints](https://docs.spring.io/spring-boot/reference/actuator/endpoints.html) - Documents health endpoints that Java services can use in deployment checks.
+- [Spring Boot Actuator endpoints](https://docs.spring.io/spring-boot/reference/actuator/endpoints.html) - Documents the readiness endpoint used in the runtime-specific runbook note.

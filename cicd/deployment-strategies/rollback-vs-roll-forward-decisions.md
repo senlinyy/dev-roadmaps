@@ -19,8 +19,7 @@ id: article-cicd-deployment-strategies-rollback-vs-roll-forward-decisions
 8. [Patch Forward When Backward Is More Dangerous](#patch-forward-when-backward-is-more-dangerous)
 9. [Stop the Rollout When the Signal Is Unclear](#stop-the-rollout-when-the-signal-is-unclear)
 10. [Write the Release Record While the Facts Are Fresh](#write-the-release-record-while-the-facts-are-fresh)
-11. [What Java Changes in the Same Decision](#what-java-changes-in-the-same-decision)
-12. [Speed vs. Certainty](#speed-vs-certainty)
+11. [Speed vs. Certainty](#speed-vs-certainty)
 
 ## What the Decision Is
 
@@ -284,7 +283,8 @@ In those cases, the safer move may be redeploying the previous artifact.
 
 An **artifact** is the built thing you deploy.
 For our Node service, it is a container image digest.
-For a Java service, it may be a container image digest or a `.jar` file.
+If a team deploys a package directly instead of a container image, the same rule applies:
+record the exact checksum, not just the friendly version name.
 
 Redeploying the previous artifact is different from reverting traffic.
 Traffic revert says, "Use the old running task set."
@@ -541,46 +541,6 @@ The release record also makes future automation easier.
 If every release records the same fields, a workflow can read them.
 The next article uses this idea to build a deployment runbook.
 
-## What Java Changes in the Same Decision
-
-Java does not change the decision tree.
-It changes the clues you look at.
-
-A Spring Boot service often exposes readiness through Actuator.
-The readiness endpoint may return `UP`, but that is only one clue.
-It tells you the Java service believes it can receive traffic.
-It does not prove checkout behavior, data compatibility, or warmup quality.
-
-For Java, startup and warmup can matter more.
-The service may pass basic startup, then slow down while the JVM (Java Virtual Machine) warms up hot code paths.
-That can make a canary look slow for a few minutes even when the code is not broken.
-
-That does not mean you ignore slow canaries.
-It means the release record should know what normal warmup looks like.
-
-```text
-java service normal warmup:
-  first 2 minutes: p95 can be up to 600 ms
-  after 5 minutes: p95 should return below 220 ms
-  readiness: /actuator/health/readiness must be UP before traffic
-```
-
-The artifact may also be different.
-A team might deploy a container image, or it might deploy a `.jar` built by Gradle.
-The same rule still applies:
-use the exact known-good artifact, not a name that can move.
-
-```text
-java artifact record:
-  commit: 4b6e91aa
-  build: ./gradlew clean test bootJar
-  jar_checksum: sha256:74ad3b8f7a...
-  container_image: sha256:6447f5a96a...
-```
-
-The decision is still practical:
-protect users first, choose the smallest safe move, and write down why.
-
 ## Speed vs. Certainty
 
 Recovery decisions trade speed for certainty.
@@ -618,4 +578,3 @@ They slow the room down just enough to prevent a reflex from becoming the next i
 - [AWS CodeDeploy Docs: Stop a deployment](https://docs.aws.amazon.com/codedeploy/latest/userguide/deployments-stop.html) - Shows how to stop a deployment and request rollback.
 - [GitHub Actions deployment environments](https://docs.github.com/en/actions/reference/deployments-and-environments) - Covers protected deployment environments and approval controls.
 - [LaunchDarkly kill switch flags](https://launchdarkly.com/docs/home/flags/killswitch/) - Gives a concrete vendor example of operational flags used to disable behavior during incidents.
-- [Spring Boot Actuator endpoints](https://docs.spring.io/spring-boot/reference/actuator/endpoints.html) - Documents health and readiness style endpoints used by Spring Boot services.

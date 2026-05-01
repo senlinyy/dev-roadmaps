@@ -1,0 +1,48 @@
+{
+  "language": "yaml",
+  "filename": "release-record.yml",
+  "completionProfile": "yaml",
+  "initialValue": "release:\n  id: rel-2026-04-30-184\n  service: polaris-orders-api\n  new_task_definition: orders-api:42\n  version: 1.8.4\n  image_digest: sha256:9c1cfbb322f6f2b8f8cc4d2b9f9e6b77c92c8da7ad9226110f0cf0c30a2a7f54\n\nrollback:\n  target: previous version\n  verification: []\n",
+  "grader": {
+    "strategy": "yaml-paths",
+    "expected": [
+      {
+        "path": ["rollback", "task_definition"],
+        "type": "string",
+        "equals": "orders-api:41",
+        "label": "rollback task definition is orders-api:41"
+      },
+      {
+        "path": ["rollback", "version"],
+        "type": "string",
+        "equals": "1.8.3",
+        "label": "rollback version is recorded"
+      },
+      {
+        "path": ["rollback", "image_digest"],
+        "type": "string",
+        "equals": "sha256:2b91fe0a7a61",
+        "label": "rollback image digest is recorded"
+      },
+      {
+        "path": ["rollback", "data_compatibility"],
+        "type": "string",
+        "contains": "1.8.3 can read",
+        "label": "rollback includes a data compatibility note"
+      },
+      {
+        "path": ["rollback", "verification"],
+        "type": "array",
+        "includes": "/version reports orders-api:41",
+        "label": "rollback verifies the public version"
+      },
+      {
+        "path": ["rollback", "verification"],
+        "type": "array",
+        "includes": "/smoke/checkout passes",
+        "label": "rollback verifies checkout smoke"
+      }
+    ]
+  }
+}
+

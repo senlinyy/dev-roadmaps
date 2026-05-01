@@ -1,0 +1,42 @@
+{
+  "language": "yaml",
+  "filename": ".github/workflows/promote.yml",
+  "completionProfile": "github-actions",
+  "initialValue": "name: Promote Orders API\non:\n  workflow_dispatch:\n    inputs:\n      image_digest:\n        description: Tested image digest\n        required: true\n        type: string\n\njobs:\n  build:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo \"Using ${{ inputs.image_digest }}\"\n\n  deploy-staging:\n    needs: build\n    runs-on: ubuntu-latest\n    environment: staging\n    steps:\n      - run: ./scripts/deploy-ecs.sh orders-api-staging \"${{ inputs.image_digest }}\"\n      - run: ./scripts/smoke.sh https://orders-api-staging.polaris.example\n\n  deploy-production:\n    needs: deploy-staging\n    runs-on: ubuntu-latest\n    steps:\n      - run: ./scripts/deploy-ecs.sh orders-api-prod \"${{ inputs.image_digest }}\"\n      - run: ./scripts/smoke.sh https://orders-api.polaris.example",
+  "grader": {
+    "strategy": "yaml-paths",
+    "expected": [
+      {
+        "path": ["concurrency", "group"],
+        "type": "string",
+        "equals": "production-orders-api",
+        "label": "workflow uses a production concurrency group"
+      },
+      {
+        "path": ["concurrency", "cancel-in-progress"],
+        "type": "boolean",
+        "equals": false,
+        "label": "production deploys do not cancel an in-flight release"
+      },
+      {
+        "path": ["jobs", "deploy-production", "needs"],
+        "type": "array",
+        "equals": ["build", "deploy-staging"],
+        "label": "production depends on build and deploy-staging"
+      },
+      {
+        "path": ["jobs", "deploy-production", "environment", "name"],
+        "type": "string",
+        "equals": "production",
+        "label": "production job uses the production environment"
+      },
+      {
+        "path": ["jobs", "deploy-production", "environment", "url"],
+        "type": "string",
+        "equals": "https://orders-api.polaris.example",
+        "label": "production environment includes the public URL"
+      }
+    ]
+  }
+}
+

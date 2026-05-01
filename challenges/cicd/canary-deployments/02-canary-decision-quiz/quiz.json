@@ -1,0 +1,85 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A release changes the checkout payment flow on a service that receives 10,000 checkout requests per minute. A teammate proposes a 10 percent first canary slice because that is the default example they remember. What is the best response?",
+      "options": [
+        { "id": "a", "text": "Use a smaller first slice, such as one percent, because checkout impact is high and ten percent is still many users." },
+        { "id": "b", "text": "Use 50 percent so the team gets faster signal." },
+        { "id": "c", "text": "Skip canary because high-traffic services do not need it." },
+        { "id": "d", "text": "Use ten percent for every service because canary percentages are fixed." }
+      ],
+      "correct": ["a"],
+      "explanation": "The first slice should match traffic volume and user impact. For a high-impact checkout or payment change, a smaller first slice can still provide signal while limiting blast radius."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "During a 10 percent canary, the whole-service 5xx graph rises from 0.08 percent to 0.45 percent. The team has no graph split by task definition or release. What is the core observability problem?",
+      "options": [
+        { "id": "a", "text": "The aggregate graph can hide whether the canary is much worse than stable." },
+        { "id": "b", "text": "Whole-service graphs are always more accurate than release-split graphs." },
+        { "id": "c", "text": "The canary should be promoted because total 5xx is below one percent." },
+        { "id": "d", "text": "The team should ignore 5xx and only check deployment status." }
+      ],
+      "correct": ["a"],
+      "explanation": "A serious canary problem can look like a modest whole-service bump because stable traffic is still most of the traffic. Canary decisions need signals split by release, task definition, or image digest."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "The release dashboard shows:\n\n```text\nstable orders-api:41: 5xx 0.07%, checkout success 99.45%, p95 179ms\ncanary orders-api:42: 5xx 3.91%, checkout success 94.10%, p95 422ms\n```\n\nWhat should the canary controller do first?",
+      "options": [
+        { "id": "a", "text": "Stop the canary and route traffic back to stable." },
+        { "id": "b", "text": "Promote to 100 percent because there is enough canary traffic for debugging." },
+        { "id": "c", "text": "Increase canary to 50 percent to confirm the pattern." },
+        { "id": "d", "text": "Ignore the dashboard until the full deployment completes." }
+      ],
+      "correct": ["a"],
+      "explanation": "The canary is clearly worse across errors, checkout success, and latency. The first action is to protect users by sending traffic back to stable, then debug the canary after impact is reduced."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "A canary receives only two real requests in an hour because the service is a low-traffic internal tool. The metrics look clean. What is the best next step?",
+      "options": [
+        { "id": "a", "text": "Treat the clean graph as strong proof and promote immediately." },
+        { "id": "b", "text": "Generate synthetic checks or route a named test account before trusting the canary signal." },
+        { "id": "c", "text": "Disable all stop rules because low traffic cannot fail." },
+        { "id": "d", "text": "Switch to blue-green because blue-green never needs tests." }
+      ],
+      "correct": ["b"],
+      "explanation": "A canary needs enough meaningful traffic to teach the team something. For low-traffic services, percentages may not produce signal, so synthetic requests or named internal accounts can make the test meaningful."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A user can bounce between stable and canary during checkout because traffic splitting is request-based and there is no session affinity. The canary changes discount validation. What risk does this create?",
+      "options": [
+        { "id": "a", "text": "The user may see inconsistent behavior across one workflow, making the signal confusing and the experience unsafe." },
+        { "id": "b", "text": "The canary becomes safer because every request is randomly independent." },
+        { "id": "c", "text": "The stable version will automatically learn the canary code path." },
+        { "id": "d", "text": "Session behavior does not matter for stateful checkout flows." }
+      ],
+      "correct": ["a"],
+      "explanation": "Canary traffic should be designed so the observed behavior is meaningful. If a user bounces between versions in one stateful flow, it can produce confusing symptoms and a poor checkout experience."
+    },
+    {
+      "id": "q6",
+      "type": "multiple",
+      "scenario": "A canary has completed its first watch window. Which facts support promotion to full traffic?",
+      "options": [
+        { "id": "a", "text": "Canary 5xx rate is close to stable over the same time window." },
+        { "id": "b", "text": "Checkout success on canary remains close to stable." },
+        { "id": "c", "text": "Canary p95 latency is close to stable after normal warmup." },
+        { "id": "d", "text": "Logs show no new error pattern for the canary release." },
+        { "id": "e", "text": "The whole-service average looks fine, but no release-split metrics exist." }
+      ],
+      "correct": ["a", "b", "c", "d"],
+      "explanation": "Promotion should rely on release-split canary evidence: errors, business success, latency, and logs. A clean aggregate graph without release split can hide a bad canary."
+    }
+  ]
+}
+

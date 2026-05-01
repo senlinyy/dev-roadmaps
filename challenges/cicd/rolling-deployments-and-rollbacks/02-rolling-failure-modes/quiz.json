@@ -1,0 +1,85 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A rolling deployment starts new tasks for `orders-api:42`. Target health shows:\n\n```text\n10.0.52.14 unhealthy Target.ResponseCodeMismatch\n10.0.53.21 unhealthy Target.ResponseCodeMismatch\n```\n\nThe app log for the new task says `readiness failed reason=\"missing ORDERS_TOPIC\"`. What is the safest release action?",
+      "options": [
+        { "id": "a", "text": "Continue the rollout because the task process started." },
+        { "id": "b", "text": "Stop the rollout and fix the missing configuration before this task definition serves users." },
+        { "id": "c", "text": "Increase desired count so more unhealthy tasks can start." },
+        { "id": "d", "text": "Ignore readiness because `/livez` would probably pass." }
+      ],
+      "correct": ["b"],
+      "explanation": "Readiness means the task can receive traffic. A response code mismatch plus a missing required variable is a clear stop signal. Starting the process is not enough, and adding more bad tasks only increases noise."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "During a rolling update, `/version` sometimes returns `orders-api:41` and sometimes returns `orders-api:42`. Error rate and latency for both task definitions remain close to baseline. How should you interpret the mixed versions?",
+      "options": [
+        { "id": "a", "text": "It is expected during a rolling deployment because old and new tasks can serve traffic during the replacement window." },
+        { "id": "b", "text": "It proves the load balancer is broken because production should never see two versions." },
+        { "id": "c", "text": "It means the release must be rolled back immediately." },
+        { "id": "d", "text": "It means staging and production are sharing secrets." }
+      ],
+      "correct": ["a"],
+      "explanation": "A rolling deployment deliberately changes production in pieces. Mixed old and new versions are normal while the service replaces tasks, as long as health and behavior remain good."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "The new task definition becomes healthy, then p95 latency for `orders-api:42` climbs to 780 ms while `orders-api:41` remains near 180 ms. The 5xx rate is still low. What should the release lead do?",
+      "options": [
+        { "id": "a", "text": "Keep rolling because only 5xx errors matter." },
+        { "id": "b", "text": "Pause or roll back according to the runbook because the new task definition is materially slower after traffic moves." },
+        { "id": "c", "text": "Delete the old task definition so all traffic reaches the new version and the sample size improves." },
+        { "id": "d", "text": "Ignore latency during rolling deployments because it is always caused by warmup." }
+      ],
+      "correct": ["b"],
+      "explanation": "The article treats latency as a release signal, not decoration. A new version can harm users without producing many 5xx responses. Warmup can explain a short spike, but sustained high p95 after traffic moves should pause the rollout."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "A reviewer notices this workflow step in a rolling deploy:\n\n```yaml\n- run: ./scripts/update-ecs-service.sh orders-api-prod orders-api:43\n```\n\nThe release record says the tested task definition is `orders-api:42`. What is the best review comment?",
+      "options": [
+        { "id": "a", "text": "Deploying `orders-api:43` is fine if it has a higher number." },
+        { "id": "b", "text": "The service update should point at the task definition revision recorded for this release, not an unreviewed newer revision." },
+        { "id": "c", "text": "Task definition revisions are ignored by ECS during rolling deployments." },
+        { "id": "d", "text": "The task definition number only affects rollback, not the rollout." }
+      ],
+      "correct": ["b"],
+      "explanation": "A task definition is the deploy snapshot. The workflow should update the service to the revision that belongs to the release record. A higher revision may contain different image, env, or role settings."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "Version `1.8.4` starts writing order rows with a field that version `1.8.3` cannot read. The rolling deployment is halfway through and errors appear only on the new path. What rollback risk must the team check before pointing the service back to `orders-api:41`?",
+      "options": [
+        { "id": "a", "text": "Whether the previous task definition can read data already written by the new version." },
+        { "id": "b", "text": "Whether the old Docker tag is shorter than the new one." },
+        { "id": "c", "text": "Whether `orders-api:41` has fewer environment variables than `orders-api:42`." },
+        { "id": "d", "text": "Whether the new version has more requests in the last minute." }
+      ],
+      "correct": ["a"],
+      "explanation": "Rollback is not only a service update. If new code wrote data old code cannot read, moving traffic back can create a second failure. The data compatibility question must be answered before treating rollback as safe."
+    },
+    {
+      "id": "q6",
+      "type": "multiple",
+      "scenario": "A rolling deployment runbook says the release is successful as soon as `update-service` exits with status 0. Which review comments are correct?",
+      "options": [
+        { "id": "a", "text": "The runbook should wait for load balancer target health." },
+        { "id": "b", "text": "The runbook should watch release signals such as 5xx rate and p95 latency." },
+        { "id": "c", "text": "The runbook should keep the previous task definition available until rollback is no longer needed." },
+        { "id": "d", "text": "The runbook should delete old tasks immediately after the update command returns." },
+        { "id": "e", "text": "The runbook should verify that the final steady state points at the intended task definition." }
+      ],
+      "correct": ["a", "b", "c", "e"],
+      "explanation": "The deploy command starts a change. Health, rollout signals, previous revision availability, and final state prove the change is safe. Deleting old tasks immediately weakens the rollback path."
+    }
+  ]
+}
+

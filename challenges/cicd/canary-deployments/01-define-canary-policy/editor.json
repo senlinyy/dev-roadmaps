@@ -1,0 +1,60 @@
+{
+  "language": "yaml",
+  "filename": "canary-policy.yml",
+  "completionProfile": "yaml",
+  "initialValue": "service: polaris-orders-api\nrelease: rel-2026-04-30-184\nchange: discount validation rewrite\ncanary:\n  first_slice_percent: 10\n  watch_window_minutes: 5\n  metrics_by_release: false\n  stop_rules:\n    - stop if the team feels uncomfortable\npromotion:\n  keep_previous_task_set: true\n",
+  "grader": {
+    "strategy": "yaml-paths",
+    "expected": [
+      {
+        "path": ["canary", "first_slice_percent"],
+        "type": "number",
+        "equals": 1,
+        "label": "first canary slice is one percent"
+      },
+      {
+        "path": ["canary", "watch_window_minutes"],
+        "type": "number",
+        "equals": 10,
+        "label": "watch window is ten minutes"
+      },
+      {
+        "path": ["canary", "metrics_by_release"],
+        "type": "boolean",
+        "equals": true,
+        "label": "metrics are split by release"
+      },
+      {
+        "path": ["canary", "stop_rules"],
+        "type": "array",
+        "minItems": 4,
+        "label": "canary has at least four stop rules"
+      },
+      {
+        "path": ["canary", "stop_rules"],
+        "type": "array",
+        "includes": "stop if canary 5xx rate is higher than stable",
+        "label": "stop rules include 5xx comparison"
+      },
+      {
+        "path": ["canary", "stop_rules"],
+        "type": "array",
+        "includes": "stop if checkout success drops below stable",
+        "label": "stop rules include checkout success"
+      },
+      {
+        "path": ["canary", "stop_rules"],
+        "type": "array",
+        "includes": "stop if canary p95 latency is much worse than stable",
+        "label": "stop rules include p95 latency"
+      },
+      {
+        "path": ["canary", "stop_rules"],
+        "type": "array",
+        "includes": "stop if logs show a new error pattern",
+        "label": "stop rules include new error patterns"
+      }
+    ]
+  }
+}
+

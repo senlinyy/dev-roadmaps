@@ -50,9 +50,9 @@ It runs on a managed container service, using Amazon ECS as the concrete example
 The deployment platform hides the individual machines, but it exposes things app developers can reason about:
 task definitions, running tasks, target group health, service events, logs, and rollback.
 
-Java maps cleanly to the same idea.
-A Spring Boot API may take longer to start and may expose `/actuator/health/readiness` instead of `/readyz`, but the rollout question stays the same:
-are the new tasks ready to join production without breaking the service?
+Some runtimes make that last question more sensitive.
+A Spring Boot API, for example, may take longer to start and may expose `/actuator/health/readiness` instead of `/readyz`.
+That matters because the rollout should wait for the service to be truly ready, not merely running.
 
 ## The Example: One ECS Service, Two Task Definitions
 
@@ -131,14 +131,11 @@ You do not need to rebuild the old code.
 You need the previous task definition to still exist and still be compatible with the current data.
 
 For a Node.js app, the task eventually runs `node dist/server.js`.
-For a Spring Boot app, the task eventually runs `java -jar orders-api.jar`.
-That runtime detail changes startup behavior, but it does not change the release idea.
 ECS still needs a clear recipe for the task.
 The load balancer still needs a readiness signal before traffic arrives.
 
-The Java startup may take longer because the JVM and Spring application context need time to warm up.
-That does not change the deployment strategy.
-It changes how patient your readiness check must be.
+Slow-starting runtimes need a little more patience.
+For example, the JVM and Spring application context may need time before readiness should pass.
 
 ## Updating the Service
 
@@ -320,7 +317,7 @@ Now the app log gives the human reason:
 The fix is not to push traffic anyway.
 Let the ECS deployment circuit breaker stop the bad deployment, fix the missing configuration, and deploy a new task definition.
 
-For Java, the failure may look like a Spring profile problem:
+For a Spring Boot service, the failure may look like a profile problem:
 
 ```text
 readiness: DOWN
@@ -334,7 +331,7 @@ do not let a task serve users when the health checks say it is not ready.
 
 Readiness can pass while real requests still behave badly.
 Maybe the Node app starts, but the new discount validation path is slow.
-Maybe the Java app starts, but the JVM needs more warmup before latency settles.
+Maybe a JVM-based app starts, but the JVM needs more warmup before latency settles.
 
 The rollout window shows the problem:
 
@@ -463,4 +460,4 @@ Change a small part, check the result, keep a rollback target, and stop when the
 - [Amazon ECS Docs: Deployment circuit breaker](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/deployment-circuit-breaker.html) - Shows how ECS can stop and roll back a failed rolling deployment.
 - [Elastic Load Balancing Docs: Target group health checks](https://docs.aws.amazon.com/elasticloadbalancing/latest/application/target-group-health-checks.html) - Explains how an Application Load Balancer decides whether ECS tasks are healthy enough for traffic.
 - [GitHub Docs: Deploying with GitHub Actions](https://docs.github.com/en/actions/concepts/use-cases/deploying-with-github-actions) - Shows how deployment workflows fit into GitHub Actions.
-- [Spring Boot Docs: Actuator Endpoints](https://docs.spring.io/spring-boot/reference/actuator/endpoints.html) - Documents health and readiness endpoints for Java services.
+- [Spring Boot Docs: Actuator Endpoints](https://docs.spring.io/spring-boot/reference/actuator/endpoints.html) - Documents the readiness endpoint used in the Spring Boot rollout examples.

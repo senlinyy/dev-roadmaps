@@ -1,0 +1,84 @@
+{
+  "language": "yaml",
+  "filename": "verification.yml",
+  "completionProfile": "yaml",
+  "initialValue": "release: rel-2026-04-30-184\nverification:\n  summary: looks good\nfinal_state: {}\n",
+  "grader": {
+    "strategy": "yaml-paths",
+    "expected": [
+      {
+        "path": ["verification", "window", "start"],
+        "type": "string",
+        "equals": "2026-04-30T21:00:00Z",
+        "label": "verification window has a start time"
+      },
+      {
+        "path": ["verification", "window", "end"],
+        "type": "string",
+        "equals": "2026-04-30T21:15:00Z",
+        "label": "verification window has an end time"
+      },
+      {
+        "path": ["verification", "metrics"],
+        "type": "array",
+        "containsObject": {
+          "name": "5xx rate",
+          "observed": "0.03%"
+        },
+        "label": "verification records 5xx rate"
+      },
+      {
+        "path": ["verification", "metrics"],
+        "type": "array",
+        "containsObject": {
+          "name": "checkout success",
+          "observed": "99.5%"
+        },
+        "label": "verification records checkout success"
+      },
+      {
+        "path": ["verification", "metrics"],
+        "type": "array",
+        "containsObject": {
+          "name": "p95 latency",
+          "observed": "190 ms"
+        },
+        "label": "verification records p95 latency"
+      },
+      {
+        "path": ["verification", "metrics"],
+        "type": "array",
+        "containsObject": {
+          "name": "new error pattern",
+          "observed": "none"
+        },
+        "label": "verification records new error patterns"
+      },
+      {
+        "path": ["final_state", "production_task_definition"],
+        "type": "string",
+        "equals": "orders-api:42",
+        "label": "final production task definition is orders-api:42"
+      },
+      {
+        "path": ["final_state", "traffic_percent"],
+        "type": "number",
+        "equals": 100,
+        "label": "final traffic is 100 percent"
+      },
+      {
+        "path": ["final_state", "verified_by"],
+        "type": "string",
+        "equals": "Maya",
+        "label": "final state names the verifier"
+      },
+      {
+        "path": ["final_state", "verified_at"],
+        "type": "string",
+        "equals": "2026-04-30T21:15:00Z",
+        "label": "final state records verification time"
+      }
+    ]
+  }
+}
+
