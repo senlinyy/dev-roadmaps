@@ -1,0 +1,84 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A DevPolaris app in `us-east-1` cannot create log streams. The policy allows:\n\n```json\n{\n  \"Effect\": \"Allow\",\n  \"Action\": \"logs:CreateLogStream\",\n  \"Resource\": \"arn:aws:logs:us-west-2:123456789012:log-group:/ecs/devpolaris-orders-api-prod:*\"\n}\n```\n\nWhat is the best fix direction?",
+      "options": [
+        { "id": "a", "text": "Correct the ARN Region to the log group's real Region before widening the policy." },
+        { "id": "b", "text": "Change the resource to `*` because the action failed with `AccessDenied`." },
+        { "id": "c", "text": "Rename the log group so the policy can find it across Regions." },
+        { "id": "d", "text": "Remove the account ID because CloudWatch Logs never uses account IDs in ARNs." }
+      ],
+      "correct": ["a"],
+      "explanation": "The policy is precise but points at the wrong Region. Correcting the ARN preserves least privilege and fixes the likely targeting error. A wildcard would hide the mistake, renaming is unrelated to the Region segment, and CloudWatch Logs ARNs do include the account in this shape."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A cleanup review finds two ECS services named `orders-api-prod`:\n\n```text\narn:aws:ecs:us-east-1:123456789012:service/devpolaris-prod/orders-api-prod\narn:aws:ecs:us-east-1:210987654321:service/devpolaris-prod/orders-api-prod\n```\n\nOne is suspected to be an old migration copy. What should the reviewer do first?",
+      "options": [
+        { "id": "a", "text": "Delete the second one because the friendly name is duplicated." },
+        { "id": "b", "text": "Compare account ownership, tags, Region, and deployment history before deciding which resource is active." },
+        { "id": "c", "text": "Treat them as the same resource because the service name and Region match." },
+        { "id": "d", "text": "Rename both services immediately so the ARNs become identical." }
+      ],
+      "correct": ["b"],
+      "explanation": "The matching friendly name is ambiguous because the account IDs differ. The reviewer needs ownership, tags, Region, and deployment evidence before changing or deleting either service. Deleting or renaming based on name alone risks touching the wrong account, and two ARNs with different accounts are not the same resource."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "A cost review shows a log group with no useful tags:\n\n```text\nARN: arn:aws:logs:us-east-1:123456789012:log-group:/ecs/orders-api-temp\nTags: none\nMonthly cost: $18.73\n```\n\nThe team confirms it belongs to a DevPolaris test service that still runs weekly. What is the strongest follow-up?",
+      "options": [
+        { "id": "a", "text": "Add the missing tags once and leave the creation workflow unchanged." },
+        { "id": "b", "text": "Add the required tags and update the creation path so future log groups get the same tag set." },
+        { "id": "c", "text": "Delete the log group because missing tags prove the service is abandoned." },
+        { "id": "d", "text": "Move the cost to production because the name contains `orders-api`." }
+      ],
+      "correct": ["b"],
+      "explanation": "The immediate resource needs tags, but the durable fix is to update Terraform, CloudFormation, a template, or a runbook so the failure does not repeat. A one-time tag patch is plausible but incomplete. Missing tags do not prove abandonment, and a name alone does not decide cost ownership or environment."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "A cleanup ticket targets `temp-export-bucket` in a dev account:\n\n```text\nName: temp-export-bucket\nAge: 188 days\nTags: env=dev\nManaged by: unknown\nData review: not completed\n```\n\nWhat is the safest next decision?",
+      "options": [
+        { "id": "a", "text": "Delete it immediately because `temp` and `env=dev` are enough evidence." },
+        { "id": "b", "text": "Pause deletion until the owner, data risk, and creation path are understood." },
+        { "id": "c", "text": "Move it to prod so the cleanup job ignores it." },
+        { "id": "d", "text": "Remove the `env=dev` tag so it no longer appears in cleanup searches." }
+      ],
+      "correct": ["b"],
+      "explanation": "Cleanup should be conservative when ownership, data risk, and management path are unknown. The name and dev tag are real clues, but they are not enough to delete stored data safely. Moving or hiding the resource would make the inventory worse instead of resolving the risk."
+    },
+    {
+      "id": "q5",
+      "type": "multiple",
+      "scenario": "A security review sees this policy and tag context:\n\n```json\n{\n  \"Effect\": \"Allow\",\n  \"Action\": \"ecs:UpdateService\",\n  \"Resource\": \"arn:aws:ecs:*:123456789012:service/*\"\n}\n```\n\nTarget service tags: `service=devpolaris-orders-api`, `env=prod`, `owner=checkout`.\n\nWhich review comments are valid?",
+      "options": [
+        { "id": "a", "text": "The wildcard Region and service resource pattern are broader than one production service needs." },
+        { "id": "b", "text": "The tags describe the intended service, but they do not narrow this `Resource` unless the policy uses tag conditions." },
+        { "id": "c", "text": "An exact service ARN would be easier to review if the deploy job only updates one ECS service." },
+        { "id": "d", "text": "The account ID alone makes the policy narrow enough for production deploys." },
+        { "id": "e", "text": "Removing all tags would make the policy safer because reviewers would only see the ARN." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "The policy allows every matching ECS service in every Region in the account, so narrowing toward the exact service ARN is a better fit for a one-service deploy. Tags are helpful context, but they do not constrain the `Resource` unless the policy actually evaluates tag conditions. The account segment is not enough by itself, and removing tags would reduce review context."
+    },
+    {
+      "id": "q6",
+      "type": "single",
+      "scenario": "A DevPolaris incident starts with an `AccessDenied` error and an empty console search. The on-call engineer wants to inspect resource identity before asking for a broader policy. Which evidence bundle should they collect first?",
+      "options": [
+        { "id": "a", "text": "Caller account, configured Region, the resource ARN from the error, the resource detail page if available, and the expected tags." },
+        { "id": "b", "text": "Only the friendly resource name, because that is the label humans can read fastest." },
+        { "id": "c", "text": "Only the IAM action name, because `AccessDenied` always means the action is missing." },
+        { "id": "d", "text": "A screenshot of the empty search, because an empty search proves the resource does not exist." }
+      ],
+      "correct": ["a"],
+      "explanation": "The useful first bundle compares the caller, Region, ARN, resource details, and tags so location errors and identity mistakes are visible. A friendly name, an action name, or an empty search can all be plausible clues, but each one is too narrow to justify a broader policy on its own."
+    }
+  ]
+}

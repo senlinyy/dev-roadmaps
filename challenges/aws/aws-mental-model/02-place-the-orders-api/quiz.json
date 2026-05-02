@@ -1,0 +1,70 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A design review asks where the production `devpolaris-orders-api` should live before anyone chooses exact AWS services. Which summary uses the article's mental model best?",
+      "options": [
+        { "id": "a", "text": "Put it in the production AWS account, choose a Region, place traffic inside a network boundary, create owned resources, and define who can touch them." },
+        { "id": "b", "text": "Pick ECS first, then let AWS decide the account, Region, and permissions after the service is running." },
+        { "id": "c", "text": "Start with public DNS only, because account and access rules become relevant after users can reach the service." },
+        { "id": "d", "text": "Keep all environments in one account and one untagged resource pool so the team does not need to learn boundaries yet." }
+      ],
+      "correct": ["a"],
+      "explanation": "The article maps cloud work from team ownership to account, Region, network boundary, resources, and IAM permissions. Choosing a service name first can be useful later, but it does not answer where the work lives or who may change it. Public DNS and untagged shared pools skip the boundaries that keep mistakes smaller."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "The deployment pipeline reports success for `devpolaris-orders-api`, but production traffic did not change. The pipeline log says:\n\n```text\ncaller account: 222222222222\nintended account: 123456789012\nregion: us-east-1\nservice: orders-api-prod\n```\n\nWhich layer should the team investigate first?",
+      "options": [
+        { "id": "a", "text": "Account boundary, because the caller account is not the intended production account." },
+        { "id": "b", "text": "Availability Zone spread, because deploy success always means the account is correct." },
+        { "id": "c", "text": "Resource tags, because missing tags are the only reason production traffic stays unchanged." },
+        { "id": "d", "text": "Managed service ownership, because AWS should route the deployment to the right account automatically." }
+      ],
+      "correct": ["a"],
+      "explanation": "The evidence shows the tool used account `222222222222` while the intended account is `123456789012`. That is an account boundary problem. Availability Zones, tags, and shared responsibility can matter in other reviews, but none of them explain why a deployment in one account did not change production in another."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "The first production map for `devpolaris-orders-api` says the load balancer and app tasks run only in one Availability Zone inside `us-east-1`. The team wants to reduce the chance that one local AWS location problem stops checkout. What review comment is most useful?",
+      "options": [
+        { "id": "a", "text": "Keep the service in `us-east-1`, but spread the load balancer and app tasks across at least two Availability Zones." },
+        { "id": "b", "text": "Move one app task to `eu-west-1` so Availability Zones and Regions are mixed for every request." },
+        { "id": "c", "text": "Ignore Availability Zones until the service has a database, because AZs only apply to storage." },
+        { "id": "d", "text": "Run everything in one Availability Zone because a Region already protects against all local failures." }
+      ],
+      "correct": ["a"],
+      "explanation": "The article treats a Region as the geographic area and Availability Zones as failure boundaries inside it. For a first production shape, spreading load balancer and app tasks across multiple AZs in the same Region reduces single-zone risk. Moving one task to another Region adds cross-region complexity, and ignoring AZs or assuming one AZ is enough misses the location map."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "Maya is writing an IAM rule for the deployment role that updates the ECS service for `devpolaris-orders-api`. Which facts belong in the access decision?",
+      "options": [
+        { "id": "a", "text": "Which identity is making the request, such as the deployment role." },
+        { "id": "b", "text": "Which API action is allowed, such as updating the ECS service." },
+        { "id": "c", "text": "Which exact resource is targeted, ideally narrowed by an ARN in the intended account and Region." },
+        { "id": "d", "text": "Which teammate prefers the Console, because Console users bypass IAM rules." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "IAM decisions are about a caller, an action, and a resource, often with account and Region embedded in the ARN. Tool preference does not bypass IAM. Console clicks, CLI commands, SDK calls, Terraform, and pipelines still hit AWS APIs that permission rules can allow or deny."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A month after launch, the team finds `test-bucket-2`, `new-prod-db`, and `/logs/app` in the production account. Nobody is sure whether they belong to `devpolaris-orders-api`. What response best follows the article?",
+      "options": [
+        { "id": "a", "text": "Adopt clear names and tags such as `service=orders-api`, `env=prod`, and `owner=checkout`, and use ARNs when policies need the exact resource." },
+        { "id": "b", "text": "Leave the resources untagged so no team accidentally becomes responsible for them." },
+        { "id": "c", "text": "Delete every unclear resource immediately because AWS resources without good names are never active." },
+        { "id": "d", "text": "Rename only the app code repository because resource names and tags do not help cloud ownership." }
+      ],
+      "correct": ["a"],
+      "explanation": "Good names and tags help humans find owners, environments, service purpose, billing impact, and security scope. ARNs help APIs and policies point at the exact resource. Untagged resources are plausible in messy accounts, but they make teams afraid to change anything. Immediate deletion is risky without evidence, and repository names alone do not identify cloud resources."
+    }
+  ]
+}

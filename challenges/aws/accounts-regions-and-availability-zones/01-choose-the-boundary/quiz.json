@@ -1,0 +1,70 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A DevPolaris engineer is about to deploy devpolaris-orders-api to staging. The preflight says target environment staging, expected account 222222222222, actual caller account 333333333333, target Region us-east-1, and app placement across two AZs. What boundary should stop the deploy first?",
+      "options": [
+        { "id": "a", "text": "The AWS account, because the caller is in the production workspace instead of the staging workspace." },
+        { "id": "b", "text": "The Region, because us-east-1 is never appropriate for staging." },
+        { "id": "c", "text": "The Availability Zone plan, because two AZs are too many for staging." },
+        { "id": "d", "text": "The service name, because devpolaris-orders-api should decide the account automatically." }
+      ],
+      "correct": ["a"],
+      "explanation": "The account is the workspace boundary, and the actual account does not match staging. Region and AZ posture are still important, but they do not matter until the deploy is using the intended workspace. A service name is helpful context, not proof of account identity."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "The team is creating the first production database for devpolaris-orders-api. They already confirmed the production account. Most early users are in the eastern United States, but a customer contract says order data must stay in a specific geography. Which pre-deploy question is still unresolved?",
+      "options": [
+        { "id": "a", "text": "Where the service runs, because the Region must match latency needs and data rules." },
+        { "id": "b", "text": "Which AWS account owns the resources, because account choice decides geography." },
+        { "id": "c", "text": "Which AZ letter has the lowest cost, because data rules are checked at AZ scope." },
+        { "id": "d", "text": "Which IAM role name is shortest, because role names determine data residency." }
+      ],
+      "correct": ["a"],
+      "explanation": "A Region is the real-world area where many resources and data live, so it must fit both user location and data promises. The account was already checked, and AZ letters are local failure areas inside a Region. IAM names affect access, not the geographic home of the database."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "A production review asks whether devpolaris-orders-api can keep serving traffic if one local AWS facility has trouble. Which checks directly support that AZ failure-boundary question?",
+      "options": [
+        { "id": "a", "text": "The app has subnets in at least two Availability Zones in the chosen Region." },
+        { "id": "b", "text": "The load balancer can route to healthy app copies in more than one Availability Zone." },
+        { "id": "c", "text": "The production database posture matches the risk, such as using a managed multi-AZ option when justified." },
+        { "id": "d", "text": "The staging account and production account use the same AZ letter names." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "Surviving a local AZ problem requires resources and traffic paths that can operate across more than one AZ, plus a data posture that fits the risk. Matching account names or AZ letters across environments sounds tidy, but it does not prove production can survive an AZ failure."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "During a design review, someone asks which database engine DevPolaris should choose. The deployment notes do not say the AWS account, Region, or AZ posture yet. What should the team do before choosing the database engine?",
+      "options": [
+        { "id": "a", "text": "Name the target account, target Region, and expected local failure boundary first." },
+        { "id": "b", "text": "Pick the engine first because all AWS databases ignore account and Region boundaries." },
+        { "id": "c", "text": "Create the database in the default Console Region and move it later if needed." },
+        { "id": "d", "text": "Use the same AZ for every component so the architecture is easier to draw." }
+      ],
+      "correct": ["a"],
+      "explanation": "The article's first habit is to know the workspace, place, and local failure boundary before deploying. Database choice matters later, but creating first and checking boundaries later is how wrong-account and wrong-Region mistakes happen. One AZ can be cheaper, but it should be an intentional posture, not a default accident."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A release plan for devpolaris-orders-api says: use the devpolaris-staging account, deploy to us-east-1, place app copies in subnets in us-east-1a and us-east-1b, and let any engineer use the root user if access is blocked. Which parts answer the article's three pre-deploy boundary questions?",
+      "options": [
+        { "id": "a", "text": "The account, Region, and two-AZ placement answer the boundary questions; the root user fallback is an access risk, not a boundary answer." },
+        { "id": "b", "text": "The root user fallback answers the boundary questions because root can access every account, Region, and AZ." },
+        { "id": "c", "text": "The Region and AZ placement answer the workspace question, while the account only affects billing." },
+        { "id": "d", "text": "Only the account matters before deployment, because Region and AZ posture can be corrected after production traffic starts." }
+      ],
+      "correct": ["a"],
+      "explanation": "Account, Region, and AZ posture map to the three questions in the article. The root user is an access concern and should not be a normal daily fallback. It is plausible because access problems feel urgent, but using root does not define where work belongs, where it runs, or what failure it can survive."
+    }
+  ]
+}

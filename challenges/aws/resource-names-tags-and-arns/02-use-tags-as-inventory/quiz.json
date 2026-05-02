@@ -1,0 +1,71 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A DevPolaris team searches by `service=devpolaris-orders-api` and `env=prod` to build an inventory. The ECS service appears, but the log group does not. The log group tags are `Service=devpolaris-orders-api`, `environment=production`, and `owner=checkout`. What is the most likely inventory problem?",
+      "options": [
+        { "id": "a", "text": "The log group is not taggable, so it can never appear in an inventory search." },
+        { "id": "b", "text": "The tag keys and values do not follow the shared convention, so the search misses the resource." },
+        { "id": "c", "text": "The friendly name is missing from the query, and tags only work when the name is included." },
+        { "id": "d", "text": "The owner tag should replace both service and environment because one tag is easier to maintain." }
+      ],
+      "correct": ["b"],
+      "explanation": "AWS tag keys and values are case sensitive, and `Service` plus `environment=production` do not match the team's `service` and `env=prod` convention. The resource may be taggable, but inconsistent labels make inventory unreliable. Names and owner tags add context, but they do not replace the service and environment keys needed for this query."
+    },
+    {
+      "id": "q2",
+      "type": "multiple",
+      "scenario": "A new production export bucket is being created for DevPolaris orders. The team wants the bucket to show up in service inventory, cost review, ownership reports, and component-level cleanup. Which tags belong in the initial tag set?",
+      "options": [
+        { "id": "a", "text": "`service=devpolaris-orders-api` to group the bucket with the rest of the app." },
+        { "id": "b", "text": "`env=prod` to separate production from dev and staging resources." },
+        { "id": "c", "text": "`owner=checkout` to show which team responds when the bucket needs review." },
+        { "id": "d", "text": "`component=exports` to explain the bucket's role inside the service." },
+        { "id": "e", "text": "`customer-email=alex@example.com` to make support cases easier to trace." }
+      ],
+      "correct": ["a", "b", "c", "d"],
+      "explanation": "Service, environment, owner, and component tags make the bucket understandable across inventory, cost, operations, and cleanup. A customer email is plausible during an incident, but tags can appear in billing, administration, and screenshots, so personal data does not belong there."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "A May cost report has an `Untagged` line growing for the DevPolaris account. Engineers insist their Terraform module adds `service` and `env` tags to new resources. What is the best next interpretation?",
+      "options": [
+        { "id": "a", "text": "The tags are useless because cost reports cannot ever group spend by tag." },
+        { "id": "b", "text": "The team should verify both sides: whether the cost allocation tag keys are activated and whether some resources are missing the required tags." },
+        { "id": "c", "text": "The team should rename every resource, because names control cost allocation reports." },
+        { "id": "d", "text": "The `Untagged` line proves every untagged cost is safe to ignore." }
+      ],
+      "correct": ["b"],
+      "explanation": "Cost allocation tags need billing setup, and the resources also need the expected tags. A growing `Untagged` line is an investigation queue, not proof that tagging is useless or that all costs are harmless. Friendly names help humans but do not replace billing tag activation."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "A teammate says the S3 export bucket is protected because it has `service=devpolaris-orders-api` and `env=prod`. The bucket policy has no tag conditions and allows a broad admin role. What is the most accurate response?",
+      "options": [
+        { "id": "a", "text": "The tags are metadata unless an IAM policy or another control actually uses them for access decisions." },
+        { "id": "b", "text": "The tags automatically block access from any role outside the owner team." },
+        { "id": "c", "text": "The tags make the bucket private even if the bucket policy is broad." },
+        { "id": "d", "text": "The tags should be removed because security tools cannot read tags." }
+      ],
+      "correct": ["a"],
+      "explanation": "Tags can support access designs such as ABAC, but only when policies or tools evaluate those tag keys. A tag by itself is descriptive metadata. The other answers treat tags as automatic enforcement, or throw away useful security context, which is not how AWS tags work."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A cleanup job is proposed for the DevPolaris dev account. It would delete any resource older than 90 days when the name contains `test`. The account includes `orders-api-loadtest-2025`, `temp-export-bucket`, and `orders-api-prod-copy`. What tag-based rule would make the cleanup safer?",
+      "options": [
+        { "id": "a", "text": "Delete by name only, because any resource with `test` in the name is clearly temporary." },
+        { "id": "b", "text": "Require tags such as `env=dev`, `owner`, `managed-by`, and an expired `expires-on` date before deletion is allowed." },
+        { "id": "c", "text": "Delete everything without an owner tag, because missing ownership proves it is unused." },
+        { "id": "d", "text": "Ignore tags and use only the oldest creation date, because age is the only cleanup signal that matters." }
+      ],
+      "correct": ["b"],
+      "explanation": "A safe cleanup rule combines environment, owner, creation path, and an expiration signal so the team can avoid deleting the wrong thing. Names and age are plausible clues, but they can lie. Missing owner tags should trigger investigation and a fix to the creation path, not automatic deletion."
+    }
+  ]
+}

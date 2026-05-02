@@ -1,6 +1,6 @@
 ---
 title: "Deployment and Runtime Operations"
-description: "Operate AWS application releases with task definitions, health checks, secrets, scaling, and rollback targets."
-tags: ["ECS", "Deployments", "Scaling"]
+description: "Update running AWS applications safely with ECS deployments, runtime config, secrets, scaling, jobs, and operational controls."
+tags: ["ECS", "Deployments", "Operations"]
 order: 7
 ---

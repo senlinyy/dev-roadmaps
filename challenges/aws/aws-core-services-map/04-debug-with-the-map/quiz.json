@@ -1,0 +1,83 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "After a DNS change, customers say `orders.devpolaris.com` does not connect. The DevPolaris app logs show no new requests, ECS desired count is 2, and running count is 2. Which map layer should the team inspect first?",
+      "options": [
+        { "id": "a", "text": "Traffic: whether the Route 53 record resolves to the expected load balancer." },
+        { "id": "b", "text": "Data: whether RDS has enough connections for checkout." },
+        { "id": "c", "text": "Access: whether the task role can read an S3 export bucket." },
+        { "id": "d", "text": "Cost: whether the monthly budget forecast changed." }
+      ],
+      "correct": ["a"],
+      "explanation": "The symptom began after DNS changed and requests are not reaching the app, so the name and front-door path should be checked first. RDS, IAM, and budgets are real map layers, but they are downstream or unrelated to this evidence."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A release finishes, but the load balancer reports:\n\n```text\ntarget group orders-api-prod\nhealthy targets: 0\nreason: Health checks failed with code 500\n\necs service\nrunning tasks: 2\nlatest task definition: orders-api:42\n```\n\nWhich first inspection best follows the map?",
+      "options": [
+        { "id": "a", "text": "Signals and compute: inspect CloudWatch app logs for the running tasks around the failed health checks." },
+        { "id": "b", "text": "Cost: lower the monthly budget threshold because health checks failed." },
+        { "id": "c", "text": "Storage: move finance exports from S3 into RDS before checking logs." },
+        { "id": "d", "text": "Traffic: replace Route 53 because ECS has two running tasks." }
+      ],
+      "correct": ["a"],
+      "explanation": "The load balancer is reachable and tasks are running, but health checks fail with app-side 500s. CloudWatch logs for those tasks are the next evidence. Cost, storage redesign, and DNS replacement skip over the strongest signal in the request path."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "The DevPolaris orders API logs this during startup:\n\n```text\nERROR database connection failed\ndetail: secret \"orders/prod/database-url\" not found\n```\n\nThe task definition revision changed in the same deployment. Which layer should the team inspect first?",
+      "options": [
+        { "id": "a", "text": "Operations and access: the task definition secret reference, Region, and task role permission." },
+        { "id": "b", "text": "Traffic: the public subnet route table for the load balancer." },
+        { "id": "c", "text": "Cost: the Budgets page for unexpected spend." },
+        { "id": "d", "text": "Resilience: whether backups were tested last quarter." }
+      ],
+      "correct": ["a"],
+      "explanation": "The changed task definition and missing secret point to the operational chain and the IAM access layer. Traffic, cost, and restore testing can matter in other incidents, but they do not explain a task looking for the wrong secret."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "The finance export job logs `upload complete`, but finance cannot find the CSV. The log line says:\n\n```text\nbucket=devpolaris-orders-export\nkey=prod/2026-05/orders.csv\n```\n\nThe documented bucket is `devpolaris-orders-exports`. What is the best next check?",
+      "options": [
+        { "id": "a", "text": "Data and configuration: compare the bucket and key the app wrote with the expected S3 location." },
+        { "id": "b", "text": "Compute: replace ECS with Lambda because S3 uploads always need functions." },
+        { "id": "c", "text": "Traffic: inspect the load balancer target group for 503 errors." },
+        { "id": "d", "text": "Signals: delete the log group because the upload log is misleading." }
+      ],
+      "correct": ["a"],
+      "explanation": "The evidence shows a data-location mismatch: the app wrote to a similarly named bucket without the final `s`. Compute replacement, load balancer checks, and deleting logs are plausible distractions from other map boxes, but the log already gives the concrete storage clue."
+    },
+    {
+      "id": "q5",
+      "type": "multiple",
+      "scenario": "The DevPolaris orders service had a one-zone incident. A review finds one app task, one subnet, no tested database restore, and no owner tag on the production resources. Which comments correctly use the cost and resilience part of the map?",
+      "options": [
+        { "id": "a", "text": "Run at least two app tasks across more than one Availability Zone for a better first production shape." },
+        { "id": "b", "text": "Keep backups and test restore steps before treating the recovery plan as real." },
+        { "id": "c", "text": "Add service, environment, and owner tags so cost and ownership are easier to trace." },
+        { "id": "d", "text": "Remove CloudWatch logs because resilience replaces observability." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "The article's first resilience shape includes multiple tasks, multiple AZs, backups, restore testing, and useful tags for ownership and cost review. Removing logs is wrong because observability still gives evidence when resilience mechanisms fail or recover."
+    },
+    {
+      "id": "q6",
+      "type": "single",
+      "scenario": "A DevPolaris development account suddenly spends three times more than usual after a load test. The app is healthy, checkout still works, and there is no customer incident. Which map layer gives the first useful signal?",
+      "options": [
+        { "id": "a", "text": "Cost: AWS Budgets and tagged cost views to find the owner, service, and resource growth." },
+        { "id": "b", "text": "Traffic: Route 53 health checks, because cost spikes always mean DNS is failing." },
+        { "id": "c", "text": "Data: RDS restore testing, because any spend increase means data loss." },
+        { "id": "d", "text": "Access: make the application task role administrator so the load test can continue." }
+      ],
+      "correct": ["a"],
+      "explanation": "When the service is healthy but spend jumps, the cost layer is the right first map box. Budgets and tags help identify the resource owner and growth source. DNS, restore testing, and broader permissions are real topics, but they do not explain a cost-only signal."
+    }
+  ]
+}

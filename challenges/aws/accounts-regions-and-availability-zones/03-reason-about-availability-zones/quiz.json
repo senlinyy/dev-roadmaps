@@ -1,0 +1,83 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A placement check for devpolaris-orders-api shows two healthy app tasks, but both are in us-east-1a. The team says the service is redundant because there are two tasks. What is the most accurate review comment?",
+      "options": [
+        { "id": "a", "text": "The service can survive one task crashing, but it is not spread across AZs for an AZ failure." },
+        { "id": "b", "text": "The service is multi-AZ because two tasks always mean two Availability Zones." },
+        { "id": "c", "text": "The service is multi-Region because us-east-1a and us-east-1 are different Regions." },
+        { "id": "d", "text": "The service is global because a healthy task can receive internet traffic." }
+      ],
+      "correct": ["a"],
+      "explanation": "Two copies help with a task or process failure, but both copies in one AZ share the same local failure boundary. The other options confuse copy count, AZ names, Regions, and global scope. They are common because the names look similar, but the boundary is different."
+    },
+    {
+      "id": "q2",
+      "type": "multiple",
+      "scenario": "A production design says devpolaris-orders-api should keep serving traffic if one AZ in us-east-1 has trouble. Which design choices support that claim?",
+      "options": [
+        { "id": "a", "text": "Create at least one subnet in each of two Availability Zones for the app path." },
+        { "id": "b", "text": "Configure the load balancer or entry point so healthy app copies in both AZs can receive traffic." },
+        { "id": "c", "text": "Use deployment and health-check behavior that avoids updating every app copy at the same time." },
+        { "id": "d", "text": "Put every app copy in one subnet so latency between copies is always lowest." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "Multi-AZ resilience needs placement, traffic routing, and operational behavior that preserve healthy capacity. A single subnet is simpler and may be cheaper, but it ties the app path to one AZ and weakens the claim."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "Two DevPolaris accounts both show an AZ named us-east-1a. A shared networking review needs to know whether those resources are in the same physical AZ across accounts. What should the review compare?",
+      "options": [
+        { "id": "a", "text": "The AZ IDs, such as use1-az1, because they are stable for comparing physical locations across accounts." },
+        { "id": "b", "text": "Only the AZ letter a, because AZ names always map to the same physical location in every account." },
+        { "id": "c", "text": "The account aliases, because aliases define AZ location." },
+        { "id": "d", "text": "The service names, because resources with the same name share a physical AZ." }
+      ],
+      "correct": ["a"],
+      "explanation": "AZ names are convenient for daily work, but AZ IDs are safer when accounts need to agree on physical placement. It is plausible to trust the letter because it looks precise. Across accounts, that assumption can be wrong."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "An incident review lists several missing resources. Which scope conclusions are sound before the team starts changing AWS settings?",
+      "options": [
+        { "id": "a", "text": "An IAM role is account-level or global thinking, so do not hunt for it as a normal per-Region resource." },
+        { "id": "b", "text": "A load balancer is regional in normal use, so the Region selector or CLI Region can hide it." },
+        { "id": "c", "text": "A subnet is zonal, so every app copy in one subnet means one AZ for that part of the app path." },
+        { "id": "d", "text": "A general purpose S3 bucket has a global name only, so its objects never have a chosen Region." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "IAM, load balancers, and subnets live at different scopes, and knowing that scope prevents wrong-boundary debugging. S3 is a useful edge case: bucket names use a broad namespace, but a general purpose bucket is still created in a chosen Region. The global-name detail is plausible but incomplete."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "The production app path spans us-east-1a and us-east-1b. A larger service problem affects the entire us-east-1 Region, including the regional entry point. What should the team say about its current posture?",
+      "options": [
+        { "id": "a", "text": "It is designed for a local AZ problem, not a full regional failure." },
+        { "id": "b", "text": "It is multi-Region because two AZs are the same thing as two Regions." },
+        { "id": "c", "text": "It is global because the entry point can receive public internet traffic." },
+        { "id": "d", "text": "It must switch accounts, because a second account automatically creates regional disaster recovery." }
+      ],
+      "correct": ["a"],
+      "explanation": "Two AZs inside one Region improve local failure tolerance, but they are not regional disaster recovery. Two Regions require much more design: data replication, routing, failover testing, and runbooks. A public entry point or a second account does not create that by itself."
+    },
+    {
+      "id": "q6",
+      "type": "single",
+      "scenario": "DevPolaris is choosing a first production posture for a small backend. The team wants a clear starting point without pretending it has a global platform. Which plan best matches the article?",
+      "options": [
+        { "id": "a", "text": "Use separate staging and production accounts, choose one primary Region on purpose, run the production app path across at least two AZs, and document any cheaper development shortcuts honestly." },
+        { "id": "b", "text": "Use one account, one Region, and one AZ for every environment, then describe the service as production-resilient because it is cheaper." },
+        { "id": "c", "text": "Start with two active Regions on day one for every small service, even before the team can test failover or data replication." },
+        { "id": "d", "text": "Choose the nearest Region even if required AWS features or data rules do not fit there." }
+      ],
+      "correct": ["a"],
+      "explanation": "The recommended first posture is clear and honest: separate important workspaces, pick a primary Region intentionally, and use at least two AZs for production-facing app paths when the risk justifies it. The other plans are plausible shortcuts or overcorrections, but they either overclaim resilience, add complexity too early, or ignore service and data constraints."
+    }
+  ]
+}

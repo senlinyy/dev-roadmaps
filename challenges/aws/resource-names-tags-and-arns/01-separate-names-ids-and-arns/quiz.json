@@ -1,0 +1,71 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A DevPolaris deploy role needs permission to update the production ECS service. The ticket shows `serviceName=orders-api-prod`, `serviceArn=arn:aws:ecs:us-east-1:123456789012:service/devpolaris-prod/orders-api-prod`, and tags `service=devpolaris-orders-api, env=prod`. What should the IAM policy use for the `Resource` when it needs to point at this exact service?",
+      "options": [
+        { "id": "a", "text": "Use `orders-api-prod` because the friendly name is what the team recognizes in the console." },
+        { "id": "b", "text": "Use the full ECS service ARN because IAM needs the precise AWS resource reference." },
+        { "id": "c", "text": "Use `service=devpolaris-orders-api` because a tag is the exact identity of the service." },
+        { "id": "d", "text": "Use only `devpolaris-prod` because the cluster name already contains the environment." }
+      ],
+      "correct": ["b"],
+      "explanation": "The full ECS service ARN is the precise resource reference IAM can evaluate. The friendly name and cluster name are useful for humans, and the tag helps inventory and grouping, but none of those alone identifies the exact service for a policy `Resource`."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A network change request says to attach the production app security group. The console search returns two resources named `orders-api-prod`:\n\n```text\nName             ID                     VPC                    Tags\norders-api-prod  sg-0a1111aaa2222bbbb   vpc-0prod111122223333  service=devpolaris-orders-api, env=prod\norders-api-prod  sg-0b9999ccc8888dddd   vpc-0dev444455556666   service=devpolaris-orders-api, env=dev\n```\n\nThe form expects a security group ID. What is the safest review comment?",
+      "options": [
+        { "id": "a", "text": "The name is enough because AWS does not let two security groups share a name." },
+        { "id": "b", "text": "Use `sg-0a1111aaa2222bbbb` after confirming the prod VPC and tags, because the generated ID is the exact object the form expects." },
+        { "id": "c", "text": "Use `service=devpolaris-orders-api` because the tag uniquely replaces the security group ID." },
+        { "id": "d", "text": "Use the dev security group because it has the same friendly name and is safer to test first." }
+      ],
+      "correct": ["b"],
+      "explanation": "The generated security group ID is the exact value the form needs, and the VPC plus tags explain why it is the production object. The repeated friendly name is only a clue, not identity. The tag is useful context but does not replace an ID, and using the dev group would point the change at the wrong environment."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "A DevPolaris log setup fails with this message:\n\n```text\nUser: arn:aws:sts::123456789012:assumed-role/devpolaris-deploy/github-actions-deploy\nis not authorized to perform: logs:CreateLogStream on resource:\narn:aws:logs:us-west-2:123456789012:log-group:/ecs/devpolaris-orders-api-prod:*\n```\n\nThe production app runs in `us-east-1`. Which ARN segment should you question first?",
+      "options": [
+        { "id": "a", "text": "The partition `aws`, because standard commercial Regions use a different partition name." },
+        { "id": "b", "text": "The service `logs`, because ECS apps cannot write to CloudWatch Logs." },
+        { "id": "c", "text": "The Region `us-west-2`, because it does not match the production Region." },
+        { "id": "d", "text": "The account `123456789012`, because the caller and resource accounts are different." }
+      ],
+      "correct": ["c"],
+      "explanation": "Reading the ARN left to right shows the Region mismatch: the resource ARN points at `us-west-2` while production is in `us-east-1`. The partition and service are plausible things to scan, but they fit this story. The account is the same as the caller account, so it is not the mismatch here."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "A deployment script says the ECS service cannot be found. The team has this evidence:\n\n```text\naws sts get-caller-identity Account: 123456789012\naws configure get region: us-east-1\nDeployment target ARN: arn:aws:ecs:us-west-2:210987654321:service/devpolaris-prod/orders-api-prod\nExpected production account: 123456789012\nExpected production Region: us-east-1\n```\n\nWhich review comments are valid before changing permissions?",
+      "options": [
+        { "id": "a", "text": "The target ARN account should be checked because it is `210987654321`, not the expected production account." },
+        { "id": "b", "text": "The target ARN Region should be checked because it is `us-west-2`, not the configured production Region." },
+        { "id": "c", "text": "The service name proves the target is correct, so account and Region checks can be skipped." },
+        { "id": "d", "text": "The resource tail should still be compared after the account and Region checks, because it names the exact service path." },
+        { "id": "e", "text": "The fastest fix is to grant `ecs:*` across all accounts so the script can find the service." }
+      ],
+      "correct": ["a", "b", "d"],
+      "explanation": "The account, Region, and resource tail are all part of proving the target. Here the account and Region are already suspicious, and the resource segment should still be checked once the location is corrected. The matching service name is not enough because names can repeat, and broad permissions would hide a targeting error instead of fixing it."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "During a review, a teammate flags these ARNs as broken because the Region or account fields look empty:\n\n```text\narn:aws:s3:::devpolaris-orders-api-prod-exports\narn:aws:iam::123456789012:role/devpolaris-orders-api-task-role\n```\n\nWhat is the best response?",
+      "options": [
+        { "id": "a", "text": "Both ARNs are always invalid because every ARN must include both a Region and an account." },
+        { "id": "b", "text": "These shapes can be normal for their services, so verify the service-specific ARN format instead of filling in guessed fields." },
+        { "id": "c", "text": "The empty fields mean the resources are public and should be deleted immediately." },
+        { "id": "d", "text": "The ARNs should be replaced with friendly names because names never omit account or Region." }
+      ],
+      "correct": ["b"],
+      "explanation": "Some AWS services omit fields in normal ARN shapes, such as S3 bucket ARNs and IAM role ARNs with an empty Region field. Guessing missing fields can create the wrong identifier. Empty fields do not prove public access, and friendly names are less precise than ARNs for policies and automation."
+    }
+  ]
+}

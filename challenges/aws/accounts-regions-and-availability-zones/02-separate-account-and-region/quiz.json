@@ -1,0 +1,83 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "multiple",
+      "scenario": "DevPolaris is deciding whether staging and production for devpolaris-orders-api should stay in one AWS account or move into separate accounts. Which reasons support separate accounts as the service becomes a real team system?",
+      "options": [
+        { "id": "a", "text": "A risky staging experiment should not have credentials that can delete production resources." },
+        { "id": "b", "text": "Production costs are easier to identify when production has its own billing boundary." },
+        { "id": "c", "text": "Developers can have broader access in development and tighter access in production." },
+        { "id": "d", "text": "Separate accounts make us-east-1 physically closer to users." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "Accounts bound resources, access rules, and billing, so they reduce blast radius and make permissions and costs easier to reason about. They do not move a Region closer to users. That distractor is plausible because accounts and Regions are both top-level selectors, but only Region affects geographic placement."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A cleanup script should remove test databases from devpolaris-dev. Its log shows an ARN containing account ID 333333333333, and the account register says 333333333333 is devpolaris-prod. What is the safest next action?",
+      "options": [
+        { "id": "a", "text": "Stop the script and switch to credentials for the development account before trying again." },
+        { "id": "b", "text": "Continue because the resource names include the word dev." },
+        { "id": "c", "text": "Change the Region flag because account IDs are Region-specific." },
+        { "id": "d", "text": "Ignore the ARN because account IDs are secret values that AWS hides from real operations." }
+      ],
+      "correct": ["a"],
+      "explanation": "The account ID in the ARN is stronger evidence than a resource name. If it points at production, the script is in the wrong workspace and should stop. Region flags solve where a regional request goes, not which account owns the credentials, and account IDs are identifiers that often appear in ARNs and logs."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "Maya runs a deploy with profile devpolaris-staging. Before changing infrastructure, she checks caller identity and sees account 333333333333 with an assumed role ARN in devpolaris-prod. The profile name still says staging. Which fact should she trust?",
+      "options": [
+        { "id": "a", "text": "The caller identity account ID and ARN, because the profile name is only a human label." },
+        { "id": "b", "text": "The profile name, because profile names cannot point to the wrong role." },
+        { "id": "c", "text": "The next command's success, because a successful deploy proves the account was correct." },
+        { "id": "d", "text": "The Availability Zone letter, because it identifies the owning AWS account." }
+      ],
+      "correct": ["a"],
+      "explanation": "A profile name can be misconfigured, so caller identity is the boundary proof. A successful command can be dangerous if it succeeds in the wrong account. AZ letters describe placement inside a Region, not account ownership."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "The team created orders-api-staging-alb in devpolaris-staging in us-east-1. A teammate opens the same account in the Console with the Region selector set to us-west-2 and sees no load balancers. What is the best diagnosis?",
+      "options": [
+        { "id": "a", "text": "The load balancer is probably in a different Region, so switch back to us-east-1 before assuming it was deleted." },
+        { "id": "b", "text": "The account boundary failed, because regional resources appear in every Region inside an account." },
+        { "id": "c", "text": "The load balancer must be global, so it cannot be viewed through any Region selector." },
+        { "id": "d", "text": "The AZ placement is wrong, because a load balancer disappears when it spans two AZs." }
+      ],
+      "correct": ["a"],
+      "explanation": "Many everyday AWS resources are regional, so the wrong Region can look empty even when the resource is healthy elsewhere. It is plausible to suspect deletion, but the first check is the Region selector. A load balancer is not managed like a normal global IAM resource, and AZ spread does not make it vanish."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A deployment plan chooses a newer AWS Region because it is close to users. The account has not opted in to that Region yet, and the needed service is already available in us-east-1. What is the best beginner response?",
+      "options": [
+        { "id": "a", "text": "Either enable the newer Region intentionally or choose an enabled Region that can run the workload cleanly." },
+        { "id": "b", "text": "Rename the service so AWS automatically enables the Region." },
+        { "id": "c", "text": "Create the resources in us-east-1 and assume they will appear in the newer Region later." },
+        { "id": "d", "text": "Switch to the production account because production accounts can use every Region by default." }
+      ],
+      "correct": ["a"],
+      "explanation": "Some Regions require opt-in, and Region choice should be deliberate. Renaming resources or switching accounts is not the fix for a disabled Region. Creating in another Region may be valid, but it means the service lives there, not in the disabled Region."
+    },
+    {
+      "id": "q6",
+      "type": "single",
+      "scenario": "DevPolaris wants a boring and strict deploy preflight for staging. Which checks belong in that preflight before it changes AWS resources?",
+      "options": [
+        { "id": "a", "text": "Compare caller account and target Region with the staging register, then block the deploy if either boundary does not match." },
+        { "id": "b", "text": "Allow the deploy when resource names contain staging, because names are stronger proof than caller identity." },
+        { "id": "c", "text": "Check only the account ID, because a regional resource appears in every Region once the account is correct." },
+        { "id": "d", "text": "Check only the Region, because a successful regional command proves the account is safe." }
+      ],
+      "correct": ["a"],
+      "explanation": "The safest preflight compares intended boundaries with what AWS says is true, then blocks mismatches. Names are useful hints, but they are not a security or location boundary. The wrong account can still contain resources with staging in their names."
+    }
+  ]
+}

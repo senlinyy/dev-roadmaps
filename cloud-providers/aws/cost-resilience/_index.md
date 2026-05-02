@@ -1,6 +1,6 @@
 ---
 title: "Cost and Resilience"
-description: "Plan cloud spend, backups, recovery, and availability before production surprises force the lesson."
-tags: ["Cost", "Backup", "Recovery"]
+description: "Keep AWS services affordable and recoverable with cost visibility, right-sizing, backups, and recovery planning."
+tags: ["Cost", "Recovery", "Right-Sizing"]
 order: 8
 ---

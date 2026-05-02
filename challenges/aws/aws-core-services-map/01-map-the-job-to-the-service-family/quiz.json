@@ -1,0 +1,70 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "The DevPolaris orders team has a working container behind an internal test endpoint. Product now wants customers to reach `orders.devpolaris.com` over HTTPS without talking directly to app tasks. Which service family should the team map first?",
+      "options": [
+        { "id": "a", "text": "Traffic: DNS, VPC routing, and a load balancer as the public entry point." },
+        { "id": "b", "text": "Compute: a larger place for the Node.js process to run." },
+        { "id": "c", "text": "Data: a database or bucket to hold checkout records." },
+        { "id": "d", "text": "Signals: logs and alarms for runtime evidence." }
+      ],
+      "correct": ["a"],
+      "explanation": "The job is reachability from a public name to a controlled front door, so the traffic family comes first. Compute is already running the code, data stores records, and signals explain behavior after the request path exists."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A review says the DevPolaris orders API already builds a Docker image and should run as a steady backend service. The team wants AWS to manage the host capacity while they define CPU, memory, environment, networking, and logs. Which map box fits the job?",
+      "options": [
+        { "id": "a", "text": "Compute, using ECS with Fargate to run container tasks." },
+        { "id": "b", "text": "Storage, using S3 to hold the container image and task settings." },
+        { "id": "c", "text": "Access, using IAM as the place where application code executes." },
+        { "id": "d", "text": "Cost, using Budgets to choose where the process runs." }
+      ],
+      "correct": ["a"],
+      "explanation": "A long-running containerized service is a compute decision, and ECS with Fargate matches the article's first fit. S3 stores objects, IAM grants permissions, and Budgets warn on spend, but none of those run the application process."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "The DevPolaris orders API creates `prod/2026-05/orders.csv` every night so finance can download it later. The file does not need SQL joins or a mounted server disk. Which service family and shape fit best?",
+      "options": [
+        { "id": "a", "text": "Data: object storage such as S3 for files addressed by bucket and key." },
+        { "id": "b", "text": "Compute: Lambda because every file belongs in a function." },
+        { "id": "c", "text": "Traffic: Route 53 because finance needs a friendly name." },
+        { "id": "d", "text": "Access: IAM because permissions replace storage." }
+      ],
+      "correct": ["a"],
+      "explanation": "The job is storing and fetching a generated file by key, so S3 in the data family is the natural fit. Lambda may produce a file but is not the storage location, Route 53 names endpoints, and IAM controls who can write or read the object."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "During startup, the DevPolaris orders task logs this error:\n\n```text\nAccessDeniedException: assumed-role/orders-api-task-role is not authorized to perform secretsmanager:GetSecretValue on orders/prod/database-url\n```\n\nWhich map layer should the team inspect first?",
+      "options": [
+        { "id": "a", "text": "Access: the IAM role, action, resource, and whether the task should read that secret." },
+        { "id": "b", "text": "Traffic: the DNS record for `orders.devpolaris.com`." },
+        { "id": "c", "text": "Compute: replace ECS with EC2 because roles do not apply to containers." },
+        { "id": "d", "text": "Cost: the monthly budget for the production account." }
+      ],
+      "correct": ["a"],
+      "explanation": "The error names a caller, action, and resource, which is the IAM access sentence from the article. DNS would matter if users could not reach the front door, EC2 would not remove the need for permissions, and budget data does not explain an authorization failure."
+    },
+    {
+      "id": "q5",
+      "type": "multiple",
+      "scenario": "The DevPolaris orders team wants a first health dashboard that follows the article's map instead of listing random AWS products. Which signals match the map for a load-balanced ECS service backed by RDS?",
+      "options": [
+        { "id": "a", "text": "Application logs in a CloudWatch log group such as `/ecs/orders-api`." },
+        { "id": "b", "text": "Load balancer 5xx metrics and target group health." },
+        { "id": "c", "text": "ECS task CPU, memory, desired count, and running count." },
+        { "id": "d", "text": "A list of every AWS service released this year." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "The useful signals follow the boxes that traffic and code actually pass through: app logs, load balancer health, and ECS task health. A broad service-release list might be interesting, but it does not show whether this architecture is healthy."
+    }
+  ]
+}

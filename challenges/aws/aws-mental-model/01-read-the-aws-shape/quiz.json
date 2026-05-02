@@ -1,0 +1,70 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A new teammate opens the AWS Console for the first time and says, \"I should probably memorize EC2, S3, IAM, VPC, RDS, ECS, Lambda, CloudWatch, and Route 53 before I touch anything.\" What coaching best matches the article?",
+      "options": [
+        { "id": "a", "text": "Start with the basic map: account, Region, resource, permission, and API call, then attach service names to that map." },
+        { "id": "b", "text": "Memorize every major product name first because AWS only makes sense after the service catalog is complete." },
+        { "id": "c", "text": "Learn Terraform first because AWS resources created through the Console are not real API-managed resources." },
+        { "id": "d", "text": "Create a few production resources immediately so the service names become familiar through trial and error." }
+      ],
+      "correct": ["a"],
+      "explanation": "The article says the better first move is to learn the shape of AWS before memorizing service names. The catalog matters later, but starting with product names alone feels like a wall of nouns. Terraform and the Console both call AWS APIs, and experimenting directly in production ignores the account and permission boundaries the mental model is meant to protect."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "The DevPolaris team wants `devpolaris-orders-api` to keep serving checkout traffic when a developer laptop sleeps, store order data safely, expose traffic over the network, and produce logs when it breaks. What is AWS mainly providing in this moment?",
+      "options": [
+        { "id": "a", "text": "Rented infrastructure building blocks such as compute, storage, networking, permissions, and observability resources." },
+        { "id": "b", "text": "A Node.js framework that replaces the backend code the team already owns." },
+        { "id": "c", "text": "A website-only dashboard where production work happens outside APIs." },
+        { "id": "d", "text": "Physical servers that the DevPolaris team buys and manages directly in an AWS data center." }
+      ],
+      "correct": ["a"],
+      "explanation": "AWS gives the team infrastructure building blocks as resources that AWS manages for them. It does not replace the application code, and it is not just a website because Console clicks, CLI commands, SDKs, Terraform, and pipelines all send API requests. The team rents capacity instead of buying and operating the physical servers directly."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "Maya is about to change an AWS resource for `devpolaris-orders-api`. She says, \"I found the right page in the Console, so I know I am safe.\" Which checks should she make before changing anything?",
+      "options": [
+        { "id": "a", "text": "Confirm which AWS account the Console or tool is currently touching." },
+        { "id": "b", "text": "Confirm the selected Region and whether the resource should live there." },
+        { "id": "c", "text": "Identify the exact resource and look for names, tags, or an ARN that tie it to the right owner." },
+        { "id": "d", "text": "Assume the Console page is enough because account and Region only matter for CLI commands." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "Account, Region, and resource identity are the first safety checks because AWS work happens inside specific boundaries. Names, tags, and ARNs help confirm what thing is being changed and who owns it. The Console is only one doorway to the same API-backed system, so it can still point at the wrong account, Region, or resource."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "A developer creates a storage bucket in the AWS Console. Later, a pipeline plans to manage that bucket with Terraform, and another teammate lists it with the AWS CLI. Which mental model keeps the team from treating these as three separate worlds?",
+      "options": [
+        { "id": "a", "text": "The Console, CLI, Terraform, SDKs, and CI/CD pipelines are different doorways that send AWS API requests." },
+        { "id": "b", "text": "The Console owns resources it creates, so Terraform and the CLI can only create separate copies." },
+        { "id": "c", "text": "Terraform talks to a different cloud database until someone imports the Console resource by hand." },
+        { "id": "d", "text": "CLI-created resources are real, but Console-created resources are only browser state until deployment." }
+      ],
+      "correct": ["a"],
+      "explanation": "The resource is an AWS resource no matter which doorway created or read it. The correct mental model is API requests plus permissions against resources. The other options are plausible because tools feel different, but the article explains that the tools all talk to AWS APIs rather than creating separate clouds."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A CLI command fails while Maya tries to create an export bucket for `devpolaris-orders-api`:\n\n```text\nAn error occurred (AccessDenied) when calling the CreateBucket operation:\nUser arn:aws:iam::123456789012:user/maya is not authorized\nto perform s3:CreateBucket on resource arn:aws:s3:::devpolaris-orders-exports\n```\n\nWhat should she inspect first?",
+      "options": [
+        { "id": "a", "text": "The API operation, caller identity, denied action, target resource, and account shown in the error." },
+        { "id": "b", "text": "The browser cache, because AccessDenied usually means the Console is showing stale state." },
+        { "id": "c", "text": "The source code of `devpolaris-orders-api`, because bucket creation errors usually come from Node.js bugs." },
+        { "id": "d", "text": "The Availability Zone, because every permission problem is caused by choosing the wrong zone." }
+      ],
+      "correct": ["a"],
+      "explanation": "The error names the API call, the caller, the denied action, the resource, and the account inside the ARN. That evidence points to an IAM permission or context problem. Browser cache, app source code, and Availability Zone are possible debugging areas in other incidents, but they do not explain this literal AccessDenied message."
+    }
+  ]
+}

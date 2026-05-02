@@ -1,0 +1,83 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "The DevPolaris orders API is packaged as a container image, handles steady HTTP traffic, needs two running tasks, writes logs, and should avoid direct host patching work at first. Which compute choice best matches that workload?",
+      "options": [
+        { "id": "a", "text": "ECS with Fargate, because the team runs containers while AWS manages the host capacity." },
+        { "id": "b", "text": "EC2, because every HTTP backend must run on a virtual server that the team patches." },
+        { "id": "c", "text": "Lambda, because all Node.js code should be split into short functions." },
+        { "id": "d", "text": "EFS, because the service needs a shared place to execute code." }
+      ],
+      "correct": ["a"],
+      "explanation": "ECS with Fargate fits a containerized steady service and keeps the team focused on image, task definition, networking, logs, and desired count. EC2 is plausible when OS-level control is the job, Lambda is plausible for event handlers, and EFS is storage, not compute."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "The DevPolaris platform team has a legacy order-pricing daemon that requires a custom kernel module, a local process manager, and hands-on operating system tuning. Which compute choice is the best first fit?",
+      "options": [
+        { "id": "a", "text": "EC2, because the workload needs server and OS-level control." },
+        { "id": "b", "text": "Lambda, because the daemon can run forever inside one invocation." },
+        { "id": "c", "text": "S3, because a daemon can be stored as an object and executed there." },
+        { "id": "d", "text": "RDS, because managed databases provide operating system tuning." }
+      ],
+      "correct": ["a"],
+      "explanation": "EC2 is the article's virtual server choice when custom system setup and OS control matter. Lambda is event-run code with timeout and execution-model constraints, while S3 and RDS are data services, not places to run a Linux daemon."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "When a receipt image lands in an S3 bucket, DevPolaris needs a small job to resize it and write a thumbnail. The work is short, event-driven, and does not need a long-running web process. Which compute service fits best?",
+      "options": [
+        { "id": "a", "text": "Lambda, because a small function can run when the upload event arrives." },
+        { "id": "b", "text": "ECS with Fargate, because all image work must be a service with desired count." },
+        { "id": "c", "text": "EC2, because every file event requires a patched server." },
+        { "id": "d", "text": "DynamoDB, because a key-value database can resize files." }
+      ],
+      "correct": ["a"],
+      "explanation": "Lambda matches a small event-driven job like reacting to an upload. ECS and EC2 can run workers, so they are plausible, but they add a long-running service or server model that the scenario does not need. DynamoDB stores key-based records and does not execute resize code."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "Checkout must create an order, its line items, and a payment record together, then support SQL-style reports by customer, date, and payment status. Which data service shape should the team reach for first?",
+      "options": [
+        { "id": "a", "text": "RDS, because relational records, transactions, and SQL queries fit this data shape." },
+        { "id": "b", "text": "S3, because every record can be written as a separate JSON file." },
+        { "id": "c", "text": "EBS, because transactional data belongs on a disk volume attached to one server." },
+        { "id": "d", "text": "EFS, because reports need a shared filesystem path." }
+      ],
+      "correct": ["a"],
+      "explanation": "The scenario describes related records, transactional rules, and SQL queries, which points to RDS. S3 is plausible for exports but awkward for relational querying, EBS is a server disk rather than a managed database, and EFS is shared files, not a default order-record store."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "The DevPolaris cart service reads and writes carts by one known key: customer ID. The team does not need joins, and the main access pattern is predictable at high request volume. Which data service is a reasonable fit from the article's map?",
+      "options": [
+        { "id": "a", "text": "DynamoDB, because key-based records with known access patterns fit its model." },
+        { "id": "b", "text": "RDS, because every backend record should start with SQL tables." },
+        { "id": "c", "text": "S3, because a cart is a file that users download directly." },
+        { "id": "d", "text": "EBS, because key lookups require a block volume." }
+      ],
+      "correct": ["a"],
+      "explanation": "The known key-based access pattern is the article's beginner case for DynamoDB. RDS may be right for relational questions, S3 is object storage for files, and EBS is a block volume for EC2 rather than a managed key-value database."
+    },
+    {
+      "id": "q6",
+      "type": "multiple",
+      "scenario": "A DevPolaris review lists several proposed storage choices. Which comments correctly match the storage service to the data shape?",
+      "options": [
+        { "id": "a", "text": "Use S3 for generated finance exports that are stored and fetched by bucket and key." },
+        { "id": "b", "text": "Use EBS when an EC2-based workload needs a persistent attached disk." },
+        { "id": "c", "text": "Use EFS when multiple compute resources need a shared mounted filesystem." },
+        { "id": "d", "text": "Use S3 as the normal mounted disk for a Fargate task that expects POSIX file locking." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "S3 fits object files, EBS fits attached block storage for EC2, and EFS fits shared filesystem needs. The S3 mounted-disk comment is wrong because the article frames S3 as object storage accessed by bucket and key, not a normal disk with filesystem semantics."
+    }
+  ]
+}

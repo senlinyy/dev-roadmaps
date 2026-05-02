@@ -1,0 +1,70 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A new DevPolaris orders task starts, then logs:\n\n```text\nAccessDeniedException: User arn:aws:sts::123456789012:assumed-role/orders-api-task-role/ecs-task is not authorized to perform s3:PutObject on arn:aws:s3:::devpolaris-orders-exports/prod/2026-05/orders.csv\n```\n\nWhat should the team inspect first?",
+      "options": [
+        { "id": "a", "text": "The task role policy: caller, action, resource, and whether that prefix should be writable." },
+        { "id": "b", "text": "The Route 53 record, because failed S3 writes usually start at DNS." },
+        { "id": "c", "text": "The RDS instance class, because database size controls S3 authorization." },
+        { "id": "d", "text": "The monthly budget, because AWS denies writes when a budget threshold is crossed." }
+      ],
+      "correct": ["a"],
+      "explanation": "The message is an IAM sentence: the task role tried `s3:PutObject` on a specific object ARN and was denied. DNS, database size, and budget alarms are plausible map layers in other incidents, but they do not explain an explicit authorization denial."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "The DevPolaris orders API now logs `connect ETIMEDOUT` when opening a database connection. There is no `AccessDeniedException`, and the database password was read successfully. The app task and database are in the expected VPC. Which layer is most likely worth checking next?",
+      "options": [
+        { "id": "a", "text": "Traffic rules, especially whether the database security group allows the app task source on the database port." },
+        { "id": "b", "text": "IAM, because all connection timeouts are permission policy failures." },
+        { "id": "c", "text": "S3 object keys, because database connections are stored as export files." },
+        { "id": "d", "text": "ECR image tags, because image storage controls database network paths." }
+      ],
+      "correct": ["a"],
+      "explanation": "A timeout after credentials are read points toward network path or port rules, so security groups are the better next check. IAM is plausible for AWS API calls, but the scenario lacks an authorization denial. S3 and ECR are unrelated to opening the database connection."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "Customers report intermittent 503 responses from `orders.devpolaris.com`. The load balancer metric shows target 5xx rising, and target group health changed from 2 healthy targets to 0. Which signal should the team inspect next to move forward on the map?",
+      "options": [
+        { "id": "a", "text": "CloudWatch Logs for the ECS task around the health-check failure time." },
+        { "id": "b", "text": "The AWS service catalog, to find new products that mention checkout." },
+        { "id": "c", "text": "The budget notification settings, because 503 responses start as cost alerts." },
+        { "id": "d", "text": "The finance export bucket, because all 503 responses mean S3 cannot list files." }
+      ],
+      "correct": ["a"],
+      "explanation": "The load balancer already says the backend targets are unhealthy, so app logs are the next signal that can explain why. Service catalogs, budgets, and export buckets can matter elsewhere, but they do not follow the failing request path in this evidence."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "The DevPolaris team is setting up first CloudWatch coverage for the orders API. Which items are useful operational signals for this architecture?",
+      "options": [
+        { "id": "a", "text": "A CloudWatch Logs group for application log events from ECS tasks." },
+        { "id": "b", "text": "Load balancer 5xx metrics and target health for the front door." },
+        { "id": "c", "text": "CPU and memory metrics for ECS tasks, database connection metrics for RDS, and CloudWatch alarms on important thresholds." },
+        { "id": "d", "text": "A single alarm on total monthly AWS spend as the only production health check." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "Logs, load balancer metrics, target health, task resource metrics, RDS connection metrics, and threshold alarms all match boxes in the service map. Spend alarms are useful cost guardrails, but they cannot be the only health signal for request failures."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A CI pipeline for DevPolaris deploys the orders API and fails while registering a task definition:\n\n```text\nUser: arn:aws:iam::123456789012:role/devpolaris-deploy-role is not authorized to perform iam:PassRole on arn:aws:iam::123456789012:role/orders-api-task-role\n```\n\nWhich explanation best fits the article's access model?",
+      "options": [
+        { "id": "a", "text": "The deployment role is the caller, `iam:PassRole` is the action, and the task role is the resource being passed." },
+        { "id": "b", "text": "The ECS task is the caller, `s3:PutObject` is the action, and the export bucket is missing." },
+        { "id": "c", "text": "The load balancer is the caller, health checks are the action, and DNS is the denied resource." },
+        { "id": "d", "text": "The budget alarm is the caller, monthly spend is the action, and ECR is the denied resource." }
+      ],
+      "correct": ["a"],
+      "explanation": "IAM decisions can be read as caller, action, resource, and conditions. Here the deploy role lacks permission to pass the task role. The other options reuse real AWS nouns, but they do not match the actors or action named in the error."
+    }
+  ]
+}

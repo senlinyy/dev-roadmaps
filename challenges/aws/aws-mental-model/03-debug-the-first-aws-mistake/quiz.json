@@ -1,0 +1,83 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A teammate says, \"I changed the ECS service, but production did not change.\" The evidence is:\n\n```text\nexpected account: 123456789012\ncaller account: 999999999999\nregion: us-east-1\nservice: orders-api-prod\n```\n\nWhat is the best first diagnosis?",
+      "options": [
+        { "id": "a", "text": "Wrong account, because the tool is touching a different account than production." },
+        { "id": "b", "text": "Wrong Region, because any unchanged production service means the Region is wrong." },
+        { "id": "c", "text": "Missing owner tag, because tags control whether deployments take effect." },
+        { "id": "d", "text": "AWS managed service failure, because ECS should copy changes across accounts automatically." }
+      ],
+      "correct": ["a"],
+      "explanation": "The account IDs do not match, so the first boundary to check is account. Region is shown as `us-east-1` in the evidence, but even a correct Region does not help if the account is wrong. Tags help ownership and cost review, not deployment routing. AWS does not automatically copy an ECS service change from one customer account to another."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "Maya created `orders-api-prod` in `us-east-1`. Later she opens the Console in the same account, but the selected Region is `us-west-2` and she cannot find the service. What should she do before changing the pipeline?",
+      "options": [
+        { "id": "a", "text": "Switch the Console or CLI context back to `us-east-1` and check for the service there." },
+        { "id": "b", "text": "Recreate the service in `us-west-2` because missing resources are usually deleted." },
+        { "id": "c", "text": "Open an IAM ticket because an invisible resource always means access was denied." },
+        { "id": "d", "text": "Rename the service because AWS cannot show resources with hyphens in their names." }
+      ],
+      "correct": ["a"],
+      "explanation": "The article calls this a classic wrong Region mistake: the resource may still exist, but the operator is looking in a different geographic AWS area. Recreating it risks duplication. IAM denial has a different evidence shape, usually an AccessDenied message. The service name is not the issue described by the evidence."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "A deployment role for `devpolaris-orders-api` fails with this message:\n\n```text\nAccessDenied when calling UpdateService\nrole arn:aws:iam::123456789012:role/devpolaris-deploy-role\nis not authorized to perform ecs:UpdateService\non arn:aws:ecs:us-east-1:123456789012:service/devpolaris-prod/orders-api-prod\n```\n\nWhich layer does the evidence point to?",
+      "options": [
+        { "id": "a", "text": "Permission, because AWS denied a specific API action by a specific role on a specific resource." },
+        { "id": "b", "text": "Wrong account, because AccessDenied always means the account number is missing." },
+        { "id": "c", "text": "Wrong Region, because ECS errors only happen when the selected Region is empty." },
+        { "id": "d", "text": "Bad resource naming, because any resource with `prod` in the name blocks updates by default." }
+      ],
+      "correct": ["a"],
+      "explanation": "The message names a caller role, the denied action `ecs:UpdateService`, and the target resource ARN. That is permission evidence. The account and Region are present in the ARN, so they should still be checked, but the strongest signal is the denied IAM action. Names do not block updates by default."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "The monthly AWS bill jumps. The production account contains resources named `new-prod-db`, `test-bucket-2`, and `temp-logs`, and none have `service`, `env`, or `owner` tags. What is the most useful first fix?",
+      "options": [
+        { "id": "a", "text": "Trace ownership, apply clear service, environment, and owner tags, then decide what can be changed or deleted." },
+        { "id": "b", "text": "Assume AWS owns the resources because untagged resources are managed services." },
+        { "id": "c", "text": "Delete all three resources immediately because unclear names prove they are unused." },
+        { "id": "d", "text": "Move the resources to another Availability Zone because billing jumps are caused by zone placement." }
+      ],
+      "correct": ["a"],
+      "explanation": "Bad names and missing tags create ownership confusion, so the first useful move is to identify what belongs to which service and tag it clearly. Managed services still need customer ownership decisions. Immediate deletion can break production if a bad name hides a real dependency. Availability Zone placement does not explain the ownership evidence in the scenario."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A review finds that the RDS database for `devpolaris-orders-api` has no tested backup restore process and no team alarm for backup failures. A teammate says, \"RDS is managed by AWS, so backup ownership is AWS's problem.\" What answer best matches the article?",
+      "options": [
+        { "id": "a", "text": "AWS manages much of the database infrastructure, but the DevPolaris team still owns configuration choices, data, access, backups, and alarms." },
+        { "id": "b", "text": "The teammate is right because managed services remove all customer responsibility." },
+        { "id": "c", "text": "Backups only matter for self-managed EC2 databases, not for any database service with an AWS name." },
+        { "id": "d", "text": "IAM permissions are enough because a database with restricted access never needs backup testing." }
+      ],
+      "correct": ["a"],
+      "explanation": "Managed does not mean ownerless. AWS operates the service platform, while the team owns how it uses the service, including data, permissions, backups, and response. The distractors are tempting because managed services reduce operational burden, but they do not remove responsibility for safe configuration and recovery."
+    },
+    {
+      "id": "q6",
+      "type": "multiple",
+      "scenario": "During an incident review, the team writes four evidence notes. Which evidence-to-layer matches are correct?",
+      "options": [
+        { "id": "a", "text": "`sts get-caller-identity` shows account `999999999999`, but production is `123456789012`: account boundary." },
+        { "id": "b", "text": "The CLI uses `us-west-2`, but `orders-api-prod` was created in `us-east-1`: Region." },
+        { "id": "c", "text": "The error says `AccessDenied` for `iam:PassRole` on a role ARN: permission." },
+        { "id": "d", "text": "A resource lacks an `owner` tag: Availability Zone outage." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "An account ID mismatch maps to the account boundary, a selected Region mismatch maps to location, and AccessDenied for a named action on a role ARN maps to permissions. A missing owner tag is a naming and ownership problem. It is plausible incident evidence, but it does not prove an Availability Zone outage."
+    }
+  ]
+}
