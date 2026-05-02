@@ -1,5 +1,7 @@
 node_modules/
 dist/
+.tts-cache/
+.wrangler/
 .DS_Store
 .env
 .env.*
