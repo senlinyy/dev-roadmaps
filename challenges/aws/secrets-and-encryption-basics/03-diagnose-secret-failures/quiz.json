@@ -1,0 +1,70 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "Maya is debugging a missing secret for `devpolaris-orders-api`. Her identity check shows:\n\n```json\n{\n  \"Account\": \"999900001111\",\n  \"Arn\": \"arn:aws:iam::999900001111:user/maya\"\n}\n```\n\nThe production account is `111122223333`. What should she do before editing policies?",
+      "options": [
+        { "id": "a", "text": "Stop and fix the caller account, profile, role, or environment target before trusting the missing-secret result." },
+        { "id": "b", "text": "Create the secret in the sandbox account so the command succeeds there too." },
+        { "id": "c", "text": "Broaden the production execution role because wrong-account results prove access is too narrow." },
+        { "id": "d", "text": "Rotate every production secret because an identity check in another account means values leaked." }
+      ],
+      "correct": ["a"],
+      "explanation": "Account and Region checks come first because many cloud mistakes are wrong-workspace mistakes. A missing secret in the wrong account does not prove anything about production permissions or names. Fix the caller context before changing policies or rotating values."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "An ECS service event says:\n\n```text\nResourceInitializationError: unable to retrieve secret from ssm:\nParameterNotFound: /prod/order/STRIPE_WEBHOOK_SECRET\n```\n\nThe documented parameter is `/prod/orders/STRIPE_WEBHOOK_SECRET`. What is the best fix direction?",
+      "options": [
+        { "id": "a", "text": "Correct the task definition reference, register a new revision, and deploy it with the real parameter path." },
+        { "id": "b", "text": "Add `kms:Decrypt` to every role because `ParameterNotFound` always means encryption failed." },
+        { "id": "c", "text": "Move the Stripe webhook token into the app image so path spelling no longer matters." },
+        { "id": "d", "text": "Create a second parameter with the misspelled name and leave both names active forever." }
+      ],
+      "correct": ["a"],
+      "explanation": "The evidence points to a name mismatch: `/prod/order` versus `/prod/orders`. The safe fix is to update the task definition reference and roll out the corrected revision. KMS and broad duplicate names do not address the actual typo, and image storage would create a secret leak risk."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "After a successful release, CloudWatch Logs contains:\n\n```text\nINFO config DATABASE_URL=postgresql://orders_app:prod-password@orders-prod.example:5432/orders\nINFO config STRIPE_WEBHOOK_SECRET=whsec_live_example\n```\n\nWhat is the right incident response?",
+      "options": [
+        { "id": "a", "text": "Remove the logging behavior, rotate the exposed secrets, redeploy, and check who could access the log group." },
+        { "id": "b", "text": "Leave the values in logs because the ECS task started successfully." },
+        { "id": "c", "text": "Only force a new deployment because restarting tasks erases old CloudWatch log events." },
+        { "id": "d", "text": "Move the same values into a ticket so the incident record is complete." }
+      ],
+      "correct": ["a"],
+      "explanation": "A log stream containing secret values is a leak. The team needs to stop the behavior, rotate values, redeploy with fresh values, and review log access. Restarting tasks does not erase retained logs, and copying the values into a ticket spreads the exposure."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "The database password was rotated at `09:22`, but one running task still fails login. Evidence shows:\n\n```text\nSecret LastChangedDate: 2026-04-18T09:22:11Z\nTask StartedAt:       2026-04-18T08:57:44Z\nTask status:          RUNNING\n```\n\nWhat is the most likely cause?",
+      "options": [
+        { "id": "a", "text": "The task started before rotation and still has the old injected environment value, so the service needs fresh tasks." },
+        { "id": "b", "text": "Secrets Manager deleted the new password because ECS tasks cannot use rotated values." },
+        { "id": "c", "text": "KMS encryption changed the running process environment automatically and broke Node.js." },
+        { "id": "d", "text": "The task execution role lost permission because `StartedAt` is earlier than `LastChangedDate`." }
+      ],
+      "correct": ["a"],
+      "explanation": "ECS injects secret values when the task starts. A running process does not automatically receive the new value after rotation. If the secret changed after the task started, force a new deployment or otherwise restart tasks so ECS starts containers with the new value."
+    },
+    {
+      "id": "q5",
+      "type": "multiple",
+      "scenario": "A shipping review for `devpolaris-orders-api` checks the repo, image, secret names, logs, and execution role. Which comments are valid?",
+      "options": [
+        { "id": "a", "text": "The repo can contain `.env.example`, but it should not contain real `.env` files, private keys, or copied outputs with secret values." },
+        { "id": "b", "text": "The container image should not bake production `DATABASE_URL` values into Dockerfile `ENV` lines or image layers." },
+        { "id": "c", "text": "Secret names and logs should help operators diagnose safely without containing full secret values or complete `process.env` dumps." },
+        { "id": "d", "text": "The execution role should read every production secret so future services do not need policy changes." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "The checklist keeps private values out of the repo, image, names, and logs while still giving operators useful metadata. The execution role should be narrow to the secrets or parameters this service needs. Giving it every production secret would make one task setup identity too powerful."
+    }
+  ]
+}

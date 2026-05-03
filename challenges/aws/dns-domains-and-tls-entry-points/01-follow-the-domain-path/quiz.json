@@ -1,0 +1,70 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A customer opens `https://orders.devpolaris.com`. The intended path is:\n\nRoute 53 hosted zone: devpolaris.com\nAlias target: dualstack.devpolaris-orders-alb-123.us-east-1.elb.amazonaws.com\nALB listener: HTTPS 443\nTarget group: devpolaris-orders-api-tg\n\nWhat does DNS prove in this path?",
+      "options": [
+        { "id": "a", "text": "It tells the browser which entry point the friendly name should reach." },
+        { "id": "b", "text": "It proves the ALB certificate is trusted for `orders.devpolaris.com`." },
+        { "id": "c", "text": "It proves the target group has healthy ECS tasks." },
+        { "id": "d", "text": "It grants the ECS task role permission to call AWS APIs." }
+      ],
+      "correct": ["a"],
+      "explanation": "DNS answers the location question: where should this name go? TLS answers the identity and trust question, and target health comes later in the path. Keeping those promises separate makes custom-domain debugging much easier."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "The team wants to replace the ALB behind devpolaris-orders-api without asking customers to change bookmarks. Which design supports that?",
+      "options": [
+        { "id": "a", "text": "Keep `orders.devpolaris.com` stable and update the Route 53 alias to the new ALB when it is ready." },
+        { "id": "b", "text": "Tell customers to use the generated ALB DNS name because it is the real entry point." },
+        { "id": "c", "text": "Put the ECS task private IPs directly into public DNS so the ALB can be removed." },
+        { "id": "d", "text": "Issue a certificate for the old ALB DNS name and leave Route 53 unchanged." }
+      ],
+      "correct": ["a"],
+      "explanation": "The friendly name gives users a stable URL while AWS resources behind it can change carefully. A Route 53 alias can point that name at the intended ALB. Customers should not need to learn the generated ALB DNS name."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "Which checks belong before blaming the Node backend when `orders.devpolaris.com` fails?",
+      "options": [
+        { "id": "a", "text": "Does the public DNS name resolve to the expected ALB entry point?" },
+        { "id": "b", "text": "Does the TLS certificate cover `orders.devpolaris.com`?" },
+        { "id": "c", "text": "Does the HTTPS listener forward to the orders API target group?" },
+        { "id": "d", "text": "Does the database security group allow browser IPs to connect to Postgres?" }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "A custom domain can fail at DNS, TLS, or listener routing before the backend code sees a request. Those layers are the first promises to prove. Browsers should not connect to the database."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "`dig +short orders.devpolaris.com` returns an empty result from a public network. The ECS service has two healthy targets. What should the team inspect first?",
+      "options": [
+        { "id": "a", "text": "The public hosted zone, the `orders` record, and domain delegation to Route 53 name servers." },
+        { "id": "b", "text": "The app `/health` endpoint, because healthy targets can cause DNS records to disappear." },
+        { "id": "c", "text": "The database security group, because DNS queries use TCP 5432." },
+        { "id": "d", "text": "The task IAM role, because `dig` requires `route53:ResolveName` from ECS." }
+      ],
+      "correct": ["a"],
+      "explanation": "An empty public DNS answer means the name promise failed before the request can reach the ALB or backend. Healthy targets are useful later, but they cannot fix a missing public DNS record or broken delegation. Start at Route 53 and registrar delegation."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "DNS resolves and TLS succeeds, but the ALB listener table says:\n\nHTTPS:443 certificate orders.devpolaris.com default action fixed-response 404\nHTTP:80 redirect to HTTPS:443\n\nWhat is missing for the orders API path?",
+      "options": [
+        { "id": "a", "text": "A listener action or rule that forwards the matching host to `devpolaris-orders-api-tg`." },
+        { "id": "b", "text": "A public IP on each ECS task so Route 53 can skip the ALB." },
+        { "id": "c", "text": "A DNS validation CNAME, because issued certificates cannot be used by listeners." },
+        { "id": "d", "text": "A database subnet group in public subnets so the listener can query orders." }
+      ],
+      "correct": ["a"],
+      "explanation": "Once DNS and TLS work, the listener still needs to send the request somewhere useful. A fixed 404 default action does not forward to the app target group. The missing promise is listener routing, not task public IPs or database placement."
+    }
+  ]
+}

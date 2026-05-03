@@ -1,0 +1,142 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A receipt Lambda was tested with a direct object:\n\n{ \"orderId\": \"ord_1042\", \"email\": \"maya@example.com\", \"total\": \"49.00\" }\n\nProduction sends this event instead:\nRecords[0].messageId: 5a6f4b79\nRecords[0].body: {\"orderId\":\"ord_1042\",\"email\":\"maya@example.com\",\"total\":\"49.00\"}\neventSource: aws:sqs\n\nThe handler fails with `Cannot read properties of undefined (reading body)`. What should be fixed first?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Update the handler tests and parsing logic to use the real SQS Records shape."
+        },
+        {
+          "id": "b",
+          "text": "Attach an ALB target group because Lambda needs port 3000 to parse SQS events."
+        },
+        {
+          "id": "c",
+          "text": "Move the receipt job into the checkout request so the event shape disappears."
+        },
+        {
+          "id": "d",
+          "text": "Increase the function timeout because event shape errors are always slow queries."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The failure is a contract mismatch between the trigger event and the handler. SQS delivers Records, and the body must be parsed from each record. Timeout and port changes would not fix code that expects the wrong input shape."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A log search shows:\n\nSTART RequestId: b8e74218-9d2e-4a97-91df\nINFO orderId=ord_1042 messageId=5a6f4b79 requestId=b8e74218-9d2e-4a97-91df action=send_receipt\nEND RequestId: b8e74218-9d2e-4a97-91df\n\nWhy is the request ID useful?",
+      "options": [
+        {
+          "id": "a",
+          "text": "It links one Lambda invocation to its logs, which helps the team follow one event through one run."
+        },
+        {
+          "id": "b",
+          "text": "It proves the function has two warm execution environments ready for the next event."
+        },
+        {
+          "id": "c",
+          "text": "It replaces the message ID, so idempotency is no longer needed."
+        },
+        {
+          "id": "d",
+          "text": "It tells the ALB which private task IP should receive traffic."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The context request ID is a tracing clue for one invocation. It helps connect START, app logs, END, and REPORT lines. It does not replace business identifiers or idempotency keys, because retries can still deliver the same work again."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "The receipt provider returns 503. The handler catches the error, logs it, and returns `{ \"processed\": 1 }`.\n\nSQS event source metrics after the run:\nLambda invocation result: success\nApproximateReceiveCount: 1\nmessage visible again: no\n\nWhat is the main problem?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The handler is reporting success even though the receipt was not sent, so the queue can treat the message as complete."
+        },
+        {
+          "id": "b",
+          "text": "The function needs a public IP address because SQS messages cannot be retried privately."
+        },
+        {
+          "id": "c",
+          "text": "The message body should include the database password so the provider can retry."
+        },
+        {
+          "id": "d",
+          "text": "The ALB health check path is too strict for receipt events."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "A handler should be honest about failure. If the work did not happen, throwing lets the event source apply its retry behavior. Swallowing the error can lose the message or make operations believe the side effect succeeded."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "A new teammate is reviewing Lambda basics for the receipt worker:\n\ntrigger: SQS queue orders-background-prod\nhandler: async function(event, context)\nidempotency key: receipt:ord_1042\nlog fields: messageId, orderId, context.awsRequestId\n\nWhich statements are correct?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The event shape depends on the trigger, so tests should use an SQS-shaped sample for this worker."
+        },
+        {
+          "id": "b",
+          "text": "The context request ID is useful for connecting logs from one invocation."
+        },
+        {
+          "id": "c",
+          "text": "Throwing an error tells Lambda the invocation failed, which affects retry behavior for the event source."
+        },
+        {
+          "id": "d",
+          "text": "A successful handler return proves the receipt email was safe to send twice."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "The trigger, handler input, and invocation result form the contract. Good logs include stable IDs from both AWS and the business event. Idempotency is still needed because a successful or retried event can be seen again in real systems."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "The team proposes moving the whole checkout API into one Lambda handler. Current API evidence says:\n\npackage: existing container image\ntraffic: steady weekday HTTP traffic\nruntime: listens on port 3000 behind ALB\nside work: receipt email and exports are event-shaped\n\nWhich split best follows the article?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Keep the main API as a service-shaped runtime and use Lambda for the event-shaped side jobs."
+        },
+        {
+          "id": "b",
+          "text": "Move every part to Lambda because side jobs are event-shaped."
+        },
+        {
+          "id": "c",
+          "text": "Move every part to EC2 because Lambda cannot read queue messages."
+        },
+        {
+          "id": "d",
+          "text": "Remove the queue so receipt emails happen before checkout returns."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The main API and the side jobs have different shapes. The checkout API is a long-running service, while receipt and export jobs can run per event. Splitting the workloads keeps each compute choice honest."
+    }
+  ]
+}

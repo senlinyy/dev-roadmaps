@@ -1,0 +1,70 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "Support search logs show:\n\n```text\noperation=supportOrderSearch\nprefix=orders/\nobjects_checked=18420\nmatches=3\nwarning=query required object scan\nfilters=customerId:cus_77,status:pending,totalCents>5000\n```\n\nWhat wrong-fit pattern does this suggest?",
+      "options": [
+        { "id": "a", "text": "S3 is being used like a database for queryable order records." },
+        { "id": "b", "text": "RDS is overloaded because it stores too many receipt PDFs." },
+        { "id": "c", "text": "EFS is missing a mount target for order JSON files." },
+        { "id": "d", "text": "DynamoDB conditional writes are rejecting duplicate checkout requests." }
+      ],
+      "correct": ["a"],
+      "explanation": "Listing many objects, downloading them, parsing JSON, and filtering locally is a sign that object storage is being forced to answer database questions. The likely fix direction is to keep queryable business facts in RDS or design a specific key-based access path. S3 can still store generated files attached to those facts."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "The receipt route logs:\n\n```text\nroute=GET /orders/ord_1042/receipt\nquery=select receipt_blob from orders where id=$1\nreceipt_bytes=734812\nduration_ms=1840\n```\n\nWhat wrong-fit pattern does this suggest?",
+      "options": [
+        { "id": "a", "text": "RDS is carrying file bytes that would be better stored as S3 objects with keys in the database." },
+        { "id": "b", "text": "S3 is being used as SQL because the route includes an order id." },
+        { "id": "c", "text": "DynamoDB needs a GSI for receipt bytes." },
+        { "id": "d", "text": "EBS is full because database rows are large." }
+      ],
+      "correct": ["a"],
+      "explanation": "The database can store bytes, but that does not make it the right file delivery layer. Receipt PDFs are durable objects, while the database should keep ownership and pointer metadata. This is the opposite wrong fit from using S3 as an order database."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "After a deploy replaces one task, customers get:\n\n```text\nroute=GET /orders/ord_1042/receipt\ninstance=i-0f31devpolarisb\npath=/var/app/receipts/ord_1042.pdf\nerror=ENOENT: no such file or directory\n```\n\nWhat does this reveal?",
+      "options": [
+        { "id": "a", "text": "A user-visible receipt is stored on a local machine path instead of durable shared object storage." },
+        { "id": "b", "text": "The receipt object key is too descriptive for S3." },
+        { "id": "c", "text": "RDS transactions are rolling back too many line items." },
+        { "id": "d", "text": "DynamoDB TTL deleted the customer's PDF from the instance." }
+      ],
+      "correct": ["a"],
+      "explanation": "The file exists only if the request lands on the machine that has the local path. That is fragile once tasks are replaced or scaled. Durable receipts should be stored in S3 and authorized through database metadata."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "Which production signals suggest the data service choice should be revisited?",
+      "options": [
+        { "id": "a", "text": "S3 order search lists thousands of objects and filters JSON locally." },
+        { "id": "b", "text": "RDS receipt endpoint spends most of its time returning large `receipt_blob` values." },
+        { "id": "c", "text": "DynamoDB helper named `findJobs(filters)` scans the whole table for flexible admin filters." },
+        { "id": "d", "text": "S3 stores a generated CSV export and RDS stores the export metadata row." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "The first three signals show a service being asked to do a job it does not fit well: S3 as SQL, RDS as file delivery, and DynamoDB without a designed access pattern. The fourth option is a healthy split. S3 stores the object while RDS stores queryable metadata."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "An export worker writes `paid-orders.csv` to S3 but does not record job status anywhere. The UI sees an object but cannot tell whether it is complete, failed, still writing, or from a previous run. What is the fix direction?",
+      "options": [
+        { "id": "a", "text": "Keep the file in S3, and store job status or export metadata in a queryable place such as RDS or DynamoDB depending on the access pattern." },
+        { "id": "b", "text": "Use only the S3 object as status because object existence proves the whole workflow completed." },
+        { "id": "c", "text": "Move the CSV into the orders table so the UI can infer completion from blob size." },
+        { "id": "d", "text": "Write the CSV to EBS and let users download it from whichever worker ran last." }
+      ],
+      "correct": ["a"],
+      "explanation": "The output file and the record of workflow state are different pieces of data. S3 is still a good home for the CSV, but the UI needs a trusted status record. The status store depends on whether the app reads by exact job id or needs flexible history."
+    }
+  ]
+}

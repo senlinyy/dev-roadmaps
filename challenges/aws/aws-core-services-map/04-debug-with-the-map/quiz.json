@@ -65,19 +65,6 @@
       ],
       "correct": ["a", "b", "c"],
       "explanation": "The article's first resilience shape includes multiple tasks, multiple AZs, backups, restore testing, and useful tags for ownership and cost review. Removing logs is wrong because observability still gives evidence when resilience mechanisms fail or recover."
-    },
-    {
-      "id": "q6",
-      "type": "single",
-      "scenario": "A DevPolaris development account suddenly spends three times more than usual after a load test. The app is healthy, checkout still works, and there is no customer incident. Which map layer gives the first useful signal?",
-      "options": [
-        { "id": "a", "text": "Cost: AWS Budgets and tagged cost views to find the owner, service, and resource growth." },
-        { "id": "b", "text": "Traffic: Route 53 health checks, because cost spikes always mean DNS is failing." },
-        { "id": "c", "text": "Data: RDS restore testing, because any spend increase means data loss." },
-        { "id": "d", "text": "Access: make the application task role administrator so the load test can continue." }
-      ],
-      "correct": ["a"],
-      "explanation": "When the service is healthy but spend jumps, the cost layer is the right first map box. Budgets and tags help identify the resource owner and growth source. DNS, restore testing, and broader permissions are real topics, but they do not explain a cost-only signal."
     }
   ]
 }

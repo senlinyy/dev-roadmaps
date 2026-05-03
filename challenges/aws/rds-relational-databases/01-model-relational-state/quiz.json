@@ -1,0 +1,70 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "`devpolaris-orders-api` needs to store this checkout state:\n\n```text\norders(id, customer_id, status, created_at)\norder_items(order_id, sku, quantity, unit_price_cents)\npayments(order_id, provider_reference, status)\n```\n\nSupport often asks for paid orders by customer and failed payment attempts by provider. What is the best first database fit?",
+      "options": [
+        { "id": "a", "text": "RDS PostgreSQL, because the records have relationships, constraints, joins, and transaction needs." },
+        { "id": "b", "text": "S3, because each order can be written as one JSON object under an order id key." },
+        { "id": "c", "text": "EBS, because an attached disk gives the database more direct control over files." },
+        { "id": "d", "text": "DynamoDB without defined access patterns, because checkout data may grow over time." }
+      ],
+      "correct": ["a"],
+      "explanation": "The model is relational because the relationships between orders, items, and payments matter. RDS gives the team SQL queries, constraints, and transactions for that shape. S3 or an attached disk would store bytes, but they would not naturally protect the business rules."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A test migration creates `order_items.order_id references orders(id)`. Later a bad insert tries to create an item for `order_id=ord_missing`. What value does the foreign key provide?",
+      "options": [
+        { "id": "a", "text": "It prevents a line item from floating around without a real order row." },
+        { "id": "b", "text": "It uploads the missing order JSON file to S3 automatically." },
+        { "id": "c", "text": "It makes all future support queries run against a read replica." },
+        { "id": "d", "text": "It stores the receipt PDF beside the line item row." }
+      ],
+      "correct": ["a"],
+      "explanation": "A foreign key is a database rule that keeps related rows honest. It blocks impossible states such as an item that points to no order. It does not create missing data or handle file storage."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "Checkout starts a transaction that creates one order, three item rows, and one payment row. The second item insert fails because `quantity` is invalid. What should the app want from the database?",
+      "options": [
+        { "id": "a", "text": "Roll back the whole group so the customer does not see a partial order." },
+        { "id": "b", "text": "Commit the order row and payment row, then let support add the missing item later." },
+        { "id": "c", "text": "Write the failed item to S3 as a recovery object and keep the rest committed." },
+        { "id": "d", "text": "Retry only the failed item in DynamoDB because item rows are small key-value records." }
+      ],
+      "correct": ["a"],
+      "explanation": "A checkout transaction should leave the order story consistent. If one required write fails, rolling back the group is safer than exposing half an order. S3 or DynamoDB do not replace the transaction boundary for these related SQL rows."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "A senior engineer reviews whether order state belongs in RDS. Which evidence supports that choice?",
+      "options": [
+        { "id": "a", "text": "The app needs joins between orders, payments, and order items." },
+        { "id": "b", "text": "Several writes must succeed or fail together during checkout." },
+        { "id": "c", "text": "Support and finance ask new questions by customer, status, date, and payment reference." },
+        { "id": "d", "text": "The receipt PDF is a large file, so the order row should contain the PDF bytes." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "Joins, transactions, and flexible questions are strong relational signals. The PDF option is tempting because receipts belong to orders, but the file bytes are object-shaped data. Store the receipt in S3 and keep the pointer and ownership in the database."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A receipt download request starts by checking:\n\n```text\norders.id=ord_1042\norders.customer_id=cus_77\norders.receipt_object_key=receipts/2026/05/ord_1042.pdf\nsignedInCustomer=cus_77\n```\n\nWhy is this RDS check still useful if the PDF bytes live in S3?",
+      "options": [
+        { "id": "a", "text": "The database owns the business relationship and authorization decision before the app reads the S3 object." },
+        { "id": "b", "text": "RDS can stream the S3 object faster after the key is found." },
+        { "id": "c", "text": "The S3 key proves customer ownership without checking order records." },
+        { "id": "d", "text": "The database check uploads a backup copy of the receipt to DynamoDB." }
+      ],
+      "correct": ["a"],
+      "explanation": "S3 is a good home for the file bytes, but it does not know the product ownership rule by itself. RDS can prove which customer owns the order and which object key belongs to it. That split keeps authorization and file storage clear."
+    }
+  ]
+}

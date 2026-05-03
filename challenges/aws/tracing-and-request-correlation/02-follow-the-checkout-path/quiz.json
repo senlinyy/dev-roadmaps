@@ -1,0 +1,70 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A failed request path says:\n\n```text\nreq_44T\nALB accepted POST /v1/orders\nECS task started handler\nRDS order insert timed out\nAPI returned 500\nS3 receipt upload did not run\nLambda email request did not run\n```\n\nWhat should the engineer avoid?",
+      "options": [
+        { "id": "a", "text": "Avoid starting with Lambda receipt-email debugging, because this request stopped before the side job." },
+        { "id": "b", "text": "Avoid checking RDS logs or metrics, because the path already names RDS." },
+        { "id": "c", "text": "Avoid app logs, because request paths replace request-level evidence." },
+        { "id": "d", "text": "Avoid the ALB dashboard, because ALB cannot see requests that return 500." }
+      ],
+      "correct": ["a"],
+      "explanation": "The path tells you which steps happened and which did not. If the RDS insert timed out, S3 and Lambda never ran for this request. That saves time and keeps the team from chasing later components."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A healthy checkout path looks like this:\n\n```text\nreq_55P\nALB accepted request\nECS task started handler\nRDS order insert succeeded\nDynamoDB idempotency write succeeded\nS3 receipt upload succeeded\nLambda email request queued\nAPI returned 201\n```\n\nWhich statement is the best use of this path?",
+      "options": [
+        { "id": "a", "text": "It gives a baseline so failures can be compared against the steps that normally happen." },
+        { "id": "b", "text": "It proves the service can never fail in DynamoDB, S3, or Lambda." },
+        { "id": "c", "text": "It means metrics are no longer useful because the path has all future rates." },
+        { "id": "d", "text": "It should be kept only in one engineer's memory rather than logs or traces." }
+      ],
+      "correct": ["a"],
+      "explanation": "A healthy path teaches the expected shape of a request. During an incident, you compare the failing path with that baseline. It does not remove the need for logs, traces, or metrics."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "A teammate starts every checkout investigation by staring at the Node app logs because that is the tool they know best. The current path evidence says:\n\n```text\nALB accepted request\nECS task returned 201\nLambda receipt email failed with TemplateNotFound\n```\n\nWhat is the better habit?",
+      "options": [
+        { "id": "a", "text": "Follow the actual request path and inspect the side-job logs because the failure appears after the API response." },
+        { "id": "b", "text": "Stay only in API logs because familiar tools are safer than path evidence." },
+        { "id": "c", "text": "Resize RDS because every post-checkout problem begins in the database." },
+        { "id": "d", "text": "Treat the Lambda failure as unrelated because HTTP 201 means the API already answered." }
+      ],
+      "correct": ["a"],
+      "explanation": "The path prevents comfort-driven debugging. If the API returned 201 and the side job failed later, the next useful evidence is in the side-job path. That does not make the API irrelevant, but it changes the first place to inspect."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "Which facts make a checkout path useful during an incident?",
+      "options": [
+        { "id": "a", "text": "The request ID that ties the path to logs and traces." },
+        { "id": "b", "text": "The ordered components that handled the work, such as ALB, ECS, RDS, DynamoDB, S3, and Lambda." },
+        { "id": "c", "text": "Which steps succeeded, failed, or did not run." },
+        { "id": "d", "text": "A rule that every incident must begin at the component the engineer likes most." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "A useful path combines identity, order, and outcome. It lets the team compare expected flow with actual flow. Personal tool preference should not decide the investigation path."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A trace is missing for one failed checkout, but logs show consistent request IDs across the path:\n\n```text\n09:42:17 req_88 checkout.start\n09:42:17 req_88 payment.authorize duration_ms=51\n09:42:18 req_88 rds.insert_order duration_ms=1030\n09:42:18 req_88 checkout.complete status=201 duration_ms=1143\n```\n\nWhat should the team do?",
+      "options": [
+        { "id": "a", "text": "Use the correlated logs to follow the request, then compare metrics for wider shape." },
+        { "id": "b", "text": "Stop the investigation because a trace is the only valid request path evidence." },
+        { "id": "c", "text": "Remove sampling so every helper function is traced forever before reading the logs." },
+        { "id": "d", "text": "Assume the request was fast because the trace was not sampled." }
+      ],
+      "correct": ["a"],
+      "explanation": "Correlation IDs make logs valuable even when a trace is missing. The logs already show RDS was the slow step for this request. Metrics can then show whether that was isolated or part of a wider pattern."
+    }
+  ]
+}

@@ -1,0 +1,70 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "You see this route table attached to the ALB subnets:\n\nRoute table: rtb-orders-public\nDestination      Target\n10.20.0.0/16     local\n0.0.0.0/0        igw-0abc1111\n\nWhat does the default route mean?",
+      "options": [
+        { "id": "a", "text": "Internet-bound traffic from these subnets goes to the internet gateway." },
+        { "id": "b", "text": "All inbound internet traffic is allowed to every resource in these subnets." },
+        { "id": "c", "text": "Only IAM principals with `ec2:Route` can reach the ALB listener." },
+        { "id": "d", "text": "Traffic to `10.20.10.45` must leave the VPC before returning to the app." }
+      ],
+      "correct": ["a"],
+      "explanation": "Route tables give directions for where traffic should go next. A default route to an internet gateway is one part of a public subnet shape. It is not a firewall rule, and local VPC traffic still follows the more specific local route."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "The private app subnet route table says:\n\nDestination      Target\n10.20.0.0/16     local\n0.0.0.0/0        nat-0aaa2222\n\nThe app task needs to connect to RDS at `10.20.21.18:5432`. Which route handles that packet?",
+      "options": [
+        { "id": "a", "text": "`10.20.0.0/16 -> local`, because the database address is inside the VPC CIDR." },
+        { "id": "b", "text": "`0.0.0.0/0 -> nat-0aaa2222`, because all private subnet traffic must use NAT." },
+        { "id": "c", "text": "No route is needed because security groups forward database packets." },
+        { "id": "d", "text": "The public ALB route table, because RDS traffic must pass through the load balancer." }
+      ],
+      "correct": ["a"],
+      "explanation": "AWS uses the most specific matching destination. `10.20.21.18` fits inside `10.20.0.0/16`, so the local route keeps the packet inside the VPC. NAT is for destinations outside the VPC, not for this database hop."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "The database subnet route table is stricter:\n\nRoute table: rtb-orders-db-private\nDestination      Target\n10.20.0.0/16     local\n\nWhich conclusion is safest?",
+      "options": [
+        { "id": "a", "text": "Resources in the DB subnets can communicate inside the VPC, but they do not have a general internet route." },
+        { "id": "b", "text": "The database cannot be reached by the app because there is no NAT route." },
+        { "id": "c", "text": "The database is public because every route table includes a local route." },
+        { "id": "d", "text": "The route table blocks TCP 5432 because routes are deny rules." }
+      ],
+      "correct": ["a"],
+      "explanation": "The local route is enough for VPC-internal traffic, including app-to-database traffic when security groups allow it. There is no default route out to the internet, which is often right for database subnets. Routes direct packets, while security groups decide allowed ports and sources."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "Which statements correctly read route-table evidence for devpolaris-orders-api?",
+      "options": [
+        { "id": "a", "text": "A route table is associated with one or more subnets." },
+        { "id": "b", "text": "`0.0.0.0/0 -> nat-a` in a private app table supports outbound connections started by private tasks." },
+        { "id": "c", "text": "A route table does not replace security group rules for TCP ports." },
+        { "id": "d", "text": "A private app task needs NAT to reach an RDS address inside `10.20.0.0/16`." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "Route tables attach to subnets and choose next hops. NAT can support outbound access from private tasks, but it is not a firewall and it is not needed for local VPC destinations. Security groups still control source and port reachability."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "The team wants better AZ independence for app outbound access. Current private routes are:\n\nrtb-app-a: 0.0.0.0/0 -> nat-a in public-a\nrtb-app-b: 0.0.0.0/0 -> nat-a in public-a\n\nWhat is the routing tradeoff?",
+      "options": [
+        { "id": "a", "text": "It is cheaper than two NAT gateways, but tasks in AZ b depend on a NAT gateway in AZ a." },
+        { "id": "b", "text": "It is safer because both app subnets become public and can skip the ALB." },
+        { "id": "c", "text": "It improves database reachability because RDS traffic now uses NAT instead of local." },
+        { "id": "d", "text": "It makes IAM unnecessary for ECR, Secrets Manager, and CloudWatch Logs." }
+      ],
+      "correct": ["a"],
+      "explanation": "One NAT gateway can reduce cost, but it creates an AZ dependency for outbound traffic. The article frames this as a routing tradeoff. It does not change IAM requirements or make private app subnets public."
+    }
+  ]
+}

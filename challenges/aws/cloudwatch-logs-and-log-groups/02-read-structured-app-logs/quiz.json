@@ -1,0 +1,70 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A checkout failure log is structured like this:\n\n```text\nlevel=error time=2026-05-02T09:42:18Z service=devpolaris-orders-api env=prod request_id=req_51 route=POST /v1/orders step=rds.insert_order error_name=ConnectionTimeout message=database connection timed out\n```\n\nWhy is this better than `checkout failed`?",
+      "options": [
+        { "id": "a", "text": "It gives searchable fields that connect the request, route, failing step, and error category." },
+        { "id": "b", "text": "It proves every RDS metric is healthy, so no more checks are needed." },
+        { "id": "c", "text": "It hides the service name, which makes cross-service searches safer." },
+        { "id": "d", "text": "It replaces the need for metrics because one log line shows the full error rate." }
+      ],
+      "correct": ["a"],
+      "explanation": "Structured fields make a future search precise. The log names the service, request, route, step, and error, so the next engineer knows where to inspect. It still needs metrics and traces to understand wider impact and timing."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A startup failure prints this line:\n\n```text\nERROR service=devpolaris-orders-api env=prod message=startup failed DATABASE_URL=postgres://orders:plain-text-password@orders-prod:5432/orders\n```\n\nWhat should the team change?",
+      "options": [
+        { "id": "a", "text": "Remove secret values from logs and keep safe identifiers such as secret name, service, release, and error category." },
+        { "id": "b", "text": "Keep the password in logs because CloudWatch retention can be shortened later." },
+        { "id": "c", "text": "Print every environment variable on startup so the next incident is easier." },
+        { "id": "d", "text": "Move database passwords into request IDs so all services can correlate them." }
+      ],
+      "correct": ["a"],
+      "explanation": "Logs are operational data the team must protect. A secret value can spread through alerts, exports, and long retention. Safe context should help debugging without exposing credentials."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "A receipt write failed after the order was accepted:\n\n```text\nlevel=error service=devpolaris-orders-api request_id=req_8X order_id=ord_8x7k2n route=POST /v1/orders step=s3.write_receipt bucket=devpolaris-orders-prod-objects key=receipts/2026/05/02/order_ord_8x7k2n/receipt.pdf error_name=AccessDenied\n```\n\nWhat is the best next move?",
+      "options": [
+        { "id": "a", "text": "Search by request ID and order ID, then inspect the S3 bucket, key, IAM role, and encryption path." },
+        { "id": "b", "text": "Assume the ECS service never started because any S3 error means container startup failed." },
+        { "id": "c", "text": "Treat the bucket and key as noise because the route and request ID are enough." },
+        { "id": "d", "text": "Resize RDS first because all checkout errors begin in the database." }
+      ],
+      "correct": ["a"],
+      "explanation": "The log gives concrete evidence for the next investigation. It names the failing operation, request, order, bucket, key, and error type. That points to S3 access and configuration, not a blind ECS or RDS change."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "The team is defining a normal error-log standard for `devpolaris-orders-api`. Which fields are usually safe and useful?",
+      "options": [
+        { "id": "a", "text": "`request_id`, so one request can be followed across logs and traces." },
+        { "id": "b", "text": "`route` and `step`, so the failing part of the request is named." },
+        { "id": "c", "text": "`error_name` and `duration_ms`, so searches and timing comparisons are easier." },
+        { "id": "d", "text": "Raw payment token or database password, so the engineer can replay the exact secret value." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "The correct fields help diagnosis while staying safe. Raw secrets and payment tokens do not belong in logs. Good logs tell the story without leaking private or credential data."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "Three services log the same request with different field names:\n\n```text\norders-api: request_id=req_77 step=checkout.start\nreceipt-lambda: reqId=req_77 step=email.send\nworker: trace=req_77 step=export.build\n```\n\nWhat problem will the team feel in CloudWatch Logs Insights?",
+      "options": [
+        { "id": "a", "text": "The query becomes harder because the same concept is spread across inconsistent field names." },
+        { "id": "b", "text": "CloudWatch cannot store fields named `request_id`." },
+        { "id": "c", "text": "The logs are safer because inconsistent names prevent searching by request." },
+        { "id": "d", "text": "Metrics will stop publishing until every log field has a unique name." }
+      ],
+      "correct": ["a"],
+      "explanation": "Consistency is part of structured logging design. If every service uses a different field name for the same ID, cross-service searches become awkward and error-prone. A shared field name lets simple queries follow the request."
+    }
+  ]
+}

@@ -1,0 +1,70 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A monthly review shows this row:\n\n```text\nResource: devpolaris-orders-prod RDS\nPattern: steady database instance capacity and backup storage\nReason known: stores final order data and supports restore points\n```\n\nWhich cost shape is most visible here?",
+      "options": [
+        { "id": "a", "text": "Direct cost, with some recovery cost attached to backups." },
+        { "id": "b", "text": "Hidden cost from a retry loop, because all database cost is accidental." },
+        { "id": "c", "text": "Only idle cost, because any spare database capacity has no resilience purpose." },
+        { "id": "d", "text": "Only growth cost, because the cost must rise every minute even if data does not grow." }
+      ],
+      "correct": ["a"],
+      "explanation": "The database instance is a resource the team intentionally runs, so direct cost is visible. Backup storage also carries recovery cost because it exists to restore data later. The next review question is whether the size and retention still match the service's needs."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "After release `2026-05-02.4`, CloudWatch Logs cost rises faster than request traffic. The app now writes this line on every normal checkout:\n\n```text\nDEBUG route=POST /v1/orders request_id=req_62 payloadBytes=18421 message=request payload accepted\n```\n\nWhich cost shape should the team discuss first?",
+      "options": [
+        { "id": "a", "text": "Hidden cost, because application behavior created extra log ingestion and storage around normal traffic." },
+        { "id": "b", "text": "Recovery cost, because every debug payload is a tested restore point." },
+        { "id": "c", "text": "Idle cost, because logs wait for traffic before they exist." },
+        { "id": "d", "text": "Direct RDS cost, because every log line is charged as database capacity." }
+      ],
+      "correct": ["a"],
+      "explanation": "Hidden cost often comes from behavior around the main resource. A chatty debug log line can multiply CloudWatch ingestion and storage without adding much diagnostic value. The fix should preserve useful request evidence while reducing noise."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "The ECS service runs four tasks all night, but quiet-hour traffic only needs two. The review note says:\n\n```text\ncost signal: compute baseline is high during quiet hours\nresilience signal: one task restart no longer affects checkout\nopen question: can we keep protection with lower minimum plus autoscaling?\n```\n\nHow should the team classify this?",
+      "options": [
+        { "id": "a", "text": "Idle cost that may be buying failure protection and needs evidence before reducing." },
+        { "id": "b", "text": "Pure waste that should be removed immediately without checking deployment or failure behavior." },
+        { "id": "c", "text": "Recovery cost, because running tasks are database backups." },
+        { "id": "d", "text": "Hidden cost from logs, because every idle task must be writing debug payloads." }
+      ],
+      "correct": ["a"],
+      "explanation": "Idle capacity is not always bad. It may protect availability during task restarts, deploys, or traffic spikes. The review should ask what protection the buffer buys and whether a smaller baseline plus autoscaling keeps that promise."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "Which cost-shape pairings are reasonable for `devpolaris-orders-api`?",
+      "options": [
+        { "id": "a", "text": "Growth cost: S3 receipts, export files, log storage, and backups increasing as time and orders accumulate." },
+        { "id": "b", "text": "Recovery cost: backups, retained logs, snapshots, and restore drills kept so the team can recover or diagnose later." },
+        { "id": "c", "text": "Hidden cost: retries, verbose debug logs, or large payloads multiplying work around a feature." },
+        { "id": "d", "text": "Direct cost: an untagged resource no team can identify or explain." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "Growth, recovery, and hidden cost are all common shapes in the article. A direct cost can be visible and intentional, but an untagged resource nobody can explain is not a healthy example. Visibility and ownership are part of making direct cost understandable."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A manager asks why the team pays for 30 days of API logs and tested RDS restore drills. The incident record says:\n\n```text\nlate support reports often arrive 7 to 14 days after checkout\nlast restore drill found a missing security-group rule before an incident\n```\n\nWhat is the best answer?",
+      "options": [
+        { "id": "a", "text": "Those are recovery and evidence costs with named jobs, so tune them intentionally rather than deleting them blindly." },
+        { "id": "b", "text": "They are always waste because quiet systems do not need evidence." },
+        { "id": "c", "text": "They are hidden retry costs, so the only fix is to reduce Lambda concurrency." },
+        { "id": "d", "text": "They should be moved into application memory so AWS no longer charges for them." }
+      ],
+      "correct": ["a"],
+      "explanation": "Recovery cost can look wasteful on quiet days because it protects future failures. The key is to name the job: support investigation, incident review, and tested recovery. Once the reason is explicit, the team can tune retention and drill cadence safely."
+    }
+  ]
+}

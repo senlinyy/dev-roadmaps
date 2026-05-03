@@ -1,0 +1,70 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "After a release, upload fails with:\n\n```text\nerrorName=AccessDenied\naction=s3:PutObject\ncaller=arn:aws:sts::123456789012:assumed-role/devpolaris-orders-api-prod-task-role/ecs-task-72af\nresource=arn:aws:s3:::devpolaris-orders-prod-objects/export/daily/2026/05/02/orders.csv\nallowedResource=arn:aws:s3:::devpolaris-orders-prod-objects/exports/daily/*\n```\n\nWhat should the team check first?",
+      "options": [
+        { "id": "a", "text": "Whether the release changed the prefix from `exports/daily/` to `export/daily/`." },
+        { "id": "b", "text": "Whether the task role needs delete permission on the entire bucket." },
+        { "id": "c", "text": "Whether RDS is rejecting the order transaction before S3 is called." },
+        { "id": "d", "text": "Whether lifecycle expiration removed the object before it was uploaded." }
+      ],
+      "correct": ["a"],
+      "explanation": "The denied request tells a clear story: caller, action, and resource. The resource uses a different prefix than the allowed policy. The safe first move is to fix or confirm the prefix, not to widen permissions."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A policy review shows this attempted permission for listing finance exports:\n\n```text\naction=s3:ListBucket\nresource=arn:aws:s3:::devpolaris-orders-prod-objects/exports/daily/*\n```\n\nWhy might this still fail?",
+      "options": [
+        { "id": "a", "text": "`s3:ListBucket` applies to the bucket ARN, usually with a prefix condition, not to an object ARN pattern." },
+        { "id": "b", "text": "`s3:ListBucket` only works when bucket versioning is disabled." },
+        { "id": "c", "text": "Finance must use `s3:PutObject` to list objects because S3 lists are writes." },
+        { "id": "d", "text": "The action should be granted on the RDS endpoint because export metadata is in SQL." }
+      ],
+      "correct": ["a"],
+      "explanation": "S3 bucket and object ARNs are different shapes. Listing a bucket is authorized against the bucket resource, often with a condition limiting the prefix. Object ARN patterns are right for actions such as `s3:GetObject` or `s3:PutObject`."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "A finance reader has `s3:GetObject` on `exports/daily/*`, but reading one export still fails:\n\n```text\nerrorName=AccessDenied\nbucket=devpolaris-orders-prod-objects\nkey=exports/daily/2026/05/02/orders.csv\nencryption=aws:kms\nkmsKey=arn:aws:kms:us-east-1:123456789012:key/abcd-1234-example\n```\n\nWhat is the best next check?",
+      "options": [
+        { "id": "a", "text": "Check whether the caller is allowed to use the KMS key for decrypting this object." },
+        { "id": "b", "text": "Replace the export key because KMS errors mean the key string is too long." },
+        { "id": "c", "text": "Move the export to RDS because encrypted S3 objects cannot be downloaded." },
+        { "id": "d", "text": "Give finance access to `receipts/*` because broader S3 read fixes KMS denials." }
+      ],
+      "correct": ["a"],
+      "explanation": "With SSE-KMS, S3 permission may not be enough. The caller also needs permission through the KMS key policy or grants. Broadening S3 prefixes does not fix missing KMS decrypt permission and may expose data finance should not read."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "The team wants the app role to upload exports and receipts safely. Which permission review points are good?",
+      "options": [
+        { "id": "a", "text": "Allow `s3:PutObject` only on object ARN patterns the app writes, such as `exports/daily/*` and `receipts/*`." },
+        { "id": "b", "text": "Use the caller, action, bucket, key, and policy reason from `AccessDenied` before changing permissions." },
+        { "id": "c", "text": "Keep broad delete permission out of the app role unless a reviewed workflow truly needs it." },
+        { "id": "d", "text": "Give the task role full bucket read and write because prefix-scoped policies are harder to debug." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "The good review points keep access close to the app's real jobs and use evidence before changing policy. Full bucket access is tempting during an incident, but it weakens the boundary and can hide mistakes like wrong prefixes. Least privilege is easier when prefixes match the data model."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A cleanup job is proposed with this note:\n\n```text\nbucket=devpolaris-orders-prod-objects\nprefix=exports/\nreason=remove temporary release files after deploy\n```\n\nWhat is the safest review response?",
+      "options": [
+        { "id": "a", "text": "Reject the scope until it targets the temporary prefix, such as `tmp/releases/`, and shows sample keys before delete." },
+        { "id": "b", "text": "Approve it because `exports/` and temporary release files both contain generated data." },
+        { "id": "c", "text": "Disable S3 versioning first so cleanup cannot leave old versions behind." },
+        { "id": "d", "text": "Move finance exports into DynamoDB so lifecycle rules cannot affect them." }
+      ],
+      "correct": ["a"],
+      "explanation": "The reason says temporary release files, but the prefix points at finance exports. That mismatch should stop the change. Versioning may help recovery, but it does not make a poorly scoped cleanup job safe."
+    }
+  ]
+}

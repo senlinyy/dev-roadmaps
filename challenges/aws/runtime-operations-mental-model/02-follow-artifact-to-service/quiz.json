@@ -1,0 +1,142 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "Release record:\n\nrelease: orders-api-prod-2026-05-02.4\napproved image digest: sha256:8f3d2b9a\ntask definition registered: devpolaris-orders-api:42\n\nTask definition 42 shows:\nimage: .../devpolaris-orders-api:latest\n\nWhat is the review concern?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The task definition does not clearly pin or record the approved artifact, so production may not run the reviewed digest."
+        },
+        {
+          "id": "b",
+          "text": "Using latest improves rollback because it always points to the previous version."
+        },
+        {
+          "id": "c",
+          "text": "The release record should omit digests because ECS only understands floating tags."
+        },
+        {
+          "id": "d",
+          "text": "The ALB target group should choose the digest at request time."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "A release record should let the team connect the reviewed artifact to the runtime recipe. Floating tags can move and make rollback or audit harder. Pinning or recording the exact digest keeps the release explainable."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A pipeline registered task definition 43. Ten minutes later:\n\nECS service taskDefinition: devpolaris-orders-api:42\ndeployments: one PRIMARY deployment for revision 42\ntarget health: 2 healthy old tasks\nCloudWatch release log: release=2026-05-02.3\n\nWhat step is missing?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Update the ECS service to task definition 43 so ECS starts a deployment from the new recipe."
+        },
+        {
+          "id": "b",
+          "text": "Push the same image again because registering a task definition deletes the old service."
+        },
+        {
+          "id": "c",
+          "text": "Change the health check path because old healthy tasks block new revisions by design."
+        },
+        {
+          "id": "d",
+          "text": "Rotate the task role because service updates are IAM credential refreshes."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Registering a task definition does not move traffic by itself. The service must be updated to the desired revision. Until then, old healthy tasks can keep serving from the previous recipe."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "A task definition excerpt shows:\n\nexecutionRoleArn: devpolaris-orders-ecs-execution\ntaskRoleArn: devpolaris-orders-api-task\nsecrets: DATABASE_URL from Secrets Manager\n\nThe task stops before app logs with `AccessDenied secretsmanager:GetSecretValue`. Which identity is the first suspect?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The execution role, because ECS uses it to fetch injected secrets before the container starts."
+        },
+        {
+          "id": "b",
+          "text": "The task role, because app code must fetch every task definition secret after startup."
+        },
+        {
+          "id": "c",
+          "text": "The ALB service-linked role, because target health reads DATABASE_URL."
+        },
+        {
+          "id": "d",
+          "text": "The CI user, because it remains attached to running containers after deploy."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The timing matters. No app logs plus secret injection failure points to ECS setup work, which uses the execution role. The task role matters after the process starts and calls AWS APIs itself."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "To prove production is running the expected version, the release captain collects:\n\nservice taskDefinition: devpolaris-orders-api:43\ntask definition image digest: sha256:8f3d2b9a\nCloudWatch startup log: release=2026-05-02.4\ntarget health: two healthy task IPs on port 3000\n\nWhich evidence helps prove the running version?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The service is pointing to the expected task definition revision."
+        },
+        {
+          "id": "b",
+          "text": "The task definition points to the approved image digest or immutable artifact reference."
+        },
+        {
+          "id": "c",
+          "text": "Startup logs from the new tasks report the expected release identifier."
+        },
+        {
+          "id": "d",
+          "text": "The ECR repository contains at least one tag named latest."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "Running-version proof needs a chain from service to recipe to artifact to task logs and health. A generic latest tag in ECR does not prove what the service is running. It is only useful if the runtime recipe points to the reviewed artifact."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A deploy fails and the incident channel asks for rollback. The release record has:\n\ncurrent: devpolaris-orders-api:43\nrollback_target: blank\nprevious deployment evidence: not linked\nimage digest history: only pipeline logs from last week\n\nWhat habit should improve before the next release?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Record the previous known-good task definition and image digest before updating the service."
+        },
+        {
+          "id": "b",
+          "text": "Stop recording task definitions because ECS can infer human intent during incidents."
+        },
+        {
+          "id": "c",
+          "text": "Use only latest tags so rollback does not require a record."
+        },
+        {
+          "id": "d",
+          "text": "Delete old task definition revisions to reduce decision pressure."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Rollback thinking starts before the incident. If the previous known-good recipe is written down, the team can recover faster and with less searching. Floating tags and missing records make a stressful moment harder."
+    }
+  ]
+}

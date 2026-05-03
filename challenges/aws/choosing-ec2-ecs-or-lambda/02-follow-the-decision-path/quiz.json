@@ -1,0 +1,142 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "Decision path answers for the checkout API:\n\nMust stay alive and listen: yes\nPackage is a container image: yes\nNeeds host OS control: no\nNeeds ALB, RDS, Secrets Manager, logs: yes\n\nWhere does the path land?",
+      "options": [
+        {
+          "id": "a",
+          "text": "ECS service on Fargate."
+        },
+        {
+          "id": "b",
+          "text": "EC2 by default, because staying alive always means host access."
+        },
+        {
+          "id": "c",
+          "text": "Lambda by default, because secrets are easier when there is no service."
+        },
+        {
+          "id": "d",
+          "text": "A one-off ECS task, because the image exists even though the API must keep listening."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The path is short when the evidence is clear. A long-running containerized service without host-control needs is a strong ECS/Fargate fit. The team still reviews the runtime contract, but not as a hand-managed server."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A new component answers the path differently:\n\nMust stay alive and listen: yes\nContainer image package: no, vendor installer only\nNeeds host OS control: yes, kernel module and host logs\nTeam accepts server ownership for this exception: yes\n\nWhich answer follows the path?",
+      "options": [
+        {
+          "id": "a",
+          "text": "EC2 for this component, with server responsibilities documented."
+        },
+        {
+          "id": "b",
+          "text": "Fargate, because host kernel modules can be installed by task environment variables."
+        },
+        {
+          "id": "c",
+          "text": "Lambda, because host logs are easier when invocations are short."
+        },
+        {
+          "id": "d",
+          "text": "The same ECS task definition as the checkout API, because fewer services means fewer risks."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The host-control answer changes the decision. EC2 can be appropriate when the requirement is real and ownership is explicit. Hiding that requirement inside Fargate or Lambda would make operations worse."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "A finance export job has this review note:\n\ntrigger: monthly schedule\nwork: scans 14 million rows, can run 45 minutes\npartial progress: should checkpoint and resume\ntimeout requirement: longer than current Lambda limit and needs steady worker logs\n\nWhat should the team consider?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Use a longer-running worker shape such as ECS or EC2 instead of forcing the job into Lambda."
+        },
+        {
+          "id": "b",
+          "text": "Use Lambda without changing the job design, because the trigger starts from a schedule."
+        },
+        {
+          "id": "c",
+          "text": "Put the export inside the checkout request so the browser waits for completion."
+        },
+        {
+          "id": "d",
+          "text": "Disable logs because long jobs are easier when there is less evidence."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Event-shaped does not automatically mean Lambda. The path asks whether the work can finish inside function limits and whether the operational shape fits. A long checkpointed job may be cleaner as a worker service."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "A design review asks these questions before choosing compute:\n\nDoes the code need to stay alive and listen?\nIs the package a container image?\nDoes it need host OS control?\nWho owns deploy, rollback, logs, secrets, and patches?\n\nWhich questions are useful in the decision path?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Process shape: service listener or event handler."
+        },
+        {
+          "id": "b",
+          "text": "Packaging shape: container image, function package, or VM install."
+        },
+        {
+          "id": "c",
+          "text": "Control and operations shape: host needs, logs, rollout, rollback, and team capacity."
+        },
+        {
+          "id": "d",
+          "text": "Alphabetical order of AWS service names."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "The useful path reduces choices by asking concrete questions. Process, package, control, traffic, and operations all affect the result. Naming preferences are not architecture evidence."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A small team proposes EC2 for the main orders API. Their stated reason is:\n\nWe know Linux, but the app does not need custom kernel modules, host agents, or local disk state. It already has a container image and should run behind an ALB.\n\nWhat is the best review response?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Ask what extra host control EC2 buys here, because Fargate may provide the needed service shape with less routine server care."
+        },
+        {
+          "id": "b",
+          "text": "Approve EC2 because knowing Linux means no one has to patch, monitor disk, or supervise processes."
+        },
+        {
+          "id": "c",
+          "text": "Reject containers because ALB traffic cannot reach containerized services."
+        },
+        {
+          "id": "d",
+          "text": "Move to Lambda because any small team should avoid all long-running services."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The question is not whether the team can use Linux. The question is whether the workload needs the extra host responsibility. If the answer is no, ECS on Fargate may be a better operating tradeoff for the main API."
+    }
+  ]
+}

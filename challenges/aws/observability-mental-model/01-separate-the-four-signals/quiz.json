@@ -1,0 +1,70 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "During a checkout incident, support gives you one failed response header: `x-request-id: req_73H2`. The CloudWatch log search returns:\n\n```text\n09:42:18 ERROR service=devpolaris-orders-api request_id=req_73H2 route=POST /v1/orders step=rds.insert_order error_name=ConnectionTimeout message=database connection timed out\n```\n\nWhich signal answered the team's immediate question?",
+      "options": [
+        { "id": "a", "text": "Logs, because they name what happened for one request and include the failing step." },
+        { "id": "b", "text": "Metrics, because a single log line proves the whole service error rate." },
+        { "id": "c", "text": "Traces, because the log line alone shows every timed span in the request path." },
+        { "id": "d", "text": "Alarms, because the error line is the notification rule that woke the team." }
+      ],
+      "correct": ["a"],
+      "explanation": "Logs are the best fit when you need the exact event and request context. This log names the service, route, request ID, step, and error, which is enough to choose the next area to inspect. It does not by itself show rates, full timing, or alarm policy."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A teammate asks whether checkout failures are isolated or becoming a service-wide problem. The dashboard has this 5-minute view:\n\n```text\ntime    requests/min  target_5xx  p95_latency_ms\n09:30   118           0           210\n09:35   122           1           225\n09:40   120           19          940\n09:45   119           37          1320\n```\n\nWhich signal should drive the first answer?",
+      "options": [
+        { "id": "a", "text": "Metrics, because the table shows how often errors and latency changed over time." },
+        { "id": "b", "text": "One ECS task log stream, because one line is enough to estimate the fleet error rate." },
+        { "id": "c", "text": "A trace sample only, because one sampled request always represents all customers." },
+        { "id": "d", "text": "A budget alert, because cost movement is the direct measure of customer failures." }
+      ],
+      "correct": ["a"],
+      "explanation": "Metrics are built for questions about volume, rate, latency, and change over time. The table shows a clear shape: errors and latency rose while request count stayed normal. A log or trace can explain details after the metric points to the pattern."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "One checkout succeeded, but the customer waited too long. The trace view says:\n\n```text\nPOST /v1/orders               1860 ms\n  validate cart                  7 ms\n  authorize payment             64 ms\n  insert order in RDS         1690 ms\n  write receipt to S3           38 ms\n  build response                 6 ms\n```\n\nWhich signal is doing the most useful work here?",
+      "options": [
+        { "id": "a", "text": "Traces, because they show where one request spent its time." },
+        { "id": "b", "text": "Alarms, because the span list is a threshold notification." },
+        { "id": "c", "text": "Cost tags, because they show which team owns the slow span." },
+        { "id": "d", "text": "Log retention, because retention alone explains the delay." }
+      ],
+      "correct": ["a"],
+      "explanation": "A trace is a timed path for one request. It points the investigation toward the RDS insert because that span consumed most of the request time. The team still needs logs and metrics to explain why RDS was slow."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "The on-call engineer is writing a first-response note for `devpolaris-orders-api`. Which signal-to-question pairings are sound?",
+      "options": [
+        { "id": "a", "text": "Logs answer: what happened to this request?" },
+        { "id": "b", "text": "Metrics answer: how often or how much is this happening?" },
+        { "id": "c", "text": "Traces answer: where did this request spend time across steps?" },
+        { "id": "d", "text": "Alarms answer: what is the exact stack trace for every failed request?" }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "The first three pairings match the article's mental model. Alarms are attention rules over signals; they do not replace logs or traces for detailed request evidence. A good alarm points the human to the right dashboard and log group."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "CloudWatch sends this notification:\n\n```text\nALARM: devpolaris-orders-api-checkout-5xx\nstate: ALARM\nreason: HTTP 5xx responses for POST /v1/orders were above threshold for 10 minutes\nfirst view: orders API dashboard\nfirst logs: /ecs/devpolaris-orders-api\n```\n\nWhat is the best interpretation?",
+      "options": [
+        { "id": "a", "text": "The alarm tells a human to look, then the dashboard and logs help diagnose." },
+        { "id": "b", "text": "The alarm has already proven the root cause is RDS." },
+        { "id": "c", "text": "The alarm replaces the need for request IDs in application logs." },
+        { "id": "d", "text": "The alarm should be ignored until a customer opens a ticket." }
+      ],
+      "correct": ["a"],
+      "explanation": "An alarm is a shoulder tap, not a complete diagnosis. This alarm gives a symptom, time window, and first places to inspect. The team still needs metrics, logs, and possibly traces to understand the failure."
+    }
+  ]
+}

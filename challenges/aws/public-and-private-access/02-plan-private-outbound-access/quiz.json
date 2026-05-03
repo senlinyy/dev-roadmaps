@@ -1,0 +1,70 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A private ECS task stops before the app starts:\n\nservice devpolaris-orders-api stopped task 8c6a\nstopped reason: ResourceInitializationError\ndetail: unable to pull secrets or registry auth: connect timeout to ecr.us-east-1.amazonaws.com\n\nWhich question should come right after the IAM check?",
+      "options": [
+        { "id": "a", "text": "Does the private subnet have a path to ECR through NAT or the required VPC endpoints?" },
+        { "id": "b", "text": "Does Route 53 point `orders.devpolaris.com` at the production ALB?" },
+        { "id": "c", "text": "Does the database security group allow TCP 5432 from the ALB security group?" },
+        { "id": "d", "text": "Does the ALB health check accept HTTP 500 during startup?" }
+      ],
+      "correct": ["a"],
+      "explanation": "The task is failing while pulling registry or secret material, before serving traffic. IAM permissions matter, but private tasks also need a network path to AWS service endpoints. NAT or VPC endpoints are the design choices to inspect."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "The app runs in private subnets and logs:\n\nrequest: POST https://api.taxvendor.example/v1/quote\ncause: ConnectTimeoutError: connect ETIMEDOUT 203.0.113.20:443\n\nThe VPC has endpoints for S3, ECR, Secrets Manager, and CloudWatch Logs. What is still likely missing?",
+      "options": [
+        { "id": "a", "text": "A controlled outbound path for true internet destinations, such as NAT or an approved proxy." },
+        { "id": "b", "text": "An S3 gateway endpoint, because all HTTPS traffic uses S3 behind the scenes." },
+        { "id": "c", "text": "A public IP on RDS, because tax providers call back to the database." },
+        { "id": "d", "text": "A Route 53 alias from the vendor domain to the orders ALB." }
+      ],
+      "correct": ["a"],
+      "explanation": "VPC endpoints help with supported AWS services, not arbitrary third-party APIs. A tax provider endpoint is a true external destination, so the private task needs a controlled egress path. Keep NAT or proxy access focused on real external needs."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "Which outbound needs are realistic for private devpolaris-orders-api tasks?",
+      "options": [
+        { "id": "a", "text": "Pulling container images from ECR during task startup." },
+        { "id": "b", "text": "Sending application logs to CloudWatch Logs." },
+        { "id": "c", "text": "Reading a database password from Secrets Manager." },
+        { "id": "d", "text": "Receiving public browser traffic directly on the task's private IP." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "Private tasks still need outbound access for platform and app dependencies such as ECR, logs, and secrets. Those can often use VPC endpoints or NAT. Receiving public browser traffic directly is the opposite of the private app design."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "A route table for private app subnets has no `0.0.0.0/0` route. The team adds interface endpoints for ECR API, ECR Docker, Secrets Manager, and CloudWatch Logs, plus an S3 gateway endpoint. What should they still check before removing NAT completely?",
+      "options": [
+        { "id": "a", "text": "Whether the app has any non-AWS runtime calls, such as a fraud or tax provider over HTTPS." },
+        { "id": "b", "text": "Whether the ALB can receive public traffic without a target group." },
+        { "id": "c", "text": "Whether RDS is in public subnets so database traffic can replace NAT." },
+        { "id": "d", "text": "Whether the task role can create route tables at runtime." }
+      ],
+      "correct": ["a"],
+      "explanation": "Endpoints can cover many AWS service calls, but they do not cover every possible runtime dependency. Before removing NAT, list the app's real outbound destinations. A private design should be quiet, not blind."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A quick fix proposes enabling public IPs on ECS tasks so they can pull images and call external APIs. The intended production shape is public ALB, private app tasks, private DB. What is the safer direction?",
+      "options": [
+        { "id": "a", "text": "Keep tasks private and add the specific outbound paths they need through NAT, endpoints, or a controlled proxy." },
+        { "id": "b", "text": "Enable public IPs and open task inbound TCP 3000 from `0.0.0.0/0` until startup stabilizes." },
+        { "id": "c", "text": "Move the database to public subnets because image pulls are part of database startup." },
+        { "id": "d", "text": "Disable CloudWatch Logs so the task has fewer outbound dependencies." }
+      ],
+      "correct": ["a"],
+      "explanation": "Private tasks need outbound design, not direct public exposure. NAT, endpoints, or a proxy can solve the egress need while preserving the ALB as the inbound path. Removing logs would make debugging worse."
+    }
+  ]
+}

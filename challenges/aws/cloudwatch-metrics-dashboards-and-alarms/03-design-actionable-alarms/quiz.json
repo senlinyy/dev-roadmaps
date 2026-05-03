@@ -1,0 +1,70 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A proposed alarm is:\n\n```text\nalarm: devpolaris-orders-api-checkout-5xx\nmetric: ALB target 5xx for POST /v1/orders\ncondition: sustained increase for 10 minutes\nowner: platform-oncall\nfirst view: orders API dashboard\nfirst logs: /ecs/devpolaris-orders-api\n```\n\nWhy is this a strong first alarm?",
+      "options": [
+        { "id": "a", "text": "It watches a user-facing failure signal and points the human to the first dashboard and log group." },
+        { "id": "b", "text": "It names every root cause, so no human diagnosis is needed." },
+        { "id": "c", "text": "It avoids ownership, which makes the alert more flexible." },
+        { "id": "d", "text": "It uses a vague metric, which keeps the team from overreacting." }
+      ],
+      "correct": ["a"],
+      "explanation": "A good alarm makes attention useful. This one is connected to customer impact, has an owner, and includes the first evidence path. It still starts an investigation rather than finishing one."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "Another alarm fires when ECS CPU exceeds 70 percent for one minute. The last 30 days show:\n\n```text\nfires: 46 times\ncustomer impact: none observed\nrunbook: no first dashboard or action\non-call behavior: usually waits for auto-clear\n```\n\nWhat should the team do?",
+      "options": [
+        { "id": "a", "text": "Review whether this belongs on a dashboard, needs a longer duration, or should be tied to latency, errors, or task health." },
+        { "id": "b", "text": "Keep paging on it because frequent low-impact pages build good habits." },
+        { "id": "c", "text": "Add more recipients before deciding what action the alarm should trigger." },
+        { "id": "d", "text": "Disable all ECS metrics because one CPU alarm was noisy." }
+      ],
+      "correct": ["a"],
+      "explanation": "Brief CPU movement may be useful context without being page-worthy. A noisy alarm should be reviewed for signal, threshold, duration, ownership, and action. The goal is trust, not maximum notifications."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "A deploy rolls out, and this alarm fires:\n\n```text\nalarm: devpolaris-orders-api-no-healthy-targets\nstate: ALARM\nmetric: HealthyHostCount for orders-api-prod target group\nvalue: 0 for 3 minutes\nfirst check: ECS service events and task startup logs\n```\n\nWhat does this alarm tell the human?",
+      "options": [
+        { "id": "a", "text": "Traffic has no healthy backend target, so check ECS events, health checks, and startup logs immediately." },
+        { "id": "b", "text": "RDS storage is full, because healthy target count is a database metric." },
+        { "id": "c", "text": "The receipt Lambda is failing, because Lambda errors reduce ALB target count." },
+        { "id": "d", "text": "The alarm is only informational because zero healthy targets cannot affect users." }
+      ],
+      "correct": ["a"],
+      "explanation": "No healthy targets is a clear operational risk for an HTTP service. The alarm does not say why targets are unhealthy, but it sends the engineer to ECS service events, health check settings, security groups, and startup logs. That is actionable."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "Which details make a CloudWatch alarm more actionable for `devpolaris-orders-api`?",
+      "options": [
+        { "id": "a", "text": "A signal tied to user impact or real operational risk." },
+        { "id": "b", "text": "An owner or notification path that matches the service." },
+        { "id": "c", "text": "A first dashboard, log group, or runbook clue for the human who receives it." },
+        { "id": "d", "text": "A generic name with no threshold context so every page feels open-ended." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "Actionable alarms reduce the first few minutes of confusion. The signal, owner, and first evidence path all matter. A vague alarm can still wake people, but it leaves them without a first move."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "Receipt emails are failing after checkout succeeds:\n\n```text\nLambda errors: above threshold for 15 minutes\nInvocations: normal\nDuration: normal\nfirst log group: /aws/lambda/devpolaris-receipt-email\nknown impact: orders complete, receipt emails delayed\n```\n\nWhat is the best alarm design choice?",
+      "options": [
+        { "id": "a", "text": "Alert the owning team with impact wording that this is a side-job failure, not necessarily checkout failure." },
+        { "id": "b", "text": "Page as `checkout down` because every side-job alarm should use the most severe label." },
+        { "id": "c", "text": "Ignore it because side jobs never affect customer trust." },
+        { "id": "d", "text": "Delete the Lambda logs so the alarm cannot fire again." }
+      ],
+      "correct": ["a"],
+      "explanation": "The alarm should be honest about impact. Receipt email failure may matter, but it is not the same as checkout returning 500. Clear wording helps the team respond with the right urgency and evidence path."
+    }
+  ]
+}

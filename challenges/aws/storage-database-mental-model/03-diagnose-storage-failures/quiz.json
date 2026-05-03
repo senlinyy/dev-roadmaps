@@ -1,0 +1,70 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "CloudWatch shows this export failure:\n\n```text\nservice=devpolaris-orders-api stage=export-upload\nerrorName=AccessDenied action=s3:PutObject\nbucket=devpolaris-orders-prod-objects\nkey=export/daily/2026/05/02/orders.csv\npolicyAllows=arn:aws:s3:::devpolaris-orders-prod-objects/exports/daily/*\n```\n\nWhat is the best first fix direction?",
+      "options": [
+        { "id": "a", "text": "Correct the application prefix from `export/daily/` to `exports/daily/` if that was the intended location." },
+        { "id": "b", "text": "Grant the task role write access to every object in the bucket so future prefixes work." },
+        { "id": "c", "text": "Move the order rows from RDS to S3 so upload permissions are simpler." },
+        { "id": "d", "text": "Disable bucket versioning because versioning can cause AccessDenied errors." }
+      ],
+      "correct": ["a"],
+      "explanation": "The denied resource is under `export/daily/`, but the policy allows `exports/daily/*`. That points to a prefix mismatch, not a need for broader access. Widening the role would hide the release mistake and weaken the permission boundary."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A checkout request fails with:\n\n```text\ncomponent=orders-db\nhost=orders-prod.xxxxxx.us-east-1.rds.amazonaws.com\nerror=ECONNREFUSED message=connect ECONNREFUSED 10.42.18.91:5432\n```\n\nWhich storage layer is most likely involved?",
+      "options": [
+        { "id": "a", "text": "RDS connection path, including endpoint, database status, port, and security groups." },
+        { "id": "b", "text": "S3 object key design, because checkout files may be named incorrectly." },
+        { "id": "c", "text": "DynamoDB conditional writes, because duplicate checkout retries usually refuse connections." },
+        { "id": "d", "text": "EBS disk fullness, because full disks produce PostgreSQL connection refused errors." }
+      ],
+      "correct": ["a"],
+      "explanation": "The log names the database host and port and shows a network-shaped connection failure. That belongs to the RDS connection path before it belongs to S3, DynamoDB, or disk cleanup. The next checks should prove database availability and allowed network access."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "A retry storm produces this DynamoDB log:\n\n```text\nevent=checkout.idempotency_duplicate\nawsError=ConditionalCheckFailedException\nidempotencyKey=checkout_01HW2S8RN8Z7\nrequestHash=sha256:18f9b31c\nexistingStatus=processing\n```\n\nHow should the on-call engineer interpret it?",
+      "options": [
+        { "id": "a", "text": "It may be the correct safety behavior, so the app should read the existing item and return the current job or result." },
+        { "id": "b", "text": "It proves DynamoDB is unavailable, so the team should remove the condition expression." },
+        { "id": "c", "text": "It means the order was already written to S3 and should be downloaded by key." },
+        { "id": "d", "text": "It proves the RDS transaction failed and must be rolled back manually." }
+      ],
+      "correct": ["a"],
+      "explanation": "For idempotency, a conditional check failure can mean another request already claimed the key. That is not automatically an outage. Removing the condition would allow duplicate work, which is exactly what the check prevents."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "Four incident snippets arrive in the same support thread. Which classifications match the evidence?",
+      "options": [
+        { "id": "a", "text": "`NoSuchKey` for `exports/daily/...` with app logs writing `export/daily/...` points to an S3 key or prefix mismatch." },
+        { "id": "b", "text": "`password authentication failed for user orders_app` points to database auth or secret rotation, not an S3 permission policy." },
+        { "id": "c", "text": "`ENOSPC` while writing `/var/lib/devpolaris-orders-api/reports/*.tmp` points to mounted storage space before DynamoDB indexes." },
+        { "id": "d", "text": "`ConditionalCheckFailedException` during idempotency always proves the customer payment failed." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "The first three options translate the error into the layer that produced it. S3 key mismatch, database authentication, and disk-full errors have different fix paths. A conditional check failure only proves the condition failed, and in an idempotency flow that can be expected duplicate protection."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "The report worker fails before upload:\n\n```text\nstage=render path=/var/lib/devpolaris-orders-api/reports/ordexp_9012.tmp\ncode=ENOSPC message=no space left on device\n```\n\nWhat should the first storage check be?",
+      "options": [
+        { "id": "a", "text": "Run disk-space and mount checks for the path, such as `df -h` and `findmnt` on the report directory." },
+        { "id": "b", "text": "List S3 object versions for the final export key because S3 caused the local write to fail." },
+        { "id": "c", "text": "Add a DynamoDB GSI so report jobs can be found faster." },
+        { "id": "d", "text": "Rotate the RDS password because render failures usually come from expired database credentials." }
+      ],
+      "correct": ["a"],
+      "explanation": "`ENOSPC` is an operating system disk-space signal for the path being written. The first useful check is whether the expected filesystem is mounted and full. S3 may matter after upload, but the failure happened before the object write."
+    }
+  ]
+}

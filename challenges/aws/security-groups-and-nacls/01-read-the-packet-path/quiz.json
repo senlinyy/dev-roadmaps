@@ -1,0 +1,70 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "devpolaris-orders-api starts successfully, reads its database secret, then logs:\n\nerror=database_connect_failed\nhost=orders-staging.abcxyz.us-east-1.rds.amazonaws.com\nport=5432\ncause=connect ETIMEDOUT 10.20.41.18:5432\n\nWhich layer should you inspect first?",
+      "options": [
+        { "id": "a", "text": "Network rules and routing for the task-to-RDS packet path." },
+        { "id": "b", "text": "The task role permission for `secretsmanager:GetSecretValue`." },
+        { "id": "c", "text": "The Route 53 public alias for `orders.devpolaris.com`." },
+        { "id": "d", "text": "The ACM certificate attached to the HTTPS listener." }
+      ],
+      "correct": ["a"],
+      "explanation": "The task already read the secret, so this is not the first IAM check. The timeout names a host, port, and private IP, which points to packet reachability. Start with the RDS security group, task security group, routes, and NACLs if needed."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "The intended rule chain is:\n\nInternet client -> ALB on 443\nALB -> ECS task on 3000\nECS task -> RDS on 5432\n\nWhich security group rule is missing if target health reports `Target.Timeout` and the task SG inbound only allows TCP 3000 from `sg-developer-vpn`?",
+      "options": [
+        { "id": "a", "text": "Task SG inbound TCP 3000 from `sg-orders-alb`." },
+        { "id": "b", "text": "ALB SG inbound TCP 3000 from `0.0.0.0/0`." },
+        { "id": "c", "text": "DB SG inbound TCP 443 from `sg-orders-alb`." },
+        { "id": "d", "text": "Task role permission for `elasticloadbalancing:ForwardTraffic`." }
+      ],
+      "correct": ["a"],
+      "explanation": "The ALB is the caller for the app port, so the task security group must allow port `3000` from the ALB security group. A developer VPN rule may let one engineer test, but it does not prove the real caller can reach the task. IAM does not forward packets between ALB and ECS."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "Which statements correctly explain the packet path for devpolaris-orders-api?",
+      "options": [
+        { "id": "a", "text": "The ALB security group can allow public HTTPS while the task security group stays private." },
+        { "id": "b", "text": "The ECS task role can read Secrets Manager without opening TCP 5432 to RDS." },
+        { "id": "c", "text": "A database security group can allow Postgres from the task security group instead of from all private IPs." },
+        { "id": "d", "text": "If IAM allows the task role, security groups are optional for the database hop." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "The public entry point, application tier, and database tier each need a clear network rule. IAM can authorize AWS API calls, but the database packet path still needs security group reachability. Keeping those layers separate makes the design safer and easier to debug."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "The CLI output for `sg-orders-task` includes:\n\nInbound:\nFromPort: 3000\nToPort: 3000\nUserIdGroupPairs: [{ GroupId: sg-orders-alb }]\n\nHow should you read this?",
+      "options": [
+        { "id": "a", "text": "Resources associated with `sg-orders-alb` may reach the task on TCP 3000." },
+        { "id": "b", "text": "Only IAM users in the ALB admin group may call the task." },
+        { "id": "c", "text": "Every IP in the VPC CIDR may reach the task on TCP 3000." },
+        { "id": "d", "text": "The task may initiate outbound database connections on TCP 3000." }
+      ],
+      "correct": ["a"],
+      "explanation": "`UserIdGroupPairs` is the CLI shape for a security group reference. It describes a network source group, not an IAM group. The rule is inbound to the task on the app port."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A review finds this database rule:\n\nsg-orders-db inbound:\nTCP 5432 from 0.0.0.0/0\n\nThe app works today and RDS is in private subnets. What is the best review comment?",
+      "options": [
+        { "id": "a", "text": "Replace the source with `sg-orders-task` so the rule describes the app tier that should reach Postgres." },
+        { "id": "b", "text": "Leave it because private subnets make broad database security group rules harmless forever." },
+        { "id": "c", "text": "Change the database port to 443 so browsers can reuse the ALB certificate." },
+        { "id": "d", "text": "Move the rule to the ALB security group because all public traffic starts there." }
+      ],
+      "correct": ["a"],
+      "explanation": "The database rule should express the intended caller: the orders API tasks. A broad source may not expose the database to the whole internet today, but it widens the blast radius for any source that gains a route. Fixing the rule is better than relying on other layers by accident."
+    }
+  ]
+}

@@ -1,0 +1,142 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "Target health during a deployment:\n\nTarget: 10.0.43.27:3000\nState: unhealthy\nReason: Target.ResponseCodeMismatch\nDescription: Health checks failed with codes: [503]\n\nApp log:\nGET /health status=503 reason=database_startup_check_failed\n\nWhat should the team inspect first?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The app readiness dependency and startup logs, because the ALB reached the task and received a non-success response."
+        },
+        {
+          "id": "b",
+          "text": "The task security group, because ResponseCodeMismatch means no packet reached the task."
+        },
+        {
+          "id": "c",
+          "text": "The ECR image tag only, because 503 proves the container was never started."
+        },
+        {
+          "id": "d",
+          "text": "The DNS hosted zone, because target health checks run before the ALB exists."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "ResponseCodeMismatch is a valuable clue: the task answered, but not with an accepted status. The app log connects that to database readiness. A pure network timeout would look different."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "Another target shows:\n\nTarget: 10.0.42.18:3000\nState: unhealthy\nReason: Target.Timeout\nDescription: Request timed out\n\nRecent app log:\nserver listening address=0.0.0.0 port=8080\ntask definition containerPort=3000\n\nWhat is the most likely fix direction?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Align the app listener, task definition, and target group port so the ALB checks the port the app actually serves."
+        },
+        {
+          "id": "b",
+          "text": "Change the health success code to accept 503 because timeout is just a status mismatch."
+        },
+        {
+          "id": "c",
+          "text": "Rotate the database secret because timeouts always mean missing credentials."
+        },
+        {
+          "id": "d",
+          "text": "Delete the target group because RUNNING tasks do not need outside proof."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The ALB is trying port 3000 while the app is listening on 8080. Timeout fits a broken reachability or port contract. The fix is to align the runtime contract, not to accept bad health or remove the check."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "A target health snapshot says:\n\nTarget: 10.0.44.19:3000\nState: initial\nDescription: Initial health checks in progress\nECS event: registered 1 targets in target-group orders-api-tg 12 seconds ago\nApp log: health=ready path=/health\n\nWhat is the best interpretation?",
+      "options": [
+        {
+          "id": "a",
+          "text": "This can be normal during registration, so watch the next health checks and service events before changing settings."
+        },
+        {
+          "id": "b",
+          "text": "Initial means the target is permanently broken and should be deregistered immediately."
+        },
+        {
+          "id": "c",
+          "text": "Initial means DNS failed before reaching the ALB."
+        },
+        {
+          "id": "d",
+          "text": "Initial means the image tag is missing from ECR."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Initial is a timing state while the ALB is still checking the new target. The recent registration event and ready log are encouraging. Operators should keep watching until it becomes healthy or exposes a clearer failure reason."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "A target group review includes these rows:\n\n10.0.42.18:3000 healthy\n10.0.43.27:3000 unhealthy Target.ResponseCodeMismatch codes [503]\n10.0.44.19:3000 draining target deregistration in progress\n10.0.45.21:3000 unused Target.NotInUse\n\nWhich interpretations are valid?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The 503 target is reachable enough to answer, but readiness or the health path is not accepted."
+        },
+        {
+          "id": "b",
+          "text": "The draining target is being removed and should not be treated like a newly failed task by itself."
+        },
+        {
+          "id": "c",
+          "text": "The unused target points toward listener rule or target group attachment, not app readiness first."
+        },
+        {
+          "id": "d",
+          "text": "The healthy target proves every checkout request and dependency is correct."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "Target health states answer narrow traffic questions. Healthy means the health check passed, not that every order path is perfect. Reason codes help you choose the next layer without jumping across the system."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A service has two RUNNING tasks, but target health says:\n\nTargetHealth.State: unused\nReason: Target.NotInUse\nDescription: Target group is not configured to receive traffic from the load balancer\n\nWhere should the team look first?",
+      "options": [
+        {
+          "id": "a",
+          "text": "ALB listener rules, target group attachment, and ECS service load balancer configuration."
+        },
+        {
+          "id": "b",
+          "text": "The database startup check, because unused means DATABASE_URL is missing."
+        },
+        {
+          "id": "c",
+          "text": "The Lambda retry policy, because unused targets are failed asynchronous events."
+        },
+        {
+          "id": "d",
+          "text": "The Node.js package lockfile, because unused targets mean npm install failed."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Unused is about routing attachment, not app readiness. The task may be running, but the load balancer is not using that target group for the request path. Check listener and service wiring first."
+    }
+  ]
+}

@@ -1,0 +1,70 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A deploy of `devpolaris-orders-api` fails health checks. The runbook says:\n\n```text\nservice: devpolaris-orders-api\nworkload: ECS Fargate\nmain log group: /ecs/devpolaris-orders-api\nside job log group: /aws/lambda/devpolaris-receipt-email\nincident time: 2026-05-02T09:40Z to 09:48Z\n```\n\nWhere should the engineer look first for the API startup error?",
+      "options": [
+        { "id": "a", "text": "In `/ecs/devpolaris-orders-api`, filtered to the incident time window and new task streams." },
+        { "id": "b", "text": "In `/aws/lambda/devpolaris-receipt-email`, because all AWS application logs share one Lambda group." },
+        { "id": "c", "text": "Only in RDS metrics, because ECS task startup logs cannot reach CloudWatch." },
+        { "id": "d", "text": "In an old staging log group, because production errors are usually copied there first." }
+      ],
+      "correct": ["a"],
+      "explanation": "The workload type and service name point to the ECS log group. The time window and new task streams keep the search small. Lambda logs may matter for side jobs, but they are not the API container's startup evidence."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "CloudWatch Logs shows this structure:\n\n```text\nlog group: /ecs/devpolaris-orders-api\nstreams:\n  orders-api/orders-api/3b7c8f2a\n  orders-api/orders-api/91d4a011\nevent:\n  09:42:18 ERROR request_id=req_7 step=rds.insert_order\n```\n\nWhat is the best reading?",
+      "options": [
+        { "id": "a", "text": "The group is the home for related service logs, each stream is one runtime source, and the event is one timestamped message." },
+        { "id": "b", "text": "The group is one request, the stream is one CloudWatch dashboard, and the event is one monthly bill row." },
+        { "id": "c", "text": "The group is an RDS table, each stream is one SQL transaction, and the event is a backup snapshot." },
+        { "id": "d", "text": "The group is always one AWS account, so stream names do not help during a deploy." }
+      ],
+      "correct": ["a"],
+      "explanation": "CloudWatch Logs uses a simple hierarchy: group, stream, event. For ECS, streams often line up with task or container runtime sources. That model helps you narrow a deploy investigation to the task streams that were created around the failure."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "The team knows customer failures started at 10:14 UTC. A teammate proposes searching every event in `/ecs/devpolaris-orders-api` from the last 30 days for `ERROR`.",
+      "options": [
+        { "id": "a", "text": "Search the service log group for the narrow incident window first, then widen only if the evidence requires it." },
+        { "id": "b", "text": "Search all 30 days first because a bigger search is always more reliable." },
+        { "id": "c", "text": "Start in the Lambda side-job group because ECS logs are not useful for API requests." },
+        { "id": "d", "text": "Skip logs and change the ECS task size before reading evidence." }
+      ],
+      "correct": ["a"],
+      "explanation": "A focused time window reduces noise and cost while preserving the most relevant events. You can widen the search later if the first useful error points outside the window. Starting too broad makes repeated symptoms harder to separate from cause."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "An on-call note needs enough context to help the next engineer find CloudWatch logs quickly. Which details belong in it?",
+      "options": [
+        { "id": "a", "text": "The workload type, such as ECS task or Lambda function." },
+        { "id": "b", "text": "The expected log group name and AWS Region." },
+        { "id": "c", "text": "The incident time window and useful search fields such as request ID or order ID." },
+        { "id": "d", "text": "A decision to read every unrelated service before checking the failing workload." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "Good log navigation starts with workload, log home, Region, time window, and search terms. Those facts get an engineer to the right evidence fast. Reading unrelated services first burns time and makes the incident feel larger than it is."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "The ALB says the new target is unhealthy, but the expected startup log never appears:\n\n```text\nexpected: service ready release=2026-05-02.4 port=3000 health_path=/health\nlog group: /ecs/devpolaris-orders-api\nstreams created after deploy: none\nECS event: task stopped before container became healthy\n```\n\nWhat should this absence make you check?",
+      "options": [
+        { "id": "a", "text": "Whether the app started, the task logging route is correct, and the execution role can write logs." },
+        { "id": "b", "text": "Whether the receipt Lambda template is missing, because startup logs always appear there." },
+        { "id": "c", "text": "Whether S3 lifecycle deleted the log group, because lifecycle rules manage CloudWatch streams." },
+        { "id": "d", "text": "Only whether the console time range is wrong, without checking app startup or log permissions." }
+      ],
+      "correct": ["a"],
+      "explanation": "Missing logs are evidence. If a release should write a startup line and no stream appears, check the app start path, task definition log configuration, Region, and permissions. The absence narrows the problem before you chase request-level errors."
+    }
+  ]
+}

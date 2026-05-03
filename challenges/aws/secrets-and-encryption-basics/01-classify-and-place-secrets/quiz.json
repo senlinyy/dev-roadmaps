@@ -1,0 +1,70 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "multiple",
+      "scenario": "A pull request adds these settings for `devpolaris-orders-api`:\n\n```ini\nDATABASE_URL=postgresql://orders_app:prod-password@orders-prod.example:5432/orders\nSTRIPE_WEBHOOK_SECRET=whsec_live_example\nNODE_ENV=production\nPORT=3000\nJWT_SIGNING_KEY=prod-signing-key-example\nPUBLIC_BASE_URL=https://orders.devpolaris.com\n```\n\nWhich values should be treated as secrets?",
+      "options": [
+        { "id": "a", "text": "`DATABASE_URL`, because it contains database access details including a password." },
+        { "id": "b", "text": "`STRIPE_WEBHOOK_SECRET`, because it lets the service verify trusted webhook payloads." },
+        { "id": "c", "text": "`JWT_SIGNING_KEY`, because it can create trusted tokens or sessions." },
+        { "id": "d", "text": "`NODE_ENV`, because every production value must be encrypted." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "A value is secret when it grants access, proves identity, signs data, or bypasses a trust check. The database URL, webhook secret, and signing key meet that test. `NODE_ENV`, `PORT`, and a public base URL can still be configuration, but they are not secret by themselves."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A developer accidentally commits `.env` with the production database URL, then removes the line in the next commit. The secret was visible in a pull request for 20 minutes. What is the safest next step?",
+      "options": [
+        { "id": "a", "text": "Rotate the leaked database credential, remove unsafe copies, and keep real `.env` files out of Git going forward." },
+        { "id": "b", "text": "Do nothing else because removing the current line deletes it from all Git history and caches." },
+        { "id": "c", "text": "Rename `.env` to `.env.production` so the same value looks less suspicious." },
+        { "id": "d", "text": "Ask reviewers not to mention the leak because fewer comments make the value safer." }
+      ],
+      "correct": ["a"],
+      "explanation": "Git history, clones, CI caches, pull request views, and backups can keep old values around. Once a real secret is committed, removing the current line is not enough. Rotation invalidates the leaked value, and future work should keep real `.env` files out of the repo."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "A Dockerfile for `devpolaris-orders-api` contains this line:\n\n```text\nENV DATABASE_URL=postgresql://orders_app:prod-password@orders-prod.example:5432/orders\n```\n\nWhy is this unsafe?",
+      "options": [
+        { "id": "a", "text": "The value can become part of image configuration or layer history, turning the registry into a secret store by accident." },
+        { "id": "b", "text": "Dockerfile `ENV` lines are only visible while the image builds, so the real risk is low." },
+        { "id": "c", "text": "ECS cannot run containers that use environment variables." },
+        { "id": "d", "text": "The database URL stops being secret once it is inside a container image." }
+      ],
+      "correct": ["a"],
+      "explanation": "Container images and registries are not the right place for production secrets. People and systems that can inspect or pull the image may discover the value. ECS can use environment variables, but secret values should come from a managed store at task startup rather than being baked into the image."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "A startup helper logs all environment variables for `devpolaris-orders-api`:\n\n```text\nDATABASE_URL=postgresql://orders_app:prod-password@orders-prod.example:5432/orders\nSTRIPE_WEBHOOK_SECRET=whsec_live_example\n```\n\nWhat response best matches the article?",
+      "options": [
+        { "id": "a", "text": "Treat the log output as a secret incident, stop logging values, rotate the exposed secrets, and redeploy." },
+        { "id": "b", "text": "Keep the behavior because logs are internal and therefore safe for private values." },
+        { "id": "c", "text": "Hide only the CloudWatch dashboard because the underlying log stream does not matter." },
+        { "id": "d", "text": "Move the same log line to debug level because secret values are safe when fewer people see them by default." }
+      ],
+      "correct": ["a"],
+      "explanation": "Logs are copied, searched, retained, exported, and shared during debugging. Once a secret value lands there, the safer response is to remove the logging behavior, rotate the exposed values, and redeploy. Hiding one view or changing log level does not erase the exposure."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A new DevPolaris teammate asks what should live in Git so they know which environment variables `devpolaris-orders-api` expects. Which file shape is safest?",
+      "options": [
+        { "id": "a", "text": "Commit `.env.example` with names such as `DATABASE_URL=` and `STRIPE_WEBHOOK_SECRET=`, but no production values." },
+        { "id": "b", "text": "Commit `.env` with production values so onboarding is faster." },
+        { "id": "c", "text": "Commit screenshots of the secret pages because screenshots are not text files." },
+        { "id": "d", "text": "Put the real database password in the parameter name so teammates can find it without opening the value." }
+      ],
+      "correct": ["a"],
+      "explanation": "A safe example file teaches the expected names without storing private values. Real `.env` files, screenshots, and names that contain secret values can leak the private data through normal engineering tools. Secret names should help operators find values without containing the values."
+    }
+  ]
+}

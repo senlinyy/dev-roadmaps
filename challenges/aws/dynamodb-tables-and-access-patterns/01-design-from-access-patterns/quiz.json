@@ -1,0 +1,70 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "Before creating a DynamoDB table, the team writes these hot-path questions:\n\n```text\nFind checkout by idempotency key.\nCreate checkout lock if key is new.\nRead job status by job id.\nLoad cart/session state by session id.\n```\n\nWhat is the best next design step?",
+      "options": [
+        { "id": "a", "text": "Turn each known question into a partition key and optional sort key shape." },
+        { "id": "b", "text": "Create columns for every possible future filter, then decide access patterns later." },
+        { "id": "c", "text": "Use one partition key value named `CHECKOUT` so all checkout data stays together." },
+        { "id": "d", "text": "Store the records in S3 first and add DynamoDB only if object listing becomes slow." }
+      ],
+      "correct": ["a"],
+      "explanation": "DynamoDB design starts with the reads and writes the application must perform. Each access pattern should map to a key the app already has. Starting from every future filter is more like SQL thinking and can lead to table scans."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "The UI polls status for one export job it already knows:\n\n```text\nGET /jobs/job_01HW2W7Z8MP4/status\n```\n\nWhich item key shape best fits that request?",
+      "options": [
+        { "id": "a", "text": "`pk=JOB#job_01HW2W7Z8MP4`, `sk=STATUS`" },
+        { "id": "b", "text": "`pk=JOB`, `sk=STATUS#latest`" },
+        { "id": "c", "text": "`pk=STATUS#running`, `sk=all-jobs`" },
+        { "id": "d", "text": "`pk=ORDER#unknown`, `sk=JOB#unknown`" }
+      ],
+      "correct": ["a"],
+      "explanation": "The app has the job id, so the key should use that value directly. This spreads jobs across partition key values and lets the app read one status item. A generic `JOB` partition risks piling many jobs under one key."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "A product manager asks for an admin screen: show all checkout jobs where `status=processing` for the last hour. The current table key is `pk=JOB#{jobId}`, `sk=STATUS`. What is the best review response?",
+      "options": [
+        { "id": "a", "text": "This table key serves read-by-job-id, so the team needs a separate designed access path, metrics/logs, or RDS if flexible search is the real need." },
+        { "id": "b", "text": "Scan the whole table on every page load because DynamoDB tables are designed for that by default." },
+        { "id": "c", "text": "Rename `status` to `pk` in every item without changing application reads." },
+        { "id": "d", "text": "Move final order records out of RDS because job status filtering proves SQL is unnecessary." }
+      ],
+      "correct": ["a"],
+      "explanation": "The current key answers one known question: read this job by job id. It does not directly answer status-by-time queries. If that new question matters, design a justified index or use a store better suited to flexible investigation."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "Which proposed DynamoDB uses fit the article's access-pattern-first mental model?",
+      "options": [
+        { "id": "a", "text": "Idempotency item read and conditionally created by exact checkout key." },
+        { "id": "b", "text": "Checkout job status read by exact job id for UI polling." },
+        { "id": "c", "text": "Cart session state read by exact session id." },
+        { "id": "d", "text": "Final order reporting with unknown future filters across customer, date, status, and payment provider." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "The first three uses have known keys and direct read or write patterns. That is DynamoDB's comfortable zone. Unknown future filters over business records are a warning sign that RDS or another queryable path may be a kinder starting point."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A pull request adds a helper named `searchCheckoutState(filters)` that scans the checkout state table and filters in Node. The first caller filters by customer id, date range, and failure reason. What should a reviewer say?",
+      "options": [
+        { "id": "a", "text": "Pause and design a real access pattern or use a query-friendly store, because a scan helper hides the missing key design." },
+        { "id": "b", "text": "Approve it because scan-and-filter is the normal way to query DynamoDB by any attribute." },
+        { "id": "c", "text": "Move the filter values into S3 object metadata so DynamoDB can search them later." },
+        { "id": "d", "text": "Increase the table name length so DynamoDB can infer the feature domain." }
+      ],
+      "correct": ["a"],
+      "explanation": "A generic scan helper is a design smell in a hot application path. DynamoDB needs keys and indexes that match real access patterns. If the team needs flexible investigation, SQL, logs, or a purpose-built reporting path may be better."
+    }
+  ]
+}

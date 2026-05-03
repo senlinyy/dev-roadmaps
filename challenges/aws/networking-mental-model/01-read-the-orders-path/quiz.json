@@ -1,0 +1,70 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "The team is drawing the first production map for devpolaris-orders-api. The inventory says:\n\npublic name: orders.devpolaris.com\nentry point: orders-prod-alb\napp runtime: ECS Fargate tasks in private-a and private-b\ndatabase: orders-prod RDS in db-a and db-b\n\nWhich first question keeps the design review useful?",
+      "options": [
+        { "id": "a", "text": "Who should be able to reach each layer, and which path should traffic take between those layers?" },
+        { "id": "b", "text": "Can the team place the ALB, tasks, and database in one shared public subnet to reduce route-table choices?" },
+        { "id": "c", "text": "Can the ECS tasks receive public traffic directly until the first incident is solved?" },
+        { "id": "d", "text": "Can the task IAM role make Route 53, ALB, and RDS traffic reachable by itself?" }
+      ],
+      "correct": ["a"],
+      "explanation": "The article starts with reachability and path because those two questions organize the whole map. The service names matter, but they come after you know who may reach the ALB, the app, and the database. IAM is still important, but it does not replace a network path."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A customer clicks Place order and the browser sends `GET https://orders.devpolaris.com/checkout`. Which path best matches the intended customer request flow?",
+      "options": [
+        { "id": "a", "text": "Browser, Route 53 answer, ALB HTTPS listener, target group, ECS task, then RDS." },
+        { "id": "b", "text": "Browser, ECS task role, Secrets Manager, RDS, then the ALB sends the response." },
+        { "id": "c", "text": "Browser, public ECS task IP, public RDS endpoint, then Route 53 for TLS." },
+        { "id": "d", "text": "Browser, NAT gateway, private route table, ECS task, then the ALB listener." }
+      ],
+      "correct": ["a"],
+      "explanation": "The main request enters through the public name and the public ALB, then moves inward to the target group, the task, and the database. Secrets Manager and NAT can support the service, but they are not the browser request path. Reading the path in order keeps later debugging calm."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "Maya is collecting evidence for the same map. Which evidence correctly explains a layer in the devpolaris-orders-api path?",
+      "options": [
+        { "id": "a", "text": "`orders.devpolaris.com -> orders-prod-alb...elb.amazonaws.com` explains where the public name points." },
+        { "id": "b", "text": "Target group health with task IPs on port `3000` explains which backend targets the ALB can use." },
+        { "id": "c", "text": "Security group rules explain which source can reach which protocol and port." },
+        { "id": "d", "text": "An IAM allow for `s3:PutObject` proves that the RDS port accepts TCP connections." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "DNS, target health, and security groups each explain a different part of the network path. IAM can allow an AWS API action, but it does not prove packet reachability to the database. That distinction prevents random rule changes."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "A draft diagram labels `subnet-app-a` as private. The route table attached to it is:\n\nDestination      Target\n10.20.0.0/16     local\n0.0.0.0/0        nat-0f12ab34\n\nWhat does this prove?",
+      "options": [
+        { "id": "a", "text": "The subnet has local VPC routing and an outbound path through NAT, but it is not an internet-facing subnet." },
+        { "id": "b", "text": "The subnet is public because every `0.0.0.0/0` route means inbound internet traffic can start there." },
+        { "id": "c", "text": "The ECS task can skip security groups because the route table already allows trusted sources." },
+        { "id": "d", "text": "The database must also use this route table so the app can write orders." }
+      ],
+      "correct": ["a"],
+      "explanation": "A NAT default route gives private resources a way to start outbound connections. It does not make those resources directly reachable from public clients. Security groups and the ALB path still decide who may reach the task."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "The team has this first access sketch:\n\nALB inbound: TCP 443 from 0.0.0.0/0\nTask inbound: TCP 3000 from sg-orders-alb\nDB inbound: TCP 5432 from sg-admin-bastion\n\nCheckout returns 503 and app logs later show database timeouts. Which rule is missing from the intended path?",
+      "options": [
+        { "id": "a", "text": "DB inbound TCP 5432 from `sg-orders-task`." },
+        { "id": "b", "text": "Task inbound TCP 3000 from `0.0.0.0/0`." },
+        { "id": "c", "text": "ALB inbound TCP 5432 from `sg-orders-db`." },
+        { "id": "d", "text": "DB inbound TCP 443 from the public ALB security group." }
+      ],
+      "correct": ["a"],
+      "explanation": "The intended database hop is from the orders API tasks to RDS on port `5432`. Admin access does not help the app tier connect. Opening the task or database more broadly would hide the real missing hop and weaken the design."
+    }
+  ]
+}

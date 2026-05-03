@@ -1,0 +1,142 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A payment provider calls a verification endpoint and waits for a response:\n\nroute: POST /webhooks/payment/verify\nrequired response: 2xx within 2 seconds\nbad response effect: provider retries the webhook\n\nWhich invocation shape fits best?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Synchronous invocation through an HTTP integration, because the caller waits for the result."
+        },
+        {
+          "id": "b",
+          "text": "SQS event source, because queue-based Lambda always returns an HTTP response to the original caller."
+        },
+        {
+          "id": "c",
+          "text": "Asynchronous EventBridge event, because the provider should not know whether verification passed."
+        },
+        {
+          "id": "d",
+          "text": "ECS desired count scaling, because Lambda cannot be used for short HTTP handlers."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The provider is waiting, so this is synchronous from the caller perspective. A synchronous handler can return success or failure directly. Queues and async events are better when the caller should not wait for the final work."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "The orders API writes an order, then emits:\n\neventType: receipt.email.requested\norderId: ord_1042\nidempotencyKey: receipt:ord_1042\n\nThe email provider is sometimes slow, but checkout should not wait for email delivery. Which trigger pattern is a good fit?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Send a small message to SQS and let a Lambda worker process it with retry-safe idempotency."
+        },
+        {
+          "id": "b",
+          "text": "Keep the email provider call inside the checkout request until it succeeds."
+        },
+        {
+          "id": "c",
+          "text": "Invoke the worker synchronously from the browser so the user can watch retries."
+        },
+        {
+          "id": "d",
+          "text": "Store the message only in CloudWatch Logs and ask operators to replay it manually."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "SQS gives the side work a buffer outside the checkout path. The idempotency key matters because queue-based processing can retry and deliver the same message more than once. Keeping slow email inside checkout makes the user path more brittle."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "Queue evidence for receipt jobs:\n\nmessageId: 8b6d4a25\norderId: ord_1042\nApproximateReceiveCount: 3\nlast worker log: provider accepted email, then function timed out before recording success\n\nWhat should the worker design protect against?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Duplicate real-world effects, by checking and recording a stable idempotency key such as receipt:ord_1042."
+        },
+        {
+          "id": "b",
+          "text": "Target group health checks, by making /health return 200 for the queue message."
+        },
+        {
+          "id": "c",
+          "text": "Missing container ports, by changing the Lambda memory setting to 3000 MB."
+        },
+        {
+          "id": "d",
+          "text": "EC2 disk pressure, by writing every receipt body to /var/log first."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "At-least-once delivery means the same job can be attempted again. If the first attempt sent the email but timed out before recording success, the retry must not send a second receipt. Idempotency turns repeated attempts into one business effect."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "A retry review for Lambda workers lists these controls:\n\nlog orderId and messageId\nuse idempotencyKey receipt:ord_1042\nsend failed poison messages to a DLQ after retries\nalert on age of oldest SQS message\n\nWhich controls help operate queue-based Lambda safely?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Log stable event identifiers so one message can be followed across attempts."
+        },
+        {
+          "id": "b",
+          "text": "Use idempotency before doing side effects that users can notice."
+        },
+        {
+          "id": "c",
+          "text": "Monitor queue age and DLQ movement so retries do not hide a stuck worker."
+        },
+        {
+          "id": "d",
+          "text": "Disable errors by catching every exception and returning success."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "Retries are useful only when the worker is safe and observable. Stable IDs, idempotency, queue age, and DLQ signals help the team know what happened. Returning success after a failed side effect can drop work silently."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "An EventBridge schedule starts a nightly export Lambda. The function logs:\n\nexportId=exp_7732 status=start\nERROR AccessDenied s3:PutObject bucket=devpolaris-orders-exports\nREPORT Duration: 842 ms Status: error\n\nWhat owns the retry and follow-up concern here?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The asynchronous event flow and Lambda error handling configuration, plus the function execution role permission."
+        },
+        {
+          "id": "b",
+          "text": "The original browser request, because every scheduled job has a waiting user request."
+        },
+        {
+          "id": "c",
+          "text": "The ALB target group, because schedules are delivered through target health."
+        },
+        {
+          "id": "d",
+          "text": "The ECS service desired count, because EventBridge retries by starting more Fargate tasks."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "A scheduled EventBridge invocation is event-shaped and no browser is waiting. The logs show an execution-role permission problem for the Lambda function. Retry and failure-destination behavior should be reviewed in the async path."
+    }
+  ]
+}

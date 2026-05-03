@@ -1,0 +1,70 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A small team is tempted to use the AWS account root user to deploy `devpolaris-orders-api` until IAM feels familiar. What is the best guidance?",
+      "options": [
+        { "id": "a", "text": "Protect root for rare account ownership tasks, use MFA, avoid root access keys, and use roles or federation for normal work." },
+        { "id": "b", "text": "Use root for daily deploys because it avoids beginner IAM mistakes." },
+        { "id": "c", "text": "Create a root access key and put it in the pipeline because pipelines need broad power." },
+        { "id": "d", "text": "Share the root password with the app so runtime calls cannot be denied." }
+      ],
+      "correct": ["a"],
+      "explanation": "The root user is for rare account ownership and emergency tasks, not daily engineering or runtime access. The safer beginner habit is to protect root and use temporary role-based access for humans, automation, and workloads."
+    },
+    {
+      "id": "q2",
+      "type": "multiple",
+      "scenario": "The DevPolaris team is reviewing IAM nouns. Which statements are accurate?",
+      "options": [
+        { "id": "a", "text": "An IAM role is meant to be assumed and gives temporary credentials to a trusted caller." },
+        { "id": "b", "text": "An IAM group helps attach permissions to IAM users, but you do not sign in as a group." },
+        { "id": "c", "text": "An IAM user is a named identity inside one account and may have long-lived credentials." },
+        { "id": "d", "text": "An IAM group is the best runtime principal for ECS tasks because groups can assume roles." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "Roles are assumed and produce temporary credentials. Groups collect IAM users for permission management, but groups are not signed-in principals for workloads. IAM users can exist in legacy or special setups, often with long-lived credentials."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "`devpolaris-orders-api-prod-task-role` needs two IAM pieces. Which pairing is correct?",
+      "options": [
+        { "id": "a", "text": "A trust policy lets ECS tasks assume the role, and a permissions policy lets the assumed role read the secret and write the S3 prefix." },
+        { "id": "b", "text": "A permissions policy lets ECS assume the role, and a trust policy lists every S3 object the app can write." },
+        { "id": "c", "text": "A bucket lifecycle rule lets ECS assume the role, and a security group policy lets the role read secrets." },
+        { "id": "d", "text": "A CloudWatch log group lets the role exist, and CloudTrail decides which secret the role can read." }
+      ],
+      "correct": ["a"],
+      "explanation": "A role has a trust side and a permissions side. The trust policy answers who can assume the role. The permissions policy answers what the role can do after it has been assumed."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "Maya writes an identity-based policy attached to `devpolaris-orders-api-prod-task-role`. She wants to include a `Principal` field. What should she remember?",
+      "options": [
+        { "id": "a", "text": "In an identity-based policy, the attached identity is already the principal, so `Principal` is not used there." },
+        { "id": "b", "text": "Every identity-based policy must name `Principal: \"*\"` or AWS cannot evaluate it." },
+        { "id": "c", "text": "Only bucket policies omit `Principal`; role policies always require it." },
+        { "id": "d", "text": "The `Principal` field controls which TCP port the policy can reach." }
+      ],
+      "correct": ["a"],
+      "explanation": "Identity-based policies attach to a user, group, or role, so the principal is implied by that attachment. Resource-based policies, such as bucket policies and trust policies, name the principal because the policy lives on a resource."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "An ECS task definition review shows:\n\n```text\ntaskRoleArn: devpolaris-orders-api-prod-task-role\nexecutionRoleArn: devpolaris-orders-api-prod-execution-role\nruntime AWS calls: secretsmanager:GetSecretValue, s3:PutObject\n```\n\nWhich review comment is most useful?",
+      "options": [
+        { "id": "a", "text": "Make sure the runtime AWS calls are allowed on the task role, while image pull and log startup permissions stay on the execution role." },
+        { "id": "b", "text": "Put all permissions on the execution role because application code always uses it." },
+        { "id": "c", "text": "Put all permissions on the task role because ECS platform startup never needs permissions." },
+        { "id": "d", "text": "Remove both roles and use a hardcoded access key so the request has a stable caller." }
+      ],
+      "correct": ["a"],
+      "explanation": "The task role is for application code calling AWS services from inside the container. The execution role is for ECS and Fargate platform work such as pulling images and sending logs. Mixing the two makes diagnosis harder and can leave the app without the permissions it needs."
+    }
+  ]
+}

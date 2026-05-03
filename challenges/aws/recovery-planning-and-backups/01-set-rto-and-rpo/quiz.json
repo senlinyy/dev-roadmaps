@@ -1,0 +1,70 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "At 10:20 UTC, the team discovers a bad release started corrupting order statuses at 10:12 UTC. The business says: `checkout must be safe for customers again within 30 minutes.` Which target is this?",
+      "options": [
+        { "id": "a", "text": "RTO, because it describes how long recovery may take before the impact is unacceptable." },
+        { "id": "b", "text": "RPO, because it describes how much data may be missing after restore." },
+        { "id": "c", "text": "Retention, because it describes how long logs stay in CloudWatch." },
+        { "id": "d", "text": "Desired count, because it describes how many ECS tasks should run." }
+      ],
+      "correct": ["a"],
+      "explanation": "RTO is the recovery time objective. It answers how quickly a usable service path should come back. It does not say which restore point to use or how much data loss is acceptable."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "For the same incident, the business says: `after recovery, we can reconcile a few minutes of accepted orders, but we cannot lose an hour.` Which target is this?",
+      "options": [
+        { "id": "a", "text": "RPO, because it describes acceptable data loss or data freshness after recovery." },
+        { "id": "b", "text": "RTO, because it describes how fast the app process starts." },
+        { "id": "c", "text": "ALB idle timeout, because it controls customer data loss." },
+        { "id": "d", "text": "CPU reservation, because it controls how fresh restored rows are." }
+      ],
+      "correct": ["a"],
+      "explanation": "RPO is about the recovery point and how much recent data the business can afford to lose or re-create. It is separate from how long recovery takes. A fast restore to old data can have good RTO and poor RPO."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "The only confirmed backup is a nightly snapshot from 02:00 UTC. The bad write starts at 10:12 UTC, and the business accepts at most 5 minutes of order data loss.",
+      "options": [
+        { "id": "a", "text": "The backup schedule probably cannot meet the RPO for accepted orders." },
+        { "id": "b", "text": "The RTO is automatically met because any backup exists." },
+        { "id": "c", "text": "The RPO is automatically zero because the snapshot is from the same day." },
+        { "id": "d", "text": "Backups are unrelated to data loss once the app is rolled back." }
+      ],
+      "correct": ["a"],
+      "explanation": "A nightly snapshot may be far too old for a 5-minute RPO. The team may need point-in-time recovery, repair from side restore, or other data protection. Backup existence is not the same as meeting the target."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "Which statements are true for the orders recovery plan?",
+      "options": [
+        { "id": "a", "text": "RTO depends on restore speed, validation, app config, traffic switch, and people who can run the steps." },
+        { "id": "b", "text": "RPO depends on backup frequency, point-in-time restore capability, and how much valid data can be reconciled." },
+        { "id": "c", "text": "Restore point choice can remove bad writes but may also exclude good orders created later." },
+        { "id": "d", "text": "RTO and RPO become guaranteed as soon as they are written in a document." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "RTO and RPO are promises that need tested systems and practiced people behind them. Restore point choice is a data decision, not only an AWS action. A document alone does not make the targets real."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A proposal sets `RTO: 5 minutes` and `RPO: near zero` for every internal and customer-facing path. There is no extra budget, no automation plan, and no restore drill evidence.",
+      "options": [
+        { "id": "a", "text": "Ask what cost, automation, backup, validation, and staffing changes would make those targets believable." },
+        { "id": "b", "text": "Accept the targets because lower numbers always make recovery cheaper." },
+        { "id": "c", "text": "Remove backups because aggressive targets mean the team will not need them." },
+        { "id": "d", "text": "Use the same target for every workload even if the business impact differs." }
+      ],
+      "correct": ["a"],
+      "explanation": "Tighter targets usually cost more and require more preparation. Some paths deserve strong targets, but every target should match business value and tested capability. Otherwise the numbers are wishes."
+    }
+  ]
+}

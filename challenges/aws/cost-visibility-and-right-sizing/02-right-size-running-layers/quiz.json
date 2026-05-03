@@ -1,0 +1,70 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "The ECS service has this 30-day review:\n\n```text\ntask size: 1024 CPU, 2048 MB memory\ndesired count: 6\nnormal CPU: 12 to 24 percent\nnormal memory: 18 to 33 percent\np95 latency: stable\n5xx: stable\nrecent deploys: no task restart impact at count 4\n```\n\nWhat is a reasonable next step?",
+      "options": [
+        { "id": "a", "text": "Test a smaller desired count or task size with monitoring and a rollback plan." },
+        { "id": "b", "text": "Set desired count to 1 immediately because low average CPU proves no resilience need." },
+        { "id": "c", "text": "Resize RDS first because ECS evidence cannot support ECS changes." },
+        { "id": "d", "text": "Disable alarms before testing so the change does not page anyone." }
+      ],
+      "correct": ["a"],
+      "explanation": "Sustained low utilization with stable health can justify a careful right-sizing test. The change still needs a rollback path and post-change monitoring. Desired count also protects availability, so avoid jumping straight to one task."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "RDS is the largest monthly line, but the review says:\n\n```text\nCPU mostly low\nconnections steady during normal traffic\nwrite latency normal except export window\nstorage growing because monthly export metadata was retained\nrelease week starts tomorrow\n```\n\nWhat is the best sequencing?",
+      "options": [
+        { "id": "a", "text": "Do not resize during release week; first fix workload shape and review the instance after representative metrics." },
+        { "id": "b", "text": "Downsize immediately because RDS is the largest line in the snapshot." },
+        { "id": "c", "text": "Ignore storage growth because database cost cannot be affected by retained data." },
+        { "id": "d", "text": "Delete backups first because backups never affect recovery promises." }
+      ],
+      "correct": ["a"],
+      "explanation": "RDS changes can be slower and riskier than ECS changes because the database holds shared state. The evidence suggests export behavior may be distorting the workload. Fix the shape first, then review sizing after a stable period."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "S3 prefix usage shows:\n\n```text\nbucket: devpolaris-orders-prod-artifacts\nreceipts/: accessed by support for customer requests\nexports/monthly/: needed for reporting window\nexports/tmp/: rarely read after jobs finish, growing every week\n```\n\nWhich right-sizing move is safest to investigate?",
+      "options": [
+        { "id": "a", "text": "Add or adjust lifecycle for `exports/tmp/` after confirming the retry and audit window." },
+        { "id": "b", "text": "Apply one immediate expiration rule to the whole bucket because all prefixes have the same job." },
+        { "id": "c", "text": "Delete receipt objects first because they are older than temporary exports." },
+        { "id": "d", "text": "Move every object to logs so S3 storage no longer grows." }
+      ],
+      "correct": ["a"],
+      "explanation": "Different prefixes have different jobs. Temporary export chunks may be safe to expire sooner, but receipts and monthly exports may have customer or reporting value. Lifecycle should follow retention intent, not one bucket-level rule."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "Which right-sizing habits are healthy for the orders service?",
+      "options": [
+        { "id": "a", "text": "Compare utilization with latency, errors, target health, and deployment behavior." },
+        { "id": "b", "text": "Change one layer carefully and watch user-impact metrics after the change." },
+        { "id": "c", "text": "Keep recovery and observability requirements in the review before reducing retention or backups." },
+        { "id": "d", "text": "Reduce every layer at once so the team cannot tell which change caused a regression." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "Right-sizing works best when each change is evidence-based, scoped, and observable. User impact and recovery promises are part of the decision. Changing everything at once makes troubleshooting much harder."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "Worker cost rises with SQS backlog. The worker review says:\n\n```text\nvisible messages: rising\noldest message age: rising\nworker errors: repeated ExportPayloadTooLarge\nDLQ: empty\nworker concurrency: increased after autoscaling reacted to backlog\n```\n\nWhat is the safest first control?",
+      "options": [
+        { "id": "a", "text": "Reduce worker concurrency enough to stop the retry storm, fix payload splitting, then replay carefully." },
+        { "id": "b", "text": "Increase worker concurrency because more workers always make backlog healthier." },
+        { "id": "c", "text": "Delete the queue because an empty DLQ proves messages are safe to drop." },
+        { "id": "d", "text": "Resize the API tasks because all worker retries are caused by public HTTP traffic." }
+      ],
+      "correct": ["a"],
+      "explanation": "A backlog caused by failing work is different from a backlog caused by useful work. More concurrency can make repeated failures more expensive and can pressure downstream services. First slow the failure loop, fix the code path, and replay with control."
+    }
+  ]
+}

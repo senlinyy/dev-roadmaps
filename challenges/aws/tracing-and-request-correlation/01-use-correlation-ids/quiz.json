@@ -1,0 +1,70 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A checkout request arrives without a request ID header. The Node backend creates this context:\n\n```text\nrequest_id=req_01J8K2M6TK7S1E9R0Y6Q\nroute=POST /v1/orders\nrelease=2026-05-02.4\n```\n\nWhich logging habit is best?",
+      "options": [
+        { "id": "a", "text": "Write the same `request_id` on important app log lines and carry it into traces where possible." },
+        { "id": "b", "text": "Generate a different request ID for each downstream step so every log looks unique." },
+        { "id": "c", "text": "Use the customer email as the request ID because support can recognize it." },
+        { "id": "d", "text": "Skip request IDs until the app has a full tracing platform." }
+      ],
+      "correct": ["a"],
+      "explanation": "A correlation ID should be safe, consistent, and present where the team will search. It connects the request story without exposing private data. You do not need perfect tracing before you can make logs easier to follow."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "The API creates an order and publishes a receipt email event:\n\n```text\nevent=receipt.email.requested\nrequest_id=req_91Q\norder_id=ord_91Q\nreceipt_key=receipts/2026/05/02/order_ord_91Q/receipt.pdf\n```\n\nWhat should the Lambda side job do with this context?",
+      "options": [
+        { "id": "a", "text": "Log the same request ID and order ID when it renders and sends the receipt email." },
+        { "id": "b", "text": "Drop both IDs because async jobs should not be connected to the original checkout." },
+        { "id": "c", "text": "Replace the request ID with the Lambda runtime request ID in every app log field." },
+        { "id": "d", "text": "Log only the receipt key and never the order ID, even when support investigates one order." }
+      ],
+      "correct": ["a"],
+      "explanation": "The side job is part of the business flow, even if it runs after the API response. Carrying request ID and order ID lets the team connect a receipt-email failure back to the checkout. The Lambda runtime ID can also exist, but it should not replace the business correlation fields."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "A Logs Insights query is supposed to follow one request, but the services log different field names:\n\n```text\norders-api: request_id=req_72 step=checkout.complete\nreceipt-email: reqId=req_72 step=email.send\nexport-worker: correlation=req_72 step=export.skip\n```\n\nWhat is the design problem?",
+      "options": [
+        { "id": "a", "text": "The same concept has inconsistent field names, so cross-service search is harder than it needs to be." },
+        { "id": "b", "text": "The ID is too short for CloudWatch Logs to store." },
+        { "id": "c", "text": "Logs from different services should never share an ID." },
+        { "id": "d", "text": "Every request should have one ID for ECS and a conflicting ID for Lambda." }
+      ],
+      "correct": ["a"],
+      "explanation": "Correlation works only when the ID appears where you search it. Different field names make simple queries harder and increase the chance of missing a related log. Consistent structured fields are a small design choice with big incident value."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "Which choices make a good correlation design for `devpolaris-orders-api`?",
+      "options": [
+        { "id": "a", "text": "Use a safe request ID generated or accepted at the edge of the service." },
+        { "id": "b", "text": "Add order ID after the order exists so support and backend evidence can meet." },
+        { "id": "c", "text": "Pass relevant IDs into events for Lambda or worker side jobs." },
+        { "id": "d", "text": "Use payment tokens as correlation IDs because they are already unique." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "Good correlation connects technical requests and business objects without leaking private values. Request ID, order ID, and side-job propagation all help the team follow work. Payment tokens and similar secrets should never become log identifiers."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "Support reports order `ord_8x7k2n` did not send a receipt email. The API logs include both IDs:\n\n```text\nrequest_id=req_8x7 order_id=ord_8x7k2n step=checkout.complete status=201\n```\n\nWhich search path is most useful?",
+      "options": [
+        { "id": "a", "text": "Search API and receipt-email logs for the order ID and request ID, then compare the side-job steps." },
+        { "id": "b", "text": "Search only ALB metrics, because metrics include the order ID for every request." },
+        { "id": "c", "text": "Use only the request ID, because business identifiers are not part of backend debugging." },
+        { "id": "d", "text": "Search every Lambda stream from the month before using no filter." }
+      ],
+      "correct": ["a"],
+      "explanation": "The order ID connects the support report to backend evidence. The request ID connects logs and traces for the original checkout. Searching both gives the team a practical bridge from customer report to side-job failure."
+    }
+  ]
+}

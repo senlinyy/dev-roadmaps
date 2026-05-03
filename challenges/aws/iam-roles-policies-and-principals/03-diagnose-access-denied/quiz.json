@@ -1,0 +1,70 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "`devpolaris-orders-api` fails with:\n\n```text\nAccessDeniedException: User: arn:aws:sts::123456789012:assumed-role/devpolaris-orders-api-prod-task-role/ecs-task-9f3a\nis not authorized to perform: secretsmanager:GetSecretValue\non resource: arn:aws:secretsmanager:us-east-1:123456789012:secret:devpolaris/orders-api/prod/database-url-a1b2c3\nbecause no identity-based policy allows the secretsmanager:GetSecretValue action\n```\n\nWhat is the smallest safe fix direction?",
+      "options": [
+        { "id": "a", "text": "Allow `secretsmanager:GetSecretValue` on that database secret ARN for the task role, after checking no deny applies." },
+        { "id": "b", "text": "Attach `AdministratorAccess` to the task role so future missing allows never happen." },
+        { "id": "c", "text": "Open database port `5432` because the error proves the TCP connection failed." },
+        { "id": "d", "text": "Move the secret value into the app log so the task no longer calls Secrets Manager." }
+      ],
+      "correct": ["a"],
+      "explanation": "The message says the task role lacks an identity-based allow for a specific action on a specific secret. The calm fix is to allow that exact request if it is intended. Broad admin access, network changes, or logging secrets are unsafe or unrelated."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "The app is allowed to write S3 exports under `orders-api/`, but a new code path tries `manual-backups/orders.json` and receives `AccessDenied` for `s3:PutObject`. What should the team do first?",
+      "options": [
+        { "id": "a", "text": "Check whether the new prefix is a bug or an intentional product requirement before changing IAM." },
+        { "id": "b", "text": "Immediately allow `s3:PutObject` on every bucket because denied exports should never block a release." },
+        { "id": "c", "text": "Delete the bucket policy because all S3 prefix mistakes come from bucket policies." },
+        { "id": "d", "text": "Switch from the task role to Maya's user because user credentials ignore prefixes." }
+      ],
+      "correct": ["a"],
+      "explanation": "The denied resource is outside the allowed prefix, so the first question is whether the app configuration is wrong or the product requirement changed. Only widen IAM intentionally after the desired behavior is clear."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "An S3 write error says the task role has an allow for `s3:PutObject`, but the request is denied `with an explicit deny in an identity-based policy`. The deny is based on `aws:SecureTransport = false`. What is the best next move?",
+      "options": [
+        { "id": "a", "text": "Find why the request is not using HTTPS and fix the client or endpoint behavior so the protective deny no longer matches." },
+        { "id": "b", "text": "Add another allow for `s3:PutObject`, because more allows override explicit denies." },
+        { "id": "c", "text": "Remove encryption from the bucket because explicit denies are caused by encrypted storage." },
+        { "id": "d", "text": "Rename the object prefix because prefix names decide whether HTTPS is used." }
+      ],
+      "correct": ["a"],
+      "explanation": "An explicit deny wins over allows. If the deny is protecting secure transport, the safer fix is to make the request use HTTPS rather than removing the guardrail or adding more allow statements."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "Maya is writing a calm IAM diagnostic path for the next incident. Which steps belong in it?",
+      "options": [
+        { "id": "a", "text": "Identify the caller from the error or `sts get-caller-identity`." },
+        { "id": "b", "text": "Copy the exact action and resource ARN from the error." },
+        { "id": "c", "text": "Look for a matching allow and then look for an explicit deny." },
+        { "id": "d", "text": "Start by adding wildcard permissions, then read the error only if the wildcard does not work." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "The article's path follows the same request shape AWS evaluates: caller, action, resource, expected role, allow, deny, and then the smallest wrong thing. Adding wildcards first hides the evidence and increases blast radius."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "The team is reviewing least privilege for `devpolaris-orders-api`. Which policy intent is best for the current app behavior?",
+      "options": [
+        { "id": "a", "text": "Let the task role read one database URL secret and write exports under `orders-api/`, then update the role intentionally when the app's job changes." },
+        { "id": "b", "text": "Let the task role read every secret and write every bucket so the team never revisits IAM." },
+        { "id": "c", "text": "Let the task role update ECS services because runtime code might need to deploy itself later." },
+        { "id": "d", "text": "Let the task role create IAM roles because least privilege means the app can grant itself future access." }
+      ],
+      "correct": ["a"],
+      "explanation": "Least privilege means the role describes the current job. For this service, that is reading one secret and writing one export prefix. Narrow permissions require maintenance, but they reduce blast radius and make review easier."
+    }
+  ]
+}

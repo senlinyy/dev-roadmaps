@@ -1,0 +1,70 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "Cost Explorer shows `Unallocated` spend growing. A resource tag sample has this pattern:\n\n```text\nECS service: Service=devpolaris-orders-api Environment=prod Team=platform Component=api\nRDS database: Service missing Environment=prod Team=platform Component=database\nS3 bucket: Service=devpolaris-orders-api Environment missing Component=storage\nLog group: no cost allocation tags visible\n```\n\nWhat should improve first?",
+      "options": [
+        { "id": "a", "text": "Consistent workload and environment tagging so costs can be grouped by service, owner, and component." },
+        { "id": "b", "text": "Immediate ECS downsizing, because missing tags prove compute is oversized." },
+        { "id": "c", "text": "Removing all component tags, because fewer labels make Cost Explorer more precise." },
+        { "id": "d", "text": "Ignoring unallocated spend until the monthly bill is final." }
+      ],
+      "correct": ["a"],
+      "explanation": "You cannot tune what you cannot see. Missing or inactive cost allocation tags make the service cost look incomplete and unowned. Consistent tags turn one large bill into responsible engineering questions."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A Cost Explorer view is filtered to `Service=devpolaris-orders-api` and `Environment=prod`:\n\n```text\nMonth: 2026-04\nTotal: 100 units, up from 74\nRDS database: 31 units, up 6\nECS API tasks: 22 units, up 2\nCloudWatch Logs: 18 units, up 14\nLambda and SQS workers: 13 units, up 8\nS3 receipts and exports: 11 units, up 5\n```\n\nWhat is the safest first investigation?",
+      "options": [
+        { "id": "a", "text": "Investigate log volume, worker retries, S3 export behavior, and nearby releases before resizing RDS." },
+        { "id": "b", "text": "Resize RDS first because it is the largest line, even though it did not move most." },
+        { "id": "c", "text": "Cut ECS desired count because API task cost is always the cause of service spend." },
+        { "id": "d", "text": "Treat the increase as impossible to explain because Cost Explorer only shows totals." }
+      ],
+      "correct": ["a"],
+      "explanation": "The largest line is not automatically the first target. Logs, workers, and S3 changed sharply, so they deserve the first diagnosis. Cost Explorer shows where spend moved; service logs, queue metrics, and release notes explain why."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "AWS Budgets sends this alert:\n\n```text\nBudget: prod-orders-monthly\nScope: Service=devpolaris-orders-api, Environment=prod\nCurrent month: 63 units used\nForecast: 112 units\nLargest movement: CloudWatch Logs and Lambda workers\nOwner: platform\n```\n\nWhat is the right interpretation?",
+      "options": [
+        { "id": "a", "text": "The budget caught drift and should start an investigation into the moving layers." },
+        { "id": "b", "text": "The budget proves production is down, so rollback the API immediately." },
+        { "id": "c", "text": "The budget automatically reduces spend once the forecast crosses the threshold." },
+        { "id": "d", "text": "The budget should be account-wide only, because service-scoped budgets hide useful detail." }
+      ],
+      "correct": ["a"],
+      "explanation": "A budget alert is an early warning, not a fix or a root cause. This one is useful because it has service scope, owner, and the largest moving layers. Engineers still need to diagnose logs and workers before acting."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "Which tags or tag habits help make `devpolaris-orders-api` spend visible?",
+      "options": [
+        { "id": "a", "text": "`Service=devpolaris-orders-api`, so resources can be grouped by workload." },
+        { "id": "b", "text": "`Environment=prod`, so production spend is separate from staging and development." },
+        { "id": "c", "text": "`Component=api`, `Component=database`, or `Component=worker`, so one service can be broken into layers." },
+        { "id": "d", "text": "Adding tags only after a surprise bill and never activating them for cost allocation." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "Good tags match how the team operates and reviews ownership. Service, environment, team, and component tags make cost questions more specific. Tags also need to be available in billing reports before they help Cost Explorer."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A monthly cost snapshot ends with these findings:\n\n```text\nworker retries rose after release 2026-04.18\nlog volume jumped in the same window\nS3 temporary exports did not expire\nRDS remains large but only rose slightly\nECS API is steady\n```\n\nWhich decision style matches the article?",
+      "options": [
+        { "id": "a", "text": "Make targeted decisions for the moving layers, then review RDS separately over a representative period." },
+        { "id": "b", "text": "Cut every layer immediately because all cost increases have the same cause." },
+        { "id": "c", "text": "Ignore worker retries because a healthy checkout API means background work cannot waste money." },
+        { "id": "d", "text": "Delete S3 exports without checking retention or support requirements." }
+      ],
+      "correct": ["a"],
+      "explanation": "A useful snapshot turns cost movement into specific decisions. The changed layers deserve investigation first, while RDS right-sizing needs its own evidence window. This avoids blame and avoids unsafe cuts."
+    }
+  ]
+}

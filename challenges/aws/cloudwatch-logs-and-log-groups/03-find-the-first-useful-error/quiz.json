@@ -1,0 +1,70 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "After a deploy, the log group fills with repeated errors:\n\n```text\n09:40:03 INFO release=2026-05-02.4 starting service\n09:40:05 ERROR Cannot find module ./dist/server.js\n09:40:07 INFO container exiting code=1\n09:40:31 ERROR target unhealthy\n09:41:02 ERROR service unavailable\n09:41:31 ERROR service unavailable\n```\n\nWhich line is the first useful error?",
+      "options": [
+        { "id": "a", "text": "`Cannot find module ./dist/server.js`, because it names the startup failure before repeated symptoms." },
+        { "id": "b", "text": "`service unavailable`, because it appears most often." },
+        { "id": "c", "text": "`target unhealthy`, because ALB health always causes missing app files." },
+        { "id": "d", "text": "`starting service`, because info logs are always the root cause." }
+      ],
+      "correct": ["a"],
+      "explanation": "The useful clue is the first specific failure that changes the next check. Missing `./dist/server.js` points toward image build, artifact path, or startup command. The later messages are symptoms after the app failed to start."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A focused search around one failed request returns:\n\n```text\n09:42:16 INFO request_id=req_A order_id=ord_9 checkout.start\n09:42:17 WARN request_id=req_A step=dynamodb.put_idempotency_key error_name=ConditionalCheckFailedException\n09:42:17 ERROR request_id=req_A step=checkout.abort reason=duplicate_request\n09:42:18 ERROR request_id=req_B step=rds.insert_order error_name=ConnectionTimeout\n```\n\nFor `req_A`, what should the engineer investigate first?",
+      "options": [
+        { "id": "a", "text": "The idempotency or duplicate-request path, because the first specific failure for `req_A` is DynamoDB conditional check failure." },
+        { "id": "b", "text": "The RDS timeout from `req_B`, because any later error in the log group belongs to the same request." },
+        { "id": "c", "text": "S3 lifecycle, because duplicate requests always mean an object expired." },
+        { "id": "d", "text": "ALB certificate renewal, because checkout aborts are normally TLS problems." }
+      ],
+      "correct": ["a"],
+      "explanation": "Request IDs keep the search scoped. For `req_A`, the first useful error is the DynamoDB conditional check, which may be expected duplicate protection or a client retry issue. A different request's RDS timeout should not steer this investigation."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "A Lambda side job fails after checkout succeeds:\n\n```text\nSTART RequestId: 4f0a\nINFO service=devpolaris-receipt-email request_id=req_52 order_id=ord_52 step=email.render\nERROR service=devpolaris-receipt-email request_id=req_52 order_id=ord_52 step=email.render error_name=TemplateNotFound locale=en-GB\nREPORT RequestId: 4f0a Duration: 92 ms Max Memory Used: 89 MB\n```\n\nWhat is the first useful diagnosis path?",
+      "options": [
+        { "id": "a", "text": "Check the receipt template configuration or deployment artifact for locale `en-GB`." },
+        { "id": "b", "text": "Increase Lambda memory first, because the report line mentions memory." },
+        { "id": "c", "text": "Resize RDS, because every Lambda error after checkout means the order table is full." },
+        { "id": "d", "text": "Delete the Lambda log group, because platform lines are too noisy to keep." }
+      ],
+      "correct": ["a"],
+      "explanation": "The app log names the failing step and error: missing template for a locale. The platform report is useful context, but the memory value is not the failure here. Follow the first specific app error."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "Which habits help find a first useful error in CloudWatch Logs without getting lost?",
+      "options": [
+        { "id": "a", "text": "Start with the service log group and the incident time window." },
+        { "id": "b", "text": "Filter by request ID, order ID, route, or `ERROR` when those fields are available." },
+        { "id": "c", "text": "Prefer the first specific dependency or assumption failure over later repeated symptoms." },
+        { "id": "d", "text": "Start by reading every stream from every environment before choosing a request." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "A narrow search keeps the investigation calm. Request IDs, time windows, and structured fields reduce noise. The first specific failure usually teaches more than repeated downstream symptoms."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "The team reviews a real outage and finds this was the only application error:\n\n```text\n09:42:18 ERROR failed\n```\n\nThe rest of the evidence had to come from incomplete clues, because there was no request ID, route, step, dependency, or error name. What should the follow-up action be?",
+      "options": [
+        { "id": "a", "text": "Improve application logging with safe structured fields that name request, route, step, dependency, and error category." },
+        { "id": "b", "text": "Stop sending logs to CloudWatch, because one vague line proves logs are not useful." },
+        { "id": "c", "text": "Keep the line as-is and add more alarms for the word `failed`." },
+        { "id": "d", "text": "Move all order data into logs so future incidents have every value in one place." }
+      ],
+      "correct": ["a"],
+      "explanation": "A vague log line is an application logging problem, not a reason to abandon logs. The fix is a small set of safe, consistent fields. Future engineers need enough context to find the first clue without exposing sensitive data."
+    }
+  ]
+}

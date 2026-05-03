@@ -1,0 +1,70 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "Two database rule proposals are on the review:\n\nProposal A: TCP 5432 from 10.20.0.0/16\nProposal B: TCP 5432 from sg-orders-task\n\nThe database only serves devpolaris-orders-api. Which proposal is better and why?",
+      "options": [
+        { "id": "a", "text": "Proposal B, because it describes the app task tier instead of every routable address in the VPC." },
+        { "id": "b", "text": "Proposal A, because CIDR ranges automatically follow ECS task replacement better than security groups." },
+        { "id": "c", "text": "Proposal A, because a VPC CIDR source proves that only the ALB can reach RDS." },
+        { "id": "d", "text": "Proposal B only if the database is public, because private databases cannot use security group references." }
+      ],
+      "correct": ["a"],
+      "explanation": "A security group reference describes the role in the architecture, not a broad address range. That is helpful for Fargate tasks whose private IPs can change. It also avoids giving unrelated VPC resources the same chance to reach the database port."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "During a rollout, old tasks are replaced with new task IPs:\n\nold task: 10.20.10.45\nnew task: 10.20.11.72\nsecurity group: sg-orders-task\n\nWhy does the DB rule `TCP 5432 from sg-orders-task` age better than `TCP 5432 from 10.20.10.45/32`?",
+      "options": [
+        { "id": "a", "text": "The new task keeps the intended network role when it is associated with `sg-orders-task`." },
+        { "id": "b", "text": "The new task inherits the old IP address because Fargate reserves it for the service." },
+        { "id": "c", "text": "The database checks the ECS service name before it checks security groups." },
+        { "id": "d", "text": "Route tables rewrite the old `/32` rule to match the new task IP." }
+      ],
+      "correct": ["a"],
+      "explanation": "Fargate task IPs are replaceable, so a single-IP rule is brittle. The security group reference follows the role of the task tier as tasks are replaced. That is exactly why resource-level rules are clearer inside an AWS app path."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "A change request says:\n\nsg-orders-db inbound:\nTCP 5432 from 0.0.0.0/0\njustification: RDS is private, so the rule is safe enough\n\nWhat risk should the reviewer name?",
+      "options": [
+        { "id": "a", "text": "Any source that later gains a route to the database can attempt Postgres, including peered VPCs or VPN paths." },
+        { "id": "b", "text": "The database will immediately become a public DNS record in Route 53." },
+        { "id": "c", "text": "The ALB will start forwarding browser traffic to RDS because both use TCP." },
+        { "id": "d", "text": "ACM will refuse to renew the HTTPS certificate because RDS has a broad source." }
+      ],
+      "correct": ["a"],
+      "explanation": "A private subnet reduces public exposure, but the security group is still too broad for the database role. Future routes, peering, VPNs, or mistakes can make that broad source matter. The safer rule is the app task security group."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "Which review actions improve the security group design without breaking the intended orders path?",
+      "options": [
+        { "id": "a", "text": "Use `sg-orders-alb` as the source for task inbound TCP 3000." },
+        { "id": "b", "text": "Use `sg-orders-task` as the source for DB inbound TCP 5432." },
+        { "id": "c", "text": "Keep ALB inbound TCP 443 from public clients because it is the public front door." },
+        { "id": "d", "text": "Use `10.20.0.0/16` for every inbound rule so all private resources can help during incidents." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "The intended path is internet to ALB, ALB to task, and task to database. Security group references express the internal hops cleanly, while the ALB keeps the narrow public entry on HTTPS. A broad VPC CIDR on every rule erases useful boundaries."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "An operator needs temporary database access from a corporate VPN during a migration. The normal app rule is still `TCP 5432 from sg-orders-task`. Which extra rule is least risky?",
+      "options": [
+        { "id": "a", "text": "A narrow temporary source for the approved VPN CIDR, with a change record and removal time." },
+        { "id": "b", "text": "`TCP 5432 from 0.0.0.0/0` until all migration tasks are complete." },
+        { "id": "c", "text": "`TCP 5432 from 10.20.0.0/16` forever so future migrations are faster." },
+        { "id": "d", "text": "Move the database into the ALB security group so the HTTPS listener controls operator access." }
+      ],
+      "correct": ["a"],
+      "explanation": "Sometimes a CIDR source is appropriate, such as a known office or VPN range. The important part is to keep it narrow, temporary, and documented. That is different from normalizing a broad database rule."
+    }
+  ]
+}

@@ -1,0 +1,142 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A stopped task for devpolaris-orders-api shows:\n\nCannotPullContainerError: failed to resolve ref\n111122223333.dkr.ecr.us-east-1.amazonaws.com/devpolaris-orders-api:2026-05-02.10: not found\n\nWhat should be inspected first?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The task definition image reference and whether that tag or digest exists in the expected ECR repository and Region."
+        },
+        {
+          "id": "b",
+          "text": "The app /health route, because image pull failures mean the route returned a non-200 response."
+        },
+        {
+          "id": "c",
+          "text": "The task role S3 policy, because app permissions are used before images are pulled."
+        },
+        {
+          "id": "d",
+          "text": "The ALB listener certificate, because TLS decides which image tag exists."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The container never started, so app health and task-role behavior are too late in the path. The stopped reason names the image reference. Check repository, tag or digest, account, Region, and pull permissions if the image exists."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A new task stops before any app log appears:\n\nResourceInitializationError: unable to pull secrets\nAccessDeniedException: not authorized to perform secretsmanager:GetSecretValue\nsecret: prod/orders/DATABASE_URL\n\nWhich role usually needs the missing permission for task definition secret injection?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The task execution role, because ECS fetches injected secrets before the container process starts."
+        },
+        {
+          "id": "b",
+          "text": "The task role, because all secret injection happens after the app handles its first request."
+        },
+        {
+          "id": "c",
+          "text": "The ALB service-linked role, because health checks fetch environment variables."
+        },
+        {
+          "id": "d",
+          "text": "The developer IAM user, because their console login becomes the container environment."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Secret injection from the task definition is setup work. ECS uses the execution role for that path before Node.js starts. The task role matters later when running application code calls AWS APIs."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "The task reaches readiness, then a request logs:\n\nINFO health=ready path=/health\nERROR AccessDenied: assumed-role/devpolaris-orders-api-task is not authorized to perform dynamodb:PutItem on table OrdersAudit\n\nWhere should the smallest safe fix live?",
+      "options": [
+        {
+          "id": "a",
+          "text": "In the task role policy, scoped to the specific action and table the app needs."
+        },
+        {
+          "id": "b",
+          "text": "In the execution role policy, because it is always safer to grant every task setup role app permissions."
+        },
+        {
+          "id": "c",
+          "text": "In the target group health check, because readiness should add DynamoDB permissions."
+        },
+        {
+          "id": "d",
+          "text": "In the container image tag, because tags grant AWS API access at runtime."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The app is running and the assumed role name is the task role. Add the narrow permission there if the behavior is expected. Giving broad permissions to the execution role would blur the setup role and app role."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "An ECS incident report includes these snapshots:\n\nservice event: runningCount remains below desiredCount\nstopped reason: CannotPullContainerError on image tag 2026-05-02.10\nother task: RUNNING but target unhealthy Target.ResponseCodeMismatch\nlogs for running task: path=/health status=500 reason=config_not_ready\n\nWhich conclusions are supported?",
+      "options": [
+        {
+          "id": "a",
+          "text": "One failure happens before app startup at image pull time."
+        },
+        {
+          "id": "b",
+          "text": "One failure happens after startup because the health endpoint returns an unacceptable status."
+        },
+        {
+          "id": "c",
+          "text": "Service events, stopped reasons, target health, and logs should be read together."
+        },
+        {
+          "id": "d",
+          "text": "Both failures prove the ALB listener certificate is the root cause."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "The two failures are different layers. CannotPullContainerError is before startup, while ResponseCodeMismatch with app logs is after the task is reachable. Combining the evidence prevents one generic fix from being applied to two different problems."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A deployment has this evidence:\n\ntask status: RUNNING\ntarget health: unhealthy Target.ResponseCodeMismatch\ndescription: Health checks failed with codes: [404]\napp log: GET /health status=404 route_not_found\napp routes: /healthz, /v1/orders\n\nWhat is the best fix direction?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Align the target group health check path with the app readiness route, or restore /health in the app."
+        },
+        {
+          "id": "b",
+          "text": "Rebuild the same image repeatedly until ECS chooses a different route."
+        },
+        {
+          "id": "c",
+          "text": "Increase task CPU because 404 means the process is too slow to answer."
+        },
+        {
+          "id": "d",
+          "text": "Give the execution role s3:PutObject because target health depends on S3 writes."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The task is reachable and the app is answering 404 on the checked path. That is a health contract mismatch, not an image-pull or CPU problem. Fix the route or target group setting intentionally and deploy the corrected revision."
+    }
+  ]
+}

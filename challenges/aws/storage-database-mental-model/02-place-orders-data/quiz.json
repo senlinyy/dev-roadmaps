@@ -1,0 +1,70 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A release note says:\n\n```text\nCreate order in RDS, then generate receipt PDF.\nRDS row: orderId=ord_1042 customerId=cus_77 receiptKey=null\nReceipt bytes: 734812 bytes, contentType=application/pdf\n```\n\nWhat is the cleanest design after the receipt is generated?",
+      "options": [
+        { "id": "a", "text": "Upload the PDF to S3 and update the RDS row with the S3 key after authorization metadata is clear." },
+        { "id": "b", "text": "Store the PDF bytes directly in the orders table so the order and receipt are always in one row." },
+        { "id": "c", "text": "Write the PDF under `/tmp/receipts` and let whichever task receives the download request serve it." },
+        { "id": "d", "text": "Put the order row itself into S3 so the receipt and order use the same object model." }
+      ],
+      "correct": ["a"],
+      "explanation": "This split keeps each service doing its natural job. RDS stores the business record and ownership, while S3 stores the durable receipt object. Putting large file bytes into RDS or a task-local path makes later downloads and recovery harder."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "During checkout, the app writes:\n\n```text\norders: ord_8841 status=pending_payment\norder_items: 3 rows\npayment_attempts: pi_2c7d status=authorized\n```\n\nIf the third item insert fails, the team wants no partial order visible to customers. What storage behavior matters most?",
+      "options": [
+        { "id": "a", "text": "A relational transaction so the related writes commit or roll back together." },
+        { "id": "b", "text": "An S3 prefix naming rule so all order files sort beside each other." },
+        { "id": "c", "text": "An EFS shared mount so every app task can see the same JSON file." },
+        { "id": "d", "text": "A DynamoDB table scan after checkout to find any missing line items." }
+      ],
+      "correct": ["a"],
+      "explanation": "The important promise is consistency across related records. RDS transactions fit because the order, items, and payment attempt must agree. A shared file or object naming plan does not give the same relational rule checking."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "The API receives two retries with the same idempotency key. Logs show the same `requestHash` and the first request already created `job_01HW2W7Z8MP4`. What should the second request do?",
+      "options": [
+        { "id": "a", "text": "Read the existing idempotency item and return the existing job or result instead of starting another checkout." },
+        { "id": "b", "text": "Delete the idempotency item so the retry can create a clean order." },
+        { "id": "c", "text": "Create a new order because duplicate browser requests should be independent." },
+        { "id": "d", "text": "Write a second receipt object first, then decide which order should own it." }
+      ],
+      "correct": ["a"],
+      "explanation": "The same idempotency key and same request hash mean this retry represents the same logical operation. The safe response is to reuse the existing state. Deleting the item or starting another order removes the protection the idempotency record was meant to provide."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "A pull request tries to simplify the orders backend by using only one service. Which review comments should you leave?",
+      "options": [
+        { "id": "a", "text": "Keep final order records in a database because support and finance need relational questions later." },
+        { "id": "b", "text": "Keep generated receipt and export bytes in S3, with database metadata linking them to the right owner." },
+        { "id": "c", "text": "Use DynamoDB for a narrow idempotency item only if the exact key-based access pattern is defined." },
+        { "id": "d", "text": "Use S3 object metadata as the main place for order status transitions and payment constraints." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "The good comments separate records, objects, and key-based operational state. S3 metadata can describe an object, but it is not where you put checkout state transitions or payment constraints. One service for everything may look simpler at first, but it usually hides the real data shapes."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A support ticket says a customer can view the order history page but the receipt download is missing. Evidence shows the RDS order row exists, `receipt_object_key` is null, and there is no S3 upload log for that order. Which layer should the first investigation focus on?",
+      "options": [
+        { "id": "a", "text": "The receipt generation and S3 upload path after the relational order write." },
+        { "id": "b", "text": "The RDS schema for order items, because missing receipts mean line item joins failed." },
+        { "id": "c", "text": "The DynamoDB idempotency table, because all checkout artifacts depend on the idempotency key." },
+        { "id": "d", "text": "The EFS mount target, because the receipt should be downloaded from a shared filesystem." }
+      ],
+      "correct": ["a"],
+      "explanation": "The order record exists, so the core relational write likely succeeded. The missing pointer and missing upload log point to the file generation or S3 upload stage. Chasing database joins or shared filesystem settings first would skip the evidence."
+    }
+  ]
+}

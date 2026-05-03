@@ -1,0 +1,70 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "multiple",
+      "scenario": "`devpolaris-orders-api` fails to upload an export:\n\n```text\nAccessDenied: Access Denied\noperation: PutObject\nbucket: devpolaris-prod-order-exports\nkey: daily/2026-05-02/orders.csv\n```\n\nWhich checks are reasonable before widening access?",
+      "options": [
+        { "id": "a", "text": "Confirm the task role has `s3:PutObject` for the object ARN." },
+        { "id": "b", "text": "Check whether the bucket policy allows the intended role and account." },
+        { "id": "c", "text": "Check whether a customer managed KMS key is involved and whether the role can use it." },
+        { "id": "d", "text": "Open database port `5432` because S3 `AccessDenied` is usually a database network timeout." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "An S3 write can involve the identity policy, bucket policy, and KMS key access if encrypted with a customer managed key. A database security group does not explain an S3 `PutObject` authorization failure."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "After the secret permission is fixed, the app log changes to:\n\n```text\nError: connect ETIMEDOUT 10.20.12.31:5432\nservice=devpolaris-orders-api\n```\n\nWhat should the team inspect first?",
+      "options": [
+        { "id": "a", "text": "Security groups, routes, network ACLs, subnets, and whether the RDS endpoint is reachable from the ECS task." },
+        { "id": "b", "text": "The task role permission for `secretsmanager:GetSecretValue`, because every later failure must have the same cause." },
+        { "id": "c", "text": "The S3 bucket policy, because database connection timeouts are stored as S3 resource rules." },
+        { "id": "d", "text": "CloudTrail retention, because CloudTrail blocks TCP connections when event history is short." }
+      ],
+      "correct": ["a"],
+      "explanation": "A timeout to a host and port points to network reachability, not to the previous IAM failure. The useful first questions are about the task security group, database security group, route path, network ACLs, subnets, and endpoint."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "A developer suggests putting the production database password in the Git repo so `devpolaris-orders-api` can start faster. What is the best response?",
+      "options": [
+        { "id": "a", "text": "Store the private value in Secrets Manager, let the task role read the secret ARN, and avoid logging the secret value." },
+        { "id": "b", "text": "Put the password in Git but encrypt the repository name, because encryption of names protects secret values." },
+        { "id": "c", "text": "Put the password in the container image because images are not readable after deployment." },
+        { "id": "d", "text": "Skip Secrets Manager because security groups are enough to protect all private values." }
+      ],
+      "correct": ["a"],
+      "explanation": "Secrets Manager is for private values the app needs at runtime, and the task role should have permission to read the specific secret. Hardcoding secrets in Git, images, or plain config expands the blast radius. Network rules and encryption do not replace safe secret storage."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "The task role has `s3:PutObject` for the export prefix, but production writes fail only when the bucket uses a customer managed KMS key. What check fits the article?",
+      "options": [
+        { "id": "a", "text": "Check whether the role and S3 service path can use the KMS key for the encrypted object write." },
+        { "id": "b", "text": "Remove all S3 permissions because KMS replaces S3 authorization." },
+        { "id": "c", "text": "Open the database security group because KMS keys are controlled by database ports." },
+        { "id": "d", "text": "Move the secret into CloudWatch Logs because logs automatically decrypt bucket objects." }
+      ],
+      "correct": ["a"],
+      "explanation": "A customer managed KMS key adds another access question. The S3 write may need the caller and service to be allowed to use the key. KMS does not replace S3 authorization, and it is not fixed by database network rules or logging secrets."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "`devpolaris-orders-api` can reach the RDS endpoint, but the app logs:\n\n```text\npassword authentication failed for user orders_app\n```\n\nWhich first check is most useful?",
+      "options": [
+        { "id": "a", "text": "Compare the secret value, database user, and any recent rotation history." },
+        { "id": "b", "text": "Add `secretsmanager:*` on every secret because database authentication is always an IAM allow problem." },
+        { "id": "c", "text": "Change the load balancer HTTPS rule because database passwords are checked at the front door." },
+        { "id": "d", "text": "Delete CloudTrail events because old audit records can make a database reject a login." }
+      ],
+      "correct": ["a"],
+      "explanation": "The app reached the database and received a database authentication decision. That points to the database username, password value, and rotation state. It is different from IAM denial and different from a TCP timeout."
+    }
+  ]
+}

@@ -1,0 +1,142 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A decision record draft says:\n\nDecision: ECS because it is best.\nOwner: orders platform team\nNotes: use containers\n\nWhat is the most important missing piece?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The context and tradeoff: why the checkout API fits ECS/Fargate and what responsibility the team gives up or accepts."
+        },
+        {
+          "id": "b",
+          "text": "A larger logo for ECS so readers remember the service name."
+        },
+        {
+          "id": "c",
+          "text": "A promise that rollback will never be needed if the decision is correct."
+        },
+        {
+          "id": "d",
+          "text": "The plaintext DATABASE_URL so future operators know which database is used."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "A useful record explains reasoning, not just the chosen service. Future teammates need to know the workload shape and tradeoff. Secrets should not be stored in the record."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A proposal says:\n\nDecision: Run checkout API on Lambda\nContext evidence: long-running HTTP service, existing container image, ALB target health checks, RDS connection pool, steady daytime traffic\nTradeoff: none recorded\n\nWhat should the reviewer ask first?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Which event invokes the function and how the team will handle service-like concerns such as connection behavior, timeout, and health evidence."
+        },
+        {
+          "id": "b",
+          "text": "Which EC2 key pair will be used to SSH into the Lambda execution environment."
+        },
+        {
+          "id": "c",
+          "text": "Whether the ALB health check path can pull images from ECR."
+        },
+        {
+          "id": "d",
+          "text": "Whether the decision can skip logs because Lambda hides runtime failures."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The evidence sounds service-shaped, so a Lambda choice needs clear reasoning. The reviewer should ask how the event, timeout, health, and connection model will work. Without that, the record is probably naming a service rather than explaining a fit."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "A strong ECS decision record includes:\n\nrollback target: previous task definition and image digest\nrelease evidence: target health, ECS events, CloudWatch logs, smoke test\ntradeoff: no host-level control for this API\n\nWhy is this useful later?",
+      "options": [
+        {
+          "id": "a",
+          "text": "It gives operators evidence to verify releases and a known-good runtime recipe to return to if a deploy fails."
+        },
+        {
+          "id": "b",
+          "text": "It lets the team skip task definitions because the image digest is enough to run production."
+        },
+        {
+          "id": "c",
+          "text": "It proves EC2 would never be appropriate for any workload in the company."
+        },
+        {
+          "id": "d",
+          "text": "It stores all secret values in one readable note for easier diagnosis."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Good records support future operations. They name what was chosen, how to prove it is running, and what rollback means. They do not turn one workload decision into a company-wide rule or a secret document."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "A compute decision record for the orders platform lists:\n\ncheckout API: ECS/Fargate, two tasks behind ALB\nreceipt worker: Lambda from SQS, idempotency key required\nfraud scorer: EC2 because vendor host agent is required\nevidence: target health, service events, queue age, function logs, systemd logs\n\nWhich qualities make this record useful?",
+      "options": [
+        {
+          "id": "a",
+          "text": "It chooses compute per workload instead of forcing one answer everywhere."
+        },
+        {
+          "id": "b",
+          "text": "It names operational evidence for each runtime shape."
+        },
+        {
+          "id": "c",
+          "text": "It states the exception that justifies EC2 host responsibility."
+        },
+        {
+          "id": "d",
+          "text": "It hides the reason for each choice so future reviews stay short."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "This record is useful because it keeps decisions scoped and evidence-based. Future engineers can see why each runtime exists and where to look during incidents. Hiding the reasons would make the service names much less helpful."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "Six months later, a teammate wants to move the receipt worker from Lambda to the main ECS service. Current evidence says:\n\nqueue age: normal\nduplicate sends: 0 after idempotency fix\nfunction errors: low\ncheckout latency: stable because email is off the request path\n\nHow should the old decision record guide the review?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Use the record to ask what problem the move solves and what tradeoff changes, rather than changing compute just for uniformity."
+        },
+        {
+          "id": "b",
+          "text": "Reject every future change because decision records are permanent rules."
+        },
+        {
+          "id": "c",
+          "text": "Move it immediately because having fewer AWS services is always safer."
+        },
+        {
+          "id": "d",
+          "text": "Delete the queue metrics because they make the old decision look too specific."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "A decision record is not a cage. It is a memory aid for tradeoffs. If current evidence is healthy, the reviewer should ask what new requirement justifies the move and what operational cost it introduces."
+    }
+  ]
+}

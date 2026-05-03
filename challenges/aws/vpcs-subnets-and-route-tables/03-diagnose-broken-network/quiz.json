@@ -1,0 +1,70 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "Users see `502 Bad Gateway`. The ALB subnet check returns:\n\nsubnet-0puba  us-east-1a\nsubnet-0pubb  us-east-1b\n\nTarget health returns:\n\n10.20.10.45  us-east-1a  healthy\n10.20.11.88  us-east-1b  unhealthy  Target.Timeout\n\nWhat question should drive the next check?",
+      "options": [
+        { "id": "a", "text": "What is different about the app subnet, route table, or access path for the unhealthy target in us-east-1b?" },
+        { "id": "b", "text": "Why is the public ALB using two subnets when one healthy target exists?" },
+        { "id": "c", "text": "Can the RDS database be moved into the public ALB subnets to make both targets healthy?" },
+        { "id": "d", "text": "Should Route 53 be changed because target health includes private IP addresses?" }
+      ],
+      "correct": ["a"],
+      "explanation": "The ALB is enabled in both expected AZs, and one target is healthy. The unhealthy target is specific to one AZ, so compare that target's subnet, route table, and security path. Do not jump to DNS or database placement before checking the differing hop."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "The route table for `subnet-0appb` shows:\n\nDestination      State      Target\n10.20.0.0/16     active     local\n0.0.0.0/0        blackhole  nat-0old99\n\nWhat does `blackhole` tell you?",
+      "options": [
+        { "id": "a", "text": "The route target is unavailable or deleted, so matching outbound traffic cannot use that default path." },
+        { "id": "b", "text": "The route is intentionally more secure because blackhole routes allow only HTTPS." },
+        { "id": "c", "text": "The local route is broken, so app-to-database traffic inside the VPC must use the internet gateway." },
+        { "id": "d", "text": "The target group is missing from the ALB listener rule." }
+      ],
+      "correct": ["a"],
+      "explanation": "A blackhole route means AWS cannot deliver traffic through that target. If the task needs outbound access during startup or health checks, this can explain the unhealthy target. The fix is to use an active intended route target, not to reinterpret the route as a security rule."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "You are comparing the healthy and unhealthy task paths. Which evidence should be in the comparison?",
+      "options": [
+        { "id": "a", "text": "The ECS service subnets and whether the task is in `subnet-0appa` or `subnet-0appb`." },
+        { "id": "b", "text": "The route table associated with each app subnet and whether route targets are active." },
+        { "id": "c", "text": "The security group attached to the ECS service and the ALB-to-task rule." },
+        { "id": "d", "text": "The application environment variables before comparing subnet placement or route-table associations." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "Placement, route-table association, route target health, and security group rules all affect whether the ALB can reach a task. Comparing those pieces between AZs is productive. Console appearance is not operational evidence."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "After fixing the blackhole NAT route, target health is green, but checkout still fails during payment. App logs say:\n\nconnect ETIMEDOUT orders-api-prod-db.abcxyz.us-east-1.rds.amazonaws.com:5432\n\nDB subnet group:\nsubnet-db-a us-east-1a\nsubnet-db-b us-east-1b\nDB SG inbound: TCP 5432 from sg-orders-app\n\nWhat is the next reasonable move?",
+      "options": [
+        { "id": "a", "text": "Keep following the private database path by checking DNS resolution, DB availability, credentials, and app configuration." },
+        { "id": "b", "text": "Return to Route 53 because every database timeout means the public domain is wrong." },
+        { "id": "c", "text": "Move the database to public subnets because private DB subnets cannot be reached locally." },
+        { "id": "d", "text": "Delete the local route because security groups already allow `sg-orders-app`." }
+      ],
+      "correct": ["a"],
+      "explanation": "Once the route and security group shape match the design, the next checks move deeper into service-specific evidence. DNS, database availability, credentials, or app configuration may still fail. The point is to advance only after proving the current layer."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A teammate wants to start the incident by changing every route table with a `0.0.0.0/0` route. Which response best fits the article's diagnostic path?",
+      "options": [
+        { "id": "a", "text": "Start at the user entry point, then prove ALB placement, target health, ECS placement, route associations, and route target state in order." },
+        { "id": "b", "text": "Start with all default routes because route tables are the only layer that can create `502` responses." },
+        { "id": "c", "text": "Skip target health because ECS running tasks prove the load balancer can reach the app." },
+        { "id": "d", "text": "Change private route tables to internet gateways so debugging from a browser is easier." }
+      ],
+      "correct": ["a"],
+      "explanation": "The article teaches a steady path from public symptom inward. Route tables matter, but they are one checkpoint among placement, target health, and access controls. Broad route changes can create new exposure while missing the actual broken hop."
+    }
+  ]
+}

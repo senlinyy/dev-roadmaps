@@ -1,0 +1,70 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A placement review for devpolaris-orders-api shows:\n\norders-alb: internet-facing\norders-api tasks: should receive traffic only from ALB\norders-db: should receive traffic only from app tasks\n\nWhich subnet plan best matches that intent?",
+      "options": [
+        { "id": "a", "text": "ALB in public subnets, ECS tasks in private app subnets, RDS in private database subnets." },
+        { "id": "b", "text": "ALB, ECS tasks, and RDS all in public subnets so each layer can be tested from a browser." },
+        { "id": "c", "text": "ALB in private subnets and ECS tasks in public subnets so the app can receive internet traffic first." },
+        { "id": "d", "text": "RDS in public subnets and ALB in database subnets so the database owns the public entry point." }
+      ],
+      "correct": ["a"],
+      "explanation": "The public edge belongs in public subnets, while the app and database stay private behind intended callers. That separates the browser entry point from runtime and data storage. It is a clean first production shape for this service."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "The subnet named `orders-public-a` has this route table:\n\nDestination      Target\n10.20.0.0/16     local\n\nNo internet gateway route is associated with it. What should the team conclude?",
+      "options": [
+        { "id": "a", "text": "The name says public, but the route table does not prove public internet-bound routing." },
+        { "id": "b", "text": "The subnet is public because any subnet with `public` in the name gets an internet gateway route automatically." },
+        { "id": "c", "text": "The subnet is public because the local route is the same thing as an internet gateway route." },
+        { "id": "d", "text": "The subnet is private only if every resource inside it has no security group." }
+      ],
+      "correct": ["a"],
+      "explanation": "Public and private behavior comes from routing, not labels. Without a route to an internet gateway, the subnet name alone does not make internet-bound traffic public. Names help humans, but route tables decide behavior."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "Which facts are needed before a resource in an IPv4 subnet is normally reachable from the public internet?",
+      "options": [
+        { "id": "a", "text": "A route table path to an internet gateway for internet-bound traffic." },
+        { "id": "b", "text": "A public IPv4 address on the resource or a public load balancer address in front of it." },
+        { "id": "c", "text": "Security rules that allow the intended protocol and port." },
+        { "id": "d", "text": "A private subnet name that includes the word `public` for the AWS console." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "Public reachability usually needs routing, an internet-routable address or public load balancer, and allowed traffic rules. Missing any one of those can break the path. A name is useful documentation, not a network control."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "A task definition sets `assignPublicIp: ENABLED` for orders-api tasks. The desired design says only the ALB should receive customer traffic. What is the best review direction?",
+      "options": [
+        { "id": "a", "text": "Use private app subnets with public IP assignment disabled, then allow task inbound only from the ALB security group." },
+        { "id": "b", "text": "Keep public task IPs and rely on the database security group to hide the app port." },
+        { "id": "c", "text": "Move the ALB to private database subnets so customers must use task public IPs." },
+        { "id": "d", "text": "Keep public task IPs because ECS tasks cannot receive ALB traffic without them." }
+      ],
+      "correct": ["a"],
+      "explanation": "The app tasks do not need direct public addresses when the ALB is the entry point. Private placement plus a task SG source of the ALB SG keeps the path narrow. The ALB can target private task IPs."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "The team plans NAT gateways for devpolaris-orders-api. Where should the NAT gateways live and why?",
+      "options": [
+        { "id": "a", "text": "In public subnets, because NAT needs its own path to the internet gateway while serving private subnet egress." },
+        { "id": "b", "text": "In private database subnets, because databases should own all outbound internet traffic." },
+        { "id": "c", "text": "In the same private app subnet as the ECS tasks, because NAT makes that subnet public." },
+        { "id": "d", "text": "In Route 53, because NAT translates public hostnames for browser requests." }
+      ],
+      "correct": ["a"],
+      "explanation": "A NAT gateway helps private resources start outbound connections, and it needs a public subnet path to the internet gateway. It does not make the private app subnet a public entry point. The ALB remains the intended inbound path."
+    }
+  ]
+}

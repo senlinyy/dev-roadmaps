@@ -1,0 +1,70 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A GitHub Actions deploy fails in the credentials step:\n\n```text\nError: Could not assume role with OIDC.\nNot authorized to perform sts:AssumeRoleWithWebIdentity on role:\narn:aws:iam::123456789012:role/devpolaris-orders-api-deploy\n```\n\nThe ECS update command has not run yet. Which door failed?",
+      "options": [
+        { "id": "a", "text": "Door one: inspect the role trust policy and the GitHub OIDC claims such as audience and subject." },
+        { "id": "b", "text": "Door two: add `ecs:UpdateService` to the deploy role permissions immediately." },
+        { "id": "c", "text": "Runtime access: edit the ECS task role because the app is missing S3 access." },
+        { "id": "d", "text": "Storage access: rotate the database password because STS errors usually mean a secret expired." }
+      ],
+      "correct": ["a"],
+      "explanation": "The job failed before it received role credentials, so this is a role assumption failure at the trust door. ECS permissions are checked only after the session exists and the deploy command runs. Task role and database secret changes do not address this OIDC handoff failure."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A deploy gets past the credentials step, then fails here:\n\n```text\nUser: arn:aws:sts::123456789012:assumed-role/devpolaris-orders-api-deploy/GitHubActions\nis not authorized to perform: ecs:UpdateService on resource:\narn:aws:ecs:us-east-1:123456789012:service/devpolaris-prod/orders-api-prod\n```\n\nWhat is the best fix direction?",
+      "options": [
+        { "id": "a", "text": "Inspect the deploy role permissions and add or correct the specific ECS action on the intended service ARN." },
+        { "id": "b", "text": "Broaden the OIDC trust subject because the role was not assumed." },
+        { "id": "c", "text": "Give the ECS task role `ecs:UpdateService` because the app runs on ECS." },
+        { "id": "d", "text": "Store permanent AWS keys in GitHub so the deploy can skip role permissions." }
+      ],
+      "correct": ["a"],
+      "explanation": "The principal is already an assumed deploy role, so door one succeeded. The denied action and resource point to the deploy role permissions policy. The safer fix is narrow permission on the intended ECS service, not broader trust, runtime permissions, or permanent keys."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "`devpolaris-orders-api` starts successfully on ECS, but the app logs this during the nightly export:\n\n```text\nAccessDenied: User arn:aws:sts::123456789012:assumed-role/devpolaris-orders-api-task/7d2f8b3e\nis not authorized to perform s3:PutObject on resource\narn:aws:s3:::devpolaris-orders-api-prod-exports/daily/2026-05-02.json\n```\n\nWhere should the team look first?",
+      "options": [
+        { "id": "a", "text": "The ECS task role permissions for the S3 bucket or prefix used by the running application." },
+        { "id": "b", "text": "The GitHub OIDC trust policy because every AWS failure in ECS starts there." },
+        { "id": "c", "text": "The ECS execution role because all app AWS SDK calls use it after startup." },
+        { "id": "d", "text": "The container image tag because S3 permissions are embedded in image metadata." }
+      ],
+      "correct": ["a"],
+      "explanation": "The principal names the task role, and the denied action is an app runtime S3 write. That points to the task role permissions. GitHub OIDC is the deploy path, the execution role handles ECS setup work, and the image tag does not grant AWS permissions."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "Two failures appear during a busy release window:\n\n```text\nJob A: ExpiredToken while running aws ecs update-service\nJob B: aws sts get-caller-identity shows Account 999900001111, but production is 123456789012\n```\n\nWhich responses follow the article's diagnostic path?",
+      "options": [
+        { "id": "a", "text": "For `ExpiredToken`, start a fresh session or rerun the job instead of reusing old temporary credentials." },
+        { "id": "b", "text": "For the wrong account, fix the profile, role ARN, account target, or environment before changing policies." },
+        { "id": "c", "text": "Use caller identity evidence before widening any production permissions." },
+        { "id": "d", "text": "Treat both failures as proof that the ECS task role needs administrator access." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "Expired temporary credentials need a fresh session, and wrong-account evidence means the caller context is wrong before policy edits make sense. Caller identity is the calming first check. Administrator access and permanent keys would increase damage without explaining either signal."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A task definition review shows:\n\n```text\nexecutionRoleArn: arn:aws:iam::123456789012:role/ecsTaskExecutionRole\ntaskRoleArn: null\n```\n\nThe Node.js code in `devpolaris-orders-api` uses the AWS SDK to read a parameter at runtime. What is the most likely issue?",
+      "options": [
+        { "id": "a", "text": "The app has no ECS task role credentials for runtime AWS calls, so the task definition needs the intended `taskRoleArn`." },
+        { "id": "b", "text": "The execution role must be renamed to include the application name or AWS will ignore it." },
+        { "id": "c", "text": "The GitHub deploy role should be attached inside the container as a secret value." },
+        { "id": "d", "text": "The app can read any parameter because Fargate always injects administrator credentials." }
+      ],
+      "correct": ["a"],
+      "explanation": "The execution role is for ECS setup work, while the task role is what application code uses for AWS SDK calls after startup. A `null` task role means the app likely lacks runtime credentials from ECS. Renaming roles, injecting deploy credentials, or using administrator access would move the risk instead of fixing it."
+    }
+  ]
+}

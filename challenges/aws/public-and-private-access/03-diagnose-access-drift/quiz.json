@@ -1,0 +1,70 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A browser cannot reach `https://orders.devpolaris.com`. The first evidence is:\n\nRoute 53 alias: expected ALB\nALB scheme: internal\nALB subnets: subnet-app-a, subnet-app-b\n\nWhich traffic direction is broken?",
+      "options": [
+        { "id": "a", "text": "Internet user to public entry point, because the ALB is not internet-facing and is in private app subnets." },
+        { "id": "b", "text": "ECS task to RDS, because internal ALBs always block database ports." },
+        { "id": "c", "text": "ECS task to ECR, because the browser needs image pull access." },
+        { "id": "d", "text": "ALB to task, because an internal ALB cannot have listener rules." }
+      ],
+      "correct": ["a"],
+      "explanation": "The symptom is a public browser path, and the evidence shows the entry point is not public. An internet-facing service needs an internet-facing ALB placed in appropriate public subnets. Do not debug the database before the public entry point exists."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "The task keeps restarting with:\n\nResourceInitializationError\nfailed to pull image: dial tcp 54.239.31.88:443: i/o timeout\n\nPrivate app route table:\n10.20.0.0/16 -> local\n\nNo ECR endpoints are configured. Which fix direction matches the failure?",
+      "options": [
+        { "id": "a", "text": "Add the needed outbound path for image pull, such as NAT or the ECR-related VPC endpoints." },
+        { "id": "b", "text": "Open ALB inbound TCP 443 from the task security group." },
+        { "id": "c", "text": "Point the Route 53 alias directly at the ECS service." },
+        { "id": "d", "text": "Move RDS into the public ALB subnets." }
+      ],
+      "correct": ["a"],
+      "explanation": "This is private task outbound access during initialization. The task has no default route and no ECR endpoint path, so it cannot reach the registry. Public DNS and database placement are not the first broken direction."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "A database exposure review shows:\n\nDB instance: devpolaris-orders-prod\nPublicly accessible: Yes\nSubnet group: orders-public-a, orders-public-b\nSecurity group inbound: TCP 5432 from 0.0.0.0/0\n\nWhich changes belong in the fix plan?",
+      "options": [
+        { "id": "a", "text": "Move the database into a private DB subnet group." },
+        { "id": "b", "text": "Disable public accessibility for the database." },
+        { "id": "c", "text": "Replace broad inbound TCP 5432 with the app task security group as the source." },
+        { "id": "d", "text": "Keep the public subnet group but rely on a longer database password as the network control." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "The snapshot has several public exposure signals at once. The safer shape is private placement, no public database address, and a narrow source from the app tier. A strong password is necessary, but it is not a substitute for network exposure control."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "A private app route and security review says:\n\nRoute table: 0.0.0.0/0 -> nat-0b34egressA\nTask SG egress: all traffic, all ports, 0.0.0.0/0\nKnown needs: Secrets Manager, CloudWatch Logs, S3, api.taxvendor.example:443\n\nWhat is the safest improvement direction?",
+      "options": [
+        { "id": "a", "text": "Move AWS service traffic to VPC endpoints where possible, keep controlled egress for the external tax API, and narrow outbound policy over time." },
+        { "id": "b", "text": "Delete NAT immediately because private apps should never make outbound calls." },
+        { "id": "c", "text": "Make the tasks public so the egress rule can be removed from the security group." },
+        { "id": "d", "text": "Add inbound TCP 443 from `0.0.0.0/0` to the task security group so responses can return." }
+      ],
+      "correct": ["a"],
+      "explanation": "The current design may work, but it is broader than the known needs. Endpoints can reduce AWS service traffic through NAT, while true external APIs still need controlled egress. The fix direction should reduce scope without breaking required outbound calls."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "An EC2 review snapshot says:\n\nInstance public IPv4: 198.51.100.44\nSubnet route table:\n10.40.0.0/16 -> local\nSecurity group inbound:\nTCP 22 from 203.0.113.10/32\n\nAn operator cannot SSH from the approved IP. What should the team notice?",
+      "options": [
+        { "id": "a", "text": "The instance has a public address, but the subnet route table has no internet gateway route." },
+        { "id": "b", "text": "The security group source is too narrow because SSH always requires `0.0.0.0/0`." },
+        { "id": "c", "text": "The local route sends SSH through RDS before reaching the instance." },
+        { "id": "d", "text": "Public IPv4 addresses work only when Route 53 has an alias record." }
+      ],
+      "correct": ["a"],
+      "explanation": "A public address alone does not prove the public path works. The subnet also needs the right internet gateway route, and the security group must allow the caller. The intended goal decides whether to add the public route or remove the public address."
+    }
+  ]
+}

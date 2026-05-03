@@ -1,5 +1,5 @@
 ---
-title: "Separate Names, IDs, And ARNs"
+title: "Separate Names, IDs, and ARNs"
 sectionSlug: names-ids-and-arns-are-different-jobs
 order: 1
 ---

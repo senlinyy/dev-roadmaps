@@ -1,0 +1,70 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A new teammate says, \"IAM is the firewall for AWS apps.\" Which correction best matches the article?",
+      "options": [
+        { "id": "a", "text": "IAM helps AWS decide whether an AWS API request should be allowed for a caller, action, resource, and context." },
+        { "id": "b", "text": "IAM opens TCP ports between ECS tasks and databases." },
+        { "id": "c", "text": "IAM runs the application process inside Fargate." },
+        { "id": "d", "text": "IAM stores the database password value for the app." }
+      ],
+      "correct": ["a"],
+      "explanation": "IAM is the permission layer for AWS API requests. It is not the network firewall, runtime container host, or secret store. Those are separate AWS checks and services."
+    },
+    {
+      "id": "q2",
+      "type": "multiple",
+      "scenario": "`devpolaris-orders-api` needs to read one database URL secret and write export files under one S3 prefix. Which translations from app behavior to IAM request pieces are correct?",
+      "options": [
+        { "id": "a", "text": "Read the database URL secret maps to `secretsmanager:GetSecretValue` on one secret ARN." },
+        { "id": "b", "text": "Upload an export maps to `s3:PutObject` on object ARNs under the intended prefix." },
+        { "id": "c", "text": "Run as the app maps to an ECS task role attached to the task definition." },
+        { "id": "d", "text": "Write any export maps to root user access because app behavior cannot be represented in IAM." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "The article starts from app behavior and translates it into actions, resources, and a runtime role. Root access is not the model for a running application. The useful request is narrow and reviewable."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "An app error shows the caller as:\n\n```text\narn:aws:iam::123456789012:user/maya\n```\n\nBut the team expected the running ECS task role. What should they suspect first?",
+      "options": [
+        { "id": "a", "text": "The app may be using the wrong credentials, such as a human access key, instead of the task role." },
+        { "id": "b", "text": "The S3 prefix is too narrow, because all IAM errors from users mean object keys are wrong." },
+        { "id": "c", "text": "The root user is missing MFA, because root MFA changes the caller ARN for ECS tasks." },
+        { "id": "d", "text": "The database security group is too strict, because it rewrites IAM caller names." }
+      ],
+      "correct": ["a"],
+      "explanation": "The caller is usually the first clue. If runtime code should be acting as the task role but the error names a human IAM user, the app may be using the wrong credential source. That is different from a network or S3 prefix issue."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "A policy review finds no matching allow for the request `s3:PutObject` on the intended object ARN. There is also no explicit deny. What is the IAM result?",
+      "options": [
+        { "id": "a", "text": "Denied by default, because IAM does not allow a request unless a matching allow applies." },
+        { "id": "b", "text": "Allowed by default, because S3 writes are safe when the bucket name includes the service name." },
+        { "id": "c", "text": "Allowed only in the Console, because Console clicks bypass IAM evaluation." },
+        { "id": "d", "text": "Allowed if the app has network access to the bucket endpoint." }
+      ],
+      "correct": ["a"],
+      "explanation": "By default, IAM denies requests. A request needs a matching allow and no matching explicit deny. Tool choice and network reachability do not bypass the IAM decision."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "The task role is allowed to write:\n\n```text\narn:aws:s3:::devpolaris-orders-api-prod-exports/orders-api/*\n```\n\nThe app tries to write:\n\n```text\narn:aws:s3:::devpolaris-orders-api-prod-exports/manual-backups/orders.json\n```\n\nWhat is the best read of the request?",
+      "options": [
+        { "id": "a", "text": "The action may be the same, but the resource no longer matches the allowed `orders-api/` prefix." },
+        { "id": "b", "text": "The request is allowed because S3 prefixes are real folders and all folders share one policy." },
+        { "id": "c", "text": "The request is allowed because the bucket name is the only resource IAM checks for object writes." },
+        { "id": "d", "text": "The request must be a network problem because object prefixes never affect IAM results." }
+      ],
+      "correct": ["a"],
+      "explanation": "For S3 object writes, the object ARN matters. The allowed resource covers objects under `orders-api/`, while the request targets `manual-backups/`. The same principal and action can still be denied when the resource does not match."
+    }
+  ]
+}

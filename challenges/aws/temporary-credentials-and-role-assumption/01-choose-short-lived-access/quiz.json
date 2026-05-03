@@ -1,0 +1,70 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A `devpolaris-orders-api` deploy log accidentally printed `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` from repository secrets. The key was created eight months ago and no one knows where else it was copied. What is the safest response direction?",
+      "options": [
+        { "id": "a", "text": "Disable or rotate the leaked key, treat old copies as unsafe, and move the deploy path toward short-lived role sessions." },
+        { "id": "b", "text": "Delete only the visible log line because the secret is safe once it disappears from the newest log view." },
+        { "id": "c", "text": "Move the same long-lived key to a different GitHub secret name." },
+        { "id": "d", "text": "Keep using the key until the next scheduled rotation because AWS keys expire automatically after each deploy." }
+      ],
+      "correct": ["a"],
+      "explanation": "A long-lived access key can keep working anywhere it was copied until it is rotated, disabled, or deleted. Removing one log line or renaming the secret does not invalidate old copies. Temporary role sessions reduce the future damage window because the credentials expire on their own."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A teammate says, \"Temporary AWS credentials sound weaker because they disappear. Should we keep permanent keys for the production deploy so it is more reliable?\" What is the best coaching?",
+      "options": [
+        { "id": "a", "text": "Temporary credentials are meant to be strong enough for one job and short enough that old copies stop working." },
+        { "id": "b", "text": "Temporary credentials skip IAM checks, so they are only safe for read-only accounts." },
+        { "id": "c", "text": "Permanent keys are safer for production because they do not include a session token." },
+        { "id": "d", "text": "Temporary credentials only work in the AWS Console, not in CI/CD or SDK calls." }
+      ],
+      "correct": ["a"],
+      "explanation": "Temporary credentials still sign normal AWS API requests, but they include a session token and an expiration. AWS keeps checking the identity and permissions while the session is valid. The expiration is the safety feature, not a weakness."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "A deploy job prints this identity before updating ECS:\n\n```json\n{\n  \"UserId\": \"AROAXAMPLEDEPLOY:github-actions-9482\",\n  \"Account\": \"123456789012\",\n  \"Arn\": \"arn:aws:sts::123456789012:assumed-role/devpolaris-orders-api-deploy/github-actions-9482\"\n}\n```\n\nWhich conclusions are supported by this output?",
+      "options": [
+        { "id": "a", "text": "The current caller is using an assumed role session, not a plain IAM user ARN." },
+        { "id": "b", "text": "The role name involved in the session is `devpolaris-orders-api-deploy`." },
+        { "id": "c", "text": "The request is targeting account `123456789012` from AWS's point of view." },
+        { "id": "d", "text": "The original GitHub workflow now has every permission that the AWS account can grant." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "The `assumed-role` ARN, account number, role name, and session name are useful identity evidence. They do not prove unlimited permission, and they do not remove expiration. The session can only do what the role permissions allow while the temporary credentials remain valid."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "The DevPolaris team finds one shared AWS key used by Maya's laptop, the GitHub Actions deploy job, and the running `devpolaris-orders-api` task. Reviews are hard because no one can tell which caller changed what. What design best matches the article?",
+      "options": [
+        { "id": "a", "text": "Use separate role sessions for humans, the deploy pipeline, and the ECS runtime because they have different jobs." },
+        { "id": "b", "text": "Keep the shared key but store it in more places so every caller has the same behavior." },
+        { "id": "c", "text": "Give the key administrator access so permission errors cannot hide the caller." },
+        { "id": "d", "text": "Move the key into the container image so at least the runtime copy is versioned." }
+      ],
+      "correct": ["a"],
+      "explanation": "Human access, pipeline access, and runtime access should be separate because they do different work and need different permissions. One shared key makes audit, least privilege, and incident response much harder. Copying or widening that key would make the blast radius larger."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "`devpolaris-orders-api` needs to write daily export files to S3 while it runs on ECS. The app team wants to avoid putting AWS keys in `.env` or baking them into the image. Which access shape fits best?",
+      "options": [
+        { "id": "a", "text": "Attach an ECS task role so ECS provides temporary runtime credentials for the application code." },
+        { "id": "b", "text": "Reuse the GitHub deploy role because it already updates ECS during release." },
+        { "id": "c", "text": "Create a permanent IAM user key and pass it as a production environment variable." },
+        { "id": "d", "text": "Put the AWS secret access key in the Dockerfile so every task starts with the same credentials." }
+      ],
+      "correct": ["a"],
+      "explanation": "The running app should use the ECS task role because that is the runtime identity for application AWS calls. The deploy role has a different job, and permanent keys in environment files or images recreate the long-lived secret problem the article is trying to remove."
+    }
+  ]
+}

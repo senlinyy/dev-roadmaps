@@ -55,19 +55,6 @@
     },
     {
       "id": "q5",
-      "type": "single",
-      "scenario": "A review finds that the RDS database for `devpolaris-orders-api` has no tested backup restore process and no team alarm for backup failures. A teammate says, \"RDS is managed by AWS, so backup ownership is AWS's problem.\" What answer best matches the article?",
-      "options": [
-        { "id": "a", "text": "AWS manages much of the database infrastructure, but the DevPolaris team still owns configuration choices, data, access, backups, and alarms." },
-        { "id": "b", "text": "The teammate is right because managed services remove all customer responsibility." },
-        { "id": "c", "text": "Backups only matter for self-managed EC2 databases, not for any database service with an AWS name." },
-        { "id": "d", "text": "IAM permissions are enough because a database with restricted access never needs backup testing." }
-      ],
-      "correct": ["a"],
-      "explanation": "Managed does not mean ownerless. AWS operates the service platform, while the team owns how it uses the service, including data, permissions, backups, and response. The distractors are tempting because managed services reduce operational burden, but they do not remove responsibility for safe configuration and recovery."
-    },
-    {
-      "id": "q6",
       "type": "multiple",
       "scenario": "During an incident review, the team writes four evidence notes. Which evidence-to-layer matches are correct?",
       "options": [

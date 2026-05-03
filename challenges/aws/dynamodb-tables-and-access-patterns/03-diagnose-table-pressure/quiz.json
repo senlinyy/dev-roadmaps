@@ -1,0 +1,70 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A checkout lookup misses even though the write log shows an item was created:\n\n```text\nwrite pk=IDEMPOTENCY#checkout_01HY8F4Z9R7JQ2K6P0 sk=REQUEST\nread  pk=checkout_01HY8F4Z9R7JQ2K6P0 sk=REQUEST result=MISS\n```\n\nWhat is the best diagnosis?",
+      "options": [
+        { "id": "a", "text": "The read key forgot the `IDEMPOTENCY#` prefix, so the app is asking for a different item." },
+        { "id": "b", "text": "DynamoDB lost the item because item prefixes are only comments." },
+        { "id": "c", "text": "The table needs an RDS foreign key to keep prefixes attached." },
+        { "id": "d", "text": "S3 lifecycle expired the DynamoDB item before the read." }
+      ],
+      "correct": ["a"],
+      "explanation": "The write and read keys are not the same. DynamoDB looks up the exact key values the app provides. Shared key-building helpers can prevent this class of bug."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "The team wants to query all processing jobs, but the table was designed for `pk=JOB#{jobId}`, `sk=STATUS`. The code currently scans 2.4 million items and filters in Node. What is the best fix direction?",
+      "options": [
+        { "id": "a", "text": "Decide whether this is a real access pattern, then add a justified index or use metrics, logs, or RDS for the operational view." },
+        { "id": "b", "text": "Keep scanning because DynamoDB scans are the intended replacement for SQL filters." },
+        { "id": "c", "text": "Change every job's partition key to `JOB` so all jobs can be queried together." },
+        { "id": "d", "text": "Store the job status as S3 metadata so it can be searched by status." }
+      ],
+      "correct": ["a"],
+      "explanation": "The table was designed for read-by-job-id, not status search. If status search is important, it deserves a real access path or a different reporting store. One giant `JOB` key would create a hot and oversized item collection risk."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "CloudWatch shows throttling concentrated on one partition key:\n\n```text\npk=JOB writeRequestsPerMinute=92000\npk=JOB#job_01HW2S8T23Q1 writeRequestsPerMinute=3\npk=JOB#job_01HW2S9A77Q writeRequestsPerMinute=2\n```\n\nWhich key design is the likely problem?",
+      "options": [
+        { "id": "a", "text": "Many writes are using the same broad partition key value `JOB` instead of spreading by real job id." },
+        { "id": "b", "text": "Each job id is too unique, so DynamoDB cannot distribute work." },
+        { "id": "c", "text": "The table has too many sort keys, and sort keys always cause hot partitions." },
+        { "id": "d", "text": "The app should remove all type prefixes because prefixes create throttling." }
+      ],
+      "correct": ["a"],
+      "explanation": "A hot key happens when one partition key receives much more traffic than others. `pk=JOB` piles many jobs onto one value, while `JOB#{jobId}` spreads work by the id the app already has. Type prefixes are fine when the rest of the key includes real identity."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "Several DynamoDB errors arrive during checkout. Which interpretations are sound?",
+      "options": [
+        { "id": "a", "text": "`AccessDeniedException` for `dynamodb:PutItem` should be read as caller, action, table ARN, and possibly index ARN." },
+        { "id": "b", "text": "`ConditionalCheckFailedException` on an idempotency put can mean a duplicate request was safely rejected." },
+        { "id": "c", "text": "A lookup miss with different write and read keys should first check key-building logic." },
+        { "id": "d", "text": "A query that cannot filter by any attribute proves DynamoDB is broken and should be retried until it works." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "The first three interpretations translate the error into the access pattern or authorization layer. A query mismatch usually means the table or index was not designed for that question. Retrying the same mismatched query does not create a new access path."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "Support often starts from an RDS order id and needs to find the checkout job that created it. The job status item already stores:\n\n```json\n{\"pk\":\"JOB#job_01HW2S8T23Q1\",\"sk\":\"STATUS\",\"status\":\"succeeded\",\"orderId\":\"ord_1042\"}\n```\n\nWhat is the best DynamoDB design response if this lookup is frequent and important?",
+      "options": [
+        { "id": "a", "text": "Add a deliberate secondary index using attributes such as `gsi1pk=ORDER#ord_1042` and `gsi1sk=JOB#...`." },
+        { "id": "b", "text": "Scan every job item by `orderId` whenever support opens the page." },
+        { "id": "c", "text": "Rename the base partition key to the order id and remove read-by-job-id support." },
+        { "id": "d", "text": "Store the order id only in object metadata on the receipt PDF." }
+      ],
+      "correct": ["a"],
+      "explanation": "A secondary index is useful when there is a known alternate access pattern. It lets the app query by order id without destroying the base job-id lookup. A scan may work in a tiny demo, but it is not a good production access pattern."
+    }
+  ]
+}

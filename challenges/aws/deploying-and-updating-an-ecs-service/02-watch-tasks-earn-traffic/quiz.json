@@ -1,0 +1,142 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "Service events show:\n\n10:12:14 service devpolaris-orders-api has started 1 tasks: task 9f4a8c1b\n10:12:47 service devpolaris-orders-api registered 1 targets in target-group orders-api-tg\n10:13:18 service devpolaris-orders-api has reached a steady state\n\nTarget health shows two healthy targets on port 3000. What does this prove?",
+      "options": [
+        {
+          "id": "a",
+          "text": "ECS started tasks, registered them with the target group, and the ALB accepted their health checks."
+        },
+        {
+          "id": "b",
+          "text": "Every checkout request and database query is guaranteed correct for the whole release."
+        },
+        {
+          "id": "c",
+          "text": "The release can skip CloudWatch Logs because target health includes app startup logs."
+        },
+        {
+          "id": "d",
+          "text": "The task definition no longer matters because steady state replaces the runtime recipe."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The evidence proves the service path up to target health. That is necessary and encouraging, but it is not proof that every business endpoint is perfect. Logs and smoke tests still add app-level confidence."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A new task is RUNNING. Target health says:\n\nTarget: 10.0.43.27:3000\nState: unhealthy\nReason: Target.ResponseCodeMismatch\nDescription: Health checks failed with codes: [500]\n\nStartup log says:\nrelease=2026-05-02.5 database=startup_check_failed health=not_ready\n\nWhat should happen before traffic moves?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Keep traffic away from the task and fix the readiness or config failure in a new revision or rollback."
+        },
+        {
+          "id": "b",
+          "text": "Mark the target healthy manually because RUNNING is stronger evidence than health checks."
+        },
+        {
+          "id": "c",
+          "text": "Stop the old healthy tasks so users are forced onto the new version."
+        },
+        {
+          "id": "d",
+          "text": "Increase the ALB success-code range to accept 500 for production health."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "RUNNING means the container process exists, but target health decides whether the ALB should trust it. The log explains why readiness failed. Sending traffic anyway would turn a protected failure into a user-facing failure."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "Deployment status:\n\nold revision 44 running=2 healthy=2\nnew revision 45 running=2 healthy=0\nrollout state: IN_PROGRESS\nALB reason for new targets: Target.Timeout\n\nWhy is old/new overlap useful here?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The old tasks can keep serving while the team diagnoses why the new tasks have not earned traffic."
+        },
+        {
+          "id": "b",
+          "text": "Overlap means users should send half their requests directly to task IPs."
+        },
+        {
+          "id": "c",
+          "text": "Overlap means the new revision is automatically successful after a few minutes."
+        },
+        {
+          "id": "d",
+          "text": "Overlap is only for cost savings and has no availability purpose."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Rolling deployment overlap buys safety. Old healthy tasks can continue serving while new tasks try to pass health. If the new tasks never earn traffic, the team can stop or roll back without first taking down the known-good revision."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "A release captain wants evidence that new tasks earned traffic safely:\n\nservice event: registered targets in orders-api-tg\ntarget health: 10.0.42.18:3000 healthy, 10.0.43.27:3000 healthy\nstartup log: release=2026-05-02.5 port=3000 health=ready\nsmoke test: GET /v1/orders/health-check-order 200\n\nWhich evidence belongs in the release note?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Target health for the new task IPs on the expected port."
+        },
+        {
+          "id": "b",
+          "text": "Startup logs from the expected release showing config and readiness."
+        },
+        {
+          "id": "c",
+          "text": "A smoke test or request metric after traffic moved."
+        },
+        {
+          "id": "d",
+          "text": "Only the fact that the image tag exists in ECR."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "New tasks earn traffic through several checks: service registration, target health, app logs, and a small user-path proof. The image tag is necessary earlier, but it does not prove the service accepted or served the revision."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "Deployment completed at 10:20. Evidence at 10:23:\n\nrollout state: COMPLETED\ntarget health: 2 healthy\nALB target 5xx: rose from 0.1 percent to 4 percent\napp log: release=2026-05-02.5 error=payment_provider_timeout route=POST /v1/orders\n\nWhat is the best operating response?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Treat the release as unhealthy at the app level, inspect the changed behavior, and consider rollback to the recorded known-good revision."
+        },
+        {
+          "id": "b",
+          "text": "Ignore it because target health is the only success signal after deployment."
+        },
+        {
+          "id": "c",
+          "text": "Delete the target group because healthy targets should not emit 5xx metrics."
+        },
+        {
+          "id": "d",
+          "text": "Increase desired count immediately because every 5xx spike is solved by more web tasks."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Target health is a gate, not the whole release verdict. The user path is failing after traffic moved, and the app logs name a dependency symptom. Rollback may be the safest user-protection move while the team investigates."
+    }
+  ]
+}

@@ -1,0 +1,142 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "Release record:\n\ncurrent deployment: devpolaris-orders-api:42\ncurrent image digest: sha256:bf91\nrollback_target: devpolaris-orders-api:41\nrevision 41 evidence: target_health 2 healthy, smoke test passed at 09:55\n\nCurrent failure:\nrevision 42 listened on 8080 while target group checks 3000\n\nWhat is the likely rollback action?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Update the ECS service back to task definition revision 41, while recording why revision 42 failed."
+        },
+        {
+          "id": "b",
+          "text": "Roll back to revision 40 because it is older than 41 and might be farther from the bug."
+        },
+        {
+          "id": "c",
+          "text": "Retag the revision 41 image as latest without updating the ECS service task definition."
+        },
+        {
+          "id": "d",
+          "text": "Deregister revision 42 and wait for ECS to choose the previous active revision automatically."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The record names a previous known-good runtime recipe. Rolling back means telling the service to run that recipe again. The team should also keep the failure reason so revision 43 fixes the port contract instead of repeating it."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A bad release changed code and ran this migration:\n\nmigration: split orders.status into orders.payment_status and orders.fulfillment_status\nold revision 41 code: reads orders.status\nnew revision 42 health: failing after deploy\n\nWhat does this mean for rollback?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Rollback may not be safe until data and schema compatibility are checked."
+        },
+        {
+          "id": "b",
+          "text": "Rollback can proceed if ECS can start revision 41, because schema compatibility is outside the service update."
+        },
+        {
+          "id": "c",
+          "text": "Rollback should use an unrelated older revision because it is farther from the bug."
+        },
+        {
+          "id": "d",
+          "text": "Rollback is impossible for ECS services, so the team must only scale out revision 42."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Rollback is about restoring a compatible runtime, not just choosing an older number. If old code cannot read the current schema, returning to revision 41 can create a second outage. The release record should call out this compatibility risk."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "An incident starts, but the release note says:\n\nprevious_task_definition: unknown\nprevious_image_digest: unknown\nsmoke_test_before_deploy: not recorded\ndeployment owner: on call is searching pipeline history\n\nWhat habit should improve?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Record the rollback target and release evidence before updating the ECS service."
+        },
+        {
+          "id": "b",
+          "text": "Stop writing release records because incident channels can reconstruct everything faster."
+        },
+        {
+          "id": "c",
+          "text": "Use only mutable latest tags so previous versions do not need names."
+        },
+        {
+          "id": "d",
+          "text": "Disable health checks so rollback decisions have fewer data points."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Rollback readiness is prepared before the risky moment. The team should know the previous known-good task definition and artifact before traffic moves. Searching during an incident costs time and makes the decision less steady."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "A rollback decision checklist includes:\n\nprevious task definition revision\nprevious image digest\nconfig and secret references\ndatabase migration compatibility\ntarget health after rollback\n\nWhich facts belong in rollback thinking?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The previous known-good task definition and image digest."
+        },
+        {
+          "id": "b",
+          "text": "Whether config, secrets, and data schema are compatible with the previous code."
+        },
+        {
+          "id": "c",
+          "text": "Post-rollback evidence such as desired count, running count, and target health."
+        },
+        {
+          "id": "d",
+          "text": "A revision with a similar image tag, even if no recent health evidence is recorded."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "Rollback should restore a compatible runtime contract. That includes artifact, task definition, config, secrets, data compatibility, and health evidence. Oldest is not the same as safest."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "After rollback, the final note says:\n\nrolled_back_to: devpolaris-orders-api:41\ndesired_count: 2\nrunning_count: 2\ntarget_health: 2 healthy, 0 unhealthy\nreason: revision 42 port contract mismatch\nnext_action: prepare revision 43 with consistent port mapping\n\nWhat operating habit does this show?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Rollback is a normal protective control that restores users first and preserves the lesson for the next revision."
+        },
+        {
+          "id": "b",
+          "text": "Rollback means the team should hide the incident because the deployment failed."
+        },
+        {
+          "id": "c",
+          "text": "Rollback removes the need to fix revision 42 because users are healthy again."
+        },
+        {
+          "id": "d",
+          "text": "Rollback works only when target health is ignored during recovery."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Good rollback culture is practical, not shame-based. The team restored the known-good service and wrote down the specific failure. That makes the next release safer instead of turning the incident into mystery."
+    }
+  ]
+}

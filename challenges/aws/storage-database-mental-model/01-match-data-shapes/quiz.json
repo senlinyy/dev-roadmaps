@@ -1,0 +1,70 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "`devpolaris-orders-api` writes this log after checkout:\n\n```text\nreceiptId=rcpt_ord_8841 contentType=application/pdf bytes=734812\nownerCustomerId=cus_77 downloadLater=true\n```\n\nThe database already has the order row and only needs to remember where the file lives. Which service shape best fits the receipt bytes?",
+      "options": [
+        { "id": "a", "text": "S3, because the receipt is a whole object that can be stored by bucket and key." },
+        { "id": "b", "text": "RDS, because every checkout artifact should be stored in the same relational table as the order." },
+        { "id": "c", "text": "DynamoDB, because the receipt has one customer id and could be fetched by a key." },
+        { "id": "d", "text": "EBS, because a PDF is a file and files should stay on a mounted server disk." }
+      ],
+      "correct": ["a"],
+      "explanation": "The PDF is file-shaped data: the app writes the whole object and later reads the whole object. S3 fits that promise, while RDS should keep the ownership and pointer metadata. Storing the PDF bytes in RDS or on one server disk would make the database or server carry file delivery work it does not need."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A checkout write must create an order row, three order item rows, and a payment attempt row. Support also needs queries by customer, status, date range, and payment reference. Which service shape is the best first home for this state?",
+      "options": [
+        { "id": "a", "text": "RDS, because the data has relationships, constraints, transactions, and flexible SQL questions." },
+        { "id": "b", "text": "S3, because the order can be serialized as one JSON file after checkout." },
+        { "id": "c", "text": "EFS, because several app tasks may need to read the same order data." },
+        { "id": "d", "text": "EBS, because transactions are safer when rows are written to one attached disk." }
+      ],
+      "correct": ["a"],
+      "explanation": "The order state is relational business data, not just bytes. RDS fits because it can protect related rows with constraints and transactions while still answering support queries later. A JSON file in S3 might work for a demo, but it makes queries and consistency harder."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "The API receives a retry with `Idempotency-Key: checkout_01HW2S8RN8Z7`. The only hot-path question is: have we already seen this exact checkout request, and what result should we return? Which service shape is a clean fit?",
+      "options": [
+        { "id": "a", "text": "DynamoDB, because the app has a known key and needs a small item lookup or conditional write." },
+        { "id": "b", "text": "S3, because the key could become an object name under an idempotency prefix." },
+        { "id": "c", "text": "EFS, because idempotency records must be visible to every task through a shared directory." },
+        { "id": "d", "text": "RDS read replica, because retries should avoid the primary database writer." }
+      ],
+      "correct": ["a"],
+      "explanation": "This is a key-based operational record. DynamoDB is a good fit when the app can build the exact key and use a conditional write to prevent duplicate work. A read replica does not protect the write, and object or filesystem storage would make the app invent its own safety rules."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "A design note for the orders service lists these data needs:\n\n```text\n1. Final order and payment records\n2. Receipt PDF objects\n3. Checkout idempotency records\n4. Temporary report chunks for one EC2 worker before upload\n```\n\nWhich pairings are reasonable first choices?",
+      "options": [
+        { "id": "a", "text": "Final order and payment records in RDS." },
+        { "id": "b", "text": "Receipt PDF objects in S3, with the order row storing the object key." },
+        { "id": "c", "text": "Checkout idempotency records in DynamoDB when the access pattern is exact-key lookup." },
+        { "id": "d", "text": "Final order truth on the EC2 worker EBS volume because the worker already writes files." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "The first three pairings match the data shape: relational records in RDS, file-shaped objects in S3, and known-key operational state in DynamoDB. The EBS option is tempting when a worker is already involved, but an attached disk is not a safe source of truth for checkout records."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "The report worker runs on one EC2 instance and logs this path while building a monthly export before uploading the finished file to S3:\n\n```text\npath=/var/lib/devpolaris-orders-api/reports/ordexp_8841.tmp\nneedsSurviveReboot=true sharedAcrossWorkers=false\n```\n\nWhat storage shape should the team consider for that working path?",
+      "options": [
+        { "id": "a", "text": "EBS, because one EC2 instance needs a mounted disk path that can survive reboot." },
+        { "id": "b", "text": "EFS, because every file path in AWS should be shared by default." },
+        { "id": "c", "text": "RDS, because temporary files should be transactionally protected." },
+        { "id": "d", "text": "S3, because the worker should append to objects as if they were local files." }
+      ],
+      "correct": ["a"],
+      "explanation": "EBS matches a one-instance mounted disk need. The finished export can still move to S3 after generation, but the working path behaves like local filesystem storage. EFS would matter if several workers needed the same live file tree."
+    }
+  ]
+}

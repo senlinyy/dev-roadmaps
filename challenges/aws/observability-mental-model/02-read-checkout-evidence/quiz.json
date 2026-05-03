@@ -1,0 +1,70 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "The first incident page has this evidence:\n\n```text\n09:38 deploy started\n09:40 new ECS tasks healthy\n09:41 target response time rose\n09:42 checkout 5xx alarm fired\n09:42 RDS connections rose\n```\n\nWhat should the engineer do next?",
+      "options": [
+        { "id": "a", "text": "Inspect the orders API error logs around 09:41 to 09:42 and compare them with database signals." },
+        { "id": "b", "text": "Assume the alarm means the load balancer is the root cause and replace it." },
+        { "id": "c", "text": "Start with Lambda receipt-email logs because every checkout failure must reach the side job." },
+        { "id": "d", "text": "Treat the deploy timing as unrelated because dashboards only matter after the root cause is known." }
+      ],
+      "correct": ["a"],
+      "explanation": "The dashboard gives timing and shape, not a full cause. RDS connections rose near the user-facing symptom, so the next useful move is to read app logs in that window and compare with database evidence. Replacing infrastructure or jumping to Lambda is premature."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "The log and trace for the same request agree:\n\n```text\nlog: request_id=req_9KLM step=rds.insert_order error_name=ConnectionTimeout\ntrace: POST /v1/orders 5020 ms, rds.insert_order 4930 ms\nmetrics: RDS connections rose before 5xx\n```\n\nWhat is the strongest next conclusion?",
+      "options": [
+        { "id": "a", "text": "The database path deserves first attention because several signals point there." },
+        { "id": "b", "text": "S3 receipt upload is the likely root cause because it appears later in the checkout design." },
+        { "id": "c", "text": "The alarm is useless because the trace already exists." },
+        { "id": "d", "text": "The app cannot be involved because RDS is a managed service." }
+      ],
+      "correct": ["a"],
+      "explanation": "Agreement across signals is powerful. The log names the failing step, the trace shows most time in that step, and the metrics show pressure in the same window. That does not prove the final fix, but it gives a strong first investigation path."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "A failed checkout has this path evidence:\n\n```text\nALB accepted request\nECS task started handler\nRDS order insert timed out\nAPI returned 500\nS3 receipt upload did not run\nLambda email request did not run\n```\n\nWhich investigation choice avoids wasted time?",
+      "options": [
+        { "id": "a", "text": "Do not debug the receipt Lambda first, because this request never reached the side job." },
+        { "id": "b", "text": "Debug the receipt Lambda first, because all failed checkouts eventually become email failures." },
+        { "id": "c", "text": "Start with S3 lifecycle expiration, because the receipt object must exist before the order insert." },
+        { "id": "d", "text": "Focus only on DNS, because every HTTP 500 comes from name resolution." }
+      ],
+      "correct": ["a"],
+      "explanation": "The path tells you where the request stopped. Since the order insert failed, later steps such as S3 receipt upload and Lambda email did not run for this request. That keeps the team from debugging a service that never received the work."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "The team is building a short incident note for this checkout failure. Which pieces of evidence are useful and scoped?",
+      "options": [
+        { "id": "a", "text": "The alarm name, state, and time window for the checkout 5xx symptom." },
+        { "id": "b", "text": "The request ID and first useful error from `/ecs/devpolaris-orders-api`." },
+        { "id": "c", "text": "A trace or timing view showing which checkout step waited." },
+        { "id": "d", "text": "A month-old cost chart with no deploy or request context." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "Good evidence stays close to the symptom, time window, and request path. Alarm, log, and trace details help another engineer follow the reasoning. An unrelated old cost chart adds noise during this diagnosis."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "After the incident, a teammate says: `The dashboard showed RDS pressure, so we did not need the log line.` The evidence was:\n\n```text\nmetric: RDS connections high\nlog: step=rds.insert_order error_name=ConnectionTimeout message=database connection timed out\ntrace: rds.insert_order consumed 4930 ms\n```\n\nWhat is the best coaching response?",
+      "options": [
+        { "id": "a", "text": "The dashboard gave direction, but the log named the failing operation and made the next check concrete." },
+        { "id": "b", "text": "Metrics are always enough because they include every application error message." },
+        { "id": "c", "text": "Logs are only useful when there are no metrics at all." },
+        { "id": "d", "text": "The team should remove request IDs now that the dashboard worked once." }
+      ],
+      "correct": ["a"],
+      "explanation": "Signals work best together. Metrics showed a system shape, the log gave request-level detail, and the trace showed where time went. Removing one of those signals would make the next incident harder."
+    }
+  ]
+}

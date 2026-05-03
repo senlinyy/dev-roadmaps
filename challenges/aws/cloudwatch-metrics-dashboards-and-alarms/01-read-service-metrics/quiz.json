@@ -1,0 +1,70 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "The public checkout path is failing. CloudWatch shows this metric table for the target group behind `devpolaris-orders-api`:\n\n```text\nnamespace: AWS/ApplicationELB\ndimension: TargetGroup=orders-api-prod\nperiod: 1 minute\nmetric                 09:35  09:40  09:45\nRequestCount           118    121    126\nHTTPCode_Target_5XX    0      8      39\nTargetResponseTime p95 0.21s  0.84s  1.33s\n```\n\nWhat is the best first reading?",
+      "options": [
+        { "id": "a", "text": "The front door sees normal traffic but rising target errors and latency for this target group." },
+        { "id": "b", "text": "The S3 bucket is definitely missing receipt files because ALB metrics include object keys." },
+        { "id": "c", "text": "The metric proves every ECS task is CPU-starved because ALB always measures container CPU." },
+        { "id": "d", "text": "The table is unusable because dimensions should never narrow a metric to one target group." }
+      ],
+      "correct": ["a"],
+      "explanation": "The namespace and dimension tell you this is ALB target group evidence. Request count stayed normal while target 5xx and latency rose, so customers are likely affected. The table points to the app path, but it does not identify the exact downstream cause."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "During the same window, CloudWatch shows:\n\n```text\nECS CPU average: 34 percent\nECS memory average: 48 percent\nrunning tasks: 3 of 3\nRDS connections: rising from 48 to 142\nRDS write latency: rising with checkout p95\n```\n\nWhich service signal deserves first follow-up?",
+      "options": [
+        { "id": "a", "text": "RDS metrics and app database logs, because database pressure moved with checkout latency." },
+        { "id": "b", "text": "ECS CPU only, because every slow request is caused by high container CPU." },
+        { "id": "c", "text": "S3 object count only, because storage size is the first metric for HTTP 5xx." },
+        { "id": "d", "text": "Lambda duration only, because the API cannot fail until the receipt email runs." }
+      ],
+      "correct": ["a"],
+      "explanation": "Metrics help line up timing across layers. ECS is not obviously starved, while RDS connections and write latency moved with checkout latency. The next step should combine database metrics with request-level logs."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "Two charts look similar, but their dimensions differ:\n\n```text\nchart A: AWS/ApplicationELB HTTPCode_Target_5XX_Count, TargetGroup=orders-api-prod\nchart B: AWS/ApplicationELB HTTPCode_Target_5XX_Count, TargetGroup=admin-api-prod\n```\n\nWhat mistake should the engineer avoid?",
+      "options": [
+        { "id": "a", "text": "Treating the metric name alone as enough and mixing evidence from the wrong target group." },
+        { "id": "b", "text": "Using dimensions, because dimensions make service metrics less specific." },
+        { "id": "c", "text": "Checking the period, because time buckets do not affect metric interpretation." },
+        { "id": "d", "text": "Comparing HTTP 5xx counts, because CloudWatch cannot measure load balancer errors." }
+      ],
+      "correct": ["a"],
+      "explanation": "A metric name needs its namespace and dimensions to be meaningful. Both charts measure target 5xx, but they are scoped to different target groups. During an incident, wrong dimensions can send the team to the wrong service."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "Which metric choices are well matched to beginner operating questions for `devpolaris-orders-api`?",
+      "options": [
+        { "id": "a", "text": "ALB request count, target 5xx, and target response time for customer-facing HTTP health." },
+        { "id": "b", "text": "ECS CPU, memory, running task count, and service events for app runtime pressure." },
+        { "id": "c", "text": "RDS connections and latency-related signals for database pressure during checkout." },
+        { "id": "d", "text": "A single unrelated account-total cost metric as the first source for one request's stack trace." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "The correct choices connect each AWS layer to a question the article names. ALB shows front-door shape, ECS shows runtime capacity, and RDS shows database pressure. Account-level cost movement is useful elsewhere, but not for one request's error detail."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "Checkout succeeds, but customers do not receive receipt emails. The side-job panel shows:\n\n```text\nLambda: devpolaris-receipt-email\nInvocations: normal\nErrors: increased after release 2026-05-02.4\nDuration p95: normal\napp log clue: TemplateNotFound locale=en-GB\n```\n\nWhat should the team conclude first?",
+      "options": [
+        { "id": "a", "text": "The side job is failing, and Lambda logs should be checked for template or release evidence." },
+        { "id": "b", "text": "The main checkout path must be fully down because any Lambda error means API 500s." },
+        { "id": "c", "text": "RDS should be resized before checking the Lambda error, because duration is normal." },
+        { "id": "d", "text": "The alarm should be deleted because side-job failures do not affect the main API response." }
+      ],
+      "correct": ["a"],
+      "explanation": "Lambda metrics tell you the side job is failing, and the log clue names a likely template issue. That is a different impact from failed checkout. The team should treat it seriously without confusing it with the main request path."
+    }
+  ]
+}

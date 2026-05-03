@@ -1,5 +1,5 @@
 ---
-title: "Read Access And Signals"
+title: "Read Access and Signals"
 sectionSlug: access-who-can-touch-what
 order: 3
 ---

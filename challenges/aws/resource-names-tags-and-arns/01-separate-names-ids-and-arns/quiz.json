@@ -48,8 +48,7 @@
         { "id": "a", "text": "The target ARN account should be checked because it is `210987654321`, not the expected production account." },
         { "id": "b", "text": "The target ARN Region should be checked because it is `us-west-2`, not the configured production Region." },
         { "id": "c", "text": "The service name proves the target is correct, so account and Region checks can be skipped." },
-        { "id": "d", "text": "The resource tail should still be compared after the account and Region checks, because it names the exact service path." },
-        { "id": "e", "text": "The fastest fix is to grant `ecs:*` across all accounts so the script can find the service." }
+        { "id": "d", "text": "The resource tail should still be compared after the account and Region checks, because it names the exact service path." }
       ],
       "correct": ["a", "b", "d"],
       "explanation": "The account, Region, and resource tail are all part of proving the target. Here the account and Region are already suspicious, and the resource segment should still be checked once the location is corrected. The matching service name is not enough because names can repeat, and broad permissions would hide a targeting error instead of fixing it."
@@ -60,12 +59,12 @@
       "scenario": "During a review, a teammate flags these ARNs as broken because the Region or account fields look empty:\n\n```text\narn:aws:s3:::devpolaris-orders-api-prod-exports\narn:aws:iam::123456789012:role/devpolaris-orders-api-task-role\n```\n\nWhat is the best response?",
       "options": [
         { "id": "a", "text": "Both ARNs are always invalid because every ARN must include both a Region and an account." },
-        { "id": "b", "text": "These shapes can be normal for their services, so verify the service-specific ARN format instead of filling in guessed fields." },
+        { "id": "b", "text": "These shapes can be normal for their services, so verify the service-specific ARN format instead of adding fields by hand." },
         { "id": "c", "text": "The empty fields mean the resources are public and should be deleted immediately." },
         { "id": "d", "text": "The ARNs should be replaced with friendly names because names never omit account or Region." }
       ],
       "correct": ["b"],
-      "explanation": "Some AWS services omit fields in normal ARN shapes, such as S3 bucket ARNs and IAM role ARNs with an empty Region field. Guessing missing fields can create the wrong identifier. Empty fields do not prove public access, and friendly names are less precise than ARNs for policies and automation."
+      "explanation": "Some AWS services omit fields in normal ARN shapes, such as S3 bucket ARNs and IAM role ARNs with an empty Region field. Adding missing-looking fields can create the wrong identifier. Empty fields do not prove public access, and friendly names are less precise than ARNs for policies and automation."
     }
   ]
 }

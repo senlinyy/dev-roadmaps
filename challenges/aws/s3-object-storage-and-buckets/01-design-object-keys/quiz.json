@@ -1,0 +1,70 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "Finance cannot find today's JSON export. The worker log says:\n\n```text\nbucket=devpolaris-orders-prod-objects\nkey=exports/daily/2026/05/02/devpolaris-orders-export-2026-05-02.json\ncontentType=application/json\n```\n\nWhat is the most precise way to describe where the object lives?",
+      "options": [
+        { "id": "a", "text": "It is one object in the bucket, addressed by the exact key string shown in the log." },
+        { "id": "b", "text": "It is a file inside real S3 folders named `exports`, `daily`, `2026`, `05`, and `02`." },
+        { "id": "c", "text": "It is stored in RDS because JSON files from checkout are relational records." },
+        { "id": "d", "text": "It is mounted on the ECS task that wrote it and copied into S3 only when finance downloads it." }
+      ],
+      "correct": ["a"],
+      "explanation": "S3 stores objects in buckets, and the key is the object's exact name. Slashes help humans organize names, but they do not make S3 search nearby folder paths. If one character in the key differs, you are asking for a different object."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A developer proposes this key for every daily export:\n\n```text\nexports/latest/orders.csv\n```\n\nThe finance team often needs to compare exports by date and audit which release wrote them. Which key pattern is a better first fit?",
+      "options": [
+        { "id": "a", "text": "`exports/daily/2026/05/02/devpolaris-orders-export-2026-05-02.csv`" },
+        { "id": "b", "text": "`latest.csv`" },
+        { "id": "c", "text": "`orders.csv` with all context stored only in object metadata." },
+        { "id": "d", "text": "`tmp/releases/2026-05-02.4/orders.csv` for the final finance download." }
+      ],
+      "correct": ["a"],
+      "explanation": "The dated prefix and descriptive filename make the object easier to list, review, permission, and diagnose. `latest.csv` is tempting because it is simple, but it hides the date and can be overwritten without telling finance which export they downloaded. Temporary release prefixes should not be the final customer or finance location."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "A receipt upload includes this object metadata:\n\n```text\nkey=receipts/2026/05/02/order_ord_8x7k2n/devpolaris-orders-receipt.pdf\nmetadata: order-id=ord_8x7k2n, generated-by=devpolaris-orders-api\n```\n\nWhat should the team remember about metadata?",
+      "options": [
+        { "id": "a", "text": "Metadata is useful context for the object, but order ownership and authorization should still come from a database record." },
+        { "id": "b", "text": "Metadata is a relational index, so the app can query all receipts by customer through S3 metadata alone." },
+        { "id": "c", "text": "Metadata replaces the object key, so the key does not need useful names." },
+        { "id": "d", "text": "Metadata means the receipt should be stored in DynamoDB instead of S3." }
+      ],
+      "correct": ["a"],
+      "explanation": "Metadata is good for small facts close to the object, such as generator or order id. It is not a relational authorization model or flexible query engine. The database should still decide whether a customer can access the receipt."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "The team is reviewing S3 object naming for exports, receipts, manifests, and release scratch files. Which review comments are sound?",
+      "options": [
+        { "id": "a", "text": "Use prefixes like `exports/daily/` and `receipts/` so access rules and lifecycle rules can target the right objects." },
+        { "id": "b", "text": "Log the exact bucket, Region, and key before upload so incidents can compare what the app wrote with what users request." },
+        { "id": "c", "text": "Keep temporary release files under a separate prefix such as `tmp/releases/` so cleanup does not touch finance exports." },
+        { "id": "d", "text": "Use the same short key `orders.csv` for every export because S3 folders will keep older copies separate." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "Good prefixes make permissions, lifecycle, and debugging more predictable. Exact bucket and key logs give the team evidence during incidents. Reusing one vague key is risky because S3 treats the key as the object name, not as a file inside a folder history."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A support note says the app wrote this key:\n\n```text\nreceipts/2026/05/02/order_ord_8x7k2n/devpolaris-orders-receipt.pdf\n```\n\nThe download code asks for:\n\n```text\nreceipt/2026/05/02/order_ord_8x7k2n/devpolaris-orders-receipt.pdf\n```\n\nWhat is the most likely problem?",
+      "options": [
+        { "id": "a", "text": "The download code is asking for a different key because `receipts/` and `receipt/` are different strings." },
+        { "id": "b", "text": "S3 is eventually moving the object between folder names, so the team should wait." },
+        { "id": "c", "text": "The object metadata is missing, so S3 cannot locate the receipt." },
+        { "id": "d", "text": "The receipt should be in RDS because S3 cannot store PDF files under nested keys." }
+      ],
+      "correct": ["a"],
+      "explanation": "S3 treats nearby key names as different object names. The two strings identify different objects, even though they look almost the same. The first fix is to make the writer and reader use the same key-building rule."
+    }
+  ]
+}

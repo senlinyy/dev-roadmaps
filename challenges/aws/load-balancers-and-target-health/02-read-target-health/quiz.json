@@ -1,0 +1,70 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "Right after a deployment, target health shows:\n\n10.0.42.18  3000  healthy\n10.0.43.27  3000  initial  Elb.InitialHealthChecking\n\nWhat should you conclude?",
+      "options": [
+        { "id": "a", "text": "One target is ready, and the other may simply be new while initial health checks run." },
+        { "id": "b", "text": "The deployment has failed because `initial` always means the target group is unused." },
+        { "id": "c", "text": "The second task must be in a public subnet because only public tasks show `initial`." },
+        { "id": "d", "text": "The DNS alias should be cut over again because target health is a Route 53 status." }
+      ],
+      "correct": ["a"],
+      "explanation": "`initial` is normal for a newly registered target while the ALB checks it. It is not automatically an outage. Watch whether it becomes healthy or moves to an unhealthy reason."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "The target group health check is:\n\nGET /health\nexpected status: 200\n\nTarget health says:\n\n10.0.42.18  3000  unhealthy  Target.ResponseCodeMismatch\n\nApp logs say:\n\npath=/health status=500 reason=db_not_ready\n\nWhat does the reason code mean?",
+      "options": [
+        { "id": "a", "text": "The app answered, but the status code did not match what the target group accepts." },
+        { "id": "b", "text": "The ALB could not open any TCP connection to the task." },
+        { "id": "c", "text": "The target group is not attached to any listener rule." },
+        { "id": "d", "text": "The browser rejected the ACM certificate before reaching the ALB." }
+      ],
+      "correct": ["a"],
+      "explanation": "`Target.ResponseCodeMismatch` means the health endpoint returned a response, but not an accepted status. That differs from a timeout, where no timely response arrives. Here, the app log and ALB reason agree."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "Target health says:\n\n10.0.42.18  3000  unused\n\nThe target group exists and has registered task IPs. Which check is most useful?",
+      "options": [
+        { "id": "a", "text": "Check whether the listener rule forwards the tested host path to this target group." },
+        { "id": "b", "text": "Check whether the database password has expired." },
+        { "id": "c", "text": "Check whether the task role can call `logs:PutLogEvents`." },
+        { "id": "d", "text": "Check whether the public hosted zone uses a shorter TTL." }
+      ],
+      "correct": ["a"],
+      "explanation": "`unused` often means the target group is not actually part of the ALB path being tested. The targets may be registered, but the listener has no reason to send traffic there. Listener rule attachment is the next evidence to inspect."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "Which target health interpretations are sound?",
+      "options": [
+        { "id": "a", "text": "`healthy` means the target passed the configured health check, not that every app feature is perfect." },
+        { "id": "b", "text": "`Target.Timeout` can come from a wrong port, blocked security group path, or a process that is too slow to answer." },
+        { "id": "c", "text": "`draining` means the target is being removed from service, often during replacement." },
+        { "id": "d", "text": "`healthy` means the database credentials, IAM permissions, and every external dependency are all correct." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "Target health is the load balancer's view of a small health contract. It is valuable, but it is not a full application audit. A healthy target can still have a bug outside the health path."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A target group is configured with:\n\nHealthCheckPath: /health\nMatcher: 200\nTimeout: 5 seconds\n\nThe app log has no `/health` entries during the failed checks. What is more likely than a response-code mismatch?",
+      "options": [
+        { "id": "a", "text": "The request may not be reaching the process, so check port mapping, task SG, NACLs, and whether the process is listening." },
+        { "id": "b", "text": "The app returned HTTP 500, but CloudWatch deletes health check logs automatically." },
+        { "id": "c", "text": "The target group matcher should be changed to accept TLS certificate names." },
+        { "id": "d", "text": "Route 53 has cached an old database endpoint." }
+      ],
+      "correct": ["a"],
+      "explanation": "No app log for `/health` suggests the health check may not reach the application process. That points to networking, port, or listener process evidence. A response-code mismatch usually leaves an app-side request record."
+    }
+  ]
+}

@@ -1,0 +1,142 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A deployment log shows:\n\nINFO boot service=devpolaris-orders-api release=2026-05-02.6\nWARN DATABASE_URL missing, continuing startup\nINFO http listening address=0.0.0.0 port=3000\nERROR POST /v1/orders status=500 reason=no_database_config\n\nWhat should change?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Validate required config during startup and fail before serving traffic when DATABASE_URL is missing."
+        },
+        {
+          "id": "b",
+          "text": "Keep accepting traffic because customer requests are the best config validator."
+        },
+        {
+          "id": "c",
+          "text": "Log the full DATABASE_URL value so operators can see whether it is empty."
+        },
+        {
+          "id": "d",
+          "text": "Change the health check path without changing startup validation so the deployment can complete."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Required production config is part of the startup contract. Failing fast with a clear missing-name message is kinder than letting the app accept traffic and fail orders. The log should name the missing variable without printing secret values."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A healthy startup log says:\n\nINFO config node_env=production port=3000 order_timeout_ms=2500\nINFO config secrets_present=DATABASE_URL,PAYMENT_WEBHOOK_SECRET\nINFO database=startup_check_ok latency_ms=42\nINFO health=ready path=/health\n\nWhy is this log shape useful?",
+      "options": [
+        {
+          "id": "a",
+          "text": "It proves safe parts of the runtime contract and secret presence without leaking secret values."
+        },
+        {
+          "id": "b",
+          "text": "It prints every secret value so the team can compare them during incidents."
+        },
+        {
+          "id": "c",
+          "text": "It replaces target health because application logs alone should decide traffic movement."
+        },
+        {
+          "id": "d",
+          "text": "It proves downstream provider behavior because all required names were present at startup."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Good startup logs expose metadata and readiness, not credentials. They tell operators which config names were present and whether a fast dependency check passed. Target health and request metrics still matter after startup."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "The health endpoint returns healthy before database readiness:\n\nINFO http listening port=3000\nINFO health=ready path=/health\nWARN database startup check still running\nERROR first checkout request failed database connection timeout\n\nWhat is the best readiness fix?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Keep readiness false until required startup checks for serving real traffic have passed."
+        },
+        {
+          "id": "b",
+          "text": "Remove the database check because it slows down the health endpoint."
+        },
+        {
+          "id": "c",
+          "text": "Make /health always return 200 so deployments complete faster."
+        },
+        {
+          "id": "d",
+          "text": "Move database checks to the browser so users can retry manually."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Readiness should describe whether the task can safely receive traffic. If the database is required for checkout, the health contract should not announce ready before the app can use it. A faster false signal only moves failures to users."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "Before devpolaris-orders-api serves traffic, the team wants these checks:\n\nrequired env names present\nsecret names present without printing values\nfast database startup check passes\nserver binds 0.0.0.0:3000\nhealth endpoint returns ready only after startup checks\n\nWhich checks belong before traffic?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Required ordinary config should be present and valid."
+        },
+        {
+          "id": "b",
+          "text": "Required secret names should be present without logging their values."
+        },
+        {
+          "id": "c",
+          "text": "Readiness should wait for fast checks that are required for serving real requests."
+        },
+        {
+          "id": "d",
+          "text": "The app should print every environment variable value so missing config is impossible to miss."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "The startup contract should catch missing or malformed required inputs before users arrive. It should reveal names and status, not secret values. Logging all environment values creates a new incident risk."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A deployment fails fast with:\n\nERROR config missing required variable PAYMENT_WEBHOOK_SECRET\nERROR startup aborted code=CONFIG_MISSING\ntarget health: no healthy new targets\nold revision: still healthy because rolling update overlap is active\n\nHow should the team view this failure?",
+      "options": [
+        {
+          "id": "a",
+          "text": "As a useful protective failure: fix the task definition secret reference and deploy a corrected revision before traffic moves."
+        },
+        {
+          "id": "b",
+          "text": "As worse than serving broken traffic, because fast failures should be hidden from ECS."
+        },
+        {
+          "id": "c",
+          "text": "As proof that PAYMENT_WEBHOOK_SECRET should become an optional default."
+        },
+        {
+          "id": "d",
+          "text": "As a reason to mark any startup error healthy in the target group."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Fail-fast behavior can protect users when deployment overlap keeps old healthy tasks serving. The task did not meet its runtime contract, so it should not earn traffic. Fix the secret reference and release a clean revision."
+    }
+  ]
+}

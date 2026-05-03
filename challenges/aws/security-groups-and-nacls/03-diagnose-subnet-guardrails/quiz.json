@@ -1,0 +1,70 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "After a subnet NACL hardening change, customers see timeouts. The ALB subnet NACL has:\n\nInbound allow TCP 443 from 0.0.0.0/0\nOutbound deny all to 0.0.0.0/0\n\nWhy can this break HTTPS even though inbound 443 is allowed?",
+      "options": [
+        { "id": "a", "text": "NACLs are stateless, so the response to the customer's ephemeral port also needs an outbound allow path." },
+        { "id": "b", "text": "Security groups become stateless whenever a custom NACL is attached to a subnet." },
+        { "id": "c", "text": "Inbound 443 should be placed on the database subnet NACL instead of the ALB subnet NACL." },
+        { "id": "d", "text": "HTTPS requires NAT gateway return traffic even for a public ALB." }
+      ],
+      "correct": ["a"],
+      "explanation": "A NACL does not remember the connection that came in. If the response path is blocked, the client can time out even though the request entered on `443`. Security groups are stateful, but a subnet NACL can still block traffic at the subnet boundary."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A flow-log style record appears after the same change:\n\nsrcaddr=10.20.12.44 dstaddr=10.20.2.18 srcport=3000 dstport=51748 protocol=6 action=REJECT\n\nThe target group reports `Target.Timeout`. What does the rejected packet most likely represent?",
+      "options": [
+        { "id": "a", "text": "Return traffic from the app target port to an ephemeral client-side port." },
+        { "id": "b", "text": "A browser attempting to connect directly to the RDS database port." },
+        { "id": "c", "text": "A Route 53 resolver query being blocked by an ACM validation record." },
+        { "id": "d", "text": "An IAM policy evaluation being denied by the ECS task role." }
+      ],
+      "correct": ["a"],
+      "explanation": "The source port is `3000`, which matches the app target port. The destination port is a high temporary port, which looks like return traffic. With NACLs, that return path must be explicitly allowed."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "A database subnet NACL is evaluated in rule-number order:\n\n100 inbound deny TCP 5432 from 10.20.10.0/24\n120 inbound allow TCP 5432 from 10.20.0.0/16\n32767 inbound deny all\n\nThe orders API task is `10.20.10.45`. What happens to its database request?",
+      "options": [
+        { "id": "a", "text": "It is denied by rule 100 before the later broader allow rule is considered." },
+        { "id": "b", "text": "It is allowed because security group references always override NACL deny rules." },
+        { "id": "c", "text": "It is allowed by rule 120 because broader CIDRs are evaluated before narrower CIDRs." },
+        { "id": "d", "text": "It is sent to the NAT gateway because NACL denies are route-table targets." }
+      ],
+      "correct": ["a"],
+      "explanation": "NACL rules are checked from the lowest rule number upward. A matching deny at rule 100 stops the packet before the allow at rule 120 can help. This is why rule order matters when NACLs become stricter."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "Which statements are correct when comparing security groups and NACLs for devpolaris-orders-api?",
+      "options": [
+        { "id": "a", "text": "Security groups are stateful allow rules attached to resources." },
+        { "id": "b", "text": "NACLs are stateless allow and deny rules attached to subnets." },
+        { "id": "c", "text": "A NACL can block return traffic even when security groups look correct." },
+        { "id": "d", "text": "NACLs are the best primary tool for app-to-database identity because they can reference security group IDs." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "Security groups are usually the main resource-level boundary, and they remember allowed conversations. NACLs work at the subnet boundary and do not remember conversations, so both directions need rules. NACLs do not express app roles with security group references."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "The app SG allows TCP 3000 from `sg-orders-alb`, and the ALB SG allows outbound TCP 3000 to `sg-orders-task`. After a NACL change, health checks time out only in `subnet-app-a`. What is the best next check?",
+      "options": [
+        { "id": "a", "text": "Inspect the NACL associated with `subnet-app-a`, including inbound request rules and outbound ephemeral return rules." },
+        { "id": "b", "text": "Add task inbound TCP 3000 from `0.0.0.0/0` because the security group path is probably too narrow." },
+        { "id": "c", "text": "Change the RDS security group because database timeouts and health check timeouts share the same port." },
+        { "id": "d", "text": "Request a new ACM certificate because NACL changes invalidate TLS trust." }
+      ],
+      "correct": ["a"],
+      "explanation": "The security group path already matches the intended caller and port. The failure is subnet-specific and started after a NACL change, so inspect that subnet guardrail next. Opening the task to everyone would be a broad change that does not address the likely return-path issue."
+    }
+  ]
+}

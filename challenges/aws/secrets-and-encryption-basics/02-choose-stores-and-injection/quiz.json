@@ -1,0 +1,70 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "The production `DATABASE_URL` for `devpolaris-orders-api` includes a database username and password. The team expects to rotate it during incidents and eventually on a schedule. Which first AWS store is the best fit?",
+      "options": [
+        { "id": "a", "text": "AWS Secrets Manager, because the value is clearly secret and lifecycle or rotation matters." },
+        { "id": "b", "text": "A plain GitHub repository variable, because database URLs are configuration rather than secrets." },
+        { "id": "c", "text": "A Dockerfile `ENV` line, because image history is easier to audit than AWS metadata." },
+        { "id": "d", "text": "The ECS service name, because ECS can infer the database password from the service." }
+      ],
+      "correct": ["a"],
+      "explanation": "Secrets Manager is the natural first choice for a secret with lifecycle and rotation concerns. The other locations either expose the value or do not store it at all. The article does not say every secret must use Secrets Manager, but database credentials are a strong fit."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "The team stores the Stripe webhook token as a `SecureString` named `/prod/orders/STRIPE_WEBHOOK_SECRET`. What is the main value of this shape?",
+      "options": [
+        { "id": "a", "text": "The path makes environment and ownership visible, while `SecureString` encrypts the stored value." },
+        { "id": "b", "text": "The parameter name hides the secret value, so IAM permissions are no longer needed." },
+        { "id": "c", "text": "Parameter Store values are automatically injected into every ECS task in the account." },
+        { "id": "d", "text": "A `SecureString` can safely include the production token in the parameter name." }
+      ],
+      "correct": ["a"],
+      "explanation": "Parameter Store gives a simple path-based naming model, and `SecureString` encrypts the value. IAM still controls who can read or decrypt it, ECS needs an explicit reference, and parameter names should not contain private data."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "A task definition review shows this simplified container config:\n\n```json\n\"environment\": [\n  { \"name\": \"NODE_ENV\", \"value\": \"production\" },\n  { \"name\": \"DATABASE_URL\", \"value\": \"postgresql://orders_app:prod-password@orders-prod.example:5432/orders\" }\n],\n\"secrets\": []\n```\n\nWhat is the best review comment?",
+      "options": [
+        { "id": "a", "text": "Keep plain config like `NODE_ENV` in `environment`, but move `DATABASE_URL` to `secrets` with a `valueFrom` reference." },
+        { "id": "b", "text": "Move both values into `secrets` because every environment variable is private." },
+        { "id": "c", "text": "Keep the database URL literal because ECS encrypts all task definitions by default." },
+        { "id": "d", "text": "Remove `NODE_ENV` because ECS containers cannot read environment variables." }
+      ],
+      "correct": ["a"],
+      "explanation": "ECS task definitions should separate literal non-secret configuration from secret references. The app can still read `process.env.DATABASE_URL`, but ECS should fetch the value from Secrets Manager or Parameter Store at startup. `NODE_ENV` can stay as plain config."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "A new ECS deployment stops before the Node.js process starts:\n\n```text\nResourceInitializationError: unable to retrieve secret from asm: AccessDeniedException:\nUser arn:aws:sts::111122223333:assumed-role/devpolaris-orders-ecs-execution/ecs-task\nis not authorized to perform secretsmanager:GetSecretValue\n```\n\nWhich role should the team inspect first?",
+      "options": [
+        { "id": "a", "text": "The task execution role, because ECS uses it to fetch injected secrets before the container starts." },
+        { "id": "b", "text": "The application task role, because app runtime SDK calls fetch all ECS secrets after startup." },
+        { "id": "c", "text": "The GitHub deploy role, because a task startup error always means the deploy role lacks ECS update access." },
+        { "id": "d", "text": "The human console role, because only people can call Secrets Manager." }
+      ],
+      "correct": ["a"],
+      "explanation": "For ECS secret injection, the execution role is the identity ECS uses during startup to retrieve referenced secrets or parameters. The app task role matters for runtime AWS SDK calls after startup. The error says the app probably has not started yet."
+    },
+    {
+      "id": "q5",
+      "type": "multiple",
+      "scenario": "A shipping review checks how ECS will inject `DATABASE_URL` for `devpolaris-orders-api`. The value comes from Secrets Manager and is protected by a customer managed KMS key. Which comments are valid before the team promotes the task definition?",
+      "options": [
+        { "id": "a", "text": "The container should receive the name `DATABASE_URL`, while `valueFrom` points to the secret ARN." },
+        { "id": "b", "text": "The task execution role needs permission to read the referenced secret during task startup." },
+        { "id": "c", "text": "If a customer managed KMS key protects the secret, the execution role and key policy may also need `kms:Decrypt`." },
+        { "id": "d", "text": "The plaintext password should be copied into `environment` as a fallback in case KMS is slow." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "ECS secret injection gives the app the environment variable name while ECS fetches the value from the managed store. For startup injection, the execution role is the key identity to check, and a customer managed KMS key can add a decrypt permission path. Copying plaintext into `environment` would put the secret back into the task definition."
+    }
+  ]
+}

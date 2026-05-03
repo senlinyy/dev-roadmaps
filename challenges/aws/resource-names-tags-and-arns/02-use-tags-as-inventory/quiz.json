@@ -17,16 +17,15 @@
     {
       "id": "q2",
       "type": "multiple",
-      "scenario": "A new production export bucket is being created for DevPolaris orders. The team wants the bucket to show up in service inventory, cost review, ownership reports, and component-level cleanup. Which tags belong in the initial tag set?",
+      "scenario": "A new production export bucket is being created for DevPolaris orders. The team wants the bucket to show up in service inventory, cost review, and ownership reports. Which tags belong in the initial tag set?",
       "options": [
         { "id": "a", "text": "`service=devpolaris-orders-api` to group the bucket with the rest of the app." },
         { "id": "b", "text": "`env=prod` to separate production from dev and staging resources." },
         { "id": "c", "text": "`owner=checkout` to show which team responds when the bucket needs review." },
-        { "id": "d", "text": "`component=exports` to explain the bucket's role inside the service." },
-        { "id": "e", "text": "`customer-email=alex@example.com` to make support cases easier to trace." }
+        { "id": "d", "text": "`customer-email=alex@example.com` to make support cases easier to trace." }
       ],
-      "correct": ["a", "b", "c", "d"],
-      "explanation": "Service, environment, owner, and component tags make the bucket understandable across inventory, cost, operations, and cleanup. A customer email is plausible during an incident, but tags can appear in billing, administration, and screenshots, so personal data does not belong there."
+      "correct": ["a", "b", "c"],
+      "explanation": "Service, environment, and owner tags make the bucket understandable across inventory, cost, and operations. A customer email is plausible during an incident, but tags can appear in billing, administration, and screenshots, so personal data does not belong there. Keep tags useful, consistent, and free of private data."
     },
     {
       "id": "q3",
@@ -61,7 +60,7 @@
       "options": [
         { "id": "a", "text": "Delete by name only, because any resource with `test` in the name is clearly temporary." },
         { "id": "b", "text": "Require tags such as `env=dev`, `owner`, `managed-by`, and an expired `expires-on` date before deletion is allowed." },
-        { "id": "c", "text": "Delete everything without an owner tag, because missing ownership proves it is unused." },
+        { "id": "c", "text": "Remove every resource without an owner tag after one age check, even if usage is unclear." },
         { "id": "d", "text": "Ignore tags and use only the oldest creation date, because age is the only cleanup signal that matters." }
       ],
       "correct": ["b"],

@@ -1,0 +1,142 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "Checkout logs during a provider slowdown:\n\nPOST /v1/orders orderId=ord_1042 database=create_ok latency_ms=84\nreceipt provider call latency_ms=6100\ncheckout response latency_ms=6420\ncustomer retries: rising\n\nWhat design change best fits the article?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Move receipt email to a queue-backed worker so checkout can return after the order is safely created and the message is sent."
+        },
+        {
+          "id": "b",
+          "text": "Increase checkout timeout so every customer waits longer for email delivery."
+        },
+        {
+          "id": "c",
+          "text": "Run receipt email in the ALB listener because listeners are faster than workers."
+        },
+        {
+          "id": "d",
+          "text": "Store the email provider password in the image so calls become synchronous."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Receipt email is slow side work that does not need to block order creation. A queue gives the system a buffer and a clearer failure boundary. The API should log that it created the order and enqueued the receipt job."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "Queue metrics for orders-background-prod:\n\nvisible messages: 8,400\nage of oldest message: 19 minutes and rising\nworker desired=2 running=2 CPU=84 percent\nemail provider latency: normal\nDLQ messages: 0\n\nWhich control is most reasonable?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Scale out workers carefully because worker capacity appears to be the limiting layer."
+        },
+        {
+          "id": "b",
+          "text": "Scale out the public API because queue age is always caused by web tasks."
+        },
+        {
+          "id": "c",
+          "text": "Pause workers because a rising queue with healthy provider means all work is bad."
+        },
+        {
+          "id": "d",
+          "text": "Delete the queue so messages stop aging."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The queue is building, workers are busy, and the provider looks healthy. Adding worker capacity can help drain valid work. The team should still watch downstream systems after scaling consumers."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "A vendor incident begins:\n\nemail provider: 429 rate limit responses\nworker desired=8 running=8\nworker errors: rising\nqueue age: rising\nDLQ movement: starting\n\nWhat control best buys time?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Reduce worker desired count or pause workers to slow pressure on the provider while preserving queued work."
+        },
+        {
+          "id": "b",
+          "text": "Increase workers to 30 so retries overpower the provider limit."
+        },
+        {
+          "id": "c",
+          "text": "Move receipt sending back into checkout so customers can wait for retries."
+        },
+        {
+          "id": "d",
+          "text": "Delete failed messages from the queue without recording which orders need receipts."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "More consumers can make a rate-limited dependency worse. Reducing or pausing workers contains damage while messages remain in the queue. The team can resume carefully when the provider recovers."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "A worker runbook tracks:\n\nSQS visible messages\nage of oldest message\nworker running count and error rate\nprovider latency and rate limits\nDLQ message count\nidempotency skips\n\nWhich signals are useful for operating queue-backed work?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Queue depth and age of oldest message."
+        },
+        {
+          "id": "b",
+          "text": "Worker errors, running count, and downstream provider health."
+        },
+        {
+          "id": "c",
+          "text": "DLQ movement and idempotency-skip logs."
+        },
+        {
+          "id": "d",
+          "text": "The public ALB certificate expiration as the only worker scaling signal."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "Queues turn immediate pain into delayed work, so age and depth matter. Worker and provider metrics tell whether consumers are helping or hurting. DLQ and idempotency signals show whether retries are safe."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "The checkout API and receipt worker share one scaling policy:\n\nif ALB request count rises, set API desired count to 6 and worker desired count to 6\n\nDuring a sale:\ncheckout requests rise\nemail provider starts rate limiting\nworker errors rise\nAPI latency remains healthy\n\nWhat is wrong with the policy?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The API and worker have different bottlenecks, so worker scaling should be based on queue and provider signals, not only ALB requests."
+        },
+        {
+          "id": "b",
+          "text": "Workers should always scale faster than the API because side work matters more than checkout."
+        },
+        {
+          "id": "c",
+          "text": "The API should stop accepting orders whenever the email provider rate limits."
+        },
+        {
+          "id": "d",
+          "text": "ALB request count is enough to prove the provider can accept more emails."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The API and worker are separate runtime surfaces. More checkout traffic may create more side work, but provider capacity and queue age decide worker safety. One shared policy can overload a dependency that the API itself is not stressing."
+    }
+  ]
+}

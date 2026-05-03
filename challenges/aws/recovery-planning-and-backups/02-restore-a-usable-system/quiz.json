@@ -1,0 +1,70 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "The team restores RDS to a side instance:\n\n```text\nsource: orders-prod\ntarget: orders-prod-restore-20260502-101100\nstatus: restore complete\napp config: DATABASE_HOST still points to orders-prod\ntraffic decision: production remains on original database\n```\n\nWhat is missing before this is a usable service restore?",
+      "options": [
+        { "id": "a", "text": "A safe plan to validate the target and connect the app or repair job to the restored database if needed." },
+        { "id": "b", "text": "Nothing, because AWS restore complete means checkout is automatically using the side instance." },
+        { "id": "c", "text": "A new ALB only, because database restores are controlled by load balancers." },
+        { "id": "d", "text": "A decision to delete production before validating the restored target." }
+      ],
+      "correct": ["a"],
+      "explanation": "A restored database is a new resource, not an automatic production fix. The team needs validation, app or repair configuration, network access, permissions, and a traffic or repair decision. Restore complete is only one step."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "After a restore test, sample orders read correctly from RDS, but receipt links fail:\n\n```text\norder row exists: ord_77\nreceipt_key: receipts/2026/05/02/order_ord_77/receipt.pdf\nS3 result: NoSuchKey\nversioning: enabled, older version exists behind delete marker\n```\n\nWhat did the plan miss?",
+      "options": [
+        { "id": "a", "text": "The full data path, including S3 object versions and how expected keys become readable again." },
+        { "id": "b", "text": "Only ECS task CPU, because missing receipts are a compute sizing issue." },
+        { "id": "c", "text": "Only the database restore, because receipt objects do not matter once rows exist." },
+        { "id": "d", "text": "Only the ALB listener rule, because S3 versioning is unrelated to object recovery." }
+      ],
+      "correct": ["a"],
+      "explanation": "The orders service depends on more than RDS. Receipt objects may need S3 version recovery or a copy-back step so the expected key serves the correct content. A usable restore covers every data dependency the feature needs."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "Validation output for a side restore says:\n\n```text\ntarget: orders-prod-restore-20260502-101100\nsample corrupted order has expected previous total\nlatest valid order before restore time exists\nbad write pattern absent\ndatabase security group allows review access only\ndecision: use restored database as repair source, not direct traffic target yet\n```\n\nWhy is that decision reasonable?",
+      "options": [
+        { "id": "a", "text": "The restore is useful evidence, but direct cutover could lose valid orders created after the restore time." },
+        { "id": "b", "text": "Side restores should never be used for repair, even when they contain clean reference data." },
+        { "id": "c", "text": "Production should always cut over immediately after one sample order passes validation." },
+        { "id": "d", "text": "Validation is unnecessary because the security group is restricted." }
+      ],
+      "correct": ["a"],
+      "explanation": "A side restore can be the clean reference for repair without becoming the live database. If good orders were created after the restore point, direct cutover may lose them. The team must choose repair or cutover based on data correctness and business impact."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "Which pieces help turn a backup into a usable recovered system?",
+      "options": [
+        { "id": "a", "text": "A named restore target and the source, chosen time, and reason it exists." },
+        { "id": "b", "text": "Application configuration, secret references, network access, and permissions for the restored target." },
+        { "id": "c", "text": "Validation checks that prove data and service behavior match the recovery goal." },
+        { "id": "d", "text": "A plan to assume the backup is fine and return traffic without checking the app path." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "A backup is stored potential. A usable restore needs a target, configuration, access, and proof. Skipping validation can turn a recovery into a second incident."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "The restore process exists only as memory in one senior engineer's head. During a drill, another engineer cannot find which secret reference the ECS task should use for the restored database.",
+      "options": [
+        { "id": "a", "text": "Write and practice a runbook that names the secret reference, config change, validation checks, and rollback path." },
+        { "id": "b", "text": "Keep the process private so fewer people can make mistakes." },
+        { "id": "c", "text": "Skip future drills because the missing secret proves restore is impossible." },
+        { "id": "d", "text": "Paste database passwords into the runbook so nobody needs Secrets Manager." }
+      ],
+      "correct": ["a"],
+      "explanation": "Recovery should be repeatable by the team, not dependent on one person's memory. The runbook should name secret references and config paths without exposing secret values. Practice is where missing steps become visible safely."
+    }
+  ]
+}

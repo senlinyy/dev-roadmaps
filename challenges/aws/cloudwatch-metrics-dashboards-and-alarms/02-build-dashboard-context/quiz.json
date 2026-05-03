@@ -1,0 +1,70 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A proposed dashboard starts with obscure resource IDs and ends with checkout errors. During a page, the first screen would show:\n\n```text\nrow 1: internal queue shard IDs, unrelated staging Lambda duration\nrow 2: S3 total bucket bytes, old export counts\nrow 3: checkout request count, 5xx, latency\nrow 4: ECS task health, RDS connections\n```\n\nWhat change best matches the article?",
+      "options": [
+        { "id": "a", "text": "Move checkout traffic, 5xx, and latency to the first row, then show app runtime and dependencies." },
+        { "id": "b", "text": "Keep user impact at the bottom so engineers learn the AWS resource names first." },
+        { "id": "c", "text": "Remove labels and let each chart title be only the generated resource ID." },
+        { "id": "d", "text": "Show only S3 storage, because dashboards should avoid customer-facing metrics." }
+      ],
+      "correct": ["a"],
+      "explanation": "A dashboard should tell a short story. Start with whether customers are affected, then show whether app runtime or dependencies changed. That order helps a junior engineer choose the next check without decoding unrelated charts first."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A 15-minute dashboard snapshot says:\n\n```text\nALB request count: normal\nALB target 5xx: increased after 09:40\nTarget response time: elevated after 09:41\nECS CPU and memory: normal\nRunning tasks: 3 of 3\nRDS connections: rising\nLambda receipt errors: normal\n```\n\nWhat is the best next dashboard-led move?",
+      "options": [
+        { "id": "a", "text": "Check orders API logs and RDS evidence, because customer errors line up with database pressure while ECS looks steady." },
+        { "id": "b", "text": "Restart the receipt Lambda first, because it appears on the dashboard." },
+        { "id": "c", "text": "Set aside the 5xx chart because request count is normal." },
+        { "id": "d", "text": "Resize every layer at once because dashboards are only useful after changes are made." }
+      ],
+      "correct": ["a"],
+      "explanation": "The dashboard narrows the investigation. Customer errors are real, app resource pressure is not obvious, and RDS moved in the same window. Logs and database checks are the next useful evidence sources."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "The team wants to add a chart for every AWS metric available on every resource that has `devpolaris` in its name. The dashboard would grow from 12 charts to 140 charts.",
+      "options": [
+        { "id": "a", "text": "Push back and keep charts tied to operating questions the team can act on." },
+        { "id": "b", "text": "Approve it because a crowded dashboard always gives more context." },
+        { "id": "c", "text": "Add the charts but remove the service names to save space." },
+        { "id": "d", "text": "Replace the dashboard with a single monthly cost number." }
+      ],
+      "correct": ["a"],
+      "explanation": "Dashboards fail when they become another search problem. The useful view is not every possible metric; it is the set of signals that helps during a real question. Customer impact, app runtime, data services, side jobs, and important object-write failures are a better shape."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "Which dashboard rows would help an engineer reason about checkout health?",
+      "options": [
+        { "id": "a", "text": "Requests, 4xx, 5xx, and latency for user-facing health." },
+        { "id": "b", "text": "Healthy targets, running ECS tasks, CPU, memory, and restarts for app runtime." },
+        { "id": "c", "text": "RDS, DynamoDB, Lambda side-job, and important receipt-write signals for dependencies." },
+        { "id": "d", "text": "Unlabeled charts from unrelated staging resources mixed into the production incident view." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "The correct rows match the service story: customer impact first, then the runtime, then dependencies and side jobs. Mixing unrelated staging resources into production incident context makes the view harder to trust. Good dashboards reduce translation work."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A dashboard chart is titled `tg-0b7ef2a3908e4 target response`. Newer teammates do not know it means checkout API latency. What improvement is most helpful?",
+      "options": [
+        { "id": "a", "text": "Use service-language labels such as `orders API latency` and `checkout 5xx` while keeping dimensions accurate." },
+        { "id": "b", "text": "Hide dimensions so nobody asks which target group the chart uses." },
+        { "id": "c", "text": "Rename every chart to `important metric` and let the runbook explain later." },
+        { "id": "d", "text": "Move the chart to a separate dashboard that only the original author can interpret." }
+      ],
+      "correct": ["a"],
+      "explanation": "Labels should use the language the team uses during incidents. Accurate dimensions still matter, but human-readable titles reduce translation work. A junior engineer should not have to decode resource IDs before seeing customer impact."
+    }
+  ]
+}

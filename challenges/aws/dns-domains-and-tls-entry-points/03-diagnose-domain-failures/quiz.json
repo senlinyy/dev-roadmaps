@@ -1,0 +1,70 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "`dig +short orders.devpolaris.com` returns:\n\n203.0.113.41\n203.0.113.92\n198.51.100.17\n\nRoute 53 record details show:\n\nAlias target: dualstack.devpolaris-orders-staging-alb-999.us-east-1.elb.amazonaws.com\nExpected production ALB: dualstack.devpolaris-orders-alb-123.us-east-1.elb.amazonaws.com\n\nWhat is the first broken promise?",
+      "options": [
+        { "id": "a", "text": "DNS resolves, but the alias points to the wrong ALB." },
+        { "id": "b", "text": "DNS does not resolve, so the hosted zone delegation is missing." },
+        { "id": "c", "text": "TLS cannot work because DNS returned more than one IP address." },
+        { "id": "d", "text": "The backend is unhealthy because staging and production ALBs share target groups." }
+      ],
+      "correct": ["a"],
+      "explanation": "The name resolves, so DNS exists, but it resolves to the wrong entry point. Stop at the alias mismatch before judging certificates, listener rules, or targets. A staging ALB can return valid responses while still being the wrong service."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "The alias target is correct. The TLS test returns:\n\nsubject=CN = api.devpolaris.com\nrequested SNI: orders.devpolaris.com\n\nWhat should the team fix?",
+      "options": [
+        { "id": "a", "text": "Attach or issue a certificate that covers `orders.devpolaris.com` on the HTTPS listener." },
+        { "id": "b", "text": "Change the target group health check path because TLS subject mismatch means `/health` is slow." },
+        { "id": "c", "text": "Open task inbound TCP 3000 from the internet so the browser can avoid the certificate." },
+        { "id": "d", "text": "Move the Route 53 record into a private hosted zone." }
+      ],
+      "correct": ["a"],
+      "explanation": "The browser requested `orders.devpolaris.com`, but the presented certificate covers a different hostname. That is a TLS identity problem on the listener. Target health cannot repair a certificate mismatch."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "Which evidence should be collected in order when `https://orders.devpolaris.com` fails?",
+      "options": [
+        { "id": "a", "text": "`dig` or Route 53 evidence that the name resolves publicly." },
+        { "id": "b", "text": "Route 53 alias details showing the expected production ALB." },
+        { "id": "c", "text": "TLS evidence showing the certificate covers `orders.devpolaris.com`." },
+        { "id": "d", "text": "RDS slow query logs before checking DNS or TLS." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "The diagnostic path starts with the name, then the alias target, then TLS identity, then listener routing and target health. Database logs can matter later, but they are not first for a domain failure. Early-layer evidence prevents noisy backend detours."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "DNS, alias target, and TLS all look correct. The listener table is:\n\nHTTPS:443 certificate orders.devpolaris.com forward: devpolaris-orders-api-tg\nHTTP:80 redirect to HTTPS:443\n\nTarget health:\n10.0.42.18 8080 healthy\n10.0.58.21 8080 healthy\n\n`curl -I https://orders.devpolaris.com/health` still returns a 404 from the app. What is the next best check?",
+      "options": [
+        { "id": "a", "text": "Check application routing or the health path, because the domain and ALB path appear to reach healthy targets." },
+        { "id": "b", "text": "Change the Route 53 alias because any 404 means the name points to the wrong ALB." },
+        { "id": "c", "text": "Request another ACM certificate because healthy targets invalidate the current certificate." },
+        { "id": "d", "text": "Move the target group to port 443 because HTTPS should reach containers on 443." }
+      ],
+      "correct": ["a"],
+      "explanation": "The earlier promises look healthy: DNS, TLS, listener, and target group. A 404 from the app suggests the request reached application routing but the path may not exist or is handled differently. Now it is reasonable to inspect app behavior."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "During a cutover, the team lowers DNS TTL, creates a new ALB, attaches a valid certificate, and registers healthy targets. The final check before changing the alias shows:\n\nnew ALB DNS: dualstack.devpolaris-orders-alb-green-456.us-east-1.elb.amazonaws.com\nlistener: HTTPS 443 forwards to devpolaris-orders-api-green-tg\ncertificate: covers orders.devpolaris.com\nhealth: 2 healthy targets\n\nWhat is the safest next action?",
+      "options": [
+        { "id": "a", "text": "Update the Route 53 alias to the new ALB and monitor DNS, TLS, listener, and target health during propagation." },
+        { "id": "b", "text": "Delete the old ALB before changing DNS so clients are forced to reconnect." },
+        { "id": "c", "text": "Change the certificate common name to the generated ALB DNS name because that is the real endpoint." },
+        { "id": "d", "text": "Move ECS tasks into public subnets so DNS propagation is faster." }
+      ],
+      "correct": ["a"],
+      "explanation": "The new entry point has the required DNS target, certificate, listener, and healthy backend evidence. Updating the alias is the controlled cutover step, followed by monitoring. Deleting the old entry point first removes the rollback path."
+    }
+  ]
+}

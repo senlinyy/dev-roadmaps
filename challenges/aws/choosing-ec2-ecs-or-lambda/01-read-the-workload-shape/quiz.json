@@ -1,0 +1,142 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A workload worksheet for devpolaris-orders-api says:\n\nprimary job: synchronous checkout API\npackage: container image\npublic entry: ALB\nstate: RDS-backed, no local disk state required\nops capacity: small team, limited host-patching time\n\nWhich compute choice is the best first recommendation?",
+      "options": [
+        {
+          "id": "a",
+          "text": "ECS on Fargate, because it fits a containerized long-running API without making the team operate EC2 hosts."
+        },
+        {
+          "id": "b",
+          "text": "EC2, because every ALB target should be a hand-managed virtual machine."
+        },
+        {
+          "id": "c",
+          "text": "Lambda, because all synchronous HTTP APIs are simpler when rewritten as one function immediately."
+        },
+        {
+          "id": "d",
+          "text": "A queue worker only, because background processing is easier to retry than synchronous HTTP traffic."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The worksheet says service-shaped and containerized, with no special host need. ECS on Fargate lets the team operate the service, health, logs, and task definition without routine host work. EC2 and Lambda may fit other components, but not this main API evidence."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A side workload note says:\n\nname: receipt-email-worker\nstarts when: SQS message arrives\nwork duration: usually under 700 ms\nneeds port listener: no\nduplicate risk: must use idempotency key receipt:{orderId}\n\nWhich compute choice fits best?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Lambda, because the job is event-shaped and should be safe across retries."
+        },
+        {
+          "id": "b",
+          "text": "EC2, because only virtual servers can read SQS messages."
+        },
+        {
+          "id": "c",
+          "text": "The main checkout ECS task, because slow side effects should stay inside the customer request."
+        },
+        {
+          "id": "d",
+          "text": "An ALB listener rule, because listeners are background workers when no targets are healthy."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The trigger and duration point to Lambda. The idempotency note is also important because queue-based work can retry. The main checkout service should not wait on slow side effects if a queue can decouple them."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "A vendor fraud scorer requires:\n\nhost agent installed as a daemon\nlicensed OS package\nvendor support asks for VM-level logs\nnormal traffic: internal API calls from orders service\n\nWhich compute choice is most defensible?",
+      "options": [
+        {
+          "id": "a",
+          "text": "EC2 for the fraud scorer, with explicit ownership for patching, disk, process supervision, and replacement."
+        },
+        {
+          "id": "b",
+          "text": "Lambda, because vendor daemons are easiest to install inside an invocation context."
+        },
+        {
+          "id": "c",
+          "text": "The existing Fargate task, because managed hosts can always be modified after launch."
+        },
+        {
+          "id": "d",
+          "text": "Fold it into the checkout API task because keeping components together is simpler, even though the vendor support path needs host logs."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The real requirement is host-level control, which is where EC2 can be honest. That choice should be scoped to the component that needs it. It does not force the main orders API off ECS."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "A good workload worksheet includes these facts:\n\nmain API: listens all day on port 3000\npackage: container image\nreceipt job: starts from SQS\nfraud scorer: requires host agent\nteam: small, limited server operations time\n\nWhich facts should influence the compute choice?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Whether the workload must stay alive and listen for requests."
+        },
+        {
+          "id": "b",
+          "text": "Whether the deployment package is already a container image."
+        },
+        {
+          "id": "c",
+          "text": "Whether a component truly needs host OS control."
+        },
+        {
+          "id": "d",
+          "text": "Whether the chosen AWS service name sounds modern in a diagram."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "The decision should come from workload shape, packaging, control, traffic, and operations capacity. A service name is not a reason by itself. Good worksheets keep the debate practical and reviewable."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A proposal says, \"Standardize the whole orders system on one compute service.\" The inventory says:\n\ncheckout API: long-running container behind ALB\nreceipt emails: SQS-triggered side work\nfraud scorer: host-level vendor daemon\n\nWhat is the better operating view?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Choose per workload: ECS/Fargate for the API, Lambda for event jobs, and EC2 only for the host-control exception."
+        },
+        {
+          "id": "b",
+          "text": "Use EC2 for everything because one service reduces all operational responsibility."
+        },
+        {
+          "id": "c",
+          "text": "Use Lambda for everything because event jobs exist somewhere in the system."
+        },
+        {
+          "id": "d",
+          "text": "Use ECS for everything and defer the vendor host requirement to a later migration."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The article teaches per-workload choice. The checkout API, receipt worker, and fraud scorer have different operating shapes. A single-company rule can hide the evidence that should drive the decision."
+    }
+  ]
+}

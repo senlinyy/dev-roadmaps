@@ -1,0 +1,142 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "Target health for devpolaris-orders-api on ECS shows:\n\nTarget: 10.0.42.18:3000\nState: unhealthy\nReason: Target.ResponseCodeMismatch\nDescription: Health checks failed with codes: [503]\n\nCloudWatch logs show:\npath=/health status=503 reason=config_not_ready\n\nWhat should the team inspect first?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The app readiness path and runtime config, because the ALB reached the task but the health response was not accepted."
+        },
+        {
+          "id": "b",
+          "text": "DNS records for orders.devpolaris.com, because ResponseCodeMismatch means the browser cannot find the ALB."
+        },
+        {
+          "id": "c",
+          "text": "The EC2 host SSH path, because every unhealthy target starts with host login."
+        },
+        {
+          "id": "d",
+          "text": "Lambda concurrency limits, because a target group health check is an invocation failure."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "ResponseCodeMismatch means the target answered with an unexpected HTTP status. That points inward to the health endpoint and why readiness returned 503. DNS and Lambda are not the first layer for this ECS target-group signal."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A side function processes export events. The dashboard shows:\n\nFunction: devpolaris-orders-export-generator\nInvocations: 420\nErrors: 37\nThrottles: 0\nAverage duration: 2890 ms\nMax memory used: 241 MB of 256 MB\n\nWhich evidence stream fits this compute shape?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Lambda invocation logs and metrics, because the work runs per event and does not listen on a container port."
+        },
+        {
+          "id": "b",
+          "text": "ALB target health on port 3000, because every Node.js workload must pass an HTTP health check."
+        },
+        {
+          "id": "c",
+          "text": "systemd service status on an EC2 instance, because Lambda reports are written by a process manager."
+        },
+        {
+          "id": "d",
+          "text": "ECS desired count, because Lambda scales only by keeping a fixed number of tasks running."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The snapshot is invocation-shaped: errors, duration, memory, and throttles. That is the Lambda operating surface. A port listener or desired task count is the wrong first model unless the workload has been redesigned as a service."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "An EC2-backed staging API has this evidence:\n\nALB target health: Target.Timeout on i-0abc123:3000\nsystemctl is-active devpolaris-orders-api: active\nlocal curl http://127.0.0.1:3000/health: 200\nsecurity group inbound: TCP 3000 from sg-admin-bastion only\n\nWhat is the most likely next fix direction?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Allow the ALB security group to reach the instance security group on port 3000, then recheck target health."
+        },
+        {
+          "id": "b",
+          "text": "Rebuild the Node.js app because local health returning 200 proves the binary is corrupt."
+        },
+        {
+          "id": "c",
+          "text": "Move the API to Lambda because Target.Timeout can only happen for serverless workloads."
+        },
+        {
+          "id": "d",
+          "text": "Increase the root EBS volume because a timeout always means disk pressure."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The local service is healthy, but the ALB cannot reach it. The security group evidence shows port 3000 is allowed from the bastion, not from the ALB. That makes the network path a better first fix than code or disk changes."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "During an ECS release, the team wants to prove the traffic path before declaring success:\n\nservice desired=2 running=2 pending=0\ntarget group orders-api-tg has task IPs on port 3000\nCloudWatch logs show release=2026-05-02.4 and health=ready\nALB target response time is stable\n\nWhich facts are useful traffic-path evidence?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The target group has healthy task IPs on the expected port."
+        },
+        {
+          "id": "b",
+          "text": "The app logs prove the expected release bound the expected port and reported readiness."
+        },
+        {
+          "id": "c",
+          "text": "The ECS service has the desired number of running tasks with no pending tasks."
+        },
+        {
+          "id": "d",
+          "text": "The ECR tag exists, so the ALB must already be sending traffic to the new tasks."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "Healthy target IPs, running counts, and app logs each prove a different part of the service path. The ECR tag is only a passive artifact. It does not prove the service deployed it or that the ALB trusts it."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "Traffic rose during a sale window:\n\nALB requests: 230 per minute, rising\nECS service: desired=2 running=2 pending=0\nCPU average: 82 percent\nmemory average: 55 percent\nRDS connections: normal\ntarget 5xx: low\n\nWhich scaling decision best matches the evidence?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Scale out the ECS service carefully, because the API task layer is the likely capacity limit and dependencies look healthy."
+        },
+        {
+          "id": "b",
+          "text": "Lower desired count, because high CPU always means the service has too many tasks."
+        },
+        {
+          "id": "c",
+          "text": "Move checkout to Lambda immediately, because any traffic spike means the current compute choice is wrong."
+        },
+        {
+          "id": "d",
+          "text": "Rotate DATABASE_URL, because scaling signals are primarily secret-injection evidence."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "This snapshot points to API capacity: requests and CPU are high while downstream signals look healthy. Scaling out is a reasonable short-term control. It should still be watched because adding tasks can hurt if the real bottleneck moves to the database."
+    }
+  ]
+}

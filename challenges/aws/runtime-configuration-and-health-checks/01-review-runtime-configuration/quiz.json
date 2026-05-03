@@ -1,0 +1,142 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "The same image digest is deployed to staging and production:\n\nimageDigest: sha256:8f3d...\nstaging env: NODE_ENV=production, PUBLIC_BASE_URL=https://staging-orders.devpolaris.com\nprod env: NODE_ENV=production, PUBLIC_BASE_URL=https://orders.devpolaris.com\nprod secrets: DATABASE_URL from Secrets Manager\n\nWhat does this show?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The image can stay boring while runtime configuration chooses environment-specific values."
+        },
+        {
+          "id": "b",
+          "text": "The image must be rebuilt for every PUBLIC_BASE_URL change even when code is unchanged."
+        },
+        {
+          "id": "c",
+          "text": "Production secrets are safe if they are copied into the image during build."
+        },
+        {
+          "id": "d",
+          "text": "Staging and production should share the same DATABASE_URL so the digest stays identical."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Runtime configuration lets the same artifact run with different environment settings. Ordinary values can live in environment entries, while secrets should be referenced from a secret store. Rebuilding for every setting change is exactly what this model tries to avoid."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A task definition review finds:\n\nenvironment:\n  NODE_ENV=production\n  PORT=3000\n  DATABASE_URL=postgres://orders_prod:plain-password@db.prod:5432/orders\nsecrets: []\n\nWhat is the main issue?",
+      "options": [
+        {
+          "id": "a",
+          "text": "DATABASE_URL is secret material and should be referenced through the secrets mechanism, not stored as plaintext environment in the task definition."
+        },
+        {
+          "id": "b",
+          "text": "PORT=3000 must be hidden because all numeric environment variables are secrets."
+        },
+        {
+          "id": "c",
+          "text": "NODE_ENV=production should be removed because runtime config cannot include ordinary values."
+        },
+        {
+          "id": "d",
+          "text": "The task definition should be committed with more plaintext values so rollback is easier."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "A database URL often grants access, so it should be treated as a secret. The task definition can name the secret without exposing the value. Ordinary values such as PORT and NODE_ENV still deserve review, but they do not need the same secrecy treatment."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "A startup log says:\n\nINFO config node_env=production port=3000 order_timeout_ms=25\nWARN checkout timeout setting unusually low\nERROR many orders fail after 25 ms waiting for payment reservation\n\nHow should the team classify ORDER_TIMEOUT_MS?",
+      "options": [
+        {
+          "id": "a",
+          "text": "It is ordinary runtime config: visible but important, because a wrong value can still break production."
+        },
+        {
+          "id": "b",
+          "text": "It is a secret because every timeout value grants database access."
+        },
+        {
+          "id": "c",
+          "text": "It is safe to ignore because non-secret values cannot cause incidents."
+        },
+        {
+          "id": "d",
+          "text": "It belongs in the Docker image so operators cannot change it."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Not every dangerous setting is secret. ORDER_TIMEOUT_MS does not grant access, but a bad value can change production behavior. Ordinary config should be intentional, reviewed, and recorded with the release."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "A runtime value review lists:\n\nNODE_ENV=production\nPORT=3000\nPUBLIC_BASE_URL=https://orders.devpolaris.com\nDATABASE_URL=postgres://...\nPAYMENT_WEBHOOK_SECRET=whsec_...\n\nWhich classifications are correct?",
+      "options": [
+        {
+          "id": "a",
+          "text": "NODE_ENV, PORT, and PUBLIC_BASE_URL are ordinary runtime values that can be visible but still need review."
+        },
+        {
+          "id": "b",
+          "text": "DATABASE_URL should be treated as a secret if it contains credentials or access details."
+        },
+        {
+          "id": "c",
+          "text": "PAYMENT_WEBHOOK_SECRET is a secret because it lets the app verify trusted events."
+        },
+        {
+          "id": "d",
+          "text": "Every environment variable is harmless if it appears in a task definition."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "The useful split is not env var versus not env var. It is whether the value grants access or proves trust, and whether a wrong ordinary value can break behavior. Task definitions should not become secret documents."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A release changes only this task definition field:\n\nORDER_TIMEOUT_MS: 2500 to 500\nimage: unchanged digest sha256:8f3d...\nservice: devpolaris-orders-api\n\nHow should the team treat the change?",
+      "options": [
+        {
+          "id": "a",
+          "text": "As a runtime recipe change that needs review, deployment evidence, and a rollback target even though the image did not change."
+        },
+        {
+          "id": "b",
+          "text": "As a no-op because only code changes can affect users."
+        },
+        {
+          "id": "c",
+          "text": "As a secret rotation because all task definition revisions are secret changes."
+        },
+        {
+          "id": "d",
+          "text": "As an ALB-only change because timeouts are stored in target groups."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "A task definition revision is the runtime recipe. Changing an environment value can change user behavior even with the same image. It deserves the same calm release thinking as other production runtime changes."
+    }
+  ]
+}

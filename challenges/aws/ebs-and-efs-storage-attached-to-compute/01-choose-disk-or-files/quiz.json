@@ -1,0 +1,70 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "The `devpolaris-orders-report-worker` runs on one EC2 instance and needs this path for local state and temporary report rendering:\n\n```text\npath=/var/lib/devpolaris-orders-api\nsharedAcrossWorkers=false\nmustSurviveInstanceReboot=true\nfinalExportUploadedToS3=true\n```\n\nWhich storage shape is the best first fit for the path?",
+      "options": [
+        { "id": "a", "text": "EBS, because one EC2 instance needs disk-like storage mounted at a normal Linux path." },
+        { "id": "b", "text": "EFS, because all AWS file paths should be shared across compute by default." },
+        { "id": "c", "text": "S3 mounted as a POSIX filesystem, because the worker should append to export objects." },
+        { "id": "d", "text": "RDS, because temporary report chunks should be stored as relational rows." }
+      ],
+      "correct": ["a"],
+      "explanation": "EBS fits when one EC2 instance needs a persistent mounted disk. The final export can still move to S3 when it is ready. EFS would make sense if several workers needed the same live file tree."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A batch renderer runs three tasks at the same time. Task A writes `part-07.ndjson`, task B writes `part-08.ndjson`, and an assembler task reads all parts from the same path:\n\n```text\nworkspace=/mnt/devpolaris-orders-shared/monthly/2026-05\nneedsOpenReadRename=true\nmultipleTasksNeedSameTree=true\n```\n\nWhich storage shape best matches this need?",
+      "options": [
+        { "id": "a", "text": "EFS, because multiple compute units need a shared Linux filesystem path." },
+        { "id": "b", "text": "EBS attached to one renderer, because an attached volume is automatically shared with all tasks." },
+        { "id": "c", "text": "RDS, because file rename operations need SQL transactions." },
+        { "id": "d", "text": "S3 only, because the tasks need POSIX file operations on one mounted tree." }
+      ],
+      "correct": ["a"],
+      "explanation": "EFS is the AWS shape for a shared mounted filesystem across compute units. EBS is normally tied to one EC2 instance and is not a shared workspace for many tasks. S3 may be the final object store, but it is not the same as a POSIX file tree."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "After report rendering finishes, the worker logs:\n\n```text\nstage=upload bucket=devpolaris-order-exports key=exports/2026/05/ordexp_8841.csv\nstage=cleanup removed=/var/lib/devpolaris-orders-api/reports/ordexp_8841.tmp\n```\n\nWhere should the finished export live for user or finance download?",
+      "options": [
+        { "id": "a", "text": "S3, because the finished CSV is a durable object read later by key." },
+        { "id": "b", "text": "The EBS temporary path, because the worker already generated the file there." },
+        { "id": "c", "text": "EFS, because all downloads should come from a mounted shared directory." },
+        { "id": "d", "text": "DynamoDB, because CSV files are key-based state." }
+      ],
+      "correct": ["a"],
+      "explanation": "The temporary report file can be built on disk, but the finished export is object-shaped data. S3 gives the export a durable bucket and key for later download. Leaving it only on a worker disk ties a user-visible result to one machine."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "A design review lists four data needs around the report pipeline. Which classifications are correct?",
+      "options": [
+        { "id": "a", "text": "Order records with transactions and support queries belong in RDS." },
+        { "id": "b", "text": "Finished receipt PDFs and export CSVs belong in S3." },
+        { "id": "c", "text": "A single EC2 worker's mounted scratch and state path can fit EBS." },
+        { "id": "d", "text": "Several workers sharing a live directory should use one worker's local EBS path." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "RDS, S3, and EBS each match a different data shape in the first three options. The fourth option is wrong because one worker's local disk is not a shared filesystem. When several compute units need the same path, EFS or a different workflow should be reviewed."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A developer suggests storing checkout orders as JSON files on the report worker volume because the code already writes files there. Support needs joins by customer, payment state, refund records, and date range. What should the review say?",
+      "options": [
+        { "id": "a", "text": "Use RDS for the order records because they are business truth with relationships and queries." },
+        { "id": "b", "text": "Use EBS because any data that can be encoded as JSON is disk-shaped." },
+        { "id": "c", "text": "Use EFS because shared files are the same as database constraints." },
+        { "id": "d", "text": "Use S3 metadata because it can replace support's relational filters." }
+      ],
+      "correct": ["a"],
+      "explanation": "The order records are not just files. They have business relationships, changing state, and support queries that need database behavior. EBS can hold bytes, but it does not provide SQL constraints or transaction semantics."
+    }
+  ]
+}

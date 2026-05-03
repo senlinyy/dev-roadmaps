@@ -1,0 +1,70 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "The devpolaris-orders-api design review starts with this placement table:\n\nResource                  Proposed placement\norders-api-prod-alb       subnet-public-a, subnet-public-b\norders-api-prod tasks     subnet-app-a, subnet-app-b\norders-api-prod-db        subnet-db-a, subnet-db-b\n\nWhat is the VPC doing in this design?",
+      "options": [
+        { "id": "a", "text": "It is the private network boundary that holds the subnets where these resources are placed." },
+        { "id": "b", "text": "It is the public DNS name that lets browsers find the ALB." },
+        { "id": "c", "text": "It is the IAM boundary that grants the task permission to call Secrets Manager." },
+        { "id": "d", "text": "It is the target group that decides which task IP gets each request." }
+      ],
+      "correct": ["a"],
+      "explanation": "The VPC is the network space for the service inside one account and Region. The ALB, tasks, and database are placed into subnets inside that boundary. DNS, IAM, and target groups answer different questions."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A teammate says, `We can put all resources in subnet-app-a because they are all inside vpc-orders-prod.` The subnet inventory is:\n\nsubnet-app-a  10.20.10.0/24  us-east-1a\nsubnet-app-b  10.20.11.0/24  us-east-1b\nsubnet-db-a   10.20.20.0/24  us-east-1a\nsubnet-db-b   10.20.21.0/24  us-east-1b\n\nWhich concern should you raise?",
+      "options": [
+        { "id": "a", "text": "A subnet lives in one Availability Zone, so putting everything in one subnet also puts everything in one AZ." },
+        { "id": "b", "text": "A subnet cannot contain ECS tasks because only RDS can use private IP addresses." },
+        { "id": "c", "text": "A VPC can contain only one subnet, so this inventory is invalid." },
+        { "id": "d", "text": "The public ALB must share the database subnet so Route 53 can resolve it." }
+      ],
+      "correct": ["a"],
+      "explanation": "Subnets are smaller slices of a VPC, and each subnet belongs to one Availability Zone. Spreading app and database placement across AZ-specific subnets improves the shape of the design. The VPC can contain many subnets."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "Which statements correctly read this first deployment sketch?\n\nVPC CIDR: 10.20.0.0/16\npublic-a: 10.20.0.0/24 in us-east-1a\napp-a:    10.20.10.0/24 in us-east-1a\ndb-a:     10.20.20.0/24 in us-east-1a\npublic-b: 10.20.1.0/24 in us-east-1b\napp-b:    10.20.11.0/24 in us-east-1b\ndb-b:     10.20.21.0/24 in us-east-1b",
+      "options": [
+        { "id": "a", "text": "The VPC gives all listed subnets one shared private address range." },
+        { "id": "b", "text": "Each subnet belongs to exactly one Availability Zone." },
+        { "id": "c", "text": "The design separates public entry, private app, and private database placement." },
+        { "id": "d", "text": "The database subnets become public because their CIDR blocks are inside the VPC CIDR." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "The VPC CIDR is the larger private range, and each subnet is an AZ-specific slice of it. The names show a layered placement plan, but public behavior still depends on route tables. Being inside the VPC CIDR does not make a database subnet public."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "A junior engineer asks why the design uses separate public, app, and database subnets instead of one flat subnet. Which answer best matches the article?",
+      "options": [
+        { "id": "a", "text": "Different layers have different jobs, so subnet placement and route tables can describe those jobs clearly." },
+        { "id": "b", "text": "AWS requires every resource type to have a subnet whose name matches the service name." },
+        { "id": "c", "text": "Security groups stop working when two resource types share the same VPC." },
+        { "id": "d", "text": "Route 53 can resolve only resources placed in public subnets." }
+      ],
+      "correct": ["a"],
+      "explanation": "The layered subnet shape makes the network easier to reason about. Public entry points, app tasks, and databases have different exposure and routing needs. Names help humans, but placement and route tables carry the design."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "You are asked where an ECS task actually runs. The service config says:\n\nsubnets: [subnet-app-a, subnet-app-b]\nsecurityGroups: [sg-orders-task]\nassignPublicIp: DISABLED\n\nWhich statement is most precise?",
+      "options": [
+        { "id": "a", "text": "The task is placed into one of the selected private app subnets, so it also belongs to that subnet's AZ and VPC." },
+        { "id": "b", "text": "The task is placed directly into the AWS account, and subnets matter only for RDS." },
+        { "id": "c", "text": "The task must receive a public IP because every ECS task needs one to run." },
+        { "id": "d", "text": "The task is placed in the ALB target group, and the target group chooses its subnet." }
+      ],
+      "correct": ["a"],
+      "explanation": "A task using `awsvpc` networking is placed into subnets from the service configuration. That placement determines its VPC and Availability Zone context. The target group can register the task IP, but it does not place the task."
+    }
+  ]
+}

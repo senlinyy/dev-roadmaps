@@ -60,7 +60,7 @@
       "options": [
         { "id": "a", "text": "Adopt clear names and tags such as `service=orders-api`, `env=prod`, and `owner=checkout`, and use ARNs when policies need the exact resource." },
         { "id": "b", "text": "Leave the resources untagged so no team accidentally becomes responsible for them." },
-        { "id": "c", "text": "Delete every unclear resource immediately because AWS resources without good names are never active." },
+        { "id": "c", "text": "Remove unclear resources based only on their names before checking tags, logs, and owners." },
         { "id": "d", "text": "Rename only the app code repository because resource names and tags do not help cloud ownership." }
       ],
       "correct": ["a"],

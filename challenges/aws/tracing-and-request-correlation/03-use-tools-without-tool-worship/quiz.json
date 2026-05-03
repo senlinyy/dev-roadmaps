@@ -1,0 +1,70 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A new X-Ray view shows a slow request, but the app logs still look like this:\n\n```text\nERROR failed\nWARN slow\nINFO done\n```\n\nThe trace has spans named `handler`, `aws`, and `db`. What is the best review comment?",
+      "options": [
+        { "id": "a", "text": "Improve span names and structured logs so the tool shows the same request story the team uses." },
+        { "id": "b", "text": "Keep vague names because X-Ray can infer the business meaning from any span." },
+        { "id": "c", "text": "Delete logs now that a tracing tool exists." },
+        { "id": "d", "text": "Trace only the fastest requests because slow requests create too much evidence." }
+      ],
+      "correct": ["a"],
+      "explanation": "A tracing tool is only as useful as the instrumentation and context it receives. Clear span names such as `rds.insert_order` and structured logs with request IDs make the trace readable. Tooling should reduce confusion, not hide vague application evidence."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A proposed instrumentation plan for the orders API has these spans:\n\n```text\nhttp.post_orders\nrds.insert_order\ndynamodb.put_idempotency_key\ns3.write_receipt\nlambda.receipt_email\n```\n\nWhy is this a good beginner shape?",
+      "options": [
+        { "id": "a", "text": "The spans name meaningful boundaries where request time and failures can appear." },
+        { "id": "b", "text": "The spans hide the AWS service names, which makes incident review faster." },
+        { "id": "c", "text": "The spans trace every small helper function, which is always the first goal." },
+        { "id": "d", "text": "The spans replace metrics because each span stores service-wide rates." }
+      ],
+      "correct": ["a"],
+      "explanation": "Boundary spans explain the path without creating a thousand tiny details. They match the operations the team talks about during incidents: HTTP handler, database write, key-value write, object storage, and side job. That is a strong starting point for traces."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "Support provides request ID `req_4SLOW`, but no trace was sampled for it. The logs include request IDs and durations for every major step.",
+      "options": [
+        { "id": "a", "text": "Use logs to follow the request and treat missing trace samples as a known sampling tradeoff." },
+        { "id": "b", "text": "Tell support the case cannot be investigated because sampling skipped the trace." },
+        { "id": "c", "text": "Disable request IDs because sampling makes them redundant." },
+        { "id": "d", "text": "Assume the request was healthy because unsampled requests cannot be slow." }
+      ],
+      "correct": ["a"],
+      "explanation": "Sampling saves cost and noise, but it means one exact trace may be missing. That is why request IDs in logs still matter. The team can often follow the request through logs and use metrics to understand wider impact."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "Which practices keep tracing tools useful without turning them into tool worship?",
+      "options": [
+        { "id": "a", "text": "Name spans after real operations such as `rds.insert_order` and `s3.write_receipt`." },
+        { "id": "b", "text": "Keep request IDs in logs so traces and logs can connect." },
+        { "id": "c", "text": "Use sampling and retention intentionally instead of keeping unlimited detail by default." },
+        { "id": "d", "text": "Assume adding X-Ray automatically fixes vague logs and missing IDs." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "Good tools support a clear request story. Clear span names, shared IDs, and intentional sampling make traces useful and affordable. A tool cannot repair vague instrumentation or missing context by itself."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A slow checkout trace shows:\n\n```text\nPOST /v1/orders              1143 ms\n  payment.authorize            51 ms\n  rds.insert_order           1030 ms\n  dynamodb.put_idempotency      12 ms\n  s3.write_receipt             31 ms\n```\n\nRDS metrics look normal for the same 5-minute window. What is the best next interpretation?",
+      "options": [
+        { "id": "a", "text": "The trace points to a slow RDS span for this request, but metrics suggest checking whether it was isolated or query-specific." },
+        { "id": "b", "text": "RDS is proven globally broken because one trace span was slow." },
+        { "id": "c", "text": "The trace should be ignored because metrics always override request-level evidence." },
+        { "id": "d", "text": "The team should add more spans before reading the existing log for that request." }
+      ],
+      "correct": ["a"],
+      "explanation": "Trace and metric scopes are different. The trace says this request spent time in the RDS span; normal metrics suggest it may be isolated, query-specific, or hidden by aggregation. Logs and query context are the next useful details."
+    }
+  ]
+}

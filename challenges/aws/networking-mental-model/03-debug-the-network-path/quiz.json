@@ -1,0 +1,70 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "Customers report checkout failures at 10:31.\n\nGET https://orders.devpolaris.com/checkout\nresponse: 503 Service Unavailable\n\nTarget health shows both task targets as `unhealthy` with `Target.ResponseCodeMismatch`. What is the next best check?",
+      "options": [
+        { "id": "a", "text": "Read app logs for `/health` and compare the health response with the target group matcher." },
+        { "id": "b", "text": "Replace the Route 53 record because a 503 means DNS did not resolve." },
+        { "id": "c", "text": "Request a new ACM certificate because all 503 responses are TLS failures." },
+        { "id": "d", "text": "Open the database port to the internet so the ALB can query RDS directly." }
+      ],
+      "correct": ["a"],
+      "explanation": "A 503 from the ALB plus target health evidence means the public front door was reached, but usable backend targets are missing. `Target.ResponseCodeMismatch` means the app answered with a status the health check did not accept. The next hop is the app health evidence."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "CloudWatch adds this line after the target health check:\n\npath=/health\nstatus=500\nreason=db_not_ready\ncause=database connection timeout\ndb_port=5432\n\nThe DB security group currently allows:\n\nTCP 5432 from sg-admin-bastion\n\nWhich fix direction matches the evidence?",
+      "options": [
+        { "id": "a", "text": "Allow TCP 5432 from `sg-orders-api` or `sg-orders-task` on the database security group." },
+        { "id": "b", "text": "Point `orders.devpolaris.com` to the RDS endpoint so the browser bypasses the ALB." },
+        { "id": "c", "text": "Change the ALB listener from HTTPS 443 to database port 5432." },
+        { "id": "d", "text": "Delete the health check so unhealthy tasks can still receive customer traffic." }
+      ],
+      "correct": ["a"],
+      "explanation": "The app reached its health handler, then failed on the private database hop. The database only allows the admin group, not the app task group. The fix should add the intended app source, not route customers or the ALB to the database."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "You are building a short incident checklist for the same service. Which checks belong in the path-order diagnosis?",
+      "options": [
+        { "id": "a", "text": "Confirm that the public name points to the expected load balancer." },
+        { "id": "b", "text": "Confirm that the HTTPS listener forwards to the intended target group." },
+        { "id": "c", "text": "Confirm that target health and app logs agree on whether `/health` is passing." },
+        { "id": "d", "text": "Start by editing all security groups that mention port `3000`, then read logs after traffic recovers." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "Good diagnosis follows the request path and lets evidence choose the next hop. DNS, listener routing, target health, and app logs are all useful checkpoints. Random security group edits can hide the real cause and leave unsafe access behind."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "A browser reports `NET::ERR_CERT_COMMON_NAME_INVALID` for `https://orders.devpolaris.com`. Target health for `orders-api-prod` is green. Where should the team start?",
+      "options": [
+        { "id": "a", "text": "TLS and the listener certificate, because the failure happens before backend target health matters." },
+        { "id": "b", "text": "The RDS security group, because certificate name errors usually mean Postgres is refusing traffic." },
+        { "id": "c", "text": "The ECS task CPU alarm, because green targets can still have slow application code." },
+        { "id": "d", "text": "The NAT gateway, because browsers need NAT to complete HTTPS requests." }
+      ],
+      "correct": ["a"],
+      "explanation": "A certificate name error is an identity-layer failure at the public entry point. Healthy backend targets do not fix a certificate that does not cover the hostname. Start where the symptom occurs."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "After a deploy, the team has these facts:\n\nRoute 53 alias: expected ALB\nHTTPS listener: forwards to orders-api-prod\nTarget group: two healthy targets\nApp log: `AccessDeniedException` for `s3:PutObject` during order export\n\nWhat should they avoid changing first?",
+      "options": [
+        { "id": "a", "text": "Avoid changing DNS or ALB routing, because the evidence points to an AWS API permission for the export path." },
+        { "id": "b", "text": "Avoid checking IAM, because healthy targets prove all AWS API permissions are correct." },
+        { "id": "c", "text": "Avoid app logs, because only route tables can explain any production error." },
+        { "id": "d", "text": "Avoid the task role, because S3 permissions are controlled by target groups." }
+      ],
+      "correct": ["a"],
+      "explanation": "The public path is already proven healthy enough to reach the app. The remaining error names an AWS API action and an authorization failure. That points to the task role or bucket policy, not to DNS or ALB routing."
+    }
+  ]
+}

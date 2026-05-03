@@ -1,0 +1,70 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "The report worker fails during render:\n\n```text\nstage=render path=/var/lib/devpolaris-orders-api/reports/ordexp_9012.tmp\ncode=ENOSPC message=no space left on device\n```\n\n`du` shows 83 GB under the reports scratch directory. What is the best fix direction?",
+      "options": [
+        { "id": "a", "text": "Safely remove confirmed temporary files, fix cleanup after upload, add monitoring, and resize the volume if needed." },
+        { "id": "b", "text": "Move all scratch files to `/tmp` even if the job needs state after reboot." },
+        { "id": "c", "text": "Give the worker `s3:DeleteObject` on the whole bucket because local disk is full." },
+        { "id": "d", "text": "Add a DynamoDB GSI so report chunks are easier to search." }
+      ],
+      "correct": ["a"],
+      "explanation": "The evidence points to disk space on the mounted worker path. Cleanup and sizing should be handled carefully so only disposable files are removed. Moving important state to `/tmp` may make the next restart lose data."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A batch renderer task cannot mount the shared workspace:\n\n```text\nworkspace=/mnt/devpolaris-orders-shared\nmount.nfs4: Connection timed out\nfilesystem=fs-0abc1234\nclientSecurityGroup=sg-renderer\nmountTargetSecurityGroup=sg-efs-target\n```\n\nWhat should the team inspect first?",
+      "options": [
+        { "id": "a", "text": "The EFS mount target network path, especially security group rules for NFS from the renderer tasks." },
+        { "id": "b", "text": "The RDS schema migrations table because NFS timeouts come from missing columns." },
+        { "id": "c", "text": "The S3 object key prefix because S3 prefixes control EFS mounts." },
+        { "id": "d", "text": "The DynamoDB TTL setting because expired job items block NFS traffic." }
+      ],
+      "correct": ["a"],
+      "explanation": "EFS mounts happen over the network through mount targets. A timeout points to VPC reachability, mount targets, DNS, routes, or security groups before it points to application code. The mount target should allow NFS traffic from the compute security group."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "After instance replacement, the worker starts with no resume state:\n\n```text\npreviousPath=/tmp/orders-worker-state.json\nnewInstance=i-0new\nstartup result=state file not found\nimpact=some exports regenerated\n```\n\nWhat was the design mistake?",
+      "options": [
+        { "id": "a", "text": "The app stored important state in a temporary local path that can disappear during replacement." },
+        { "id": "b", "text": "The app used RDS for final orders instead of keeping all state in `/tmp`." },
+        { "id": "c", "text": "The S3 export key had too many date parts." },
+        { "id": "d", "text": "The EFS mount was too durable for scratch state." }
+      ],
+      "correct": ["a"],
+      "explanation": "`/tmp` can be fine for disposable scratch, but it is a poor home for state the worker needs after replacement. If the state matters, choose EBS, EFS, S3, DynamoDB, or RDS based on the access pattern. The final order database is not the problem shown here."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "Match the attached-storage symptom to a sensible first fix direction. Which matches are correct?",
+      "options": [
+        { "id": "a", "text": "`ENOSPC` on the worker mount: inspect space usage, cleanup, monitoring, and volume sizing." },
+        { "id": "b", "text": "AWS volume attached but `findmnt` empty: investigate OS mount configuration and startup mounting." },
+        { "id": "c", "text": "EFS mount timeout: inspect mount targets, routes, DNS, and security groups for NFS." },
+        { "id": "d", "text": "Receipt missing after load balancer sends user to another task: store all receipts on that task's local disk." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "The first three matches follow the evidence to the layer that broke its promise. The receipt option is wrong because user-visible files should not depend on which task receives the request. S3 with database authorization metadata is a better fit for durable receipts."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A team wants EFS because a producer writes vendor input files and several workers process them. A reviewer asks whether workers truly need shared file operations or can process object keys from a queue. Why is that a good question?",
+      "options": [
+        { "id": "a", "text": "EFS is useful for real shared filesystem semantics, but S3 plus a queue can be simpler when workers only need independent objects by key." },
+        { "id": "b", "text": "EFS should replace RDS for all order records if any worker reads files." },
+        { "id": "c", "text": "S3 cannot store vendor input files, so the question is not relevant." },
+        { "id": "d", "text": "EBS automatically shares one worker's local disk with every other worker in the same subnet." }
+      ],
+      "correct": ["a"],
+      "explanation": "The choice depends on the workflow promise. EFS is right when tools need a shared mounted directory with filesystem behavior. If each worker can process a named object independently, S3 plus a queue or database row may be simpler to operate."
+    }
+  ]
+}

@@ -1,0 +1,142 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "The staging launch sheet says:\n\nsubnet: private-app-us-east-1a\npublicIp: false\naccess: Session Manager\nALB target: instance i-0f2c4a91 on port 3000\ninstance role: devpolaris-orders-api-ec2\n\nWhich review comment is best?",
+      "options": [
+        {
+          "id": "a",
+          "text": "This is a reasonable private-instance shape if the ALB can reach port 3000 and Session Manager prerequisites are in place."
+        },
+        {
+          "id": "b",
+          "text": "The instance must have a public IP because an ALB cannot forward to private subnets."
+        },
+        {
+          "id": "c",
+          "text": "Session Manager means the instance does not need an IAM role or network path to Systems Manager."
+        },
+        {
+          "id": "d",
+          "text": "The ALB target makes systemd unnecessary because the load balancer starts Node.js."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "A private EC2 instance behind a public ALB is a common shape. Operators still need a real access model, and Session Manager needs role, agent, and network support. The ALB forwards traffic, but it does not supervise the Node.js process."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "An EC2 instance starts returning 500s. The instance snapshot says:\n\nCPU: 28 percent\nmemory: 63 percent\ndf -h /: 19G used of 20G, 96 percent\njournal: ENOSPC while writing /var/log/devpolaris-orders-api/app.log\n\nWhich launch choice should the team revisit first?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Root volume sizing and log retention, because the disk is the saturated resource."
+        },
+        {
+          "id": "b",
+          "text": "Instance public IP assignment, because a full disk means the instance is not reachable from the internet."
+        },
+        {
+          "id": "c",
+          "text": "AMI operating system family, because only a new AMI can clear application logs."
+        },
+        {
+          "id": "d",
+          "text": "ALB listener certificate, because certificate errors fill the root volume."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The evidence points to disk pressure, not CPU or public reachability. EC2 makes disk and log care part of your operating responsibility. The fix may include cleanup, retention, and a better-sized volume."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "The orders API on EC2 calls S3 and fails:\n\nAccessDenied: arn:aws:sts::123456789012:assumed-role/devpolaris-orders-api-ec2/i-0f2c4a91\nis not authorized to perform s3:PutObject on arn:aws:s3:::devpolaris-orders-exports/prod/orders.csv\n\nWhat should change?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Review the instance role policy and add the narrow missing permission if the app should write that object."
+        },
+        {
+          "id": "b",
+          "text": "Copy long-lived AWS keys into the .env file so the process bypasses the instance role."
+        },
+        {
+          "id": "c",
+          "text": "Change the key pair because SSH keys control S3 object writes."
+        },
+        {
+          "id": "d",
+          "text": "Move the instance to a public subnet because private subnets cannot use IAM roles."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The error names the assumed instance role, so IAM permission is the first layer. EC2 software should use the instance profile instead of copied static keys. Network placement and SSH keys are separate concerns."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "A launch review for devpolaris-orders-api lists these choices:\n\nAMI: team-supported Linux\ninstance type: small general purpose\nsubnet: private app subnet\nsecurity group: TCP 3000 from ALB security group\naccess: Session Manager\nroot volume: 20 GiB\n\nWhich choices directly affect later operations?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The instance type affects CPU and memory pressure during traffic spikes."
+        },
+        {
+          "id": "b",
+          "text": "The security group affects whether the ALB can reach the Node.js port."
+        },
+        {
+          "id": "c",
+          "text": "The access model affects how humans open a shell during incidents."
+        },
+        {
+          "id": "d",
+          "text": "The ECR tag digest controls whether the EC2 kernel receives security patches."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "Launch choices become diagnostic questions later. Instance size, security groups, access method, disk, and roles all shape incidents. An ECR image digest is useful for container releases, but it does not patch the EC2 operating system."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "After a sale starts, the kernel logs show:\n\nOut of memory: Killed process 1842 (node) total-vm:812000kB anon-rss:621000kB\nsystemd: devpolaris-orders-api.service: Main process exited, status=9/KILL\nALB target health: Target.Timeout\n\nWhich operating decision is most relevant?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Right-size the instance or reduce memory pressure, because the server is killing the Node.js process under load."
+        },
+        {
+          "id": "b",
+          "text": "Rotate the TLS certificate, because OOM events come from the ALB handshake path."
+        },
+        {
+          "id": "c",
+          "text": "Change the health check path first, because timeout proves the app is healthy but the path is wrong."
+        },
+        {
+          "id": "d",
+          "text": "Disable the instance role, because IAM credentials consume most Node.js memory."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The kernel killed the process because memory ran out. systemd can restart it, but repeated OOM events mean the capacity or memory behavior needs attention. The ALB timeout is a symptom after the process disappears."
+    }
+  ]
+}

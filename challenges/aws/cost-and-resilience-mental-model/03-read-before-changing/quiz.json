@@ -1,0 +1,70 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A Cost Explorer review says:\n\n```text\ntime window: last 14 days\nchanged signals:\n  ECS and Fargate usage: steady high baseline after desired count increase\n  RDS usage: steady after database resize\n  CloudWatch usage: rising after debug logs were enabled\n  S3 usage: gradual growth in object versions\nfirst engineering question: which changes were deliberate resilience buffers, and which are leftovers?\n```\n\nWhat should the team do before cutting resources?",
+      "options": [
+        { "id": "a", "text": "Map each cost movement to usage, health, and the protection it was meant to buy." },
+        { "id": "b", "text": "Reduce every line item by the same percentage because the bill moved." },
+        { "id": "c", "text": "Start with RDS resize during the active review because it is usually the largest resource." },
+        { "id": "d", "text": "Delete logs first because rising CloudWatch usage can never protect diagnosis." }
+      ],
+      "correct": ["a"],
+      "explanation": "Cost Explorer shows where spend moved, but it does not say which movement is safe to reduce. The team needs runtime, traffic, error, retention, and recovery context. That separates useful buffers from leftovers."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "An ECS check returns:\n\n```json\n{ \"desired\": 4, \"running\": 4, \"pending\": 0 }\n```\n\nQuiet-hour metrics show CPU below 20 percent and memory below 35 percent for weeks. What is still missing before lowering desired count?",
+      "options": [
+        { "id": "a", "text": "Traffic peaks, latency, 5xx, deployment behavior, and the failure protection the extra tasks provide." },
+        { "id": "b", "text": "Only the current desired count, because it proves four tasks are unnecessary." },
+        { "id": "c", "text": "Only the monthly bill total, because service health should not affect scaling decisions." },
+        { "id": "d", "text": "A decision to turn off autoscaling before reading any user-impact metrics." }
+      ],
+      "correct": ["a"],
+      "explanation": "Low quiet-hour utilization is useful, but it is not the whole story. Desired count also affects availability, deployments, and peak traffic. A safe change compares capacity with customer impact and failure tolerance."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "A log review finds this normal request pair:\n\n```text\nDEBUG route=POST /v1/orders request_id=req_20 body_size=18421 message=request payload accepted\nINFO route=POST /v1/orders request_id=req_20 status=201 duration_ms=84 message=order created\n```\n\nWhich change best balances cost and resilience?",
+      "options": [
+        { "id": "a", "text": "Remove or sample the noisy debug payload while keeping useful INFO fields and error details." },
+        { "id": "b", "text": "Remove request IDs from all logs to reduce ingestion slightly." },
+        { "id": "c", "text": "Keep every debug payload forever because more bytes always make incidents easier." },
+        { "id": "d", "text": "Stop logging successful orders and errors so CloudWatch cost drops immediately." }
+      ],
+      "correct": ["a"],
+      "explanation": "The INFO line has operational value: request ID, route, status, duration, and result. The debug payload is likely expensive and noisy during normal traffic. A good change keeps diagnosis evidence while reducing avoidable ingestion."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "Before scaling down a production resource, which evidence should the team read?",
+      "options": [
+        { "id": "a", "text": "Traffic, latency, errors, CPU, memory, target health, and running task count." },
+        { "id": "b", "text": "Recent incident history, deploy behavior, and what failure the buffer protects against." },
+        { "id": "c", "text": "Cost movement by service, usage type, and workload tags." },
+        { "id": "d", "text": "Only the desire to reduce the bill this week." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "Right-sizing is a cost and service-health decision. You need operating signals, resilience context, and cost movement to judge risk. Cost desire alone is not evidence."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A restore drill record says:\n\n```text\nrestored database accepted read-only validation connection\nsample order ord_01HX9K7P2B had expected status\napp config change required DATABASE_HOST update\nresult: recovery path understood, app cutover not automated\n```\n\nWhat should this mean for cost and resilience planning?",
+      "options": [
+        { "id": "a", "text": "The team can trust part of the restore path, but RTO must include manual config work unless automation improves." },
+        { "id": "b", "text": "Backups can be deleted now because one drill connected to the restored database." },
+        { "id": "c", "text": "RPO is automatically zero because validation read one sample order." },
+        { "id": "d", "text": "The result is irrelevant to cost because drills never affect resource decisions." }
+      ],
+      "correct": ["a"],
+      "explanation": "A drill turns recovery assumptions into evidence. This one proves useful steps, but it also exposes manual cutover work. That affects the real recovery time and helps the team decide whether automation is worth the cost."
+    }
+  ]
+}

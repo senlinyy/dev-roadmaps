@@ -1,0 +1,70 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "On the report worker, `lsblk` shows:\n\n```text\nNAME      SIZE TYPE MOUNTPOINTS\nnvme0n1    30G disk /\nnvme1n1   100G disk /var/lib/devpolaris-orders-api\n```\n\nWhat does this prove?",
+      "options": [
+        { "id": "a", "text": "Linux sees a second block device mounted at the path the worker uses." },
+        { "id": "b", "text": "The final export has already been uploaded to S3." },
+        { "id": "c", "text": "The RDS database can read files from the EBS volume." },
+        { "id": "d", "text": "The volume is shared across all ECS tasks in the VPC." }
+      ],
+      "correct": ["a"],
+      "explanation": "`lsblk` is Linux evidence that the device exists and has a mount point. It does not prove S3 upload, database behavior, or shared filesystem semantics. AWS attachment and app logs are still separate pieces of evidence."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "The worker logs `ENOSPC` while writing a report. `df -h /var/lib/devpolaris-orders-api` shows:\n\n```text\nFilesystem      Size  Used Avail Use% Mounted on\n/dev/nvme1n1     98G   98G     0 100% /var/lib/devpolaris-orders-api\n```\n\nWhat is the best first conclusion?",
+      "options": [
+        { "id": "a", "text": "The mounted filesystem is full, so cleanup, volume sizing, and monitoring need review." },
+        { "id": "b", "text": "The RDS password expired because `df` reports database authentication." },
+        { "id": "c", "text": "The S3 key is wrong because disk usage reaches 100% when object names mismatch." },
+        { "id": "d", "text": "The EFS mount target security group is definitely blocking NFS." }
+      ],
+      "correct": ["a"],
+      "explanation": "`df -h` shows the filesystem backing that path has no available space. The fix direction is to safely clean temporary files, correct cleanup logic, resize if needed, and monitor earlier. It is not a database password or S3 key symptom."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "After a reboot, the app can still write files, but support sees this evidence:\n\n```text\n$ findmnt /var/lib/devpolaris-orders-api\n\n$ df -h /var/lib/devpolaris-orders-api\nFilesystem      Size  Used Avail Use% Mounted on\n/dev/nvme0n1p1   30G   29G  800M  98% /\n```\n\nWhat is most likely happening?",
+      "options": [
+        { "id": "a", "text": "The expected mount is absent, and writes are landing on the root filesystem path." },
+        { "id": "b", "text": "The EBS volume is healthy because any writable directory proves the mount is present." },
+        { "id": "c", "text": "S3 is serving the directory through a hidden mount." },
+        { "id": "d", "text": "DynamoDB moved the worker state to the root disk." }
+      ],
+      "correct": ["a"],
+      "explanation": "An empty `findmnt` result means there is no mount at that target. `df` shows the path is on `/`, the root filesystem, not the intended worker volume. That can create a dangerous illusion because writes still appear to work."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "Which evidence sources should be combined before declaring an EBS-backed worker path healthy?",
+      "options": [
+        { "id": "a", "text": "AWS volume attachment state, to see whether the volume is attached to the expected instance." },
+        { "id": "b", "text": "Linux mount evidence such as `lsblk`, `findmnt`, or `mount` for the expected path." },
+        { "id": "c", "text": "Filesystem space evidence such as `df -h` and careful `du` output." },
+        { "id": "d", "text": "A finance S3 download test, because a successful download proves the worker path is mounted." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "AWS can prove the volume is attached, Linux can prove it is mounted, and filesystem tools can prove whether there is space. A finance S3 download may prove the final object exists, but it does not prove the worker's mounted path is healthy. The layers answer different questions."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "AWS says the volume is attached:\n\n```json\n{\"VolumeId\":\"vol-0a12b34c56d78e901\",\"State\":\"in-use\",\"Instance\":\"i-0123456789abcdef0\",\"Device\":\"/dev/sdf\"}\n```\n\nBut `findmnt /var/lib/devpolaris-orders-api` returns no output. What should the team investigate next?",
+      "options": [
+        { "id": "a", "text": "Linux mount configuration and whether the filesystem was mounted after attachment or reboot." },
+        { "id": "b", "text": "S3 bucket policy for `exports/daily/*` because S3 controls Linux mounts." },
+        { "id": "c", "text": "RDS restore targets because attached volumes are restored as DB instances." },
+        { "id": "d", "text": "DynamoDB partition keys because the mount point uses a path string." }
+      ],
+      "correct": ["a"],
+      "explanation": "Attachment and mounting are separate facts. AWS can attach a block device, but Linux still needs the filesystem mounted at the path the app uses. The next investigation belongs in OS mount configuration and startup behavior."
+    }
+  ]
+}

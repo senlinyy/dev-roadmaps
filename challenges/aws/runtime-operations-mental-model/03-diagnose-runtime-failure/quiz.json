@@ -1,0 +1,142 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "The image exists in ECR, but tasks stop with:\n\n(service devpolaris-orders-api) was unable to start a task\nReason: ResourceInitializationError: unable to retrieve secret from Secrets Manager\nTask definition: devpolaris-orders-api:42\nCloudWatch app logs: none for the stopped task\n\nWhat is the best first check?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Secret ARN, Region, KMS requirements, and execution-role permission for the task definition secret."
+        },
+        {
+          "id": "b",
+          "text": "The checkout route handler, because the app returned an HTTP 500 after serving traffic."
+        },
+        {
+          "id": "c",
+          "text": "Target group success codes, because the health check produced a 404."
+        },
+        {
+          "id": "d",
+          "text": "Database indexes, because secret retrieval errors mean query latency is high."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The failure happened before the container started. The image can exist while the runtime recipe still asks ECS to fetch a secret it cannot read. Inspect the secret path and execution role before rebuilding the image."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A deployment reaches RUNNING tasks, but target health says:\n\nTarget IP       Port   State       Reason\n10.0.18.42      3000   unhealthy   Health checks failed with status code 404\n10.0.27.113     3000   unhealthy   Health checks failed with status code 404\n\nApp routes in the release log: /healthz, /v1/orders\n\nWhat should be fixed?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The health contract: restore /health or update the target group to the readiness route the app serves."
+        },
+        {
+          "id": "b",
+          "text": "The ECR repository, because 404 means the image manifest is missing."
+        },
+        {
+          "id": "c",
+          "text": "The execution role, because health checks are secret fetches."
+        },
+        {
+          "id": "d",
+          "text": "The desired count, because more tasks make 404s become 200s."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The tasks are reachable enough to answer with 404. That is a health-path mismatch, not an image-pull failure. The ALB and app need one agreed readiness contract."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "A service stays pending. ECS events show:\n\nhas started 0 tasks\ninsufficient CPU or memory configuration for requested task size in selected capacity\ndesiredCount=2 taskDefinition=devpolaris-orders-api:42\n\nWhat layer should the team inspect?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Capacity and placement settings, including task CPU, memory, selected subnets, and Fargate capacity configuration."
+        },
+        {
+          "id": "b",
+          "text": "The app route for /health, because pending tasks are already answering the ALB."
+        },
+        {
+          "id": "c",
+          "text": "The Lambda event source mapping, because pending is a queue retry state."
+        },
+        {
+          "id": "d",
+          "text": "The database password, because all pending deployments are secret-rotation failures."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Pending with insufficient CPU or memory is a placement or capacity-shaped signal. The app is not serving health checks yet. Look at the task size and where ECS is allowed to place it."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "A runtime failure table lists:\n\nCannotPullContainerError on image tag\nResourceInitializationError for DATABASE_URL\nRUNNING task with Target.ResponseCodeMismatch\nAccessDenied inside app log after health=ready\n\nWhich layer matches are correct?",
+      "options": [
+        {
+          "id": "a",
+          "text": "CannotPullContainerError points to image reference, ECR access, or registry reachability before app startup."
+        },
+        {
+          "id": "b",
+          "text": "ResourceInitializationError for an injected secret points to execution role, secret ARN, Region, or KMS path."
+        },
+        {
+          "id": "c",
+          "text": "AccessDenied inside app logs after readiness usually points to task role permission for app code."
+        },
+        {
+          "id": "d",
+          "text": "Target.ResponseCodeMismatch always means the ECR image tag is missing."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "Each failure shape points at a different part of the runtime contract. Naming the layer keeps the first fix small. Target.ResponseCodeMismatch means the target answered with an unacceptable status, not that the image could not be pulled."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "The new release has no useful app logs. Task definition excerpt:\n\nlogConfiguration: awslogs group /ecs/devpolaris-orders-api\nexecutionRoleArn: devpolaris-orders-ecs-execution\n\nStopped reason:\nAccessDeniedException: logs:CreateLogStream on /ecs/devpolaris-orders-api\n\nWhat should the team fix?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The execution role log permissions for the configured CloudWatch log group."
+        },
+        {
+          "id": "b",
+          "text": "The task role S3 permissions, because logs are application data exports."
+        },
+        {
+          "id": "c",
+          "text": "The ALB health check path, because log stream creation happens only after /health passes."
+        },
+        {
+          "id": "d",
+          "text": "The Dockerfile CMD, because log permissions are compiled into the image."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The runtime recipe names the awslogs driver, and ECS needs permission to create streams and put events. Without that, humans lose startup evidence. Fix the narrow logging setup instead of relying on status fields alone."
+    }
+  ]
+}

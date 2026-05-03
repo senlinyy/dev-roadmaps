@@ -1,0 +1,70 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "Two checkout requests with the same idempotency key arrive within 80 ms. The first request should claim the key. Which DynamoDB write behavior protects this path?",
+      "options": [
+        { "id": "a", "text": "A conditional put that only creates the item if the key does not already exist." },
+        { "id": "b", "text": "A table scan before each write to see whether any item has a similar key." },
+        { "id": "c", "text": "An S3 object upload before DynamoDB so the duplicate can download the receipt." },
+        { "id": "d", "text": "A read replica so the second request writes to a different copy of the table." }
+      ],
+      "correct": ["a"],
+      "explanation": "A conditional write gives the app an atomic safety check at the item key. The first request can create the item, and the second receives a conditional failure instead of creating duplicate work. Scanning first is slower and still has a race."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "The duplicate request logs:\n\n```text\nawsError=ConditionalCheckFailedException\nidempotencyKey=checkout_01HW2S8RN8Z7\nrequestHash=sha256:18f9b31c\nexistingStatus=succeeded\nexistingOrderId=ord_1042\n```\n\nWhat should the API usually return?",
+      "options": [
+        { "id": "a", "text": "The existing successful result for `ord_1042`, because the same logical request already completed." },
+        { "id": "b", "text": "A new order id, because retry requests should always create a fresh order." },
+        { "id": "c", "text": "A generic 500 error, because every conditional check failure is a DynamoDB outage." },
+        { "id": "d", "text": "A receipt PDF from S3 without checking order ownership." }
+      ],
+      "correct": ["a"],
+      "explanation": "Same key, same request hash, and succeeded status are exactly the case idempotency is meant to handle. Returning the existing result makes the retry safe for the customer. Treating it as an outage or creating a new order would defeat the design."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "A retry uses the same idempotency key but a different request hash:\n\n```text\nidempotencyKey=checkout_01HW2S8RN8Z7\nexistingRequestHash=sha256:18f9b31c\nincomingRequestHash=sha256:bead9021\n```\n\nWhat should the app do?",
+      "options": [
+        { "id": "a", "text": "Reject the request as key reuse for different input." },
+        { "id": "b", "text": "Overwrite the item because the new hash is more recent." },
+        { "id": "c", "text": "Create a second order and keep both hashes under the same key." },
+        { "id": "d", "text": "Delete the existing item so the client can try again with no history." }
+      ],
+      "correct": ["a"],
+      "explanation": "An idempotency key is a promise that retries represent the same operation. A different request hash means the client reused the key for different input. Rejecting it protects checkout from mixing two logical requests."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "The team is reviewing the idempotency item shape:\n\n```json\n{\"pk\":\"IDEMPOTENCY#checkout_01HW2S8RN8Z7\",\"sk\":\"REQUEST\",\"requestHash\":\"sha256:18f9b31c\",\"status\":\"processing\",\"jobId\":\"job_01HW2W7Z8MP4\",\"expiresAt\":1777713102}\n```\n\nWhich review comments are useful?",
+      "options": [
+        { "id": "a", "text": "The key includes a clear type prefix so logs and reads can build the same exact key." },
+        { "id": "b", "text": "The `requestHash` helps detect key reuse with different checkout input." },
+        { "id": "c", "text": "The status should guide the duplicate response, such as still processing or already succeeded." },
+        { "id": "d", "text": "The item should omit expiration planning because idempotency records must stay forever." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "The key prefix, request hash, and status all support safe retry behavior. Expiration planning is also important because idempotency records are operational state, not permanent order history. The retention window should match the retry and support need."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "An engineer suggests removing the condition expression because it is causing noisy `ConditionalCheckFailedException` warnings during a retry spike. What is the best response?",
+      "options": [
+        { "id": "a", "text": "Keep the condition and make the app handle duplicates intentionally; the warning may be expected safety behavior." },
+        { "id": "b", "text": "Remove the condition so every retry can create a fresh idempotency item." },
+        { "id": "c", "text": "Replace DynamoDB with S3 object uploads because S3 does not return conditional failures." },
+        { "id": "d", "text": "Remove the idempotency table and rely on the checkout UI to avoid duplicate submissions." }
+      ],
+      "correct": ["a"],
+      "explanation": "The condition is the guardrail that prevents two requests from both claiming the same key. Noisy logs may need better severity or clearer handling, but removing the condition opens the duplicate-order risk. Idempotency is there because browsers and networks do retry."
+    }
+  ]
+}

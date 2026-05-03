@@ -1,0 +1,70 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "Finance reports this missing file:\n\n```text\nrequested=s3://devpolaris-orders-prod-objects/exports/daily/2026/05/02/devpolaris-orders-export-2026-05-02.csv\nhead-object=404 Not Found\nappLogKey=export/daily/2026/05/02/devpolaris-orders-export-2026-05-02.csv\n```\n\nWhat is the best diagnosis?",
+      "options": [
+        { "id": "a", "text": "The object may exist under the wrong prefix, so compare and list the exact written prefix." },
+        { "id": "b", "text": "The RDS database is unavailable, so S3 cannot show the export." },
+        { "id": "c", "text": "The object is present but hidden by KMS, because all 404 responses mean encryption failures." },
+        { "id": "d", "text": "Finance should search every bucket manually because S3 cannot list by prefix." }
+      ],
+      "correct": ["a"],
+      "explanation": "The requested key and app log key differ by one letter in the prefix. S3 will not treat those as the same object. Listing the written `export/daily/` prefix can prove whether the file was misplaced."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A customer receipt read fails with:\n\n```text\ncaller=arn:aws:sts::123456789012:assumed-role/devpolaris-finance-export-reader/maya\naction=s3:GetObject\nresource=arn:aws:s3:::devpolaris-orders-prod-objects/receipts/2026/05/02/order_ord_8x7k2n/devpolaris-orders-receipt.pdf\npolicyAllows=exports/daily/*\n```\n\nWhat should the engineer conclude first?",
+      "options": [
+        { "id": "a", "text": "The finance reader is asking for a receipt object outside its approved export prefix." },
+        { "id": "b", "text": "The receipt is definitely missing and should be regenerated immediately." },
+        { "id": "c", "text": "The app should grant finance read access to the entire bucket to avoid future denials." },
+        { "id": "d", "text": "The S3 key is invalid because receipt keys cannot include order ids." }
+      ],
+      "correct": ["a"],
+      "explanation": "The denial shows a caller allowed for exports trying to read a receipt prefix. That may be a correct denial, not a missing object. The next step is to verify whether the workflow should read an export or whether a specific approved receipt access path is needed."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "The current export is empty, but version listing shows:\n\n```text\nVersionId=Vp9a-bad IsLatest=true Size=92\nVersionId=3Lg7-good IsLatest=false Size=982144\n```\n\nWhat is the right incident direction?",
+      "options": [
+        { "id": "a", "text": "Use the older version as recovery evidence and investigate why the latest write overwrote the good export." },
+        { "id": "b", "text": "Delete all noncurrent versions because only the latest object can ever be recovered." },
+        { "id": "c", "text": "Switch order storage to EBS because S3 cannot keep previous object states." },
+        { "id": "d", "text": "Treat the size difference as unrelated because the key still has a current version." }
+      ],
+      "correct": ["a"],
+      "explanation": "Versioning gives the team a clue and a possible recovery path. The tiny latest version looks suspicious, while the older larger version looks like the real export. Deleting noncurrent versions during the incident would remove useful recovery evidence."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "A support engineer is building a calm S3 diagnostic checklist for `devpolaris-orders-api`. Which checks belong near the top?",
+      "options": [
+        { "id": "a", "text": "Ask for the exact bucket, Region, and key rather than a vague folder screenshot." },
+        { "id": "b", "text": "Use `head-object` on the exact key to separate current object presence from assumptions." },
+        { "id": "c", "text": "Read `AccessDenied` as caller, action, resource, and policy reason before editing policies." },
+        { "id": "d", "text": "Start by downloading every object in the bucket because exact keys are not reliable." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "Good S3 debugging starts with exact object identity and exact authorization evidence. `head-object` is a small proof that avoids downloading a large file. Downloading everything is noisy, slow, and usually avoids the real mismatch."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "After a lifecycle rule change, `head-object` on a current export returns 404. `list-object-versions` shows a fresh delete marker with `IsLatest=true` and older versions below it. What should the team investigate first?",
+      "options": [
+        { "id": "a", "text": "Whether the lifecycle rule or cleanup job matched the export prefix and created the delete marker." },
+        { "id": "b", "text": "Whether the RDS connection pool has too many clients." },
+        { "id": "c", "text": "Whether the object key is too deep because S3 supports only one slash." },
+        { "id": "d", "text": "Whether DynamoDB TTL deleted the object version." }
+      ],
+      "correct": ["a"],
+      "explanation": "A latest delete marker makes normal reads look like the object is gone while older versions may still exist. That is strong evidence for a delete action or lifecycle rule, not a database or DynamoDB issue. The team should recover needed versions and fix the matching scope."
+    }
+  ]
+}

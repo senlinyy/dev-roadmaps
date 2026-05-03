@@ -1,0 +1,70 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "At 09:14, a new task for devpolaris-orders-api writes this CloudWatch line:\n\ncause=AccessDeniedException: not authorized to perform secretsmanager:GetSecretValue\nsecret=arn:aws:secretsmanager:us-east-1:333333333333:secret:orders-api/prod/database-AbCdEf\n\nWhich first check matches the evidence?",
+      "options": [
+        { "id": "a", "text": "Inspect the task role, secret policy, and any KMS permissions tied to the secret." },
+        { "id": "b", "text": "Add inbound TCP 5432 from the app task security group to the database security group." },
+        { "id": "c", "text": "Move the RDS database into a public subnet so Secrets Manager can read it." },
+        { "id": "d", "text": "Change the ALB health check matcher because the browser sees a backend error." }
+      ],
+      "correct": ["a"],
+      "explanation": "The app reached the AWS API and received an authorization decision. That points to IAM, resource policy, or key access, not to the database port. A network change would not grant `secretsmanager:GetSecretValue`."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "Ten minutes later another task logs:\n\nsecret_read=ok\nhost=orders-prod.cluster-cxample.us-east-1.rds.amazonaws.com\nport=5432\ncause=connect ETIMEDOUT 10.20.31.18:5432\n\nWhat changed about the problem?",
+      "options": [
+        { "id": "a", "text": "IAM for the secret path worked, so the next useful checks are routes and security groups for the database hop." },
+        { "id": "b", "text": "The task role must be missing `rds:Connect`, so the TCP timeout should be ignored." },
+        { "id": "c", "text": "The Route 53 public record is wrong because the database hostname resolved to an IP." },
+        { "id": "d", "text": "The ALB listener certificate is expired because TLS and database TCP share the same port." }
+      ],
+      "correct": ["a"],
+      "explanation": "This error says the app has the database hostname and secret but cannot complete a TCP connection. That is network reachability evidence. Start with the app subnet, DB endpoint, DB security group, and task security group."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "During review, these notes appear for devpolaris-orders-api. Which notes correctly separate IAM access from packet reachability?",
+      "options": [
+        { "id": "a", "text": "`AccessDeniedException` while calling Secrets Manager belongs with the task role and secret policy review." },
+        { "id": "b", "text": "`connect ETIMEDOUT 10.20.31.18:5432` belongs with the route and security group review." },
+        { "id": "c", "text": "`Target.ResponseCodeMismatch` belongs with the app health endpoint and target group matcher review." },
+        { "id": "d", "text": "A successful `GetSecretValue` call proves that RDS inbound TCP 5432 is open from the app task." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "Each symptom points to a different layer, and the error shape is the clue. Secret authorization, TCP timeout, and health check mismatch should not be fixed with the same knob. A successful secret read does not prove the database port is reachable."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "A teammate suggests opening database inbound TCP 5432 from `0.0.0.0/0` because the task role already has a narrow IAM policy. What is the safest response?",
+      "options": [
+        { "id": "a", "text": "Keep the checks separate: narrow IAM can read the secret, but the database should allow TCP 5432 only from the app task security group." },
+        { "id": "b", "text": "Accept the change because IAM will block every database login attempt before the packet reaches RDS." },
+        { "id": "c", "text": "Remove the task role so the database security group becomes the only access control." },
+        { "id": "d", "text": "Move the database to the ALB security group so the public listener can enforce IAM." }
+      ],
+      "correct": ["a"],
+      "explanation": "IAM and network rules protect different parts of the system. A narrow task role is good, but it does not make a broad database security group safe. The database rule should describe the intended packet source."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A checkout failure timeline shows:\n\n09:20 task started\n09:21 `AccessDeniedException` for Secrets Manager\n09:24 IAM policy updated\n09:29 secret read succeeds\n09:30 `password authentication failed for user orders_app`\n\nWhere should the team look next?",
+      "options": [
+        { "id": "a", "text": "The secret value and database user, because the TCP path reached database authentication." },
+        { "id": "b", "text": "The task security group, because every database auth error means packets are blocked." },
+        { "id": "c", "text": "The Route 53 alias, because password errors are caused by the public domain path." },
+        { "id": "d", "text": "The NAT gateway, because database passwords are retrieved through outbound internet routes." }
+      ],
+      "correct": ["a"],
+      "explanation": "The symptom moved again. A password authentication failure means the app reached the database server far enough to attempt login. That is different from IAM denial and different from a TCP timeout."
+    }
+  ]
+}

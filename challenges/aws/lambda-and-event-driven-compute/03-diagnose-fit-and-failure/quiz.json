@@ -1,0 +1,142 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "The export Lambda logs:\n\nSTART RequestId: 8f0f0a20\nINFO exportId=exp_7732 action=generate_export start\nERROR Task timed out after 3.00 seconds\nREPORT Duration: 3000.00 ms Billed Duration: 3000 ms Memory Size: 256 MB Max Memory Used: 182 MB Status: timeout\n\nWhat is the best first response?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Investigate the work duration, batch size, downstream client timeouts, and whether the job fits the function timeout."
+        },
+        {
+          "id": "b",
+          "text": "Add an ALB health check because timeout proves the function lacks a target group."
+        },
+        {
+          "id": "c",
+          "text": "Patch the EC2 host because Lambda REPORT lines are Linux service logs."
+        },
+        {
+          "id": "d",
+          "text": "Raise the timeout first and skip checking batch size because the same work may finish later."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The REPORT line gives a timeout diagnosis and memory clue. The next step is to understand why this unit of work cannot finish in time. Raising timeout may be part of a fix, but it should not be the only thought."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A Lambda receipt worker fails with:\n\nAccessDenied: User arn:aws:sts::123456789012:assumed-role/devpolaris-receipt-worker/devpolaris-receipt-worker\nis not authorized to perform ses:SendEmail on identity orders.devpolaris.com\n\nWhere should the team inspect first?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The Lambda execution role policy and the specific SES identity permission."
+        },
+        {
+          "id": "b",
+          "text": "The ECS task execution role, because it pulls all Lambda permissions from ECR."
+        },
+        {
+          "id": "c",
+          "text": "The ALB target group health path, because SendEmail depends on /health."
+        },
+        {
+          "id": "d",
+          "text": "The SQS visibility timeout only, because IAM denies are caused by hidden retries."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The error names the Lambda assumed role and the denied action. That points to the function execution role policy. Retry settings may affect how often it fails, but they do not grant SES permission."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "A handler was written for SQS, but a manual test event uses:\n\n{ \"orderId\": \"ord_1042\", \"email\": \"maya@example.com\" }\n\nThe error says:\nTypeError: Cannot read properties of undefined (reading map)\nat handler (index.mjs:4:31)\n\nWhich fix best matches the failure?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Test and validate with a realistic SQS event containing Records, and make the handler reject bad shapes clearly."
+        },
+        {
+          "id": "b",
+          "text": "Increase memory because undefined values are caused by insufficient RAM."
+        },
+        {
+          "id": "c",
+          "text": "Move the function into an EC2 systemd service because only servers can parse JSON arrays."
+        },
+        {
+          "id": "d",
+          "text": "Return success for bad test events so retries stop."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "This is an event-contract problem. The handler expected one shape and received another. Good validation gives a clear error and realistic tests prevent direct-object samples from hiding production behavior."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "A Lambda incident review includes:\n\nrequestId: 0ad7729e\nmessageId: 5a6f4b79\norderId: ord_1042\nREPORT Duration: 2988 ms Max Memory Used: 251 MB of 256 MB\nerror: provider timeout after receipt send accepted\n\nWhich checks belong in a calm diagnostic path?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Find the event identifier and request ID in the log group."
+        },
+        {
+          "id": "b",
+          "text": "Read the first error line and the REPORT line for duration, memory, and timeout clues."
+        },
+        {
+          "id": "c",
+          "text": "Check whether the trigger sent the event shape the handler expects."
+        },
+        {
+          "id": "d",
+          "text": "Start by changing timeout, memory, and permissions together so one of them works."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "The useful path is evidence first. IDs connect attempts, REPORT lines show runtime pressure, and event shape explains parsing failures. Changing several settings at once makes it harder to know what actually fixed the issue."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "Receipt emails are duplicated. The logs show:\n\nattempt 1: provider accepted email for orderId=ord_1042\nattempt 1: function timed out before writing receipt_sent record\nattempt 2: same SQS message delivered again\nworker behavior: sends email before checking existing receipt state\n\nWhat is the best design fix?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Make the worker idempotent by checking and recording a stable key before creating another real-world effect."
+        },
+        {
+          "id": "b",
+          "text": "Increase checkout API desired count so Lambda receives fewer duplicate messages."
+        },
+        {
+          "id": "c",
+          "text": "Set the visibility timeout much higher and assume duplicate sends cannot happen after that."
+        },
+        {
+          "id": "d",
+          "text": "Print the email provider API key in logs so operators can confirm the send."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The duplicate comes from retry plus a side effect that was not protected. The worker should treat `receipt:ord_1042` as the business identity and avoid sending twice. More API tasks or leaked secrets do not solve the retry shape."
+    }
+  ]
+}

@@ -42,19 +42,6 @@
     },
     {
       "id": "q4",
-      "type": "multiple",
-      "scenario": "An incident review lists several missing resources. Which scope conclusions are sound before the team starts changing AWS settings?",
-      "options": [
-        { "id": "a", "text": "An IAM role is account-level or global thinking, so do not hunt for it as a normal per-Region resource." },
-        { "id": "b", "text": "A load balancer is regional in normal use, so the Region selector or CLI Region can hide it." },
-        { "id": "c", "text": "A subnet is zonal, so every app copy in one subnet means one AZ for that part of the app path." },
-        { "id": "d", "text": "A general purpose S3 bucket has a global name only, so its objects never have a chosen Region." }
-      ],
-      "correct": ["a", "b", "c"],
-      "explanation": "IAM, load balancers, and subnets live at different scopes, and knowing that scope prevents wrong-boundary debugging. S3 is a useful edge case: bucket names use a broad namespace, but a general purpose bucket is still created in a chosen Region. The global-name detail is plausible but incomplete."
-    },
-    {
-      "id": "q5",
       "type": "single",
       "scenario": "The production app path spans us-east-1a and us-east-1b. A larger service problem affects the entire us-east-1 Region, including the regional entry point. What should the team say about its current posture?",
       "options": [
@@ -67,7 +54,7 @@
       "explanation": "Two AZs inside one Region improve local failure tolerance, but they are not regional disaster recovery. Two Regions require much more design: data replication, routing, failover testing, and runbooks. A public entry point or a second account does not create that by itself."
     },
     {
-      "id": "q6",
+      "id": "q5",
       "type": "single",
       "scenario": "DevPolaris is choosing a first production posture for a small backend. The team wants a clear starting point without pretending it has a global platform. Which plan best matches the article?",
       "options": [

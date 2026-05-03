@@ -55,19 +55,6 @@
     },
     {
       "id": "q5",
-      "type": "single",
-      "scenario": "The DevPolaris cart service reads and writes carts by one known key: customer ID. The team does not need joins, and the main access pattern is predictable at high request volume. Which data service is a reasonable fit from the article's map?",
-      "options": [
-        { "id": "a", "text": "DynamoDB, because key-based records with known access patterns fit its model." },
-        { "id": "b", "text": "RDS, because every backend record should start with SQL tables." },
-        { "id": "c", "text": "S3, because a cart is a file that users download directly." },
-        { "id": "d", "text": "EBS, because key lookups require a block volume." }
-      ],
-      "correct": ["a"],
-      "explanation": "The known key-based access pattern is the article's beginner case for DynamoDB. RDS may be right for relational questions, S3 is object storage for files, and EBS is a block volume for EC2 rather than a managed key-value database."
-    },
-    {
-      "id": "q6",
       "type": "multiple",
       "scenario": "A DevPolaris review lists several proposed storage choices. Which comments correctly match the storage service to the data shape?",
       "options": [

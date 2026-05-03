@@ -1,0 +1,142 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "On an EC2 instance, systemd reports:\n\nActive: failed (Result: exit-code)\nExecStart=/usr/bin/node server.js\nWorkingDirectory=/opt/devpolaris-orders-api\njournal: Error: Cannot find module /opt/devpolaris-orders-api/server.js\n\nWhat should the operator inspect first?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The deployed app path and systemd unit WorkingDirectory or ExecStart, because the service cannot find the Node.js entry file."
+        },
+        {
+          "id": "b",
+          "text": "The ALB listener certificate, because module resolution errors come from HTTPS termination."
+        },
+        {
+          "id": "c",
+          "text": "The instance role policy, because IAM denies missing local files."
+        },
+        {
+          "id": "d",
+          "text": "The target group health threshold, because systemd failed only after the ALB marked it unhealthy."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "systemd is failing before the app can serve anything. The journal names a local path problem, so the service unit and deployed files are the useful first layer. ALB health can only improve after the process starts correctly."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "The same instance later shows:\n\nsystemctl is-active devpolaris-orders-api: active\ncurl http://127.0.0.1:3000/health: {\"status\":\"ok\"}\nALB target health: unhealthy Target.Timeout\ninstance SG inbound: TCP 3000 from sg-admin-bastion\n\nWhat is the next best fix direction?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Adjust the instance security group to allow TCP 3000 from the ALB security group."
+        },
+        {
+          "id": "b",
+          "text": "Rewrite the systemd unit because active services cannot serve local health checks."
+        },
+        {
+          "id": "c",
+          "text": "Add more RestartSec delay because Target.Timeout means systemd restarts too quickly."
+        },
+        {
+          "id": "d",
+          "text": "Move the app to port 443 inside Node.js because ALB listeners cannot forward to port 3000."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The service is healthy locally, so the broken part is outside the process. The security group only allows the bastion, not the ALB, to reach port 3000. Fix that path and then recheck target health."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "A teammate starts the API with `node server.js` in an SSH session. The app works until the terminal closes. There is no unit file under /etc/systemd/system and the ALB later reports no healthy targets.\n\nWhat is the best production-minded change?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Create and enable a systemd service so the app starts at boot, restarts on failure when configured, and writes useful logs."
+        },
+        {
+          "id": "b",
+          "text": "Keep a shared SSH session open permanently so the process has a terminal owner."
+        },
+        {
+          "id": "c",
+          "text": "Disable the ALB health check because human-started processes do not need readiness checks."
+        },
+        {
+          "id": "d",
+          "text": "Put the database password in the AMI so the process survives logout."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "A long-running EC2 service needs a supervisor. systemd gives the team a standard way to start, restart, enable, and inspect the process. An SSH session is a fragile experiment, not an operating model."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "A healthy EC2 process check shows:\n\nsystemctl status: Loaded enabled, Active active (running), Main PID 1842 (node)\njournal: service=devpolaris-orders-api port=3000 node_env=production\nlocal curl /health: 200\nALB target health: healthy\n\nWhich facts are useful proof that port 3000 is being served correctly?",
+      "options": [
+        {
+          "id": "a",
+          "text": "systemd sees the service active with a Node.js main process."
+        },
+        {
+          "id": "b",
+          "text": "A local health request to 127.0.0.1:3000 returns success."
+        },
+        {
+          "id": "c",
+          "text": "The ALB marks the instance target healthy on the expected port."
+        },
+        {
+          "id": "d",
+          "text": "The SSH key pair name is short, so health checks can trust the process."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "You want evidence from both inside and outside the instance. systemd proves the process is alive, local curl proves the app answers on the port, and target health proves the ALB can reach it. The SSH key name does not prove runtime health."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A unit file contains:\n\nEnvironment=PORT=8080\nExecStart=/usr/bin/node server.js\n\nTarget group settings:\nProtocol: HTTP\nPort: 3000\nHealth path: /health\n\nThe app log says `listening on 8080`. What should the team do?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Align the runtime port contract by changing the app environment or the target group so both use the same port."
+        },
+        {
+          "id": "b",
+          "text": "Increase desired EC2 instances because port mismatch is solved by more capacity."
+        },
+        {
+          "id": "c",
+          "text": "Change NODE_ENV to development so Express listens on both ports."
+        },
+        {
+          "id": "d",
+          "text": "Rotate the instance role because IAM chooses the health check port."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The evidence shows a simple contract mismatch. The ALB checks port 3000 while the process listens on 8080. Fix the runtime or target group mapping deliberately, then recheck local and target health."
+    }
+  ]
+}

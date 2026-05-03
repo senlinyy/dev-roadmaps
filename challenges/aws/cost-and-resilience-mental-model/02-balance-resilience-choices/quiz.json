@@ -1,0 +1,70 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "One ECS task crashes during a deploy. The ALB keeps sending checkout requests to two healthy tasks, and customers do not notice. Which resilience idea is this?",
+      "options": [
+        { "id": "a", "text": "Serving through a small runtime failure by keeping healthy task copies available." },
+        { "id": "b", "text": "Recovering from data loss, because task replacement restores deleted order rows." },
+        { "id": "c", "text": "Meeting RPO, because no backup was restored." },
+        { "id": "d", "text": "Replacing all observability, because the service stayed online." }
+      ],
+      "correct": ["a"],
+      "explanation": "Resilience includes serving through small failures. Multiple healthy tasks let checkout continue when one task restarts. That is different from recovering lost or corrupted data."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A bad write corrupts order totals at 10:12 UTC. The business says checkout must be safe again within 30 minutes and no more than about 5 minutes of accepted order writes can be lost.",
+      "options": [
+        { "id": "a", "text": "The 30-minute target is RTO, and the 5-minute data-loss target is RPO." },
+        { "id": "b", "text": "The 30-minute target is RPO, and the 5-minute data-loss target is RTO." },
+        { "id": "c", "text": "Both targets are the same because recovery time and data freshness mean one thing." },
+        { "id": "d", "text": "Neither target matters once a database backup exists." }
+      ],
+      "correct": ["a"],
+      "explanation": "RTO is about how long recovery can take. RPO is about how fresh recovered data must be, or how much recent data loss is acceptable. A backup setting only matters if it can actually meet those targets."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "Checkout returns 201, but receipt emails are delayed because the `devpolaris-receipt-email` Lambda is failing. The API is usable, but customers do not receive receipts.",
+      "options": [
+        { "id": "a", "text": "This is degraded service, not necessarily full checkout downtime, and it still deserves an owned recovery path." },
+        { "id": "b", "text": "This is permanent data loss because the API returned 201." },
+        { "id": "c", "text": "This proves RTO and RPO are irrelevant for side jobs." },
+        { "id": "d", "text": "This should be ignored because delayed email can never affect customer trust." }
+      ],
+      "correct": ["a"],
+      "explanation": "Resilience depends on user impact. Orders may complete while a side job is degraded, so the urgency and response differ from checkout 500s. The team should still know how to recover the side job and communicate impact."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "Which choices are resilience choices with cost tradeoffs?",
+      "options": [
+        { "id": "a", "text": "Keeping at least two ECS tasks so one restart does not remove all healthy targets." },
+        { "id": "b", "text": "Keeping RDS backups and testing restore so bad writes or deletion can be repaired." },
+        { "id": "c", "text": "Retaining enough logs to diagnose support reports after the original incident window." },
+        { "id": "d", "text": "Cutting every retained signal and backup because smaller bills automatically mean safer systems." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "Each correct choice has a cost side and a protection side. Running tasks protects availability, backups protect recovery, and logs protect diagnosis. Blindly cutting all protection may reduce cost while increasing business risk."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A proposal saves money by shortening backup retention until it removes the only tested restore point for orders. The proposal has no updated RTO or RPO evidence.",
+      "options": [
+        { "id": "a", "text": "Reject or revise it until recovery targets are still believable and tested." },
+        { "id": "b", "text": "Approve it because cost savings are proof that resilience improved." },
+        { "id": "c", "text": "Approve it if ECS still has enough CPU, because CPU replaces backups." },
+        { "id": "d", "text": "Ignore RPO because users only care about application uptime." }
+      ],
+      "correct": ["a"],
+      "explanation": "A cost change that breaks the only restore path is not a safe win. Recovery targets need evidence: backup schedule, restore process, validation, app config, and practice. Cost and resilience should be reviewed together."
+    }
+  ]
+}

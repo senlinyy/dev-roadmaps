@@ -1,0 +1,70 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "`curl -I https://orders.devpolaris.com/health` returns:\n\nHTTP/2 503\nserver: awselb/2.0\n\nWhat does this prove?",
+      "options": [
+        { "id": "a", "text": "The request reached the ALB, so the next checks should focus on listener routing and target health." },
+        { "id": "b", "text": "DNS failed, because a 503 is returned before any ALB can answer." },
+        { "id": "c", "text": "TLS failed, because successful TLS never allows an HTTP status code." },
+        { "id": "d", "text": "The database rejected the browser directly." }
+      ],
+      "correct": ["a"],
+      "explanation": "`server: awselb/2.0` is strong evidence that the ALB answered. A 503 from the ALB usually means it could not forward to usable backend targets. Move inward instead of changing DNS first."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "The HTTPS listener table says:\n\nPriority  Condition                         Action\n10        host-header api.devpolaris.com     forward to orders-api-tg\ndefault   any request                        fixed-response 404\n\nThe customer calls `orders.devpolaris.com`. What is wrong?",
+      "options": [
+        { "id": "a", "text": "The host rule does not match the requested hostname, so the request may fall to the default action." },
+        { "id": "b", "text": "The listener must forward on port 80 because host-header rules do not work on HTTPS." },
+        { "id": "c", "text": "The target group should be attached to Route 53 instead of the listener." },
+        { "id": "d", "text": "The database security group needs inbound TCP 443 from the internet." }
+      ],
+      "correct": ["a"],
+      "explanation": "Listener rules must match the host being tested. A typo or old hostname can send traffic to a default response even when the target group itself is healthy. Fix the listener path before deeper backend checks."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "Target health snapshot:\n\nTarget        Port  State       Reason\n10.0.42.18    3000  healthy\n10.0.43.27    3000  unhealthy   Target.ResponseCodeMismatch\n\nCloudWatch logs for the unhealthy task show:\n\npath=/health status=500 reason=db_not_ready\n\nWhat is the safest next move?",
+      "options": [
+        { "id": "a", "text": "Inspect why `/health` reports `db_not_ready`, including the task-to-database path and app readiness behavior." },
+        { "id": "b", "text": "Make `/health` always return `200` so the ALB sends traffic to both tasks." },
+        { "id": "c", "text": "Delete the unhealthy task's private subnet route table." },
+        { "id": "d", "text": "Move the listener rule to a new domain because one target is still healthy." }
+      ],
+      "correct": ["a"],
+      "explanation": "The ALB reached the app, and the app said it was not ready. That is useful evidence, not something to hide. Fix the readiness cause or tune the deployment behavior instead of forcing green health."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "Which checks belong in a calm ALB failure runbook for devpolaris-orders-api?",
+      "options": [
+        { "id": "a", "text": "Confirm the request reaches the ALB, for example with response headers from `curl -I`." },
+        { "id": "b", "text": "Confirm the listener rule forwards the tested host to `orders-api-tg`." },
+        { "id": "c", "text": "Confirm registered targets use the expected task IPs and app port." },
+        { "id": "d", "text": "Start by opening task inbound TCP 3000 from `0.0.0.0/0` to remove security from the question." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "A good runbook proves one layer at a time: ALB reached, listener matched, target group used, targets registered, and app evidence checked. Opening the app port broadly may mask the issue and weaken the boundary. The caller that matters is the ALB security group."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "ECS events and app logs line up like this:\n\n10:41:18 registered target 10.0.44.92:3000\n10:41:48 task failed ELB health checks\n10:41:49 stopped task\n10:41:52 HTTP server listening on 0.0.0.0:3000\n\nWhat is the best interpretation?",
+      "options": [
+        { "id": "a", "text": "The app starts listening after ECS has already treated the target as failed, so startup timing and grace settings need review." },
+        { "id": "b", "text": "The task security group must allow the public internet on port 3000 because the app eventually listens." },
+        { "id": "c", "text": "The ALB listener certificate is wrong because health checks always wait for TLS." },
+        { "id": "d", "text": "The target group is unused because a task cannot be registered before the HTTP server starts." }
+      ],
+      "correct": ["a"],
+      "explanation": "The evidence shows a timing problem: health checks fail before the server is ready. Possible fixes include reducing slow startup work, starting the HTTP listener earlier with accurate readiness, or tuning the ECS health check grace period. Always returning `200` would hide readiness rather than fix it."
+    }
+  ]
+}

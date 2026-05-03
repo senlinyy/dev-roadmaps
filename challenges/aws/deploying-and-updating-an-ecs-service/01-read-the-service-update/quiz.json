@@ -1,0 +1,142 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "The pipeline log says:\n\npushed image: devpolaris-orders-api:2026-05-02.5\nregistered task definition: devpolaris-orders-api:44\n\nECS service still shows:\ntaskDefinition: devpolaris-orders-api:43\ndeployments: PRIMARY revision 43 rollout COMPLETED\n\nWhat has not happened yet?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The ECS service has not been updated to run task definition revision 44."
+        },
+        {
+          "id": "b",
+          "text": "The image was not pushed because completed revision 43 deletes all newer tags."
+        },
+        {
+          "id": "c",
+          "text": "The ALB health check has accepted revision 44 and hidden it from the service view."
+        },
+        {
+          "id": "d",
+          "text": "Rollback has already occurred because any new task definition triggers automatic rollback."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "A service update is the moment ECS is told which recipe to run. Pushing an image and registering a task definition are necessary steps, but they do not move customer traffic by themselves. The service still points at revision 43."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "Task definition 45 changes only:\n\nenvironment ORDER_TIMEOUT_MS: 2500 to 1000\nimage digest: unchanged sha256:8f3d2b9a\nportMappings: unchanged 3000\n\nShould this still be treated as a deployment?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Yes, because the task definition revision is the runtime recipe and config changes can affect production behavior."
+        },
+        {
+          "id": "b",
+          "text": "No, because deployments only exist when the image digest changes."
+        },
+        {
+          "id": "c",
+          "text": "No, because environment variables are read from the ALB, not from the task definition."
+        },
+        {
+          "id": "d",
+          "text": "Yes, but only if the value is a secret and printed in logs."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "An ECS service update changes the recipe the service should run. Config-only changes can be safer than code changes, but they still change behavior. They need release evidence and rollback thinking."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "A release record before update says:\n\nnew taskDefinition: devpolaris-orders-api:45\nnew image digest: sha256:bf91\nrollback target: devpolaris-orders-api:44\nexpected health path: /health on port 3000\nsmoke test: GET /v1/orders/health-check-order\n\nWhy is this record useful?",
+      "options": [
+        {
+          "id": "a",
+          "text": "It names what should run, how to verify it, and what known-good revision to return to if the update fails."
+        },
+        {
+          "id": "b",
+          "text": "It lets the team skip target health because the record already says health is expected."
+        },
+        {
+          "id": "c",
+          "text": "It replaces CloudWatch Logs because records should contain all runtime evidence."
+        },
+        {
+          "id": "d",
+          "text": "It makes old task definitions unnecessary and safe to delete before the deploy."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "A release record prepares the team for verification and recovery. It does not replace live evidence, but it tells engineers what evidence to look for. The rollback target is especially useful when the new revision is unsafe."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "A reviewer checks an ECS service update plan:\n\nnew image digest: sha256:bf91\ntask definition: devpolaris-orders-api:45\ndesired count: 2\ndeployment config: minimum healthy percent 100, maximum percent 200\ntarget group health path: /health\nrollback target: devpolaris-orders-api:44\n\nWhich items belong in the review?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The task definition revision and the image it points to."
+        },
+        {
+          "id": "b",
+          "text": "Deployment settings that control old and new task overlap."
+        },
+        {
+          "id": "c",
+          "text": "Target health and rollback target evidence."
+        },
+        {
+          "id": "d",
+          "text": "The local Docker image ID on one developer machine after the image was pushed."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "A service update review should follow the production path. Artifact, recipe, deployment rules, health, logs, and rollback target all matter. A local Docker image ID is not enough once the release artifact has moved through ECR and ECS."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "During a rolling update:\n\ndesiredCount: 2\nold revision 44: running=2\nnew revision 45: running=1 pending=1\nminimum healthy percent: 100\nmaximum percent: 200\n\nWhy does ECS temporarily run old and new tasks together?",
+      "options": [
+        {
+          "id": "a",
+          "text": "To keep enough healthy capacity while new tasks start, register, and pass health checks before old tasks stop."
+        },
+        {
+          "id": "b",
+          "text": "To let the ALB shift traffic to new tasks before their target health is known."
+        },
+        {
+          "id": "c",
+          "text": "To make rollback impossible by mixing revisions permanently."
+        },
+        {
+          "id": "d",
+          "text": "To avoid using target health because overlap proves the app is safe."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Rolling deployment settings protect availability while the service changes recipes. New tasks need time to start and earn traffic. Old tasks should leave only when the deployment rules and health checks allow it."
+    }
+  ]
+}

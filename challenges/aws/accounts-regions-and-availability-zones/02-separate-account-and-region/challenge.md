@@ -1,5 +1,5 @@
 ---
-title: "Separate Account And Region"
+title: "Separate Account and Region"
 sectionSlug: accounts-the-workspace-boundary
 order: 2
 ---

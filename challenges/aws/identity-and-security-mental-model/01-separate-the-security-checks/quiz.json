@@ -1,0 +1,70 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "The DevPolaris team says `devpolaris-orders-api` has a security problem because startup fails with:\n\n```text\nAccessDeniedException: not authorized to perform secretsmanager:GetSecretValue\n```\n\nWhat is the safest first check?",
+      "options": [
+        { "id": "a", "text": "Identify the caller role, the `secretsmanager:GetSecretValue` action, and the exact secret ARN before changing anything else." },
+        { "id": "b", "text": "Open the database security group to the whole private CIDR because every security problem is a network problem." },
+        { "id": "c", "text": "Rotate the database password immediately because every secret error means the password value is stale." },
+        { "id": "d", "text": "Disable CloudTrail for the account because audit records can block runtime access." }
+      ],
+      "correct": ["a"],
+      "explanation": "The error names an AWS API action and says the request is not authorized, so the first useful door is identity and permission. A network rule, password rotation, or audit setting may matter in other failures, but this evidence points to the caller, action, and resource involved in the IAM decision."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A teammate is drawing the running example for `devpolaris-orders-api` and wants one clean sentence that names both an actor and a protected resource. Which sentence fits the article's security model best?",
+      "options": [
+        { "id": "a", "text": "The ECS task role is the principal when the app calls AWS, and the Secrets Manager secret is a resource it may need to read." },
+        { "id": "b", "text": "The RDS database is the principal, and the engineer's laptop is the protected AWS resource." },
+        { "id": "c", "text": "The load balancer is the IAM policy, and the app log group is the network path." },
+        { "id": "d", "text": "The customer request is the encryption key, and the task role is the database password." }
+      ],
+      "correct": ["a"],
+      "explanation": "A principal is the actor making an AWS request, and a resource is the thing AWS manages or protects. The ECS task role can be the app's AWS caller, while the secret is a protected resource. The other answers mix up traffic components, local tools, logs, network paths, keys, and passwords."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "Maya is building a checklist for a production incident. Which evidence matches the right security check?",
+      "options": [
+        { "id": "a", "text": "`aws sts get-caller-identity` shows the role ARN: identity." },
+        { "id": "b", "text": "An IAM policy simulator result for `s3:PutObject`: permission." },
+        { "id": "c", "text": "A database security group rule for port `5432`: network reachability." },
+        { "id": "d", "text": "An app log line that prints a password value: encryption success." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "Caller identity, policy evaluation, and security group rules map directly to identity, permission, and network checks. A log line that prints a password is not encryption evidence. It is a secret handling problem because the private value should not be exposed in logs."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "`devpolaris-orders-api` runs on ECS. The Node.js code needs to read a database secret and write S3 export files. Which role should normally carry those application permissions?",
+      "options": [
+        { "id": "a", "text": "The ECS task role, because it is the role used by application code running inside the container." },
+        { "id": "b", "text": "The ECS task execution role, because it is always the role used by application code." },
+        { "id": "c", "text": "The AWS account root user, because root is the safest runtime identity for production." },
+        { "id": "d", "text": "Maya's long-lived access key, because human credentials are easier for ECS to reuse." }
+      ],
+      "correct": ["a"],
+      "explanation": "The task role is what the application uses for AWS API calls at runtime. The execution role is for platform work such as pulling images and sending logs. Root and long-lived human access keys are not the safe runtime model for an application."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A reviewer says, \"The app is down, so AWS security is blocking it.\" The only evidence so far is that load balancer targets are unhealthy. What response best follows the article?",
+      "options": [
+        { "id": "a", "text": "Ask for the next specific evidence: caller, denied action, network timeout, secret lookup, database login error, or audit record." },
+        { "id": "b", "text": "Assume IAM is wrong and add `*` permissions until the targets become healthy." },
+        { "id": "c", "text": "Assume the database is public because unhealthy load balancer targets always mean open network access." },
+        { "id": "d", "text": "Ignore logs because security failures never leave useful application evidence." }
+      ],
+      "correct": ["a"],
+      "explanation": "The mental model is useful because it turns a vague security label into separate checks. Unhealthy targets are only a symptom. The next safe move is to gather evidence that points to IAM, network reachability, secret retrieval, database authentication, encryption, or audit history."
+    }
+  ]
+}

@@ -1,0 +1,70 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A new ECS task revision fails readiness:\n\n```text\nloading database secret secretId=orders/prod/postgres\ndatabase endpoint host=orders-prod.xxxxxx.us-east-1.rds.amazonaws.com port=5432 database=orders\nreadiness failed error=connect ETIMEDOUT 10.42.18.91:5432\n```\n\nWhat should the team inspect first?",
+      "options": [
+        { "id": "a", "text": "The network path to RDS, especially RDS status, subnet placement, and security group rules." },
+        { "id": "b", "text": "The S3 export prefix, because failed readiness usually means missing receipt objects." },
+        { "id": "c", "text": "The DynamoDB idempotency condition, because duplicate checkouts time out RDS connections." },
+        { "id": "d", "text": "The SQL schema migration table, because every timeout means a column is missing." }
+      ],
+      "correct": ["a"],
+      "explanation": "`ETIMEDOUT` means the app had a host and port but did not complete the connection. That points first to routing, subnet placement, security groups, or database availability. A wrong password would usually produce a different error after the database answered."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "The app expects the secret field `host`, but the rotated secret now contains:\n\n```json\n{\"engine\":\"postgres\",\"hostname\":\"orders-prod.xxxxxx.us-east-1.rds.amazonaws.com\",\"port\":5432,\"database\":\"orders\",\"username\":\"orders_app\",\"password\":\"***\"}\n```\n\nWhat is the likely failure class?",
+      "options": [
+        { "id": "a", "text": "App configuration or secret shape mismatch before the network path is even proven." },
+        { "id": "b", "text": "RDS security group denial, because the field name controls inbound traffic." },
+        { "id": "c", "text": "S3 KMS denial, because the password is redacted in the secret output." },
+        { "id": "d", "text": "DynamoDB TTL expiration, because connection settings are short-lived state." }
+      ],
+      "correct": ["a"],
+      "explanation": "The app and secret no longer agree on the JSON field name. That can break startup before the app reaches RDS at all. Security groups and passwords matter later, but first the app must parse the intended host."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "The readiness log changes after a secret rotation:\n\n```text\ndatabase endpoint host=orders-prod.xxxxxx.us-east-1.rds.amazonaws.com port=5432 database=orders\nreadiness failed error=password authentication failed for user orders_app\n```\n\nWhat does this prove?",
+      "options": [
+        { "id": "a", "text": "The app reached PostgreSQL, so the next checks are credential version, database user, and rotation behavior." },
+        { "id": "b", "text": "The database endpoint cannot be resolved by DNS." },
+        { "id": "c", "text": "The RDS security group is blocking TCP traffic to port 5432." },
+        { "id": "d", "text": "The S3 object bucket is denying the ECS task role." }
+      ],
+      "correct": ["a"],
+      "explanation": "A password authentication error comes from the database after the network path reaches it. That narrows the investigation to auth and secret rotation, not DNS or security group reachability. It is a different class of failure than a timeout."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "The team writes a connection checklist for `devpolaris-orders-api` on ECS. Which checks belong in it?",
+      "options": [
+        { "id": "a", "text": "The task role can read the specific Secrets Manager secret." },
+        { "id": "b", "text": "The secret has the field names and endpoint the app expects." },
+        { "id": "c", "text": "The RDS security group allows PostgreSQL from the ECS service security group." },
+        { "id": "d", "text": "The S3 bucket policy allows finance to read `exports/daily/*`." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "The database path includes secret access, secret contents, endpoint, network rules, and database authentication. The finance S3 policy may be important for exports, but it does not prove an ECS task can connect to RDS. Keeping the layers separate makes incidents much calmer."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "After scaling from 2 to 18 ECS tasks, checkout errors increase. Metrics show:\n\n```text\nDatabaseConnections: 540 of max 600\nappPoolMaxPerTask: 30\nreadiness: intermittent timeout\n```\n\nWhat is the most useful first conclusion?",
+      "options": [
+        { "id": "a", "text": "The total possible app connections grew with task count, so pool sizing or RDS Proxy should be reviewed." },
+        { "id": "b", "text": "The RDS endpoint is wrong because connection count grows only when DNS fails." },
+        { "id": "c", "text": "The app should move order writes to a read replica to reduce writer connections." },
+        { "id": "d", "text": "The team should store pending orders in S3 because S3 has no database connections." }
+      ],
+      "correct": ["a"],
+      "explanation": "Each task has its own pool, so scaling task count can multiply database connections quickly. Pool limits, task count, and possibly RDS Proxy are the right review topics. Moving writes to a replica or S3 would avoid the real issue and break the data model."
+    }
+  ]
+}

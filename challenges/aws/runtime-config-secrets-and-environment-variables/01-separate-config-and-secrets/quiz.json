@@ -1,0 +1,142 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A task definition review lists:\n\nenvironment:\n  NODE_ENV=production\n  PORT=3000\n  ORDER_TIMEOUT_MS=2500\n  PUBLIC_BASE_URL=https://orders.devpolaris.com\nsecrets:\n  DATABASE_URL from Secrets Manager\n  PAYMENT_WEBHOOK_SECRET from SSM Parameter Store\n\nWhich review comment is best?",
+      "options": [
+        {
+          "id": "a",
+          "text": "This split is sensible: ordinary values are visible but intentional, and access-bearing values are referenced as secrets."
+        },
+        {
+          "id": "b",
+          "text": "PORT and NODE_ENV must be moved to Secrets Manager because every env var is sensitive."
+        },
+        {
+          "id": "c",
+          "text": "DATABASE_URL should be plaintext environment so operators can debug faster."
+        },
+        {
+          "id": "d",
+          "text": "PUBLIC_BASE_URL should be baked into the image so production cannot change it."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The useful distinction is what the value can do. Ordinary config can be visible and still reviewed carefully. Database URLs and webhook secrets grant access or trust, so the task definition should reference them without exposing values."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A diff changes this field:\n\nenvironment:\n  DATABASE_PASSWORD=prod-super-secret-value\n\nThe reviewer says it makes rollback easier because the value is visible in the task definition. What should the team do?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Move the password to a secret reference and keep the task definition from becoming a secret document."
+        },
+        {
+          "id": "b",
+          "text": "Accept it because rollback is more important than secret handling."
+        },
+        {
+          "id": "c",
+          "text": "Move all ordinary values into the same plaintext block so they are consistent."
+        },
+        {
+          "id": "d",
+          "text": "Put the password in CloudWatch startup logs and remove it from the task definition."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Rollback records should name secret references, not secret values. Plaintext credentials in task definitions are easy to leak through reviews, history, and screenshots. A secret reference keeps the runtime contract visible without exposing the credential."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "The Node.js config helper contains this default:\n\nDATABASE_URL = process.env.DATABASE_URL || \"postgres://localhost/orders\"\n\nProduction logs show:\nWARN DATABASE_URL missing, using default localhost\nERROR connect ECONNREFUSED 127.0.0.1:5432\n\nWhat is the best fix?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Fail startup clearly when required production DATABASE_URL is missing instead of using a quiet default."
+        },
+        {
+          "id": "b",
+          "text": "Keep the default because localhost is safe and proves the app can start."
+        },
+        {
+          "id": "c",
+          "text": "Increase desired count so at least one task finds a local database."
+        },
+        {
+          "id": "d",
+          "text": "Move localhost into Secrets Manager so the default becomes a secret."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Defaults are fine only when the fallback is genuinely safe. A production database URL is required config, so missing should stop startup with a clear message. Quiet defaults turn config mistakes into confusing runtime failures."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "A value classification review includes:\n\nNODE_ENV=production\nORDER_TIMEOUT_MS=2500\nDATABASE_URL=postgres://orders:password@db.prod/orders\nPAYMENT_WEBHOOK_SECRET=whsec_live_123\nDEFAULT_PAGE_SIZE=25\n\nWhich statements are correct?",
+      "options": [
+        {
+          "id": "a",
+          "text": "DATABASE_URL is a secret if it includes credentials or access details."
+        },
+        {
+          "id": "b",
+          "text": "PAYMENT_WEBHOOK_SECRET is a secret because it proves trusted webhook events."
+        },
+        {
+          "id": "c",
+          "text": "ORDER_TIMEOUT_MS is ordinary config, but a wrong value can still harm production behavior."
+        },
+        {
+          "id": "d",
+          "text": "DEFAULT_PAGE_SIZE must be treated like a password because it is numeric."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "Secrets are about access, identity, signing, or trust. Ordinary values can still break behavior and should be reviewed. Safe defaults belong only where the fallback is optional and harmless."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A release changes only runtime values:\n\nORDER_TIMEOUT_MS: 2500 to 500\nPUBLIC_BASE_URL: https://orders.devpolaris.com to https://api.devpolaris.com\nimage digest: unchanged\n\nHow should this be treated?",
+      "options": [
+        {
+          "id": "a",
+          "text": "As a real runtime release that needs review, deployment evidence, and rollback notes."
+        },
+        {
+          "id": "b",
+          "text": "As harmless metadata because no source code changed."
+        },
+        {
+          "id": "c",
+          "text": "As a secret rotation because every config value grants access."
+        },
+        {
+          "id": "d",
+          "text": "As an ALB certificate change because URLs cannot live in task definitions."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Runtime config changes can alter behavior even when the image stays the same. A shorter timeout or wrong public URL can affect users. The team should review and record the change like any other production recipe update."
+    }
+  ]
+}

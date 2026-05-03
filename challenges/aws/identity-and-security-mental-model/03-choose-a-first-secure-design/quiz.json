@@ -1,0 +1,70 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A deploy succeeds, but new tasks keep restarting. CloudWatch shows:\n\n```text\nreason=\"database initialization failed\"\ncause=\"AccessDeniedException: not authorized to perform secretsmanager:GetSecretValue\"\nsecret=\"arn:aws:secretsmanager:us-east-1:333333333333:secret:orders-api/prod/database-AbCdEf\"\n```\n\nWhat is the best next check?",
+      "options": [
+        { "id": "a", "text": "Confirm the ECS task role, then compare the exact action and secret ARN with its policies and any deny rules." },
+        { "id": "b", "text": "Change the RDS inbound rule first because the app must have reached the database." },
+        { "id": "c", "text": "Rotate the database password first because the error proves the database rejected the password." },
+        { "id": "d", "text": "Move the export bucket to a new name because S3 names control Secrets Manager access." }
+      ],
+      "correct": ["a"],
+      "explanation": "The app failed before it had the secret value, and the error names the denied AWS action. The right first check is the task role and the policy decision for that exact secret. RDS network and database password checks come after the app can read the secret."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "The team fixes secret access. The next deployment gets past startup, then logs:\n\n```text\ncause=\"connect ETIMEDOUT 10.20.12.31:5432\"\n```\n\nWhat habit prevents the team from wasting time?",
+      "options": [
+        { "id": "a", "text": "Notice the error shape changed and move from IAM checks to network reachability checks." },
+        { "id": "b", "text": "Keep editing IAM because the first incident was IAM and all following symptoms share the same root cause." },
+        { "id": "c", "text": "Disable encryption because encrypted database storage causes TCP timeouts." },
+        { "id": "d", "text": "Delete the database secret because the app no longer needs credentials after IAM is fixed." }
+      ],
+      "correct": ["a"],
+      "explanation": "The article's diagnosis path depends on reading the current evidence. A timeout to port `5432` points to network reachability. It is a different door from the earlier `GetSecretValue` authorization failure."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "At 10:18, `devpolaris-orders-api` starts timing out to RDS. CloudWatch has the app error. The team needs to know whether someone changed the database security group shortly before the failure. Which service gives the most direct AWS account activity record?",
+      "options": [
+        { "id": "a", "text": "CloudTrail, because it records AWS API activity such as security group changes." },
+        { "id": "b", "text": "CloudWatch Logs only, because app logs are the account audit trail for security group edits." },
+        { "id": "c", "text": "Secrets Manager, because secret versions list every VPC route change." },
+        { "id": "d", "text": "KMS, because key rotation records every load balancer and security group update." }
+      ],
+      "correct": ["a"],
+      "explanation": "CloudTrail records account activity from Console, CLI, SDK, and API calls, including security group changes. CloudWatch logs are the app side of the story. Together they help tell what failed and who changed what."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "The DevPolaris team is choosing a beginner-friendly secure design for `devpolaris-orders-api`. Which choices fit the article?",
+      "options": [
+        { "id": "a", "text": "Use one task role for the orders API with narrow permissions for its secret and export prefix." },
+        { "id": "b", "text": "Allow the database security group to accept PostgreSQL only from the orders API security group." },
+        { "id": "c", "text": "Keep CloudWatch logs and CloudTrail records available for diagnosis." },
+        { "id": "d", "text": "Use one broad role shared by every future workload so no team needs to update IAM later." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "The practical starting posture is understandable and narrow: one role per workload, tight network rules, and useful logs and audit records. A broad shared role feels easy at first, but it increases blast radius and makes future reviews harder."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A teammate wants customer managed KMS keys, strict resource policies, and automatic secret rotation everywhere on day one. Another teammate wants no rotation, broad roles, and open private network rules. What is the best senior-to-junior coaching?",
+      "options": [
+        { "id": "a", "text": "Pick secure defaults the team can operate, then tighten where extra control is worth the policy, rotation, and debugging cost." },
+        { "id": "b", "text": "Always choose the most complex security option because complexity proves the system is safer." },
+        { "id": "c", "text": "Always choose broad access first because beginners should not use boundaries in production." },
+        { "id": "d", "text": "Avoid audit records until the system is mature because logs make first designs less secure." }
+      ],
+      "correct": ["a"],
+      "explanation": "The article frames the tradeoff as simplicity versus tight boundaries. A first secure design should be understandable enough to operate, while still using narrow roles, private resources, useful logs, and clear ownership. More controls are good when the team can safely manage them."
+    }
+  ]
+}

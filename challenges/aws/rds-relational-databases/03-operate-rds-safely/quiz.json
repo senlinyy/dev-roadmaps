@@ -1,0 +1,70 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A new app version expects `payments.failure_code`, but the migration did not run in production. Logs show:\n\n```text\nquery=insert_payment_failure\nerror=column \"failure_code\" of relation \"payments\" does not exist\nrelease=2026-05-02.5\n```\n\nWhat is the safest diagnosis?",
+      "options": [
+        { "id": "a", "text": "The app and schema are out of sync, so deploy order and migration history need review." },
+        { "id": "b", "text": "RDS lost the column because managed databases remove unused fields." },
+        { "id": "c", "text": "The S3 receipt key is missing, so the payment row cannot be inserted." },
+        { "id": "d", "text": "The security group is blocking PostgreSQL traffic, so SQL sees missing columns." }
+      ],
+      "correct": ["a"],
+      "explanation": "The database is reachable and is returning a SQL error about schema shape. That points to migration coordination, not network access. RDS manages the database service, but the team still owns schema changes and deploy order."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "The team wants to add payment failure details without breaking old running tasks. Which sequence best matches the expand, deploy, contract pattern?",
+      "options": [
+        { "id": "a", "text": "Add nullable columns, deploy code that writes them, verify or backfill, then later add stricter constraints if safe." },
+        { "id": "b", "text": "Drop the old payment columns first, then deploy code that reads the new shape." },
+        { "id": "c", "text": "Store failure details only in S3 until all old tasks disappear." },
+        { "id": "d", "text": "Pause automated backups so the migration can run faster." }
+      ],
+      "correct": ["a"],
+      "explanation": "Expand, deploy, contract keeps old and new app versions compatible during a rollout. Adding nullable fields first lets old code leave them unused while new code starts writing them. Dropping old shape first is risky because old tasks may still be running."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "During an incident, this query returns:\n\n```text\nversion        name                       applied_at\n202605021030   add_payment_failure_code   2026-05-02 10:31:07+00\n202604281415   create_order_items         2026-04-28 14:16:44+00\n```\n\nWhat does this evidence help prove?",
+      "options": [
+        { "id": "a", "text": "Whether the expected schema migration was recorded as applied in this database." },
+        { "id": "b", "text": "Whether the ECS task role can read S3 receipts." },
+        { "id": "c", "text": "Whether the database subnet group spans enough Availability Zones." },
+        { "id": "d", "text": "Whether DynamoDB conditional writes are preventing duplicate checkout keys." }
+      ],
+      "correct": ["a"],
+      "explanation": "The migration table is concrete database evidence during a deploy incident. It helps compare the schema state with the app release that is running. It does not prove S3 access, subnet design, or DynamoDB behavior."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "A teammate says, \"RDS is managed, so AWS owns the database work now.\" Which corrections should you make?",
+      "options": [
+        { "id": "a", "text": "AWS helps manage provisioning, backups, maintenance options, and database service availability." },
+        { "id": "b", "text": "The application team still owns schema design, indexes, queries, migrations, and connection pool behavior." },
+        { "id": "c", "text": "The team still needs to practice restores and decide how recovered data will be used." },
+        { "id": "d", "text": "Managed RDS means migrations cannot block writes or create missing-column errors." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "RDS removes a lot of server management, but it does not design the application contract with the database. The team still owns migrations, query behavior, restore decisions, and pool sizing. Managed infrastructure does not make unsafe schema changes safe."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A bad release at 09:36 UTC marks many pending orders as cancelled. The team restores RDS to a new instance named `orders-prod-restore-20260502-093500`. The app still points to:\n\n```text\nDATABASE_HOST=orders-prod.cluster-c8r2.example.us-east-1.rds.amazonaws.com\n```\n\nWhy does the app still show bad statuses?",
+      "options": [
+        { "id": "a", "text": "The restore created a separate target, and the app has not been repaired from it or deliberately pointed at it." },
+        { "id": "b", "text": "RDS point-in-time recovery always rewinds production in place, so the restore must have failed." },
+        { "id": "c", "text": "The S3 export lifecycle rule is hiding the restored database rows." },
+        { "id": "d", "text": "DynamoDB TTL removed the RDS restore endpoint." }
+      ],
+      "correct": ["a"],
+      "explanation": "An RDS point-in-time restore creates a new DB instance, so recovery is not finished when the restore completes. The team must validate the restored target and decide whether to repair production from it or cut over intentionally. The existing app config still points at the old database."
+    }
+  ]
+}

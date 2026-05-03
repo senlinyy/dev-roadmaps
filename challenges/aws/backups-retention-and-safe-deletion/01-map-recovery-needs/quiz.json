@@ -1,0 +1,70 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "Incident note:\n\n```text\nBad release at 09:36 UTC changed many order statuses from pending to cancelled.\nData set: orders-prod RDS PostgreSQL\nNeed: inspect last good state and repair wrong rows\n```\n\nWhat recovery map entry is most accurate?",
+      "options": [
+        { "id": "a", "text": "Recover from RDS automated backups or a manual snapshot, usually into a new DB instance for validation or repair." },
+        { "id": "b", "text": "Recover from S3 object versions because order statuses are stored as object keys." },
+        { "id": "c", "text": "Recover from EFS backup because RDS rows are files in a shared mount." },
+        { "id": "d", "text": "Recover from DynamoDB TTL because TTL keeps old order rows available." }
+      ],
+      "correct": ["a"],
+      "explanation": "Final order state lives in RDS, so the recovery source should be RDS backups or snapshots. The restore target is usually a new DB instance, not a silent rewind of production. S3 versions and filesystem backups protect different data shapes."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A support engineer finds this S3 version history for a receipt:\n\n```text\nkey=receipts/2026/05/02/order_ord_8x7k2n/devpolaris-orders-receipt.pdf\nDeleteMarker IsLatest=true VersionId=mF9pZs0exampleDeleteMarker\nVersion IsLatest=false VersionId=3HL4kqtGood Size=734812\n```\n\nWhat does the recovery map say?",
+      "options": [
+        { "id": "a", "text": "The receipt may be recoverable from an earlier S3 object version or by removing the delete marker after review." },
+        { "id": "b", "text": "The receipt must be restored from the RDS order table because S3 versions do not contain bytes." },
+        { "id": "c", "text": "The receipt is unrecoverable because a delete marker deletes all previous versions." },
+        { "id": "d", "text": "The receipt should be restored into DynamoDB because it has an order id." }
+      ],
+      "correct": ["a"],
+      "explanation": "With S3 Versioning, a delete marker can make the current key look deleted while older versions still exist. The older version id is recovery evidence. The team should review the deletion scope and restore the needed version carefully."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "A DynamoDB restore finishes with this target:\n\n```text\nsourceTable=devpolaris-checkout-state-prod\nrestoredTable=devpolaris-checkout-state-restore-20260502-091500\nappConfig CHECKOUT_STATE_TABLE=devpolaris-checkout-state-prod\n```\n\nWhy is recovery not complete yet?",
+      "options": [
+        { "id": "a", "text": "The restored table is a new target, and the app or repair process must intentionally read from it after validation." },
+        { "id": "b", "text": "DynamoDB restores always overwrite the source table, so the config should not matter." },
+        { "id": "c", "text": "The app will automatically discover any table with the word `restore` in its name." },
+        { "id": "d", "text": "The restored table must be converted into an S3 object before use." }
+      ],
+      "correct": ["a"],
+      "explanation": "DynamoDB restores table data to a new table. That means the restored data is not used until a repair process or deliberate config change points at it. Validation and cutover planning are part of recovery."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "The team drafts a recovery map for the orders system. Which rows are sensible?",
+      "options": [
+        { "id": "a", "text": "Finance exports in S3: recover from earlier object version or regenerate from RDS if the source data is healthy." },
+        { "id": "b", "text": "Idempotency records in DynamoDB: recover through PITR or a restored table when missing records make retries unsafe." },
+        { "id": "c", "text": "Worker files on EBS or EFS: recover from snapshots or AWS Backup only when the files cannot be regenerated." },
+        { "id": "d", "text": "Final order records in RDS: recover by deleting the S3 bucket lifecycle rule." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "The good rows match the recovery source to the data shape. S3 versions or regeneration can protect exports, DynamoDB PITR can help with checkout safety state, and EBS or EFS backups matter for important worker files. RDS order records need database recovery, not S3 lifecycle changes."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A restore report says:\n\n```text\nrestoredResource=orders-prod-restore-20260502-093500.c9n4.example.us-east-1.rds.amazonaws.com\nvalidation=sample order ord_01HVZK8W93S6 status=pending\ncurrentAppConfig DATABASE_HOST=orders-prod.cluster-c8r2.example.us-east-1.rds.amazonaws.com\n```\n\nWhat should the team decide before declaring recovery done?",
+      "options": [
+        { "id": "a", "text": "Whether to repair production from the restored DB or deliberately cut over app config after validation." },
+        { "id": "b", "text": "Whether to delete the restored DB immediately because validation passed." },
+        { "id": "c", "text": "Whether to disable all backups so the app stops seeing old data." },
+        { "id": "d", "text": "Whether S3 receipt keys should be renamed to match the restored DB endpoint." }
+      ],
+      "correct": ["a"],
+      "explanation": "A restored resource is only useful after the team decides how it will be used. The app still points at the old database, so the data path has not changed. Recovery includes validation, repair or cutover, and a plan for the old and restored resources."
+    }
+  ]
+}

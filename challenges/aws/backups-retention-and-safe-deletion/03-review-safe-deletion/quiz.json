@@ -1,0 +1,70 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A cleanup job is ready to run:\n\n```text\njob=orders-export-cleanup env=prod\nbucket=devpolaris-orders-prod-objects\nconfiguredPrefix=exports/\nexpectedPrefix=tmp/releases/\naction=DeleteObjects\nobjectCount=1842\n```\n\nWhat should the reviewer do?",
+      "options": [
+        { "id": "a", "text": "Stop the cleanup and fix the scope because the configured prefix targets exports, not temporary release files." },
+        { "id": "b", "text": "Approve it because both prefixes contain generated files." },
+        { "id": "c", "text": "Disable S3 Versioning first so delete markers do not confuse the job." },
+        { "id": "d", "text": "Move finance exports into DynamoDB before cleanup." }
+      ],
+      "correct": ["a"],
+      "explanation": "The delete command could run successfully while the decision is wrong. The configured prefix does not match the stated target, so the job should stop before deleting production exports. Versioning may help recovery, but it is not permission to run a bad delete."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A safer cleanup proposal says:\n\n```text\nprefix=tmp/releases/\nproof before delete: list first 20 matching keys, count matching keys, write manifest to s3://devpolaris-orders-prod-objects/manifests/cleanup/\nrecovery: S3 Versioning enabled, cleanup manifest retained\n```\n\nWhy is this better?",
+      "options": [
+        { "id": "a", "text": "It makes scope visible before deletion and leaves evidence of what the job planned to remove." },
+        { "id": "b", "text": "It proves no review is needed because a manifest can never be wrong." },
+        { "id": "c", "text": "It deletes all old exports faster by avoiding prefix checks." },
+        { "id": "d", "text": "It converts S3 objects into RDS rows before deleting them." }
+      ],
+      "correct": ["a"],
+      "explanation": "A dry-run style proof and manifest make the deletion decision reviewable. They do not remove the need for human ownership, but they give reviewers concrete sample keys and counts. That is much safer than a vague cleanup note."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "A ticket says:\n\n```text\nDelete unpaid orders older than 30 days from RDS.\nReason: reduce table size.\nProof: count=4217\nOwner: backend only\nRecovery: not listed\n```\n\nWhat is the best review response?",
+      "options": [
+        { "id": "a", "text": "Treat this as a business data deletion decision and require scope, owner, retention reason, and recovery plan before running it." },
+        { "id": "b", "text": "Approve it because unpaid orders are not customer-visible after 30 days." },
+        { "id": "c", "text": "Move the rows to S3 object metadata and then delete them from RDS." },
+        { "id": "d", "text": "Run it directly in production because RDS deletion protection will stop bad SQL deletes." }
+      ],
+      "correct": ["a"],
+      "explanation": "Deleting order rows is not just a storage cleanup. It affects business evidence, support, privacy, and recovery. RDS deletion protection helps with deleting the DB resource, not with a harmful SQL delete."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "Which items belong in a safe production deletion review?",
+      "options": [
+        { "id": "a", "text": "The exact data scope, such as bucket and prefix, table and key pattern, SQL query, or filesystem path." },
+        { "id": "b", "text": "Proof before delete, such as sample keys, dry-run counts, query output, or a manifest." },
+        { "id": "c", "text": "The recovery path if the scope is wrong, such as S3 versions, RDS restore, DynamoDB PITR, or snapshots." },
+        { "id": "d", "text": "A statement that the command is syntactically valid, which is enough for production deletion." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "Safe deletion is about the decision, not just whether the command can run. Scope, proof, and recovery make the risk visible before data disappears. A syntactically valid command can still delete the wrong thing."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A cleanup worker wants to delete this local file:\n\n```text\npath=/mnt/orders-worker/tmp/exports/2026-05-02/orders.csv\nlastUploadStatus=AccessDenied\ns3HeadObject=not checked\n```\n\nWhat should the cleanup worker require first?",
+      "options": [
+        { "id": "a", "text": "Proof that the durable S3 object exists or a clear decision that the local file can be regenerated." },
+        { "id": "b", "text": "A larger EBS volume, because cleanup should never delete files." },
+        { "id": "c", "text": "DynamoDB deletion protection, because local files are table resources." },
+        { "id": "d", "text": "A finance download failure, because cleanup should run only after a customer complains." }
+      ],
+      "correct": ["a"],
+      "explanation": "The upload failed, so the local file may still be the only copy. Cleanup should require proof of the durable target or a clear regeneration path. Otherwise a permissions bug can turn into permanent data loss."
+    }
+  ]
+}

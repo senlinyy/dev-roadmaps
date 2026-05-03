@@ -1,0 +1,142 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A pipeline record says:\n\nimage pushed: 111122223333.dkr.ecr.us-east-1.amazonaws.com/devpolaris-orders-api:2026-05-02.4\nECS service taskDefinition: devpolaris-orders-api:41\ntask definition 41 image: ...:2026-05-02.3\ntarget health: 2 healthy tasks from revision 41\n\nWhat is missing from the runtime contract?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The service has not been moved to a task definition revision that points at the new image."
+        },
+        {
+          "id": "b",
+          "text": "The image is missing from ECR because healthy revision 41 tasks prove no images exist."
+        },
+        {
+          "id": "c",
+          "text": "The ALB listener must be recreated for every new tag."
+        },
+        {
+          "id": "d",
+          "text": "The CloudWatch log group should run the image directly."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The image exists, but production still runs the old recipe. ECS serves traffic from the task definition revision used by the service, not from the newest tag in ECR. The runtime contract must connect artifact, revision, service, and health."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A runtime review table has these rows:\n\nrunning version: devpolaris-orders-api:42\nconfig: task definition environment\nsecrets: task definition secrets\ncapacity: desiredCount=2\nlogs: missing\nrollback target: missing\n\nWhat is the strongest review concern?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The team may not be able to explain failures or recover calmly because logs and rollback target are not recorded."
+        },
+        {
+          "id": "b",
+          "text": "The service cannot run because capacity must always be missing when logs are missing."
+        },
+        {
+          "id": "c",
+          "text": "Secrets should be moved into logs so recovery is faster."
+        },
+        {
+          "id": "d",
+          "text": "Rollback is unnecessary if desiredCount is greater than zero."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Logs and rollback target are part of the runtime contract because they help humans operate the service. Running tasks alone do not explain what happened or what known-good recipe to restore. Secrets should stay protected, not logged."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "A deploy has this evidence:\n\ntask definition: devpolaris-orders-api:42\nimage digest: sha256:8f3d\nrunningCount: 2\nALB target health: 0 healthy, 2 unhealthy Target.ResponseCodeMismatch\nCloudWatch logs: GET /health status=500 reason=config_not_ready\n\nWhich contract part is false?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Health and runtime configuration, because the tasks exist but are not trusted to receive traffic."
+        },
+        {
+          "id": "b",
+          "text": "Artifact existence, because a task can only run when no image exists."
+        },
+        {
+          "id": "c",
+          "text": "Capacity only, because runningCount 2 means the health check must be ignored."
+        },
+        {
+          "id": "d",
+          "text": "Rollback target only, because config_not_ready is a documentation warning."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Running tasks are not enough. The health endpoint is part of the traffic contract, and the log says config is blocking readiness. The artifact exists, but production still cannot safely send users to the new tasks."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "A complete runtime contract for devpolaris-orders-api should help answer:\n\nWhich build is production using?\nWhich config and secrets does the task read?\nHow does AWS know a task can receive traffic?\nHow many copies should exist?\nWhere can humans read runtime evidence?\n\nWhich items belong in that contract?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Task definition revision and image digest or tag."
+        },
+        {
+          "id": "b",
+          "text": "Environment values, secret references, roles, health check, desired count, and log group."
+        },
+        {
+          "id": "c",
+          "text": "Previous known-good task definition for rollback."
+        },
+        {
+          "id": "d",
+          "text": "A plaintext copy of every secret so operators can compare values quickly."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "The runtime contract is a map for operating the image safely. It includes version, config, secrets by reference, health, capacity, logs, and rollback target. It should not turn into a secret dump."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A task exits immediately, but no application logs appear. The task definition has:\n\nlogConfiguration: missing\ncontainer command: node server.js\nECS event: task stopped after 9 seconds\n\nWhat should be fixed for future diagnosis?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Add a proper awslogs configuration and ensure the execution role can write logs."
+        },
+        {
+          "id": "b",
+          "text": "Remove the container command so ECS falls back to the image default command."
+        },
+        {
+          "id": "c",
+          "text": "Store logs in the Docker image, because runtime logs are not needed after build."
+        },
+        {
+          "id": "d",
+          "text": "Disable task replacement so the failed task stays invisible longer."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Without logs, the team loses one of the first useful questions. ECS can report a stopped task, but app logs explain what the process did before it exited. Logging setup and permission are part of the runtime contract."
+    }
+  ]
+}

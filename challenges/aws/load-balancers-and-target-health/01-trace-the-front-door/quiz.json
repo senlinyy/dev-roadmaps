@@ -1,0 +1,70 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A request path note for devpolaris-orders-api says:\n\nCustomer browser -> https://orders.devpolaris.com -> HTTPS listener 443 -> orders-api target group -> 10.0.42.18:3000\n\nWhat job is the ALB doing in this path?",
+      "options": [
+        { "id": "a", "text": "Receiving public HTTP or HTTPS traffic, applying listener rules, and forwarding to healthy backend targets." },
+        { "id": "b", "text": "Replacing the ECS task process so the container does not need to listen on a port." },
+        { "id": "c", "text": "Granting the task role permission to read secrets and write logs." },
+        { "id": "d", "text": "Turning the RDS database into a public web endpoint for checkout traffic." }
+      ],
+      "correct": ["a"],
+      "explanation": "The ALB is the public front door and routing layer for web traffic. It does not run the application code or grant IAM permissions. The app still needs to listen on the target port and answer health checks."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "The target group is configured for port `3000`, but the new task log says:\n\nHTTP server listening on 0.0.0.0:8080\n\nTarget health shows `Target.Timeout`. What is the most likely mismatch?",
+      "options": [
+        { "id": "a", "text": "The ALB is checking or forwarding to port `3000`, but the app process is listening on `8080`." },
+        { "id": "b", "text": "The Route 53 alias points to a private hosted zone instead of public DNS." },
+        { "id": "c", "text": "The ACM certificate does not cover the task's private IP address." },
+        { "id": "d", "text": "The database security group is missing outbound TCP 443 to the ALB." }
+      ],
+      "correct": ["a"],
+      "explanation": "A load balancer is a strict caller: it uses the target group port and health check settings. If the app listens somewhere else, the ALB may time out. Fix the port mapping or target group configuration so both sides agree."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "Which pieces must cooperate for the public front door to work?",
+      "options": [
+        { "id": "a", "text": "A public HTTPS listener on the ALB." },
+        { "id": "b", "text": "A listener rule that forwards `orders.devpolaris.com` traffic to the orders API target group." },
+        { "id": "c", "text": "Registered ECS task targets on the port where the container listens." },
+        { "id": "d", "text": "Direct public inbound access from browsers to each ECS task private IP." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "The ALB listener, rule, target group, and registered targets form the front-door path. ECS tasks can stay private while the ALB forwards to their private IPs. Direct browser access to task IPs is not part of this design."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "The team makes `/health` call a slow payment provider before returning. During deploys, target health often flips to `unhealthy` even though normal checkout sometimes works. What should the team change first?",
+      "options": [
+        { "id": "a", "text": "Make `/health` return quickly and check only what the service needs in order to accept traffic." },
+        { "id": "b", "text": "Make `/health` always return `200` before the app has loaded any required configuration." },
+        { "id": "c", "text": "Move the ALB into private subnets so health checks run closer to the tasks." },
+        { "id": "d", "text": "Remove the target group so ECS can route browser requests directly." }
+      ],
+      "correct": ["a"],
+      "explanation": "The health check is a small contract between the ALB and the app. It should be fast and meaningful, not a slow integration test. Always returning `200` hides readiness problems and can send users to a task that is not ready."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A teammate says, `ECS says two tasks are running, so the ALB must be able to send traffic to them.` Target health says:\n\n10.0.42.18:3000 unhealthy Target.Timeout\n10.0.43.27:3000 unhealthy Target.Timeout\n\nWhat is the best response?",
+      "options": [
+        { "id": "a", "text": "Running tasks are not enough. Target health shows whether the ALB can reach and accept each target's health response." },
+        { "id": "b", "text": "Running tasks prove the browser should call the task IPs directly until the ALB recovers." },
+        { "id": "c", "text": "Target health can be ignored because ECS service desired count is the source of truth for traffic routing." },
+        { "id": "d", "text": "The database must be down because ALB target timeouts can only come from RDS." }
+      ],
+      "correct": ["a"],
+      "explanation": "ECS running state and ALB target health answer different questions. A process can exist while the ALB cannot reach it, the port is wrong, or the health endpoint times out. Target health is the evidence for the load balancer's view."
+    }
+  ]
+}

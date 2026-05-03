@@ -1,0 +1,70 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A drill note says:\n\n```text\ndrill: orders-rds-side-restore\ngoal: restore RDS, validate data, run API in staging against restored target\nrestore duration: 12 minutes\nconfig update duration: 9 minutes\nECS healthy duration: 5 minutes\nvalidation duration: 6 minutes\ncleanup: restored DB still running after review\n```\n\nWhat should the team learn?",
+      "options": [
+        { "id": "a", "text": "The measured steps inform RTO, and cleanup needs improvement because the restored resource was left running." },
+        { "id": "b", "text": "The drill proves RTO is zero because the database eventually restored." },
+        { "id": "c", "text": "The cleanup issue is harmless because drill resources never cost money." },
+        { "id": "d", "text": "Validation time should be ignored because only the restore duration matters." }
+      ],
+      "correct": ["a"],
+      "explanation": "A drill measures the real work behind RTO: restore, config, task health, validation, and cleanup. Leaving restored resources running can create cost and confusion. These findings are useful because they happened outside a customer incident."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A bad release writes negative order totals. The database report shows:\n\n```text\nminute                  negative_totals  changed_orders\n2026-05-02 10:10 UTC    0                42\n2026-05-02 10:11 UTC    0                39\n2026-05-02 10:12 UTC    7                45\n2026-05-02 10:13 UTC    18               51\n2026-05-02 10:14 UTC    26               58\n```\n\nWhat recovery risk must the team handle?",
+      "options": [
+        { "id": "a", "text": "Restoring to 10:11 removes bad writes but may exclude valid orders created after that time." },
+        { "id": "b", "text": "Restoring to 10:14 is always safe because it keeps the newest data." },
+        { "id": "c", "text": "No restore is needed because the app stayed online." },
+        { "id": "d", "text": "Deleting all orders from the bad window is always safer than comparing data." }
+      ],
+      "correct": ["a"],
+      "explanation": "Restore point choice is a data tradeoff. A clean point before corruption may also miss later good writes. The team may need a side restore, comparison, repair plan, and reconciliation rather than a blind cutover."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "The RDS database is Multi-AZ. A teammate says that means the team no longer needs backups or restore drills for bad writes.",
+      "options": [
+        { "id": "a", "text": "Correct them: Multi-AZ helps availability, but backups and restores protect against bad writes, deletion, and corruption." },
+        { "id": "b", "text": "Agree, because failover can undo incorrect SQL writes." },
+        { "id": "c", "text": "Agree only if the ECS service also has two tasks." },
+        { "id": "d", "text": "Replace every restore drill with an ALB health check." }
+      ],
+      "correct": ["a"],
+      "explanation": "Failover and backup solve different failure shapes. Multi-AZ can help when an infrastructure side fails. It does not undo an application that wrote wrong data."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "Which outcomes should a useful restore drill measure for `devpolaris-orders-api`?",
+      "options": [
+        { "id": "a", "text": "How long restore, config update, ECS health, and validation took." },
+        { "id": "b", "text": "Whether the restored service used the intended database, table, bucket, and secret references." },
+        { "id": "c", "text": "Whether sample reads, blocked writes, logs, and cleanup behaved as expected." },
+        { "id": "d", "text": "Whether the team can skip documentation because one person completed the drill." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "A drill should prove both speed and correctness. It should show the app really used the restored target, validation passed, and cleanup happened. Documentation matters because recovery must be repeatable under pressure."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A regional recovery proposal says:\n\n```text\nobjective: recover orders API in another Region\nmissing plan: copied data, task definitions, images, secret references, certificates, DNS decisions, and restore drill\n```\n\nWhat should the review say?",
+      "options": [
+        { "id": "a", "text": "Regional recovery needs a separate design and test; Multi-AZ inside one Region does not prove it." },
+        { "id": "b", "text": "The plan is complete because any ECS task definition can run in any Region without preparation." },
+        { "id": "c", "text": "DNS and certificates are unrelated because recovery only concerns RDS data." },
+        { "id": "d", "text": "The team should promise near-zero regional recovery first and design the data path later." }
+      ],
+      "correct": ["a"],
+      "explanation": "Regional recovery is larger than normal Multi-AZ thinking. Data, runtime config, images, secrets, certificates, DNS, and validation all need to exist or be recreated in the target Region. Stronger recovery can be right, but it needs explicit cost and practice."
+    }
+  ]
+}

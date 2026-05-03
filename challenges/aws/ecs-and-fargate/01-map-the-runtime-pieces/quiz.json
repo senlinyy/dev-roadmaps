@@ -1,0 +1,142 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "The pipeline pushed this image:\n\n111122223333.dkr.ecr.us-east-1.amazonaws.com/devpolaris-orders-api:2026-05-02.7\n\nBut ECS service details show:\nservice taskDefinition: devpolaris-orders-api:41\ntask definition 41 image: ...:2026-05-02.6\nrunningCount: 2\n\nWhat is missing from the release path?",
+      "options": [
+        {
+          "id": "a",
+          "text": "A new task definition revision that points at the new image, followed by a service update to that revision."
+        },
+        {
+          "id": "b",
+          "text": "A new cluster, because every image tag requires a separate ECS workspace."
+        },
+        {
+          "id": "c",
+          "text": "A manual SSH restart on the Fargate host so the image tag is reloaded."
+        },
+        {
+          "id": "d",
+          "text": "A new ALB certificate, because image tags are selected by TLS."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "An ECR image is passive until the runtime recipe and service use it. The task definition revision is the bridge from artifact to running tasks. Updating the service is what starts the deployment path."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "ECS service snapshot:\n\ndesiredCount: 2\nrunningCount: 1\npendingCount: 1\nevent: was unable to start a task because CannotPullContainerError: manifest unknown\ntask definition image: .../devpolaris-orders-api:2026-05-02.8\n\nWhich piece should be inspected first?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The task definition image reference and ECR tag or digest, plus execution-role pull permission if the image exists."
+        },
+        {
+          "id": "b",
+          "text": "The target group health check path, because manifest unknown means /health returned 404."
+        },
+        {
+          "id": "c",
+          "text": "The task role permissions used by app code after startup."
+        },
+        {
+          "id": "d",
+          "text": "The ALB listener priority, because listener rules pull images from ECR."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "CannotPullContainerError happens before the app starts. The first useful evidence is the image reference, whether the tag exists, and whether ECS can pull it. Target health and app task-role permissions come later in the path."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "A teammate says, \"The cluster is unhealthy because I cannot find the EC2 instances for Fargate.\" The service is using launch type FARGATE and has two running tasks.\n\nWhich correction is most useful?",
+      "options": [
+        {
+          "id": "a",
+          "text": "For Fargate, the cluster is a logical ECS workspace for services and tasks, not a host list the team SSHs into."
+        },
+        {
+          "id": "b",
+          "text": "For Fargate, every task runs on a visible EC2 instance that must be patched by the app team."
+        },
+        {
+          "id": "c",
+          "text": "The cluster replaces the task definition, so image and environment settings should be edited on the cluster."
+        },
+        {
+          "id": "d",
+          "text": "The cluster is the public entry point, so browser traffic should target the cluster ARN directly."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Fargate changes the host ownership line. You still operate ECS objects such as services, tasks, task definitions, events, and logs. You do not debug by searching for app-team EC2 hosts to patch."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "A service map for devpolaris-orders-api includes:\n\nECR image: devpolaris-orders-api:2026-05-02.7\ntask definition: devpolaris-orders-api:42\nservice: desiredCount=2\ntarget group: orders-api-tg, ip targets on 3000\nlogs: /ecs/devpolaris-orders-api\n\nWhich mappings are correct?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The task definition is the versioned recipe that names the image, port, roles, config, secrets, and logs."
+        },
+        {
+          "id": "b",
+          "text": "A task is one running copy of that recipe."
+        },
+        {
+          "id": "c",
+          "text": "The service keeps the desired number of tasks running and connects them to the load balancer."
+        },
+        {
+          "id": "d",
+          "text": "The target group stores container images and decides which task definition revision is latest."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "The core ECS path is image to task definition to service to tasks to target group and logs. The target group handles traffic health, not artifact storage or task definition versioning. Keeping those nouns separate makes incidents much easier to read."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "The task starts and logs:\n\nINFO health=ready path=/health\nERROR AccessDenied: arn:aws:sts::111122223333:assumed-role/devpolaris-orders-api-task/9f4a8c1b\nis not authorized to perform s3:GetObject on arn:aws:s3:::devpolaris-invoice-templates/prod/default.html\n\nWhich role is the likely fix target?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The task role, because the application code is running and calling S3 after startup."
+        },
+        {
+          "id": "b",
+          "text": "The execution role, because every AccessDenied after health readiness belongs to ECS setup."
+        },
+        {
+          "id": "c",
+          "text": "The cluster role, because clusters own all application API calls."
+        },
+        {
+          "id": "d",
+          "text": "The ALB service-linked role, because target health controls S3 reads."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The app has already started and is making an AWS API call. That is task-role territory. The execution role is important for pulling images, fetching injected secrets, and sending logs before or during setup, but this error is inside running app code."
+    }
+  ]
+}

@@ -1,0 +1,142 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A new ECS task has no app startup logs. The stopped reason says:\n\nResourceInitializationError: unable to retrieve secret from asm\nAccessDeniedException: not authorized to perform secretsmanager:GetSecretValue\nsecret: arn:aws:secretsmanager:us-east-1:111122223333:secret:prod/orders/DATABASE_URL-a1b2c3\n\nWhat should be inspected first?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The task execution role permission, secret ARN, Region, and KMS path if a customer managed key is used."
+        },
+        {
+          "id": "b",
+          "text": "The Express checkout route because the app returned 500 after serving traffic."
+        },
+        {
+          "id": "c",
+          "text": "The task role only, because ECS always fetches injected secrets after Node.js starts."
+        },
+        {
+          "id": "d",
+          "text": "The ALB listener certificate because secret injection is part of TLS termination."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The app never reached startup, so the failure happened during ECS setup. Secret injection from the task definition uses the execution role. If the secret uses a customer managed key, decrypt permission and key policy may also be part of the path."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A secret value was rotated at 10:02. Service evidence says:\n\nrunning task started: 09:41\ntask definition secret name: DATABASE_URL\nnew secret version: AWSCURRENT at 10:02\napp log at 10:08: still using old database endpoint metadata\n\nWhat is the correct operating expectation?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Already running tasks keep their existing environment, so replace tasks or force a new deployment to read the new value."
+        },
+        {
+          "id": "b",
+          "text": "ECS rewrites process.env inside running containers as soon as Secrets Manager rotates a value."
+        },
+        {
+          "id": "c",
+          "text": "The ALB health check injects the new value on the next request."
+        },
+        {
+          "id": "d",
+          "text": "The task role can refresh the injected environment by calling sts:GetCallerIdentity."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Environment variables are created when the process starts. Updating a secret value does not rewrite a running Node.js process. New tasks need to start so ECS can fetch and inject the current value."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "A task fails during startup with:\n\nResourceInitializationError: unable to pull secrets\nAccessDeniedException: not authorized to perform kms:Decrypt\nkey: arn:aws:kms:us-east-1:111122223333:key/1234abcd-12ab-34cd-56ef-1234567890ab\n\nWhat should the team check?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Whether the execution role and key policy allow decrypt for the specific key used by the secret or parameter."
+        },
+        {
+          "id": "b",
+          "text": "Whether the app route /health returns 200 after startup."
+        },
+        {
+          "id": "c",
+          "text": "Whether the task role can write to S3, because KMS decrypt is always an app-code permission."
+        },
+        {
+          "id": "d",
+          "text": "Whether the ALB listener uses TLS 1.3, because KMS decrypt is a browser cipher setting."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The error is still in the pre-start secret path, but it names KMS this time. Some secrets or parameters require decrypt permission through a customer managed key. Grant the narrow path needed by the role ECS uses for setup."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "A task definition snippet includes:\n\nexecutionRoleArn: devpolaris-orders-ecs-execution\ntaskRoleArn: devpolaris-orders-task\nsecrets: DATABASE_URL from Secrets Manager\nlogConfiguration: awslogs group /ecs/devpolaris-orders-api\n\nWhich setup responsibilities usually belong to the execution role?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Pulling the image from ECR for the task."
+        },
+        {
+          "id": "b",
+          "text": "Fetching secrets referenced by the task definition before the container starts."
+        },
+        {
+          "id": "c",
+          "text": "Writing container logs through the configured awslogs driver."
+        },
+        {
+          "id": "d",
+          "text": "Authorizing an app request to write an order export to S3 after health readiness."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "The execution role supports ECS setup work. The task role is what app code receives after it starts. Keeping the two roles separate makes AccessDenied errors much easier to diagnose."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "The app starts and logs:\n\nINFO secrets_present=DATABASE_URL,PAYMENT_WEBHOOK_SECRET\nINFO health=ready path=/health\nERROR AccessDenied assumed-role/devpolaris-orders-task is not authorized to perform s3:PutObject\n\nWhich role should be reviewed now?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The task role, because the running application is making the S3 call."
+        },
+        {
+          "id": "b",
+          "text": "The execution role, because all AccessDenied messages belong to startup injection."
+        },
+        {
+          "id": "c",
+          "text": "The ALB service-linked role, because health readiness grants S3 access."
+        },
+        {
+          "id": "d",
+          "text": "The Secrets Manager resource policy only, because S3 writes are secret reads."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "This is no longer secret injection. The app reached readiness and then called S3 using its task role. The narrow fix belongs in the app runtime identity if the write is expected."
+    }
+  ]
+}

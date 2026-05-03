@@ -1,0 +1,70 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "ACM shows this certificate request:\n\nDomain: orders.devpolaris.com\nValidation method: DNS\nStatus: Pending validation\nCNAME name: _a1b2c3d4.orders.devpolaris.com\nCNAME value: _f6e7d8c9.acm-validations.aws\n\nWhat should the team do next?",
+      "options": [
+        { "id": "a", "text": "Create the exact validation CNAME in the public DNS zone for `devpolaris.com`." },
+        { "id": "b", "text": "Create an `orders.devpolaris.com` A record pointing at the ECS task private IP." },
+        { "id": "c", "text": "Add inbound TCP 443 from ACM to the RDS security group." },
+        { "id": "d", "text": "Move the ALB to the same subnet as the certificate request." }
+      ],
+      "correct": ["a"],
+      "explanation": "ACM DNS validation uses a proof CNAME, not the user-facing app record. ACM must see that exact CNAME in public DNS before it can issue the certificate. This proves domain control, not backend reachability."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "The team has an issued ACM certificate for `orders.devpolaris.com` in `us-west-2`. The production ALB is in `us-east-1`. The listener certificate picker does not show it. What is the likely issue?",
+      "options": [
+        { "id": "a", "text": "For this ALB, the ACM certificate must be available in the same Region as the load balancer." },
+        { "id": "b", "text": "ALB listeners can attach certificates only if the domain uses a private hosted zone." },
+        { "id": "c", "text": "Issued certificates cannot be used until the target group has zero unhealthy targets." },
+        { "id": "d", "text": "Route 53 alias records must be deleted before a certificate can be attached." }
+      ],
+      "correct": ["a"],
+      "explanation": "ACM certificates are regional for Elastic Load Balancing. A valid certificate in a different Region can look correct in ACM but still be unavailable to this ALB listener. Request or import it in the ALB Region."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "Which TLS facts are correct for the devpolaris-orders-api entry point?",
+      "options": [
+        { "id": "a", "text": "The certificate must cover the hostname the browser requested, such as `orders.devpolaris.com`." },
+        { "id": "b", "text": "DNS validation proves domain control through a CNAME record that is separate from the app alias." },
+        { "id": "c", "text": "The ALB HTTPS listener presents the certificate during the TLS handshake." },
+        { "id": "d", "text": "A certificate for `api.devpolaris.com` automatically covers `orders.devpolaris.com` because both are subdomains." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "TLS trust depends on the requested hostname being covered by the certificate. DNS validation is a separate proof record, and the ALB listener presents the certificate. A sibling subdomain is not covered unless it appears on the certificate or a suitable wildcard is used."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "An engineer tests:\n\nopenssl s_client -connect orders.devpolaris.com:443 -servername orders.devpolaris.com\nsubject=CN = orders.devpolaris.com\nissuer=C = US, O = Amazon, CN = Amazon RSA 2048 M03\n\nWhat did this prove?",
+      "options": [
+        { "id": "a", "text": "The server presented a certificate trusted for `orders.devpolaris.com` during the TLS handshake." },
+        { "id": "b", "text": "The `/checkout` endpoint returned the correct application response." },
+        { "id": "c", "text": "The target group contains only healthy ECS tasks." },
+        { "id": "d", "text": "The database SG allows TCP 5432 from the app task SG." }
+      ],
+      "correct": ["a"],
+      "explanation": "The `-servername` value sends the requested hostname during TLS. The certificate subject evidence proves identity for that hostname. It does not prove backend routing, health, or database reachability."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A certificate covers only `*.devpolaris.com`. Which hostname is covered by that wildcard in the usual beginner model?",
+      "options": [
+        { "id": "a", "text": "`orders.devpolaris.com`." },
+        { "id": "b", "text": "`api.orders.devpolaris.com`." },
+        { "id": "c", "text": "`devpolaris.com`." },
+        { "id": "d", "text": "`orders.devpolaris.net`." }
+      ],
+      "correct": ["a"],
+      "explanation": "A wildcard such as `*.devpolaris.com` covers one label below `devpolaris.com`, so `orders.devpolaris.com` fits. It does not cover the apex domain, a deeper name like `api.orders.devpolaris.com`, or a different domain. Certificate coverage must match the browser hostname."
+    }
+  ]
+}

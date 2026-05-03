@@ -1,0 +1,70 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A review finds this trust condition on the production deploy role:\n\n```text\ntoken.actions.githubusercontent.com:sub = repo:devpolaris/devpolaris-orders-api:*\n```\n\nThe role updates the production ECS service. What is the strongest review comment?",
+      "options": [
+        { "id": "a", "text": "Narrow the subject condition toward the intended production workflow or environment before trusting this role." },
+        { "id": "b", "text": "Remove the subject condition because GitHub's OIDC provider is enough proof by itself." },
+        { "id": "c", "text": "Keep the wildcard because permissions policy statements are the only place least privilege matters." },
+        { "id": "d", "text": "Store `AWS_SECRET_ACCESS_KEY` as a backup because OIDC trust conditions are not reviewed by AWS." }
+      ],
+      "correct": ["a"],
+      "explanation": "The subject claim is the part that ties the role to a specific repository, branch, or environment. A broad wildcard may let the wrong workflow borrow the production deploy role. Permissions still matter after assumption, but trust is the first door and should be narrow too."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "The `devpolaris-orders-api` workflow uses `aws-actions/configure-aws-credentials`, but the credentials step cannot request a GitHub OIDC token. The workflow has `contents: read` but no `id-token` permission. What is the next safe check?",
+      "options": [
+        { "id": "a", "text": "Confirm the workflow grants `id-token: write` so GitHub can issue the runtime identity token for AWS STS." },
+        { "id": "b", "text": "Add a permanent AWS secret key to the repository because OIDC only works after the first deploy." },
+        { "id": "c", "text": "Attach administrator access to the AWS role because the credentials step is failing." },
+        { "id": "d", "text": "Change the ECS cluster name because OIDC token creation depends on the service name." }
+      ],
+      "correct": ["a"],
+      "explanation": "GitHub must be allowed to mint the OIDC token before it can exchange that proof with AWS STS. Permanent AWS keys and broader role permissions would bypass or confuse the safer handoff. The ECS service name is not involved in token creation."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "A teammate proposes one role named `devpolaris-orders-api-everything` for GitHub deploys, ECS startup, and app runtime AWS calls. Which review comments are valid?",
+      "options": [
+        { "id": "a", "text": "The deploy role should cover release actions such as registering task definitions and updating the ECS service." },
+        { "id": "b", "text": "The task role should cover application runtime actions such as reading parameters or writing order exports." },
+        { "id": "c", "text": "The ECS task execution role is a setup identity used by ECS or Fargate for work such as pulling images, writing logs, and fetching injected secrets." },
+        { "id": "d", "text": "A single broad role is easier to review because every AWS call has the same permission boundary." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "The article separates deploy access, runtime application access, and ECS setup access because each has a different job. One broad role makes review and blast radius worse. A deploy role should not gain customer data access just because it can update the service."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "A production deploy includes this diagnostic before any ECS change:\n\n```text\nArn: arn:aws:sts::123456789012:assumed-role/devpolaris-orders-api-deploy/GitHubActions\nAccount: 123456789012\n```\n\nWhy is this useful?",
+      "options": [
+        { "id": "a", "text": "It proves which role session and account AWS sees before the deploy command changes anything." },
+        { "id": "b", "text": "It proves the deployment cannot fail later because identity checks grant all ECS permissions." },
+        { "id": "c", "text": "It prints the secret token needed to rerun the deploy from a laptop." },
+        { "id": "d", "text": "It replaces CloudTrail because session names are only visible in workflow logs." }
+      ],
+      "correct": ["a"],
+      "explanation": "An identity check is a diagnostic breadcrumb: it confirms the current role session and account before a risky action. It does not grant permissions, print reusable secrets, or replace audit logs. Later errors still need to be read by principal, action, and resource."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "Maya needs emergency read-only AWS access to inspect the DevPolaris production service. The team is moving away from permanent IAM user keys. Which access pattern is the best first fit?",
+      "options": [
+        { "id": "a", "text": "Maya signs in through the workforce identity path and receives a short-lived AWS role session scoped to the inspection job." },
+        { "id": "b", "text": "Maya creates a permanent production admin access key and deletes it when she remembers." },
+        { "id": "c", "text": "Maya borrows the GitHub deploy role because it already has production access." },
+        { "id": "d", "text": "Maya copies the ECS task role credentials from a running container so her CLI matches the app." }
+      ],
+      "correct": ["a"],
+      "explanation": "Human access should be a human role session, usually reached through a workforce identity system. Borrowing automation or runtime identities blurs audit trails and responsibilities. A permanent admin key brings back the long-lived key risk."
+    }
+  ]
+}

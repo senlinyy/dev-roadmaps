@@ -1,0 +1,70 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "Cost Explorer daily view shows:\n\n```text\nScope: Service=devpolaris-orders-api, Environment=prod\nDay     ECS API  RDS   Logs    Lambda/SQS  S3     Notes\nApr 16  normal   high  normal  normal      normal\nApr 17  normal   high  normal  normal      normal\nApr 18  normal   high  rising  rising      rising  release 2026-04.18\nApr 19  normal   high  high    high        rising\nApr 20  normal   high  high    high        high\n```\n\nWhere should the team look first?",
+      "options": [
+        { "id": "a", "text": "At the release behavior that changed logs, workers, and S3, not at shrinking steady ECS API tasks." },
+        { "id": "b", "text": "At ECS API task size, because it is listed first in the table." },
+        { "id": "c", "text": "At RDS resizing, because a high but steady database line must explain every new jump." },
+        { "id": "d", "text": "At account-wide taxes and discounts before reading workload evidence." }
+      ],
+      "correct": ["a"],
+      "explanation": "The movement started in logs, Lambda or SQS, and S3 near a release. ECS stayed normal, and RDS was high but steady. A safe investigation follows the moving layers first."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "CloudWatch Logs for the worker show repeated lines:\n\n```text\n2026-04-19T02:14:11Z ERROR service=devpolaris-orders-worker job=monthly-export orderId=ord_4418 error=ExportPayloadTooLarge retry=7 payloadBytes=1832044 message=export failed, retrying with full payload logged\n2026-04-19T02:14:14Z ERROR service=devpolaris-orders-worker job=monthly-export orderId=ord_4418 error=ExportPayloadTooLarge retry=8 payloadBytes=1832044 message=export failed, retrying with full payload logged\n```\n\nWhat cost story does this support?",
+      "options": [
+        { "id": "a", "text": "The worker is retrying failed work and logging too much data, increasing both worker activity and log ingestion." },
+        { "id": "b", "text": "The API tasks are oversized, because worker logs always point to public HTTP compute." },
+        { "id": "c", "text": "The database should be deleted, because retry logs prove order records no longer matter." },
+        { "id": "d", "text": "The budget alert is false, because repeated logs are normal after any release." }
+      ],
+      "correct": ["a"],
+      "explanation": "The log explains two moving cost lines at once: worker retries and CloudWatch Logs ingestion. The payload size and retry count make the waste concrete. The next step is to control the retry loop and fix the export behavior."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "The queue snapshot says:\n\n```text\nSQS queue: orders-background-prod\nvisible messages: rising\nnot visible messages: high during export window\noldest message age: rising\nDLQ messages: 0\nworker concurrency: higher after autoscaling reacted to backlog\n```\n\nWhat is the careful interpretation?",
+      "options": [
+        { "id": "a", "text": "Autoscaling may be amplifying a retry loop even though the DLQ is empty." },
+        { "id": "b", "text": "The empty DLQ proves all work is healthy and concurrency should keep increasing." },
+        { "id": "c", "text": "SQS backlog proves the ALB target group is misconfigured." },
+        { "id": "d", "text": "Queue age cannot affect cost because messages are not compute." }
+      ],
+      "correct": ["a"],
+      "explanation": "An empty DLQ does not prove health if messages are being retried repeatedly before they fail or reappear. Autoscaling sees backlog and adds workers, which can make a bad loop more expensive. Queue metrics need logs to explain the work quality."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "Which facts help explain a spend jump after release `2026-04.18`?",
+      "options": [
+        { "id": "a", "text": "Which AWS service and component cost changed, and exactly when it changed." },
+        { "id": "b", "text": "What release, traffic, queue, or retention change happened in the same window." },
+        { "id": "c", "text": "Whether logs, worker retries, queue age, concurrency, and S3 prefixes show the same story." },
+        { "id": "d", "text": "Which resource is easiest to cut, even if it did not move during the jump." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "Cost diagnosis is correlation work. You need service movement, timing, release context, and operating evidence from the layers that changed. Cutting the easiest resource can add risk without addressing the cause."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "The short-term response proposal says:\n\n```text\nreduce worker concurrency\nstop logging full export payloads on every retry\npreserve enough error context to debug\nkeep messages in the queue while payload split logic is fixed\nreview S3 temporary export lifecycle after retention check\n```\n\nWhy is this safer than cutting API capacity?",
+      "options": [
+        { "id": "a", "text": "It controls the moving failure loop while preserving checkout serving capacity and debugging evidence." },
+        { "id": "b", "text": "It avoids fixing code, because cost problems should only be solved with infrastructure limits." },
+        { "id": "c", "text": "It removes all logs immediately, which is the only way to prove the spend jump stopped." },
+        { "id": "d", "text": "It treats the budget alert as a false positive and waits for next month." }
+      ],
+      "correct": ["a"],
+      "explanation": "The evidence points to workers, logs, and S3, not the steady API task layer. The proposed controls reduce damage while keeping messages and enough evidence for repair. That is safer than cutting unrelated serving capacity during an active diagnosis."
+    }
+  ]
+}

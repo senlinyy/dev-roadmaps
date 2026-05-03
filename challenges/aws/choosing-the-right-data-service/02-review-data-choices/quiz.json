@@ -1,0 +1,70 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "Design review evidence:\n\n```text\norders: customer_id, status, total_cents, created_at\norder_items: one to many with orders\npayments: provider_reference and status\nqueries: customer history, failed payments this week, revenue by day\n```\n\nWhich choice best matches the decision table?",
+      "options": [
+        { "id": "a", "text": "RDS, because these are transactional records with relationships and flexible support queries." },
+        { "id": "b", "text": "S3, because each order can be downloaded as a JSON document if support needs it." },
+        { "id": "c", "text": "EBS, because an attached disk can store all rows as files." },
+        { "id": "d", "text": "EFS, because multiple app tasks need to read order history." }
+      ],
+      "correct": ["a"],
+      "explanation": "The evidence points to relational state and changing business questions. RDS is a better starting point than forcing SQL-like behavior into files or objects. EFS and EBS can expose paths, but they do not provide joins and constraints."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "The receipt endpoint is slow:\n\n```text\nroute=GET /orders/ord_1042/receipt\nmessage=database query returned receipt_blob\nreceipt_bytes=734812\nduration_ms=1840\n```\n\nWhat design change fits the decision table?",
+      "options": [
+        { "id": "a", "text": "Move receipt bytes to S3 and keep the object key plus authorization metadata in RDS." },
+        { "id": "b", "text": "Move all order rows to S3 so the receipt and order are closer together." },
+        { "id": "c", "text": "Move the PDF to DynamoDB because the order id is a key." },
+        { "id": "d", "text": "Serve the PDF only from the container filesystem to avoid database latency." }
+      ],
+      "correct": ["a"],
+      "explanation": "The database is doing file delivery work. S3 is a better home for durable file bytes, while RDS keeps the record of which customer can access the object. Moving the order records or using task-local disk would solve the wrong problem."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "A job status feature starts simple:\n\n```text\nGET /exports/jobs/job_2026_05_paid_orders\nresponse needs: status, progress_label, output_key\n```\n\nThe product manager also says a future admin dashboard may filter by customer, time range, failure reason, worker version, and export type. What should the reviewer say?",
+      "options": [
+        { "id": "a", "text": "DynamoDB can fit the direct job-id lookup, but flexible admin search may need RDS, logs, metrics, or a designed index." },
+        { "id": "b", "text": "DynamoDB is always best for both direct lookup and unknown future filters." },
+        { "id": "c", "text": "S3 object keys should become the only job status store." },
+        { "id": "d", "text": "EBS should store the status file because every worker can query it by SQL." }
+      ],
+      "correct": ["a"],
+      "explanation": "The direct lookup has a clear key, which can fit DynamoDB. The future dashboard sounds like flexible investigation, and that needs its own design. A scan-heavy DynamoDB table is not a plan."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "Which service choices match the everyday decision table for `devpolaris-orders-api`?",
+      "options": [
+        { "id": "a", "text": "RDS for checkout order records, line items, payments, and support queries." },
+        { "id": "b", "text": "S3 for generated receipt PDFs and monthly CSV exports." },
+        { "id": "c", "text": "DynamoDB for exact-key idempotency records when the retry behavior is well defined." },
+        { "id": "d", "text": "One EC2 worker's EBS volume for durable receipt downloads across all running tasks." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "The first three choices match records, objects, and key-based operational state. A single worker's EBS volume is not a durable download layer for all tasks. User-visible files should not depend on which machine handled the request."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A report job writes temporary chunks, builds a zip, uploads it, then records status:\n\n```text\n1. write chunks under /tmp/devpolaris-report-job_1042\n2. build final archive\n3. upload to s3://devpolaris-orders-prod-objects/exports/2026/05/report.zip\n4. mark job complete with output key\n```\n\nWhich statement is most accurate?",
+      "options": [
+        { "id": "a", "text": "Temporary local chunks are acceptable only if the job can retry and the durable result is confirmed elsewhere." },
+        { "id": "b", "text": "The chunks should be the official report because `/tmp` is faster than S3." },
+        { "id": "c", "text": "The final archive should live in RDS because it came from order rows." },
+        { "id": "d", "text": "The job status record is unnecessary because the S3 object alone proves the workflow completed." }
+      ],
+      "correct": ["a"],
+      "explanation": "Scratch space is fine when the data is disposable and the final output is durable. The job still needs a record of completion so the UI and support can distinguish done, failed, and still running. S3 stores the object, but it does not replace all workflow state."
+    }
+  ]
+}

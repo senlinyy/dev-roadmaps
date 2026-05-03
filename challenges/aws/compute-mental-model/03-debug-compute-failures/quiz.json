@@ -1,0 +1,142 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "Checkout returns this response:\n\nHTTP/2 503\nserver: awselb/2.0\n\nTarget health says:\n10.0.42.18:3000 unhealthy Target.ResponseCodeMismatch\n\nCloudWatch logs say:\nWARN config DATABASE_URL missing\npath=/health status=500 reason=config_not_ready\n\nWhat should the team do next?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Inspect the task definition secret reference and execution-role permission for DATABASE_URL."
+        },
+        {
+          "id": "b",
+          "text": "Change DNS because the awselb header proves the request never reached the load balancer."
+        },
+        {
+          "id": "c",
+          "text": "Increase Lambda memory because the health check is an invocation timeout."
+        },
+        {
+          "id": "d",
+          "text": "Open SSH to a Fargate host and restart the Node.js process manually."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The public request reached the ALB, the ALB reached the task, and the app reported missing config. That path points to task definition secrets and the role ECS uses to fetch them. Restarting or changing DNS would skip the strongest evidence."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A new ECS task is RUNNING but unhealthy:\n\nTarget health: Target.Timeout on 10.0.43.27:3000\nApp log: server listening address=127.0.0.1 port=3000\nTask security group: inbound 3000 from ALB security group allowed\n\nWhat is the likely app-side fix?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Bind the Node.js server to 0.0.0.0 inside the container so the ALB can reach the task ENI."
+        },
+        {
+          "id": "b",
+          "text": "Change the public ALB listener from 443 to 3000 so users connect directly to the container."
+        },
+        {
+          "id": "c",
+          "text": "Remove the health check because RUNNING tasks do not need readiness evidence."
+        },
+        {
+          "id": "d",
+          "text": "Put DATABASE_URL into the Docker image so the target group can read it."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The security group and port look aligned, but the app is listening only on loopback. From outside the container, the ALB cannot reach 127.0.0.1. Binding to 0.0.0.0 is the practical fix for that evidence."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "A Lambda export function logs:\n\nSTART RequestId: 8f0f0a20\nINFO exportId=exp_7732 action=generate_export start\nERROR Task timed out after 3.00 seconds\nREPORT Duration: 3000.00 ms Memory Size: 256 MB Max Memory Used: 182 MB Status: timeout\n\nWhat is the best first diagnosis path?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Investigate why the export work exceeds the timeout, including batch size, downstream latency, and client timeouts."
+        },
+        {
+          "id": "b",
+          "text": "Check ALB target group port 3000, because Lambda timeouts usually mean the target group cannot connect."
+        },
+        {
+          "id": "c",
+          "text": "Patch the EC2 operating system, because REPORT lines are systemd health events."
+        },
+        {
+          "id": "d",
+          "text": "Treat the timeout as low priority because Lambda retries will probably finish the export later."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The REPORT line names a timeout and gives duration and memory clues. The next question is why the unit of work took too long, not which port the function listens on. Retries may happen, so the code also needs safe duplicate handling."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "An incident note has mixed evidence:\n\npublic health: 503 from awselb/2.0\ntarget health: Target.Timeout\nservice events: started task 9f4a8c1b, registered target\nCloudWatch logs: no startup line for task 9f4a8c1b\n\nWhich moves follow a calm diagnostic path?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Use the ALB response to confirm the request reached the load balancer before debugging DNS."
+        },
+        {
+          "id": "b",
+          "text": "Use target health reason codes to decide whether to inspect app readiness or network reachability first."
+        },
+        {
+          "id": "c",
+          "text": "Compare ECS service events with task logs to see whether the container started and registered."
+        },
+        {
+          "id": "d",
+          "text": "Change several settings at once so the incident has more chances to clear quickly."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "A calm path proves one layer at a time. The ALB header, target reason, service events, and logs each narrow the failure. Changing several settings together can hide the real cause and make rollback harder."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A stopped task reason says:\n\nResourceInitializationError: unable to pull secrets or registry auth\nAccessDeniedException: not authorized to perform secretsmanager:GetSecretValue\nresource: arn:aws:secretsmanager:us-east-1:111122223333:secret:prod/orders/DATABASE_URL-a1b2c3\n\nThe application has no startup logs for this task. Which layer failed first?",
+      "options": [
+        {
+          "id": "a",
+          "text": "ECS setup before the Node.js process started, so inspect the execution role, secret ARN, Region, and KMS path if used."
+        },
+        {
+          "id": "b",
+          "text": "Application request handling after the server accepted traffic, so inspect the Express route for /checkout."
+        },
+        {
+          "id": "c",
+          "text": "ALB listener rules after target registration, so inspect host-based routing first."
+        },
+        {
+          "id": "d",
+          "text": "Lambda event parsing, because ResourceInitializationError is a queue message format error."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "No startup logs plus ResourceInitializationError means ECS failed while preparing the task. Secret injection through the task definition uses the execution role before app code runs. That is a different layer from task-role errors inside a running app."
+    }
+  ]
+}

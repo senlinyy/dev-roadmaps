@@ -1,0 +1,142 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "Production reports 504s. Evidence from the instance says:\n\nALB target health: unhealthy Target.Timeout\nsystemctl is-active devpolaris-orders-api: active\ncurl http://127.0.0.1:3000/health: 200\nsecurity group: TCP 3000 from sg-admin-bastion only\n\nWhat should the operator do first?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Fix the ALB-to-instance network path, especially the security group source for TCP 3000."
+        },
+        {
+          "id": "b",
+          "text": "Restart the active systemd service because local health success means systemd is stale."
+        },
+        {
+          "id": "c",
+          "text": "Change the health route to /checkout because 504s are application validation errors."
+        },
+        {
+          "id": "d",
+          "text": "Increase Lambda reserved concurrency because 504s indicate serverless throttling."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The local service is answering, so the problem is likely between the ALB and instance. The security group evidence is the strongest clue. Restarting a healthy local service would not open the path from the load balancer."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "The approved access model is Session Manager. During an incident, access fails with:\n\nSSM Agent: running\ninstance profile: missing AmazonSSMManagedInstanceCore equivalent permissions\nsubnet: private, no NAT or VPC endpoints for ssm, ssmmessages, ec2messages\n\nWhat is the safest response?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Debug the Session Manager prerequisites: instance role permissions and network path to Systems Manager."
+        },
+        {
+          "id": "b",
+          "text": "Open SSH from 0.0.0.0/0 so operators can bypass the approved access model quickly."
+        },
+        {
+          "id": "c",
+          "text": "Remove the instance role because Session Manager should not use IAM."
+        },
+        {
+          "id": "d",
+          "text": "Replace the ALB because access failures mean the public listener is unhealthy."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The evidence points to the chosen access path, not the public request path. Session Manager needs agent, IAM permissions, and network reachability. Creating broad SSH access during an incident adds risk and changes the design."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "The app starts and local health is 200, but one request logs:\n\nAccessDenied: arn:aws:sts::123456789012:assumed-role/devpolaris-orders-api-ec2/i-0f2c4a91\nis not authorized to perform ssm:GetParameter on /prod/orders/public-base-url\n\nWhere should the team inspect first?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The EC2 instance role policy and the exact denied SSM parameter ARN."
+        },
+        {
+          "id": "b",
+          "text": "The ALB target group health path, because healthy targets cannot have IAM errors."
+        },
+        {
+          "id": "c",
+          "text": "The systemd Restart setting, because AccessDenied means the process supervisor rejected the request."
+        },
+        {
+          "id": "d",
+          "text": "The root EBS volume size, because SSM permissions are stored on disk."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The app is already running and AWS denied an API call made by the instance role. The fix belongs in narrow IAM permission or the parameter path, not in target health. The role ARN in the error is the strongest clue."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "A calm EC2 runbook starts with these checks:\n\npublic endpoint: HTTP 502 from awselb/2.0\ntarget health: Target.ResponseCodeMismatch\nSession Manager: connects successfully\nsystemctl status: active (running)\nlocal curl /health: 500 config_not_ready\ndf -h /: 68 percent used\n\nWhich conclusions are supported?",
+      "options": [
+        {
+          "id": "a",
+          "text": "DNS reached the ALB, so the front door exists."
+        },
+        {
+          "id": "b",
+          "text": "The instance is reachable through the intended operator access path."
+        },
+        {
+          "id": "c",
+          "text": "The app process is running, but local readiness is failing before the ALB can trust it."
+        },
+        {
+          "id": "d",
+          "text": "Disk is full and must be the primary cause."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "The evidence narrows the issue nicely. The request reached the ALB, operators can connect, systemd is running, and local health reports a config problem. Disk at 68 percent is worth watching, but it is not the primary cause shown here."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A fresh instance never starts the API. Boot evidence says:\n\ncloud-init-output.log: npm ci failed with ENOTFOUND registry.npmjs.org\nsystemctl status devpolaris-orders-api: Unit devpolaris-orders-api.service could not be found\nALB target health: initial, then unhealthy Target.Timeout\n\nWhat failed first?",
+      "options": [
+        {
+          "id": "a",
+          "text": "First-boot setup failed before the systemd unit was installed, so inspect user data, package access, and bootstrap logs."
+        },
+        {
+          "id": "b",
+          "text": "The app health route returned the wrong status code after successful startup."
+        },
+        {
+          "id": "c",
+          "text": "The instance role denied an S3 call inside a running Node.js request."
+        },
+        {
+          "id": "d",
+          "text": "The ALB listener rule pointed to the wrong domain name."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The unit does not exist and cloud-init shows a package install failure. That means the server never reached the normal process-supervision state. Target health is downstream of the bootstrap failure."
+    }
+  ]
+}

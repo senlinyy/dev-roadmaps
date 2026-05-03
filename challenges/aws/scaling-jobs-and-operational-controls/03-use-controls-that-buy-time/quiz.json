@@ -1,0 +1,142 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A receipt worker starts sending duplicate emails. Evidence:\n\nworker release: 2026-05-02.9\nidempotency log: missing key for orderId ord_1042\nqueue visible messages: 3,200\ncheckout API: healthy\ncustomer impact: duplicate receipts, orders still created correctly\n\nWhich control best buys time?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Pause or reduce the receipt worker desired count while preserving queued messages and preparing a fix or rollback."
+        },
+        {
+          "id": "b",
+          "text": "Disable the checkout API immediately because the worker bug proves orders are not being created."
+        },
+        {
+          "id": "c",
+          "text": "Increase worker desired count so duplicates finish faster."
+        },
+        {
+          "id": "d",
+          "text": "Delete all queue messages because duplicate emails are less visible if no work remains."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The damage is in the worker side effect, not the checkout API. Pausing or reducing consumers can stop more duplicate emails while keeping the queue as the work record. It is smaller and easier to reverse than disabling all checkout."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A vendor API is rate-limiting DevPolaris:\n\nprovider response: 429 Too Many Requests\nworker desired=10 running=10\nerrors per minute: rising with worker count\nqueue age: rising slowly\norders API: healthy\n\nWhat control matches the failure?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Reduce worker desired count or cap concurrency so the system stops overwhelming the provider."
+        },
+        {
+          "id": "b",
+          "text": "Increase API desired count because worker errors come from too few web tasks."
+        },
+        {
+          "id": "c",
+          "text": "Start a new ECS rollout for the API because vendor rate limits are target health failures."
+        },
+        {
+          "id": "d",
+          "text": "Disable DLQ handling so retries never become visible."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The provider is the saturated layer. More workers create more failing calls, so a limit buys time. The queue may grow, but that is often safer than hammering a dependency that is already rejecting traffic."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "A scheduled cleanup job is deleting active export files:\n\nschedule: every 15 minutes\nlast run: deleted 312 files with prefix prod/current/\nexpected prefix: prod/tmp/\nnext run: in 7 minutes\n\nWhat is the safest first control?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Disable the schedule or stop the job trigger before the next run, then investigate and fix the prefix bug."
+        },
+        {
+          "id": "b",
+          "text": "Increase API desired count because more web tasks can recreate deleted files faster."
+        },
+        {
+          "id": "c",
+          "text": "Scale receipt workers to zero because every operational incident starts with workers."
+        },
+        {
+          "id": "d",
+          "text": "Let one more run happen so the team can collect more deleted examples."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The active risk is the next scheduled run. Disabling the schedule is a small reversible control that stops more deletion while the team investigates. A code fix still matters, but the control buys time."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "An operational-control table for the orders runtime includes:\n\nincrease API desired count\nlower API desired count\npause worker desired count\ndisable schedule\nreserve Lambda concurrency\nstop ECS service deployment with rollback\n\nWhich are valid examples of controls that can buy time?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Changing API desired count when API capacity or dependency pressure is the issue."
+        },
+        {
+          "id": "b",
+          "text": "Pausing or reducing workers when side work is unsafe or a dependency is overloaded."
+        },
+        {
+          "id": "c",
+          "text": "Disabling a risky schedule or stopping an unsafe rollout with rollback."
+        },
+        {
+          "id": "d",
+          "text": "Editing production code directly inside a running container so no release record is needed."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "Operational controls change runtime behavior to contain damage. They should be deliberate, reversible, and matched to the failure. Editing a running container bypasses the release record and is not the habit this article is teaching."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A control is proposed:\n\naction: pause receipt workers for 30 minutes\nbenefit: stop duplicate emails from bad release 2026-05-02.9\ncost: receipt queue age will rise and some customers receive emails late\nrollback: set worker desired count back to 4 after fixed revision passes idempotency check\n\nWhat should the on-call do with this tradeoff?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Record the reason, expected side effect, owner, and reversal condition before applying the control."
+        },
+        {
+          "id": "b",
+          "text": "Apply it silently because controls are not user-visible changes."
+        },
+        {
+          "id": "c",
+          "text": "Reject it because every control with a downside is worse than doing nothing."
+        },
+        {
+          "id": "d",
+          "text": "Delete queue metrics so delayed email does not appear on dashboards."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Controls buy time, but they still have consequences. A good control note says why it is being used, what pain it creates, who owns it, and when to reverse it. That makes containment safer and easier to hand off."
+    }
+  ]
+}

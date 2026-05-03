@@ -22,7 +22,7 @@
         { "id": "a", "text": "Stop the script and switch to credentials for the development account before trying again." },
         { "id": "b", "text": "Continue because the resource names include the word dev." },
         { "id": "c", "text": "Change the Region flag because account IDs are Region-specific." },
-        { "id": "d", "text": "Ignore the ARN because account IDs are secret values that AWS hides from real operations." }
+        { "id": "d", "text": "Proceed because the cleanup script name says devpolaris-dev, even though the ARN points somewhere else." }
       ],
       "correct": ["a"],
       "explanation": "The account ID in the ARN is stronger evidence than a resource name. If it points at production, the script is in the wrong workspace and should stop. Region flags solve where a regional request goes, not which account owns the credentials, and account IDs are identifiers that often appear in ARNs and logs."
@@ -55,19 +55,6 @@
     },
     {
       "id": "q5",
-      "type": "single",
-      "scenario": "A deployment plan chooses a newer AWS Region because it is close to users. The account has not opted in to that Region yet, and the needed service is already available in us-east-1. What is the best beginner response?",
-      "options": [
-        { "id": "a", "text": "Either enable the newer Region intentionally or choose an enabled Region that can run the workload cleanly." },
-        { "id": "b", "text": "Rename the service so AWS automatically enables the Region." },
-        { "id": "c", "text": "Create the resources in us-east-1 and assume they will appear in the newer Region later." },
-        { "id": "d", "text": "Switch to the production account because production accounts can use every Region by default." }
-      ],
-      "correct": ["a"],
-      "explanation": "Some Regions require opt-in, and Region choice should be deliberate. Renaming resources or switching accounts is not the fix for a disabled Region. Creating in another Region may be valid, but it means the service lives there, not in the disabled Region."
-    },
-    {
-      "id": "q6",
       "type": "single",
       "scenario": "DevPolaris wants a boring and strict deploy preflight for staging. Which checks belong in that preflight before it changes AWS resources?",
       "options": [

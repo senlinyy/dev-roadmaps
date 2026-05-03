@@ -1,5 +1,5 @@
 ---
-title: "Pick Compute And Data Services"
+title: "Pick Compute and Data Services"
 sectionSlug: compute-where-the-code-runs
 order: 2
 ---

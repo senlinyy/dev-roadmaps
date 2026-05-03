@@ -1,0 +1,142 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "Target health shows:\n\nTarget: 10.0.42.18:3000\nState: unhealthy\nReason: Target.Timeout\nHealth check: GET /health on traffic port\n\nThe task log says:\nserver listening address=127.0.0.1 port=3000\n\nWhat is the best fix direction?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Change the app to listen on 0.0.0.0 inside the container so the task ENI can receive ALB traffic."
+        },
+        {
+          "id": "b",
+          "text": "Change the browser URL to include :3000 because ALB listeners cannot forward to private ports."
+        },
+        {
+          "id": "c",
+          "text": "Register the target group as instance targets because Fargate cannot use private IP targets."
+        },
+        {
+          "id": "d",
+          "text": "Remove the /health endpoint because timeout means the app is too ready."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The app is listening only on loopback, so the ALB cannot reach it through the task ENI. Fargate with awsvpc commonly uses IP targets. The public listener can stay on 443 while the private target group forwards to port 3000."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A task definition excerpt says:\n\ncontainerDefinitions[0].name: orders-api\nportMappings: containerPort=8080\nenvironment: PORT=8080\n\nService load balancer mapping says:\ncontainerName: orders-api\ncontainerPort: 3000\n\nWhat is wrong?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The ECS service mapping and the container runtime port are inconsistent, so ECS registers the wrong port with the target group."
+        },
+        {
+          "id": "b",
+          "text": "The task has too little memory, because port 8080 always means CPU pressure."
+        },
+        {
+          "id": "c",
+          "text": "The ALB listener must be changed to port 8080 for public users."
+        },
+        {
+          "id": "d",
+          "text": "The task role is missing ecr:GetAuthorizationToken."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The private port contract must be consistent across the app, task definition, service mapping, and target group. Here the container is configured for 8080 while the service registers 3000. Fix one clear contract and redeploy a new revision."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "Target health for a new deployment says:\n\nTarget: 10.0.43.27:3000\nState: unused\nReason: Target.NotInUse\nDescription: Target group is not configured to receive traffic from the load balancer\n\nWhere should the team look first?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Listener rules, target group attachment, and the ECS service load balancer configuration."
+        },
+        {
+          "id": "b",
+          "text": "The Node.js route handler for POST /v1/orders, because unused means checkout returned 500."
+        },
+        {
+          "id": "c",
+          "text": "The ECR image digest, because unused targets cannot pull container layers."
+        },
+        {
+          "id": "d",
+          "text": "The SQS receipt worker, because unused means queue retries are disabled."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Unused is a traffic-routing signal. It says the target is not in the listener path, not that the process returned a bad health code. Inspect the load balancer and service attachment before changing app code."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "A healthy ECS traffic contract for devpolaris-orders-api should include:\n\npublic URL: https://orders.devpolaris.com\nALB listener: HTTPS 443\ntarget group: HTTP 3000, target type ip\ntask security group: inbound 3000 from ALB security group\nNode.js log: listening on 0.0.0.0:3000\n\nWhich entries are part of that contract?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The target group should register Fargate task IPs on the container port."
+        },
+        {
+          "id": "b",
+          "text": "The task security group should allow the ALB security group on the app port."
+        },
+        {
+          "id": "c",
+          "text": "The Node.js process should listen on the same port the target group checks."
+        },
+        {
+          "id": "d",
+          "text": "Each Fargate task should expose port 3000 directly to the public internet."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "The ALB is the public front door, and the tasks stay private. The task IP, security group, container port, and app listener must line up. Exposing each task directly would bypass the load balancer model."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A security group review says:\n\nALB security group: inbound 443 from internet\nTask security group: inbound 3000 from 0.0.0.0/0\nTarget health: healthy\nService: private subnets\n\nWhat is the best correction?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Restrict task inbound 3000 to the ALB security group, because the ALB should be the public entry point."
+        },
+        {
+          "id": "b",
+          "text": "Open the ALB security group on port 3000, because users must reach the Node.js port directly."
+        },
+        {
+          "id": "c",
+          "text": "Remove task security groups because private subnets already block every packet."
+        },
+        {
+          "id": "d",
+          "text": "Switch the target group to Lambda targets because healthy tasks are a security risk."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Healthy traffic does not mean the security boundary is right. The task should usually accept app-port traffic from the ALB security group, not the whole internet. That keeps the public entry point clear and reviewable."
+    }
+  ]
+}

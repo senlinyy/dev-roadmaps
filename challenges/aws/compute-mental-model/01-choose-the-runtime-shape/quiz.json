@@ -1,0 +1,142 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A design note for devpolaris-orders-api says:\n\nworkload: long-running Node.js HTTP API\npackage: container image in ECR\ntraffic: ALB forwards to port 3000\nteam goal: avoid host patching and SSH operations for this API\n\nWhich compute shape is the best first fit?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Run it as an ECS service on Fargate, with the image, task definition, service, health check, and logs as the main operating surface."
+        },
+        {
+          "id": "b",
+          "text": "Run it on one EC2 instance because any service with an HTTP port must expose a virtual server to operators."
+        },
+        {
+          "id": "c",
+          "text": "Run it as one Lambda function without changing the request model, because Lambda is just a hidden port listener."
+        },
+        {
+          "id": "d",
+          "text": "Keep only the ECR image and skip a runtime service until traffic arrives."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The evidence points to a containerized service that should stay alive behind a load balancer. ECS on Fargate keeps the service shape while AWS manages the host capacity. EC2 would add server work, and Lambda would require an event or request handler design rather than a normal long-running port listener."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A fraud-scoring side component has this support note:\n\nrequires vendor Linux agent on host\nrequires local file inspection under /var/lib/vendor\nsupport team asks for VM-level logs during incidents\ntraffic is internal and low volume\n\nWhich first compute choice is most honest?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Use EC2 for this component, because the requirement is host-level control and the team must accept server operations with it."
+        },
+        {
+          "id": "b",
+          "text": "Use Fargate and plan to install the vendor agent on the managed host after the task starts."
+        },
+        {
+          "id": "c",
+          "text": "Use Lambda because the traffic is low volume, even though the vendor requires a host agent."
+        },
+        {
+          "id": "d",
+          "text": "Keep it in the same ECS service as the orders API so every backend has one deployment surface."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "This is the kind of exception where EC2 can be the right answer. The useful clue is not traffic volume, it is host control. Fargate and Lambda deliberately move the host away from your operating boundary."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "The team plans a receipt email worker with this input:\n\n{ \"type\": \"receipt.email.requested\", \"orderId\": \"ord_1042\", \"email\": \"maya@example.com\" }\n\nThe worker should run when the event arrives, send one receipt, log the request ID, and finish. Which compute shape matches that mental model?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Lambda, because this is handler-shaped work that starts from an event and ends after processing that event."
+        },
+        {
+          "id": "b",
+          "text": "EC2, because every background job needs a process manager even when it only reacts to events."
+        },
+        {
+          "id": "c",
+          "text": "The existing ALB target group, because target groups execute small jobs when HTTP traffic is quiet."
+        },
+        {
+          "id": "d",
+          "text": "A larger Fargate task for the checkout API, because side effects should stay inside the request path."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The event is the important evidence. Lambda is a good fit when each run is tied to an invocation and can finish inside the function limits. Keeping slow side work inside the checkout path would make the API more fragile."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "A runbook lists where failures appeared during three incidents:\n\nEC2 incident: systemd inactive, disk 96 percent full, ALB target timeout\nECS incident: task stopped reason ResourceInitializationError, target unhealthy, CloudWatch startup log missing DATABASE_URL\nLambda incident: REPORT line status timeout, SQS message retried, duplicate receipt blocked by idempotency key\n\nWhich statements match the compute ownership boundary?",
+      "options": [
+        {
+          "id": "a",
+          "text": "EC2 puts more server evidence in the team path, including service status, disk, OS logs, and instance access."
+        },
+        {
+          "id": "b",
+          "text": "ECS on Fargate shifts host care away, but the team still owns task definitions, roles, health checks, and logs."
+        },
+        {
+          "id": "c",
+          "text": "Lambda failures are usually read through invocation logs, duration, retries, event shape, and concurrency signals."
+        },
+        {
+          "id": "d",
+          "text": "All three compute shapes should be debugged first by SSHing to the host and checking port 3000."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "The same app family can fail in different evidence streams depending on the compute shape. EC2 is server-shaped, ECS is service-shaped, and Lambda is invocation-shaped. A single SSH and port checklist misses the point of Fargate and Lambda."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A release review says:\n\nimage built: yes\nECS service updated: yes\ntarget health: 0 healthy, 2 unhealthy\nCloudWatch logs: DATABASE_URL missing\nALB response: 503 from awselb/2.0\n\nWhat is the best correction to the statement \"compute is the whole architecture\"?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Compute is where the code runs, but the runtime also depends on configuration, secrets, IAM, health checks, networking, and logs."
+        },
+        {
+          "id": "b",
+          "text": "Compute is only the Docker image, so target health and secrets are outside the release conversation."
+        },
+        {
+          "id": "c",
+          "text": "Compute replaces IAM because a running task can read every secret by default."
+        },
+        {
+          "id": "d",
+          "text": "Compute replaces networking because the app will receive public traffic once a process starts."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The evidence shows a runtime contract, not just a place where code exists. The code can be built and the service can be updated while traffic still fails because config, secrets, or health checks are wrong. Naming those surrounding pieces makes debugging calmer."
+    }
+  ]
+}

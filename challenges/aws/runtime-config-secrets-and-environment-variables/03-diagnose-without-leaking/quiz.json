@@ -1,0 +1,142 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A teammate suggests adding this startup log:\n\nconsole.log(process.env)\n\nThe incident is about missing DATABASE_URL in production. What is the safer diagnostic approach?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Log required variable names and presence status, then inspect task definition secret names and Secrets Manager metadata."
+        },
+        {
+          "id": "b",
+          "text": "Print all environment values once and delete the log group afterward."
+        },
+        {
+          "id": "c",
+          "text": "Send the environment dump to the incident channel so reviewers can search it."
+        },
+        {
+          "id": "d",
+          "text": "Disable startup validation because missing config is easier to debug after traffic arrives."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Most secret diagnosis needs names, ARNs, versions, Regions, and errors, not secret values. Printing all env vars can leak credentials and tokens. Safe metadata narrows the problem without creating a second incident."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A command runbook shows:\n\naws sts get-caller-identity Account: 222222222222\nexpected production account: 111122223333\naws region: us-west-2\norders service region: us-east-1\nerror: secret prod/orders/DATABASE_URL not found\n\nWhat should happen first?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Stop and fix the AWS account and Region context before reading deeper secret or ECS evidence."
+        },
+        {
+          "id": "b",
+          "text": "Create a new secret in the wrong account so the command succeeds."
+        },
+        {
+          "id": "c",
+          "text": "Print the production database password from a teammate laptop."
+        },
+        {
+          "id": "d",
+          "text": "Update the task role because wrong account errors are always app permissions."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Wrong workspace evidence is a hard stop. Many secret-not-found errors are just account or Region mistakes. Fix the context before changing production resources or permissions."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "Secret rotation evidence:\n\nSecrets Manager LastChangedDate: 10:02\nrunning ECS task started: 09:40\ntask definition secret name: DATABASE_URL\napp log at 10:20: connected to old endpoint metadata\n\nWhat explains the behavior?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The running process keeps the environment it received at start, so new tasks must be started to read the rotated value."
+        },
+        {
+          "id": "b",
+          "text": "Secrets Manager failed because all running tasks should update process.env automatically every minute."
+        },
+        {
+          "id": "c",
+          "text": "The ALB cached the old secret and should be restarted."
+        },
+        {
+          "id": "d",
+          "text": "CloudWatch Logs changed the database endpoint because it stores old messages."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Injected environment values are not live-updated inside a running Node.js process. Rotation changes the source value, but ECS must start new tasks for the process to receive it. That is why config and secret rotations are runtime releases."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "A safe diagnosis checklist says:\n\nconfirm account and Region\nread ECS service events\nlist task definition environment names and secret names\ndescribe secret metadata such as ARN, KmsKeyId, and LastChangedDate\ncheck execution role permission errors\n\nWhich practices are safe and useful?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Confirm the AWS account and Region before changing resources."
+        },
+        {
+          "id": "b",
+          "text": "Inspect task definition names and secret metadata without printing secret values."
+        },
+        {
+          "id": "c",
+          "text": "Use ECS events to tell whether the app failed before or after startup."
+        },
+        {
+          "id": "d",
+          "text": "Paste plaintext secret values into the release record for rollback."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "Safe diagnosis follows metadata and event trails. Account, Region, task definition names, secret metadata, and ECS events usually narrow the issue. Plaintext secret values do not belong in release records or incident chat."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A rollback target uses task definition 39. Its secret reference is:\n\nDATABASE_URL -> arn:aws:secretsmanager:us-east-1:111122223333:secret:prod/orders/old-database-url-a1b2\n\nSecrets Manager metadata says:\nold-database-url-a1b2: DeletedDate 2026-04-28T11:00:00Z\n\nWhat should the team consider before rollback?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Revision 39 may not be a safe rollback target because its secret reference no longer exists."
+        },
+        {
+          "id": "b",
+          "text": "Deleted secret metadata proves revision 39 is safer because old resources are cleaner."
+        },
+        {
+          "id": "c",
+          "text": "The rollback can proceed because ECS stores deleted secret values inside the task definition."
+        },
+        {
+          "id": "d",
+          "text": "The team should log the deleted secret value from an old task before updating the service."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Rollback restores a runtime recipe, and that recipe must still be compatible with current config and secrets. A deleted secret reference can make the rollback fail during initialization. Check the contract before pointing production back."
+    }
+  ]
+}

@@ -1,0 +1,70 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A migration will rewrite payment status logic in RDS. The release owner wants a named recovery point immediately before the change. Which control fits best?",
+      "options": [
+        { "id": "a", "text": "Create a manual RDS snapshot before the migration and keep automated backups enabled." },
+        { "id": "b", "text": "Enable S3 Versioning on the exports bucket because order rows are database records." },
+        { "id": "c", "text": "Create an EBS snapshot of a report worker volume because it runs near the app." },
+        { "id": "d", "text": "Rely on DynamoDB TTL because TTL creates point-in-time restore points." }
+      ],
+      "correct": ["a"],
+      "explanation": "A manual DB snapshot gives a named point before a risky database change. Automated backups and point-in-time restore still matter for time-based recovery. S3, EBS, and TTL protect different kinds of data."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "An export cleanup job accidentally deletes current S3 objects. Version listing shows delete markers and older object versions. Which control made this recovery path possible?",
+      "options": [
+        { "id": "a", "text": "S3 Versioning, because older versions can remain behind the key after overwrite or simple delete." },
+        { "id": "b", "text": "RDS deletion protection, because it protects S3 object versions." },
+        { "id": "c", "text": "DynamoDB PITR, because it stores old S3 object bytes." },
+        { "id": "d", "text": "EFS backup, because S3 objects are mounted files." }
+      ],
+      "correct": ["a"],
+      "explanation": "S3 Versioning can preserve earlier object versions and expose delete markers. That gives the team something concrete to restore or copy. Lifecycle and retention still decide how long those versions remain available."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "A release accidentally writes idempotency items with `expiresAt` minutes in the future instead of days. By 09:30 UTC, retries miss records that should still exist. Which recovery control is most relevant?",
+      "options": [
+        { "id": "a", "text": "DynamoDB point-in-time recovery to a new table for inspection or targeted repair." },
+        { "id": "b", "text": "S3 lifecycle expiration for `tmp/releases/`." },
+        { "id": "c", "text": "RDS read replica promotion because idempotency records are SQL rows." },
+        { "id": "d", "text": "EBS volume resize because missing items are caused by disk fullness." }
+      ],
+      "correct": ["a"],
+      "explanation": "The missing safety records live in DynamoDB, so DynamoDB PITR is the matching recovery control. The restored table can help inspect and repair needed items. Rolling back the whole table may be too broad, so the recovery mode still needs judgment."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "Which backup or protection controls match their data shape?",
+      "options": [
+        { "id": "a", "text": "RDS automated backups and point-in-time restore for final order records." },
+        { "id": "b", "text": "S3 Versioning and carefully scoped lifecycle rules for receipt and export objects." },
+        { "id": "c", "text": "DynamoDB PITR and deletion protection for checkout state tables." },
+        { "id": "d", "text": "S3 lifecycle expiration as the main rollback plan for bad SQL updates." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "The first three controls line up with the data service that stores the data. S3 lifecycle is a retention and cleanup tool, not a rollback plan for relational database rows. Matching controls to data shapes prevents false confidence."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A worker status record says:\n\n```text\nlocalPath=/mnt/orders-worker/tmp/exports/2026-05-02/orders.csv\nuploadTarget=s3://devpolaris-orders-prod-objects/exports/daily/2026/05/02/orders.csv\nstatus=upload_failed\nerror=AccessDenied\n```\n\nWhat backup or retention decision matters before cleanup?",
+      "options": [
+        { "id": "a", "text": "Do not delete the local worker file until the durable S3 target is confirmed or the file is recoverable or regeneratable." },
+        { "id": "b", "text": "Delete the local file immediately because failed uploads always mean the file is invalid." },
+        { "id": "c", "text": "Disable EBS snapshots because upload failure proves the file is in S3." },
+        { "id": "d", "text": "Move the local file into the RDS orders table before checking the S3 object." }
+      ],
+      "correct": ["a"],
+      "explanation": "The local worker file may be the only copy while upload is failing. Cleanup should wait until the S3 object is confirmed or the data can be regenerated safely. Deleting first can turn a permission issue into data loss."
+    }
+  ]
+}

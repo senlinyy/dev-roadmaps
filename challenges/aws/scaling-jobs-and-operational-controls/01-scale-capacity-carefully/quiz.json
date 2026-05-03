@@ -1,0 +1,142 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "Metrics for the last 15 minutes:\n\nALB requests: 118 per minute, normal\ntarget 5xx: rising after 10:42\nECS desired=4 running=4 CPU=31 percent memory=48 percent\nRDS connections: 96 percent of pool\ncheckout write latency: high\n\nWhat is the safest first scaling decision?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Do not add more API tasks yet; reduce pressure and inspect database connections or the change that increased database work."
+        },
+        {
+          "id": "b",
+          "text": "Double API desired count immediately because every 5xx increase means web CPU is saturated."
+        },
+        {
+          "id": "c",
+          "text": "Increase Lambda concurrency because ALB 5xx always come from scheduled jobs."
+        },
+        {
+          "id": "d",
+          "text": "Delete the RDS metrics because ECS CPU is the only scaling signal that matters."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The API has spare CPU while the database is under pressure. More API tasks may create more connections and make the bottleneck worse. Scaling should follow the saturated layer, not the first service name in the incident."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A different sale-window snapshot says:\n\nALB requests: 230 per minute, rising\ntarget 5xx: low\ntarget response time: 220 ms average, slowly rising\nECS desired=2 running=2 CPU=82 percent memory=55 percent\nRDS connections: normal\npayment provider latency: normal\n\nWhich action best matches the evidence?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Scale out the API service carefully and keep watching dependency metrics."
+        },
+        {
+          "id": "b",
+          "text": "Lower desired count because high CPU means the app is doing too much work."
+        },
+        {
+          "id": "c",
+          "text": "Pause all workers because API CPU can only be caused by queue consumers."
+        },
+        {
+          "id": "d",
+          "text": "Rollback immediately because scaling is never appropriate during real traffic."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Here the API layer looks like the capacity limit and dependencies look healthy. Increasing desired count can be a good short-term control. The team should still watch for the bottleneck moving downstream."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "After a deploy, every request spins CPU. Evidence:\n\nECS CPU: 95 percent on all tasks\nALB requests: normal\nnew log line repeats: retrying price calculation without backoff\ntarget 5xx: rising\nprevious revision: healthy before deploy\n\nWhat is the better first response than simply adding tasks?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Contain or roll back the bad revision, because scaling a CPU-loop bug can multiply the problem."
+        },
+        {
+          "id": "b",
+          "text": "Increase desired count without checking whether the CPU spike came from the new release."
+        },
+        {
+          "id": "c",
+          "text": "Increase RDS connections because all CPU loops are database bottlenecks."
+        },
+        {
+          "id": "d",
+          "text": "Disable logs because repeated log lines make CPU look worse."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Scaling adds capacity, but it does not cure a bad release. If each task burns CPU because of a bug, more tasks can increase cost and downstream pressure. A rollback or containment control protects users while the fix is prepared."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "Before changing desired count, the on-call collects:\n\nALB request rate and target 5xx\ntarget response time\nECS desired, running, pending, CPU, memory\nRDS connections and write latency\nSQS age of oldest message for background work\n\nWhich signals should guide the scaling decision?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Whether the API tasks are actually saturated."
+        },
+        {
+          "id": "b",
+          "text": "Whether a downstream dependency such as RDS is already the bottleneck."
+        },
+        {
+          "id": "c",
+          "text": "Whether queues are building pressure outside the request path."
+        },
+        {
+          "id": "d",
+          "text": "The planned desired count from last quarter, without checking the current bottleneck."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "Scaling is a capacity decision. You need enough metrics to see which layer is saturated and whether adding consumers will help or harm. Visual urgency is not operational evidence."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "Traffic drops after a sale. The team lowers API desired count from 6 to 2. Follow-up metrics show:\n\nrunningCount: 2\nCPU: 68 percent\ntarget response time: 260 ms and stable\ntarget health: 2 healthy\nRDS connections: normal\n\nWhat should the team keep watching?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Whether the smaller capacity still keeps latency, CPU, target health, and dependency pressure within safe ranges."
+        },
+        {
+          "id": "b",
+          "text": "Nothing, because lowering desired count can never cause a new bottleneck."
+        },
+        {
+          "id": "c",
+          "text": "Only the monthly bill, because runtime metrics stop mattering after scaling down."
+        },
+        {
+          "id": "d",
+          "text": "Only Lambda throttles, because ECS desired count does not affect web traffic."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Scaling down is also a capacity change. It can be safe, but the team should verify the new steady state. Target health, latency, CPU, memory, and dependencies tell whether the smaller service is still comfortable."
+    }
+  ]
+}

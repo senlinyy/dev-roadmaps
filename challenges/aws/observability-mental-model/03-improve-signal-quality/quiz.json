@@ -1,0 +1,70 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "After a difficult payment bug, the team adds this normal production log:\n\n```text\nDEBUG route=POST /v1/orders request_id=req_A12 body={customerEmail=buyer@example.com, paymentToken=tok_live_...} message=full payload accepted\n```\n\nWhat is the best review comment?",
+      "options": [
+        { "id": "a", "text": "Keep safe structured fields, but remove sensitive values and full request bodies from normal logs." },
+        { "id": "b", "text": "Keep the full payload forever because CloudWatch Logs is only visible to engineers." },
+        { "id": "c", "text": "Delete request IDs because they make logs too searchable." },
+        { "id": "d", "text": "Move the payload into an alarm description so it is easier to page people." }
+      ],
+      "correct": ["a"],
+      "explanation": "Good logs help diagnosis without exposing sensitive data. Request ID, route, status, duration, and error categories are useful. Payment tokens and full bodies create security and privacy risk."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "The checkout dashboard has 62 widgets. During an incident, the first screen shows container memory for an unrelated service, S3 bucket size, old staging Lambda duration, and a hidden checkout 5xx chart at the bottom.",
+      "options": [
+        { "id": "a", "text": "Rebuild the dashboard around the service questions: customer impact, app runtime, dependencies, and side jobs." },
+        { "id": "b", "text": "Add more widgets so every AWS metric appears somewhere on the page." },
+        { "id": "c", "text": "Remove all labels so engineers learn the resource IDs by memory." },
+        { "id": "d", "text": "Use the dashboard only for screenshots and do diagnosis from memory." }
+      ],
+      "correct": ["a"],
+      "explanation": "More charts do not automatically create better observability. The dashboard should reduce translation work during stress. Starting with user-facing health and then showing runtime and dependencies matches the article's signal-quality habit."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "An alarm fires every weekday at 09:00, stays in ALARM for one minute, and always clears without user impact. The runbook says:\n\n```text\nowner: unknown\nfirst dashboard: none\nfirst log group: none\nrecent action taken: ignored for 28 days\n```\n\nWhat should happen?",
+      "options": [
+        { "id": "a", "text": "Review the signal, threshold, owner, and action path so the alarm earns trust again." },
+        { "id": "b", "text": "Leave it alone because frequent alarms prove the system is observable." },
+        { "id": "c", "text": "Send it to more people before deciding what it means." },
+        { "id": "d", "text": "Delete all checkout alarms because one alarm is noisy." }
+      ],
+      "correct": ["a"],
+      "explanation": "Noisy alarms train people to ignore real risk. The fix is not automatically deletion; first review whether the metric, threshold, duration, owner, and response path match user impact. A trusted alarm should make the first human question easier."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "The team wants better observability for `devpolaris-orders-api` without creating avoidable cost or noise. Which changes improve signal quality?",
+      "options": [
+        { "id": "a", "text": "Use the same `request_id` in app logs, Lambda side-job logs, and traces." },
+        { "id": "b", "text": "Log structured fields such as route, step, status, duration, and error name." },
+        { "id": "c", "text": "Set log retention intentionally based on support and incident-review needs." },
+        { "id": "d", "text": "Trace every helper function forever and keep every debug line for all traffic." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "The correct choices make evidence easier to find and safer to keep. The last option adds cost and attention load without a clear question. More detail is useful only when it has a job."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A new tracing proposal says:\n\n```text\nsample rate: 100 percent forever\nspan policy: every internal helper function\nretention: no review planned\nlogs: request_id still missing in some services\n```\n\nWhat is the best response?",
+      "options": [
+        { "id": "a", "text": "Start with useful boundary spans, fix correlation IDs, and choose sampling and retention intentionally." },
+        { "id": "b", "text": "Approve it because complete tracing should come before fixing request IDs or retention policy." },
+        { "id": "c", "text": "Reject all tracing because logs can always show where time went." },
+        { "id": "d", "text": "Keep vague span names and rely on the tool to explain them later." }
+      ],
+      "correct": ["a"],
+      "explanation": "Tracing has cost and design tradeoffs. Boundary spans such as HTTP handler, RDS insert, DynamoDB write, S3 upload, and side job usually explain the request path well. Correlation IDs still matter when a trace is not sampled."
+    }
+  ]
+}
