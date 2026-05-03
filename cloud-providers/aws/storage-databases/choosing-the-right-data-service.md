@@ -203,10 +203,10 @@ The API checks authorization before it returns a download link or streams the ob
 
 ```mermaid
 flowchart TD
-    RDS["RDS<br/>orders and items"]
-    Worker["Export worker<br/>devpolaris-orders-api"]
-    S3["S3<br/>exports/monthly-paid-orders.csv"]
-    Meta["RDS export row<br/>status and object key"]
+    RDS["Orders and items<br/>(RDS database)"]
+    Worker["Export worker<br/>(devpolaris-orders-api)"]
+    S3["Monthly paid-orders CSV<br/>(S3 object)"]
+    Meta["Export status and object key<br/>(RDS row)"]
     User["Authorized admin<br/>downloads file"]
 
     RDS --> Worker

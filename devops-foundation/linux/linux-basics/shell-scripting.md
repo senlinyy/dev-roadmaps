@@ -244,9 +244,9 @@ set -euo pipefail
 
 ```mermaid
 graph TD
-    START["Script begins\nexecution"] --> SETE["set -e\nExit on\nany error"]
-    SETE --> SETU["set -u\nError on\nunset variables"]
-    SETU --> PIPE["set -o pipefail\nPipeline fails if\nany stage fails"]
+    START["Script begins\nexecution"] --> SETE["Exit on any error<br/>(set -e)"]
+    SETE --> SETU["Error on unset variables<br/>(set -u)"]
+    SETU --> PIPE["Pipeline fails if any stage fails<br/>(set -o pipefail)"]
     PIPE --> SAFE["Script is\nfail-fast safe"]
     SAFE --> LOGIC["Your actual\nscript logic"]
 ```

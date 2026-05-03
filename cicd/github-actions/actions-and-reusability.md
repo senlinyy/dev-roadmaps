@@ -77,23 +77,13 @@ We are going to eliminate this duplication by creating a **Composite Action**. A
 Before we refactor, we need to choose the right tool. GitHub Actions provides two entirely different mechanisms for reusability: Custom Actions and Reusable Workflows.
 
 ```mermaid
-%%{init: {"themeVariables": {"clusterBkg": "transparent"}}}%%
 graph TD
-    subgraph Composite Action
-        A[Caller Job: test] --> B{Action Called}
-        B --> C[Step 1: Setup Node]
-        C --> D[Step 2: npm ci]
-        D --> E[Step 3: npm build]
-        E --> F[Caller Job resumes: npm test]
-    end
-
-    subgraph Reusable Workflow
-        G[Caller Workflow] --> H{Workflow Call}
-        H --> I[New Job Created]
-        I --> J[New Runner Provisioned]
-        J --> K[Scan Steps Execute]
-        K --> L[Caller Workflow Resumes]
-    end
+    A["Repeated work"] --> B{"Reuse boundary?"}
+    B -- "Steps inside one job" --> C["Shared setup<br/>(composite action)"]
+    C --> D["Caller job continues"]
+    B -- "Whole job or policy" --> E["Separate workflow run<br/>(reusable workflow)"]
+    E --> F["New runner executes"]
+    F --> G["Caller workflow continues"]
 ```
 
 The diagram above illustrates the structural difference, which dictates when you should use each one.

@@ -105,10 +105,6 @@ flowchart TD
     WEBHOOK["Payment proof value<br/>(secret)"]
     CERT["HTTPS trust bundle<br/>(certificate)"]
     KEY["Data protection handle<br/>(key)"]
-    DATABASE["Order database<br/>(Azure SQL)"]
-    PROVIDER["Payment provider<br/>(webhook sender)"]
-    BROWSER["Customer browser<br/>(TLS client)"]
-    STORAGE["Encrypted service data<br/>(Azure service using a customer-managed key)"]
 
     APP --> IDENTITY
     IDENTITY --> VAULT
@@ -116,19 +112,17 @@ flowchart TD
     VAULT --> WEBHOOK
     VAULT --> CERT
     VAULT --> KEY
-    DBSECRET --> DATABASE
-    WEBHOOK --> PROVIDER
-    CERT --> BROWSER
-    KEY --> STORAGE
 ```
 
 Read the diagram from top to bottom.
 The running app has an identity.
 That identity is allowed to ask the vault for only the objects it needs.
 The app can retrieve secret values such as the database connection string and webhook secret.
-The TLS certificate may be consumed by the platform or imported into a service that terminates HTTPS.
-The encryption key is different:
+The TLS certificate and encryption key are different object types in the same vault.
+The certificate may be consumed by the platform or imported into a service that terminates HTTPS.
+The key is different:
 an Azure service may use the key for key operations, while the raw key should not become a normal application environment variable.
+The database, payment provider, browser, and storage service are outside systems that use the result, so they do not need their own boxes in the first picture.
 
 This is a healthier shape than a deployment pipeline that pushes all sensitive values directly into the app.
 The pipeline can deploy the app and assign permissions.

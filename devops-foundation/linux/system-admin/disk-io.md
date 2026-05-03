@@ -212,16 +212,14 @@ If your application needs more IOPS than the device can deliver, no amount of CP
 It helps to picture where I/O actually goes. When an application calls `read()`, it does not talk to the disk directly. It traverses a stack:
 
 ```mermaid
-flowchart LR
-    A["Application"] -->|"read()/write()"| B["Page Cache\n(in RAM)"]
-    B -->|"cache hit\n~100ns"| A
-    B -->|"cache miss"| C["Block I/O Layer"]
-    C --> D["I/O Scheduler\n(merge & reorder)"]
-    D --> E["Device Driver"]
-    E --> F["Block Device"]
-    F -->|"NVMe ~0.1ms"| G["Storage Media"]
-    F -->|"SSD ~0.5ms"| G
-    F -->|"HDD ~10ms"| G
+flowchart TD
+    A["Application calls<br/>read() or write()"] --> B["RAM-backed file cache<br/>(page cache)"]
+    B --> C{"Cache hit?"}
+    C -- "Yes" --> D["Return data from memory"]
+    C -- "No" --> E["Block I/O layer"]
+    E --> F["Merge and reorder work<br/>(I/O scheduler)"]
+    F --> G["Device driver"]
+    G --> H["Storage media<br/>(NVMe, SSD, or HDD)"]
 ```
 
 The **page cache** is the kernel's in-memory cache of file data. When you read a file, the kernel keeps a copy in free RAM; the next read of the same data is served from memory at roughly 100-nanosecond latency, not from disk. This is why a server with plenty of free memory often *feels* like its disk is fast even when the underlying device is slow. It also explains why "free memory" on a healthy Linux box is often near zero: the kernel has filled it with cached file data and will release it instantly the moment a process needs it. The `free -h` command's `buff/cache` column is the page cache.

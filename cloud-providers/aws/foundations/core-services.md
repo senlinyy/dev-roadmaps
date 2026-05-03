@@ -105,7 +105,7 @@ Each one carries one responsibility in the system.
 
 Here is the first architecture map.
 Read it top to bottom.
-The dotted lines are checks or supporting responsibilities, not places where user traffic flows.
+It shows customer traffic first, then the main things the backend touches while handling a request.
 
 ```mermaid
 graph TD
@@ -115,13 +115,15 @@ graph TD
     APP --> DB["Order records<br/>(RDS database)"]
     APP --> FILES["Export files<br/>(S3 bucket)"]
     APP --> LOGS["Runtime signals<br/>(CloudWatch logs and metrics)"]
-    PERMS["Access rules<br/>(IAM roles and policies)"] -.-> APP
-    PERMS -.-> DB
-    PERMS -.-> FILES
-    DEPLOY["Release package<br/>(ECR image and ECS task definition)"] -.-> APP
-    COST["Guardrails<br/>(Budgets and backups)"] -.-> DB
-    COST -.-> FILES
 ```
+
+Three supporting responsibilities sit around that path:
+
+| Responsibility | AWS Service | Why It Stays Outside The Traffic Path |
+|----------------|-------------|---------------------------------------|
+| Access checks | IAM roles and policies | They decide what the backend may call, not where customer requests flow. |
+| Release package | ECR image and ECS task definition | They tell ECS what to run when the service starts or deploys. |
+| Guardrails | Budgets and backups | They help the team notice spend and recover data when operations go wrong. |
 
 This is not the only good design.
 You could run the backend on EC2.
@@ -167,11 +169,7 @@ graph TD
     LB --> PUB["Public subnets<br/>(internet-facing entry points)"]
     PUB --> PRIV["Private subnets<br/>(app tasks)"]
     PRIV --> DATA["Private data area<br/>(database subnet group)"]
-    ROUTES["Traffic rules<br/>(route tables)"] -.-> PUB
-    ROUTES -.-> PRIV
-    RULES["Port rules<br/>(security groups)"] -.-> LB
-    RULES -.-> PRIV
-    RULES -.-> DATA
+    RULES["Traffic and port rules<br/>(route tables and security groups)"] -.-> PRIV
 ```
 
 The diagram does not show every AWS networking detail.
@@ -179,8 +177,8 @@ It shows the job split.
 DNS gives users a name.
 The load balancer receives traffic.
 Subnets place resources into smaller network areas.
-Route tables decide where packets can go.
-Security groups act like resource-level firewall rules.
+The dotted side check combines route tables and security groups so the map does not repeat the same rule beside every subnet.
+Route tables decide where packets can go, and security groups act like resource-level firewall rules.
 
 The public/private subnet idea is worth slowing down for.
 A public subnet is not public because every resource inside it is magically open.

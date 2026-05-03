@@ -60,55 +60,43 @@ A **route table** is the list of directions attached to a subnet.
 It answers a practical question: when traffic leaves this subnet, which target should AWS send it to?
 The target might be the local VPC network, an internet gateway, a NAT gateway, a transit gateway, or another AWS networking target.
 
-Here is the whole picture before we zoom in:
+Here is the placement picture before we zoom in.
+It leaves the individual AWS resources out for a moment, because the first lesson is where each subnet type belongs:
 
 ```mermaid
 flowchart TD
     ACCOUNT["Workspace<br/>(AWS account)"]
     REGION["Where it runs<br/>(Region us-east-1)"]
     VPC["Private network boundary<br/>(VPC 10.20.0.0/16)"]
-    AZA["Failure area<br/>(us-east-1a)"]
-    AZB["Failure area<br/>(us-east-1b)"]
-    PUBA["Public subnet<br/>(10.20.0.0/24)"]
-    PUBB["Public subnet<br/>(10.20.1.0/24)"]
-    APPA["Private app subnet<br/>(10.20.10.0/24)"]
-    APPB["Private app subnet<br/>(10.20.11.0/24)"]
-    DBA["Private DB subnet<br/>(10.20.20.0/24)"]
-    DBB["Private DB subnet<br/>(10.20.21.0/24)"]
-    ALB["ALB nodes"]
-    ECS["Fargate tasks"]
-    RDS["RDS subnet group"]
-    RT["Route tables<br/>(traffic directions)"]
+    AZS["Local failure areas<br/>(Availability Zones)"]
+    PUBLIC["Internet-facing slices<br/>(public subnets)"]
+    APP["Internal app slices<br/>(private app subnets)"]
+    DATA["Internal data slices<br/>(database subnets)"]
+    RT["Traffic directions<br/>(route tables)"]
 
     ACCOUNT --> REGION
     REGION --> VPC
-    VPC --> AZA
-    VPC --> AZB
-    AZA --> PUBA
-    AZB --> PUBB
-    AZA --> APPA
-    AZB --> APPB
-    AZA --> DBA
-    AZB --> DBB
-    PUBA --> ALB
-    PUBB --> ALB
-    APPA --> ECS
-    APPB --> ECS
-    DBA --> RDS
-    DBB --> RDS
-    RT -.-> PUBA
-    RT -.-> APPA
-    RT -.-> DBA
+    VPC --> AZS
+    AZS --> PUBLIC
+    AZS --> APP
+    AZS --> DATA
+    RT -.-> PUBLIC
+    RT -.-> APP
+    RT -.-> DATA
 ```
 
 Read the solid path from top to bottom.
 The account contains the Region.
 The Region contains the VPC.
 The VPC spans the Availability Zones in that Region.
-Each subnet sits inside one Availability Zone.
-Resources are placed into subnets.
+Each subnet sits inside one Availability Zone, and a real production design usually repeats each subnet type across more than one AZ.
 
-That last sentence is the mental model to keep.
+The resource table above tells you what lands in those subnet types:
+the load balancer uses public subnets, the ECS tasks use private app subnets, and the database uses database subnets through an RDS subnet group.
+Route tables are dotted because they are not a place where resources run.
+They are the direction signs attached to those subnets.
+
+That placement idea is the mental model to keep.
 You do not place an ECS task "in AWS" in a vague way.
 You place it in a subnet.
 Because the subnet belongs to one Availability Zone, the task also runs in that Availability Zone.

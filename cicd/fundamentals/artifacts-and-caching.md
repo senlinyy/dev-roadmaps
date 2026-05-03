@@ -49,7 +49,7 @@ Because pipelines are Directed Acyclic Graphs (DAGs) made of isolated jobs, arti
 Imagine a pipeline with two jobs: `build` and `test-integration`. The `build` job takes 10 minutes to compile a massive application. The `test-integration` job needs to run tests against that compiled application.
 
 ```mermaid
-graph LR
+graph TD
     CODE["Source Code"] --> BUILD["Job 1: Build\n(Runs on VM A)"]
     BUILD -- "Upload Artifact\n(binary)" --> STORAGE[("CI Internal Storage")]
     STORAGE -- "Download Artifact\n(binary)" --> TEST["Job 2: Integration Tests\n(Runs on VM B)"]

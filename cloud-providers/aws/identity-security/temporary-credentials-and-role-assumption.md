@@ -90,11 +90,11 @@ The handoff looks like this:
 ```mermaid
 flowchart TD
     CALLER["Caller proves identity<br/>(human, pipeline, or service)"]
-    TRUST["Role trust policy<br/>Who may use this role?"]
-    STS["AWS STS<br/>Issues temporary credentials"]
-    SESSION["Role session<br/>Access key, secret key, token, expiration"]
-    API["AWS API call<br/>Evaluated under the role"]
-    PERMS["Role permissions policy<br/>What can this role do?"]
+    TRUST["Who may use this role?<br/>(role trust policy)"]
+    STS["Temporary credential issuer<br/>(AWS STS)"]
+    SESSION["Temporary access set<br/>(role session)"]
+    API["Request using the role<br/>(AWS API call)"]
+    PERMS["What can this role do?<br/>(role permissions policy)"]
 
     CALLER --> TRUST
     TRUST --> STS

@@ -66,12 +66,12 @@ For `devpolaris-orders-api`, the path looks like this:
 
 ```mermaid
 flowchart TD
-    User["Customer checkout"] --> API["ECS Fargate<br/>orders API"]
-    API --> RDS["RDS<br/>orders data"]
-    API --> Logs["CloudWatch Logs<br/>app events"]
-    API --> S3["S3<br/>receipts and exports"]
-    API --> SQS["SQS<br/>background work"]
-    SQS --> Workers["Lambda or ECS<br/>workers"]
+    User["Customer checkout"] --> API["Orders API<br/>(ECS Fargate service)"]
+    API --> RDS["Orders data<br/>(RDS database)"]
+    API --> Logs["App events<br/>(CloudWatch Logs)"]
+    API --> S3["Receipt and export files<br/>(S3 objects)"]
+    API --> SQS["Background jobs<br/>(SQS queue)"]
+    SQS --> Workers["Background workers<br/>(Lambda or ECS)"]
     Workers --> Logs
     Workers --> RDS
     Workers --> S3

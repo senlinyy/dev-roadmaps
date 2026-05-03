@@ -50,31 +50,16 @@ Here is the beginner picture:
 
 ```mermaid
 flowchart TD
-    REQUEST["AWS request"]
-    WHO["Who is asking?<br/>(principal)"]
-    ACTION["What do they want?<br/>(action)"]
-    RESOURCE["What are they touching?<br/>(resource ARN)"]
-    CONTEXT["What else is true?<br/>(conditions)"]
-    POLICIES["Applicable policies"]
-    DENY["Any explicit deny?"]
-    ALLOW["Any matching allow?"]
-    RESULT["Allow or deny"]
-
-    REQUEST --> WHO
-    REQUEST --> ACTION
-    REQUEST --> RESOURCE
-    REQUEST --> CONTEXT
-    WHO --> POLICIES
-    ACTION --> POLICIES
-    RESOURCE --> POLICIES
-    CONTEXT --> POLICIES
-    POLICIES --> DENY
-    DENY --> RESULT
-    POLICIES --> ALLOW
-    ALLOW --> RESULT
+    REQUEST["AWS request"] --> FACTS["Request facts<br/>(principal, action, resource, conditions)"]
+    FACTS --> POLICIES["Rules AWS must evaluate<br/>(applicable policies)"]
+    POLICIES --> DENY{"Matching explicit deny?"}
+    DENY -->|Yes| BLOCK["Stop the request<br/>(deny)"]
+    DENY -->|No| ALLOW{"Matching allow?"}
+    ALLOW -->|Yes| OK["Let the request continue<br/>(allow)"]
+    ALLOW -->|No| BLOCK
 ```
 
-Read the diagram from the request outward.
+Read the diagram from top to bottom.
 AWS does not ask whether the service is important or whether the developer is in a hurry.
 It checks the information in the request against the policies that apply.
 

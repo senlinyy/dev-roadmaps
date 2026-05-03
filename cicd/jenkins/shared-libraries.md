@@ -250,19 +250,12 @@ One catch: `libraryResource` only works for *external* libraries (libraries load
 Jenkins offers three places to configure a shared library, and each one corresponds to a different organisational scope.
 
 ```mermaid
-%%{init: {"themeVariables": {"clusterBkg": "transparent"}}}%%
 graph TD
-    A["Jenkinsfile<br/>@Library 'devpolaris-pipeline@v1.4.2' _"] --> B[Controller looks up<br/>'devpolaris-pipeline' name]
-    B --> C{Where is it<br/>configured?}
-    C --> D[Global Pipeline Libraries<br/>Manage Jenkins → System]
-    C --> E[Folder-scoped library<br/>Folder → Configure]
-    C --> F["Dynamic load<br/>library 'name@ref' step"]
-    D --> G[git fetch tag v1.4.2]
-    E --> G
-    F --> G
-    G --> H[Cache under JENKINS_HOME/<br/>workflow-libs/]
-    H --> I[Compile vars/ + src/]
-    I --> J[Pipeline starts on agent<br/>buildJavaService is callable]
+    A["Jenkinsfile names library<br/>(@Library)"] --> B["Controller resolves scope"]
+    B --> C["Fetch pinned version<br/>(Git ref)"]
+    C --> D["Cache library under<br/>JENKINS_HOME"]
+    D --> E["Compile vars/ and src/"]
+    E --> F["Helper is callable<br/>from the pipeline"]
 ```
 
 The three paths are:

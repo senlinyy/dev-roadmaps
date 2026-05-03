@@ -71,22 +71,21 @@ Here is the operating map:
 
 ```mermaid
 flowchart TD
-    USER["Customer checkout"] --> ALB["Application Load Balancer"]
-    ALB --> API["ECS service<br/>orders API"]
-    API --> DB["RDS<br/>orders data"]
-    API --> QUEUE["SQS queue<br/>background work"]
-    QUEUE --> WORKER["ECS service<br/>orders worker"]
-    WORKER --> EMAIL["Email and exports"]
-    SCHED["EventBridge Scheduler"] --> CLEANUP["Cleanup job"]
-    EVENT["Small AWS event"] --> LAMBDA["Lambda function"]
+    USER["Customer checkout"] --> ALB["Traffic gate<br/>(Application Load Balancer)"]
+    ALB --> API["User-facing capacity<br/>(ECS service)"]
+    API --> DB["Order records<br/>(RDS database)"]
+    API --> QUEUE["Slow work buffer<br/>(SQS queue)"]
+    QUEUE --> WORKER["Background capacity<br/>(ECS worker service)"]
+    WORKER --> JOBS["Email, exports, cleanup<br/>(background work)"]
+    TRIGGERS["Timed or small triggers<br/>(EventBridge Scheduler and Lambda)"] --> JOBS
 ```
 
 Read the map from top to bottom.
 The API is the front door for checkout.
 RDS is the database dependency.
 SQS is the buffer that stores work until workers are ready.
-EventBridge Scheduler starts time-based work.
-Lambda handles small event reactions that do not need a long-running process.
+The trigger box groups two separate job starters:
+EventBridge Scheduler starts time-based work, and Lambda handles small event reactions that do not need a long-running process.
 
 This map also shows where controls live.
 The API has an ECS desired count and autoscaling policy.

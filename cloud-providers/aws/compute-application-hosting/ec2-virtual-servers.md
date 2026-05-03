@@ -128,23 +128,21 @@ Here is the shape:
 
 ```mermaid
 flowchart TD
-    USER["Customer browser<br/>orders.devpolaris.com"]
-    DNS["Route 53 alias<br/>friendly name to ALB"]
-    ALB["Application Load Balancer<br/>HTTPS listener 443"]
-    TG["Target group<br/>health check /health"]
-    EC2["EC2 instance<br/>private subnet"]
-    SYSTEMD["systemd service<br/>devpolaris-orders-api"]
-    NODE["Node.js process<br/>PORT=3000"]
-    ROLE["Instance role<br/>temporary AWS credentials"]
-    AWSAPI["AWS APIs<br/>parameters, artifacts, storage"]
+    USER["Customer request<br/>(orders.devpolaris.com)"]
+    DNS["Public service name<br/>(Route 53 alias)"]
+    ALB["Public HTTPS gate<br/>(Application Load Balancer)"]
+    TG["Health-checked backend pool<br/>(target group)"]
+    EC2["Private virtual server<br/>(EC2 instance)"]
+    APP["Backend process<br/>(systemd and Node.js on port 3000)"]
+    ROLE["Temporary AWS access<br/>(instance role)"]
+    AWSAPI["Supporting service calls<br/>(AWS APIs)"]
 
     USER --> DNS
     DNS --> ALB
     ALB --> TG
     TG -->|"HTTP 3000"| EC2
-    EC2 --> SYSTEMD
-    SYSTEMD --> NODE
-    NODE -.-> ROLE
+    EC2 --> APP
+    APP -.-> ROLE
     ROLE -.-> AWSAPI
 ```
 

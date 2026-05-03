@@ -93,13 +93,13 @@ The canary rollout will create the replacement task set, check it through the te
 
 ```mermaid
 graph TD
-    BUILD["Build image\n8f3a12c6"] --> STAGING["Deploy to staging"]
+    BUILD["Built release image<br/>(8f3a12c6)"] --> STAGING["Deploy to staging"]
     STAGING --> CHECK["Staging smoke test"]
     CHECK --> CANARY["Create replacement\ntask set"]
     CANARY --> FIVE["Send 10% traffic\nto canary"]
     FIVE --> WATCH["Compare canary\nagainst stable"]
     WATCH --> DECISION{"Healthy?"}
-    DECISION -- "Yes" --> FULL["CodeDeploy shifts\nremaining traffic"]
+    DECISION -- "Yes" --> FULL["Shift remaining traffic<br/>(CodeDeploy)"]
     DECISION -- "No" --> STOP["Route 100% back\nto stable"]
 ```
 

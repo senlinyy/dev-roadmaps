@@ -56,21 +56,21 @@ Here is the first job map.
 Keep it small on purpose.
 Azure has more services than this, but a beginner needs a useful map before a catalog.
 
-| Job In The System | Azure Service | What To Check First |
-|-------------------|---------------|---------------------|
-| Public name | Azure DNS | Record points to edge |
-| Public entry | Front Door or Application Gateway | Backend health |
-| Private network | Virtual Network | Subnet and route |
-| Run the API | Azure Container Apps | Revision health |
-| Store orders | Azure SQL Database | Connection and firewall |
-| Store exports | Blob Storage | Container and network |
-| Store secrets | Key Vault | Access policy or RBAC |
-| Service login | Managed Identity | Identity assigned |
-| Logs and metrics | Azure Monitor | Data is flowing |
-| App traces | Application Insights | Requests and failures |
-| Query logs | Log Analytics | Workspace linked |
-| Store images | Container Registry | Image tag exists |
-| Track spend | Cost Management | Resource group cost |
+| Job In The System | Azure Service | First Question To Ask |
+|-------------------|---------------|-----------------------|
+| Public name | Azure DNS | Does the public name resolve to the intended entry point? |
+| Public entry | Front Door or Application Gateway | Are requests reaching a healthy backend? |
+| Private network | Virtual Network | Is the app on the expected private network path? |
+| Run the API | Azure Container Apps | Is a healthy revision running and receiving traffic? |
+| Store orders | Azure SQL Database | Can the app connect, and does the firewall allow it? |
+| Store exports | Blob Storage | Does the container exist, and can the app reach it? |
+| Store secrets | Key Vault | Can the app identity read the needed secret? |
+| Service login | Managed Identity | Is the identity attached to the running app? |
+| Logs and metrics | Azure Monitor | Are logs and metrics arriving for this service? |
+| App traces | Application Insights | Can you see requests, failures, and dependency calls? |
+| Query logs | Log Analytics | Are the logs connected to the right workspace? |
+| Store images | Container Registry | Does the release image tag exist in the registry? |
+| Track spend | Cost Management | Can you see cost for this resource group? |
 
 The table is not a final architecture review.
 It is a first response map.
@@ -150,31 +150,30 @@ Azure DNS
 
 Read the diagram from top to bottom.
 The labels put the plain job first and the Azure name second.
-The dotted lines are supporting responsibilities, not the main customer request path.
+Identity, networking, images, and cost stay in the inventory table so the request path stays readable.
 
 ```mermaid
 graph TD
-    USER["Customer request<br/>(browser or mobile app)"] --> DNS["Public name<br/>(Azure DNS)"]
-    DNS --> EDGE["HTTP edge<br/>(Front Door or Application Gateway)"]
-    EDGE --> APP["Running API<br/>(Azure Container Apps)"]
-    APP --> DB["Order records<br/>(Azure SQL Database)"]
-    APP --> FILES["Export files<br/>(Blob Storage)"]
-    APP --> SECRETS["Secret lookup<br/>(Key Vault)"]
-    APP --> SIGNALS["Runtime evidence<br/>(Azure Monitor)"]
-    SIGNALS --> TRACES["Request traces<br/>(Application Insights)"]
-    SIGNALS --> LOGS["Queryable logs<br/>(Log Analytics)"]
-    ID["Service identity<br/>(Managed Identity)"] -.-> APP
-    ID -.-> DB
-    ID -.-> FILES
-    ID -.-> SECRETS
-    NET["Private traffic area<br/>(Virtual Network)"] -.-> APP
-    NET -.-> DB
-    NET -.-> FILES
-    IMAGE["Container image<br/>(Container Registry)"] -.-> APP
-    COST["Spend view<br/>(Cost Management)"] -.-> APP
-    COST -.-> DB
-    COST -.-> FILES
+    USER["Customer request<br/>(browser or mobile app)"]
+    DNS["Public name<br/>(Azure DNS)"]
+    EDGE["HTTP edge<br/>(Front Door or Application Gateway)"]
+    APP["Running API<br/>(Azure Container Apps)"]
+    DB["Order records<br/>(Azure SQL Database)"]
+    FILES["Export files<br/>(Blob Storage)"]
+    SECRETS["Secret lookup<br/>(Key Vault)"]
+    SIGNALS["Runtime evidence<br/>(Azure Monitor)"]
+
+    USER --> DNS
+    DNS --> EDGE
+    EDGE --> APP
+    APP --> DB
+    APP --> FILES
+    APP --> SECRETS
+    APP --> SIGNALS
 ```
+
+Managed Identity, Virtual Network, Container Registry, Application Insights, Log Analytics, and Cost Management still matter.
+The table below names those supporting pieces without turning every support relationship into another arrow.
 
 This design does not try to use every Azure service.
 That is the point.
@@ -227,14 +226,14 @@ Network rules, private endpoints, and service integration decide which resources
 
 Here is the traffic slice for the orders API:
 
-| Job | Azure Service | What To Check First |
-|-----|---------------|---------------------|
-| Human name | Azure DNS | `orders` record exists |
-| HTTP edge | Front Door | Origin health |
-| Regional entry | Application Gateway | Backend pool health |
-| Private space | Virtual Network | Correct VNet |
-| Placement | Subnet | App integration |
-| Block or allow | Network rules | Source allowed |
+| Job | Azure Service | First Question To Ask |
+|-----|---------------|-----------------------|
+| Human name | Azure DNS | Does `orders` resolve to the expected Azure entry? |
+| HTTP edge | Front Door | Is the origin healthy and receiving requests? |
+| Regional entry | Application Gateway | Is the backend pool healthy? |
+| Private space | Virtual Network | Is this resource in the expected VNet? |
+| Placement | Subnet | Is the app integrated with the expected subnet? |
+| Block or allow | Network rules | Does a rule allow this source to reach this target? |
 
 The beginner failure is to treat "networking" as one blob.
 It is not one blob when you debug.
@@ -342,13 +341,13 @@ It should read them at runtime through a controlled identity.
 
 Here is the data map:
 
-| Data Job | Azure Service | What To Check First |
-|----------|---------------|---------------------|
-| Order records | Azure SQL Database | Connection and login |
-| Export files | Blob Storage | Container exists |
-| Secret values | Key Vault | Identity has access |
-| Database password fallback | Key Vault | Secret version current |
-| File access control | Storage account | Network and role |
+| Data Job | Azure Service | First Question To Ask |
+|----------|---------------|-----------------------|
+| Order records | Azure SQL Database | Can the app connect with the expected login? |
+| Export files | Blob Storage | Does the target container exist? |
+| Secret values | Key Vault | Can the app identity read the needed value? |
+| Database password fallback | Key Vault | Is the app using the intended secret version? |
+| File access control | Storage account | Do network rules and data roles both allow access? |
 
 The job split matters during incidents.
 If an export file is missing, Azure SQL may still be perfectly healthy.

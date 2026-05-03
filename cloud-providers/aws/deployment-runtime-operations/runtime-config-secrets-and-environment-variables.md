@@ -83,12 +83,12 @@ The production contract is easier to understand as a map:
 
 ```mermaid
 flowchart TD
-    IMAGE["Container image<br/>code only"] --> TASKDEF["Task definition<br/>runtime contract"]
-    TASKDEF --> ECS["ECS starts task"]
-    SM["Secrets Manager<br/>DATABASE_URL"] --> ECS
-    SSM["Parameter Store<br/>PAYMENT_WEBHOOK_SECRET"] --> ECS
-    ECS --> NODE["Node process<br/>process.env"]
-    NODE --> LOGS["CloudWatch Logs<br/>safe evidence"]
+    IMAGE["Code-only package<br/>(container image)"] --> TASKDEF["Runtime contract<br/>(task definition)"]
+    TASKDEF --> ECS["Task startup<br/>(ECS)"]
+    SM["Database URL secret<br/>(Secrets Manager)"] --> ECS
+    SSM["Webhook secret<br/>(Parameter Store)"] --> ECS
+    ECS --> NODE["Runtime variables<br/>(Node process.env)"]
+    NODE --> LOGS["Runtime evidence<br/>(CloudWatch Logs)"]
 ```
 
 The app still reads `process.env.DATABASE_URL`.

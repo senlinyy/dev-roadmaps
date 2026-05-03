@@ -76,20 +76,11 @@ If you build separately for staging and production, you are *not* deploying the 
 The safer pattern is: build once, store the artifact, deploy that exact artifact to staging, validate it, then promote the exact same artifact to production.
 
 ```mermaid
-%%{init: {"themeVariables": {"clusterBkg": "transparent"}}}%%
 graph TD
-    subgraph bad ["Bad Approach: Rebuilding"]
-        A1[Staging Branch] -->|npm build| B1(Staging Artifact)
-        B1 --> C1[Deploy Staging]
-        A2[Main Branch] -->|npm build| B2(Prod Artifact)
-        B2 --> C2[Deploy Prod]
-    end
-    
-    subgraph good ["Good Approach: Promote Artifact"]
-        D[Source Commit] -->|build once| E(Immutable Artifact)
-        E --> F[Deploy to Staging]
-        F --> G[Promote to Prod]
-    end
+    A["Source commit"] --> B["Build once"]
+    B --> C["Stored artifact<br/>(immutable artifact)"]
+    C --> D["Deploy to staging"]
+    D --> E["Promote same artifact<br/>to production"]
 ```
 
 One more nuance: the "staging branch" versus "main branch" setup is also a smell. In strong CD setups, environments are usually not represented by long-lived branches. You build from a commit, produce an immutable artifact, and promote that artifact between environments. Branches represent code history; environments represent deployment state. Those are different things.

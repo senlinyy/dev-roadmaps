@@ -50,14 +50,14 @@ Each box answers one beginner question.
 
 ```mermaid
 flowchart TD
-    USER["Customer browser"] --> DNSQ["Ask DNS<br/>orders.devpolaris.com"]
-    DNSQ --> R53["Public hosted zone<br/>devpolaris.com in Route 53"]
-    R53 --> ALBDNS["Alias answer<br/>devpolaris-orders-alb...elb.amazonaws.com"]
-    ALBDNS --> TLS["TLS handshake<br/>SNI: orders.devpolaris.com"]
-    TLS --> CERT["ACM certificate<br/>covers orders.devpolaris.com"]
-    CERT --> LISTENER["ALB HTTPS listener<br/>port 443"]
-    LISTENER --> TG["Forward action<br/>devpolaris-orders-api-tg"]
-    TG --> APP["Healthy service targets<br/>orders API"]
+    USER["Customer browser"] --> DNSQ["Public service lookup<br/>(orders.devpolaris.com)"]
+    DNSQ --> R53["Public DNS records<br/>(Route 53 hosted zone)"]
+    R53 --> ALBDNS["Load balancer address<br/>(ALB alias answer)"]
+    ALBDNS --> TLS["Name sent during TLS<br/>(SNI: orders.devpolaris.com)"]
+    TLS --> CERT["Certificate for the name<br/>(ACM certificate)"]
+    CERT --> LISTENER["Secure public entry point<br/>(ALB HTTPS listener on 443)"]
+    LISTENER --> TG["Backend pool selection<br/>(target group action)"]
+    TG --> APP["Running backend<br/>(healthy orders API targets)"]
 ```
 
 There are two important lessons hiding in this diagram.

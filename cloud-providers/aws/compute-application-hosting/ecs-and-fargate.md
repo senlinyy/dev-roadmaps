@@ -91,10 +91,9 @@ Here is the beginner map:
 ```mermaid
 flowchart TD
     ECR["App package<br/>(ECR image)"] --> TD["Run recipe<br/>(task definition)"]
-    TD --> SERVICE["ECS service<br/>keeps desired count"]
-    ALB["Application Load Balancer<br/>public front door"] --> TG["Target group<br/>healthy task IPs"]
+    TD --> SERVICE["Desired runtime<br/>(ECS service)"]
     SERVICE --> TASKS["Running copies<br/>(Fargate tasks)"]
-    TG --> TASKS
+    TRAFFIC["Traffic health gate<br/>(Application Load Balancer target group)"] --> TASKS
     TASKS --> CW["Runtime evidence<br/>(CloudWatch Logs)"]
     CLUSTER["Logical workspace<br/>(ECS cluster)"] -.-> SERVICE
     FARGATE["Managed server capacity<br/>(Fargate)"] -.-> TASKS

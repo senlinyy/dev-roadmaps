@@ -262,10 +262,10 @@ Small functions stay easier to reason about because the input contract is narrow
 
 ```mermaid
 flowchart TD
-    EVENTS["Event sources<br/>(API Gateway, SQS, EventBridge, S3)"]
-    LAMBDA["Lambda function<br/>One bounded job"]
-    LOGS["CloudWatch Logs<br/>Request ID and evidence"]
-    RESULT["Result<br/>Email, export, cleanup, or response"]
+    EVENTS["Things that start work<br/>(API Gateway, SQS, EventBridge, S3)"]
+    LAMBDA["One bounded job<br/>(Lambda function)"]
+    LOGS["Run evidence<br/>(CloudWatch Logs)"]
+    RESULT["Work outcome<br/>(email, export, cleanup, response)"]
 
     EVENTS --> LAMBDA
     LAMBDA --> RESULT

@@ -68,7 +68,7 @@ The design looks like this:
 
 ```mermaid
 flowchart TD
-    API["devpolaris-orders-api<br/>Node.js backend"]
+    API["Node.js backend<br/>(devpolaris-orders-api)"]
     DB["Order records<br/>(RDS database)"]
     WORKER["Report worker<br/>(EC2 instance)"]
     EBS["Mounted worker disk<br/>(EBS volume)"]
@@ -168,9 +168,9 @@ Here is the shape:
 ```mermaid
 flowchart TD
     QUEUE["Export jobs<br/>(AWS queue)"]
-    TASKA["Renderer task A<br/>writes part files"]
-    TASKB["Renderer task B<br/>writes part files"]
-    TASKC["Assembler task<br/>reads all parts"]
+    TASKA["Writes part files<br/>(renderer task A)"]
+    TASKB["Writes part files<br/>(renderer task B)"]
+    TASKC["Reads all parts<br/>(assembler task)"]
     EFS["Shared workspace<br/>(EFS filesystem)"]
     S3["Final monthly export<br/>(S3 bucket)"]
 

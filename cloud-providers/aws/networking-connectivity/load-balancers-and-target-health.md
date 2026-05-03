@@ -97,21 +97,18 @@ Here is that path as a diagram:
 
 ```mermaid
 flowchart TD
-    BROWSER["Customer browser"] --> DNS["orders.devpolaris.com<br/>DNS name"]
-    DNS --> ALB["Application Load Balancer<br/>public subnets"]
-    ALB --> LISTENER["Listener<br/>HTTPS 443"]
-    LISTENER --> RULE["Listener rule<br/>host orders.devpolaris.com"]
-    RULE --> TG["Target group<br/>orders-api-tg"]
-    TG --> TASK1["Registered target<br/>10.0.42.18:3000"]
-    TG --> TASK2["Registered target<br/>10.0.43.27:3000"]
-    TASK1 --> APP1["orders-api container<br/>listens on 3000"]
-    TASK2 --> APP2["orders-api container<br/>listens on 3000"]
-    TG -.-> HEALTH["Health check<br/>GET /health"]
+    BROWSER["Customer browser"] --> DNS["Public service name<br/>(orders.devpolaris.com)"]
+    DNS --> ALB["Public traffic distributor<br/>(Application Load Balancer)"]
+    ALB --> LISTENER["Port waiting for requests<br/>(HTTPS listener 443)"]
+    LISTENER --> RULE["Host-based routing rule<br/>(orders.devpolaris.com)"]
+    RULE --> TG["Backend target list<br/>(orders-api-tg target group)"]
+    TG --> TARGETS["Healthy backend endpoints<br/>(task IPs on port 3000)"]
+    TG -.-> HEALTH["Backend liveness test<br/>(GET /health)"]
 ```
 
 Read the diagram from top to bottom.
 The public path ends at the ALB.
-The private path begins when the ALB forwards to task IPs.
+The private path begins when the ALB forwards to task IPs on the target port.
 The health check is drawn as a dotted line because it is not a customer request, but it controls whether customer requests are sent.
 
 This split is why load balancers are so useful during deployments.

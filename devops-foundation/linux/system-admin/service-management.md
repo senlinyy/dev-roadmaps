@@ -181,14 +181,14 @@ There are a handful you will see constantly. `multi-user.target` means "fully bo
 
 ```mermaid
 flowchart TD
-    BOOT[systemd PID 1 starts] --> BASIC[basic.target\nfilesystems, swap, sockets]
+    BOOT[systemd PID 1 starts] --> BASIC[Core boot dependencies<br/>(basic.target)]
     BASIC --> NET[network.target]
-    NET --> NETONLINE[network-online.target\nDNS + route ready]
+    NET --> NETONLINE[DNS and route are ready<br/>(network-online.target)]
     NETONLINE --> PG[postgresql.service]
     NETONLINE --> NGINX[nginx.service]
-    PG --> APP[myapp.service\nWants=postgresql\nAfter=postgresql]
+    PG --> APP[App waits for Postgres<br/>(myapp.service)]
     NGINX --> APP
-    APP --> MULTI[multi-user.target\nsystem fully up]
+    APP --> MULTI[System fully up<br/>(multi-user.target)]
 ```
 
 To see what a unit actually depends on once systemd has resolved everything:

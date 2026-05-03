@@ -94,13 +94,13 @@ Here is the first mental map:
 
 ```mermaid
 graph TD
-    REPO["Repo<br/>safe code and examples"] --> IMAGE["Container image<br/>no production secrets"]
-    IMAGE --> ECS["ECS task<br/>starts the app"]
-    SM["Secrets Manager<br/>DATABASE_URL"] -.-> ECS
-    SSM["Parameter Store<br/>STRIPE_WEBHOOK_SECRET"] -.-> ECS
-    KMS["KMS key<br/>encrypts stored values"] -.-> SM
+    REPO["Safe code and examples<br/>(repo)"] --> IMAGE["Code without secrets<br/>(container image)"]
+    IMAGE --> ECS["Running app<br/>(ECS task)"]
+    SM["Database URL secret<br/>(Secrets Manager)"] -.-> ECS
+    SSM["Webhook secret<br/>(Parameter Store)"] -.-> ECS
+    KMS["Stored value encryption<br/>(KMS key)"] -.-> SM
     KMS -.-> SSM
-    IAM["IAM permissions<br/>who may read"] -.-> ECS
+    IAM["Who may read<br/>(IAM permissions)"] -.-> ECS
 ```
 
 Read the solid line as the deployment path.

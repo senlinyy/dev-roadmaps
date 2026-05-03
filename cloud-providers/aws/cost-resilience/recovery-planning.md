@@ -69,12 +69,12 @@ The application shape looks like this:
 ```mermaid
 flowchart TD
     User["Customer request"]
-    DNS["DNS and ALB"]
-    ECS["ECS service"]
-    RDS["RDS orders"]
-    S3["S3 receipts"]
-    DDB["DynamoDB state"]
-    Logs["CloudWatch logs"]
+    DNS["Traffic entry<br/>(DNS and ALB)"]
+    ECS["Orders service<br/>(ECS service)"]
+    RDS["Order records<br/>(RDS database)"]
+    S3["Receipt files<br/>(S3 objects)"]
+    DDB["Checkout state<br/>(DynamoDB table)"]
+    Logs["Runtime logs<br/>(CloudWatch Logs)"]
 
     User --> DNS
     DNS --> ECS

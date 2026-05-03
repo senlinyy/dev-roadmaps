@@ -88,31 +88,24 @@ Those words are easy to blur together when you are new.
 The portal often shows them near each other, and a CLI command may mention several of them in one output.
 
 Read this diagram from top to bottom.
-It shows where the orders API belongs.
+It shows the production path for the orders API.
 The side note is a rule layer, not another place where the app runs.
 
 ```mermaid
 flowchart TD
     TENANT["Identity home<br/>(Microsoft Entra tenant)"]
     MGMT["Optional grouping layer<br/>(management group)"]
-    SUBPROD["Billing and policy boundary<br/>(production subscription)"]
-    SUBSTAGE["Billing and policy boundary<br/>(staging subscription)"]
-    RGPROD["Lifecycle container<br/>(rg-devpolaris-orders-prod)"]
-    RGSTAGE["Lifecycle container<br/>(rg-devpolaris-orders-staging)"]
-    RESPROD["Azure resources<br/>(app service, database, storage, logs)"]
-    RESSTAGE["Azure resources<br/>(app service, database, storage, logs)"]
+    SUBPROD["Production operating boundary<br/>(production subscription)"]
+    RGPROD["App lifecycle container<br/>(rg-devpolaris-orders-prod)"]
+    RESPROD["Azure resources<br/>(app, database, storage, logs)"]
     RULES["Access and guardrails<br/>(RBAC, policy, locks, tags)"]
 
     TENANT --> MGMT
     MGMT --> SUBPROD
-    MGMT --> SUBSTAGE
     SUBPROD --> RGPROD
-    SUBSTAGE --> RGSTAGE
     RGPROD --> RESPROD
-    RGSTAGE --> RESSTAGE
-    RULES -.-> MGMT
-    RULES -.-> SUBPROD
-    RULES -.-> RGPROD
+    RULES -. "can apply above many apps" .-> MGMT
+    RULES -. "can apply to this app group" .-> RGPROD
 ```
 
 The main path is the location and ownership path.
@@ -120,6 +113,7 @@ The tenant contains the identities that can sign in.
 A management group can collect subscriptions for shared governance.
 A subscription contains resource groups.
 A resource group contains resources.
+Staging follows the same shape, usually with its own subscription and resource group, but drawing both paths repeats the same idea.
 
 The dotted rule box is different.
 RBAC (role-based access control, the permission system that answers who can do what) and Azure Policy (rules that allow, deny, or audit resource configuration) do not hold your app.

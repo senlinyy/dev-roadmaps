@@ -474,12 +474,12 @@ This pulls the ninth field (the HTTP status code in common log format), counts o
 
 ```mermaid
 graph TD
-    A["Raw\nLog File"] --> B["grep\nFilter Lines"]
-    B --> C["awk\nExtract Fields"]
-    C --> D["sort\nOrder Lines"]
-    D --> E["uniq -c\nCount Duplicates"]
-    E --> F["sort -rn\nRank by Count"]
-    F --> G["head -n 10\nTop Results"]
+    A["Raw\nLog File"] --> B["Filter lines<br/>(grep)"]
+    B --> C["Extract fields<br/>(awk)"]
+    C --> D["Order lines<br/>(sort)"]
+    D --> E["Count duplicates<br/>(uniq -c)"]
+    E --> F["Rank by count<br/>(sort -rn)"]
+    F --> G["Top results<br/>(head -n 10)"]
 ```
 
 This pattern of filter, extract, sort, count, and rank appears over and over in real-world text processing. The specific tools in the middle may change, but the shape of the pipeline stays the same.

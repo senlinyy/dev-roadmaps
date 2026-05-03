@@ -108,7 +108,7 @@ It is not just the identity.
 It is the record that says:
 this identity gets this role at this scope.
 
-Read this diagram from top to bottom.
+First, keep the role assignment itself small in your head.
 The plain-English labels come first.
 The Azure terms are in parentheses because the mental model matters before the vocabulary.
 
@@ -116,37 +116,40 @@ The Azure terms are in parentheses because the mental model matters before the v
 flowchart TD
     REQUEST["Someone tries to act<br/>(Azure request)"]
     WHO["Who is asking?<br/>(principal)"]
-    WHAT["What permission bundle?<br/>(role definition)"]
-    WHERE["Where does it apply?<br/>(scope)"]
+    ROLE["What permission bundle?<br/>(role definition)"]
+    SCOPE["Where it applies?<br/>(scope)"]
     ASSIGN["Access binding<br/>(role assignment)"]
-    MG["Many subscriptions<br/>(management group scope)"]
-    SUB["One operating boundary<br/>(subscription scope)"]
-    RG["One app environment<br/>(resource group scope)"]
-    RES["One Azure object<br/>(resource scope)"]
     DECISION["Allow or deny<br/>(authorization result)"]
 
     REQUEST --> WHO
     WHO --> ASSIGN
-    WHAT --> ASSIGN
-    WHERE --> ASSIGN
+    ROLE --> ASSIGN
+    SCOPE --> ASSIGN
     ASSIGN --> DECISION
+```
+
+The role assignment is the join between identity, role, and scope.
+Azure identifies the principal, looks for role assignments, evaluates the role definition, and checks whether the requested resource sits inside the assignment scope.
+
+The scope hierarchy is a separate idea:
+
+```mermaid
+flowchart TD
+    MG["Many subscriptions<br/>(management group scope)"]
+    SUB["One operating boundary<br/>(subscription scope)"]
+    RG["One app environment<br/>(resource group scope)"]
+    RES["One Azure object<br/>(resource scope)"]
+
     MG --> SUB
     SUB --> RG
     RG --> RES
-    WHERE -. "can be any one of these levels" .-> MG
-    WHERE -. "inherits downward" .-> SUB
-    WHERE -. "inherits downward" .-> RG
-    WHERE -. "inherits downward" .-> RES
 ```
 
-The left side is the permission check.
-Azure identifies the principal, looks for role assignments, evaluates the role definition, and checks whether the requested resource sits inside the assignment scope.
-
-The right side is the scope hierarchy.
 A management group can contain subscriptions.
 A subscription can contain resource groups.
 A resource group can contain resources.
 If a role is assigned above the resource, the resource can inherit it.
+That inheritance rule is easier to explain in prose than as four repeated arrows.
 
 That means access is not always visible where you first look.
 When someone can edit `ca-devpolaris-orders-api-prod`, the reason may be a role assignment directly on the Container App.

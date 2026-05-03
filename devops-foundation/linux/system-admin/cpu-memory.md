@@ -184,12 +184,9 @@ graph TD
     RAM --> KERNEL["Kernel Reserved"]
     RAM --> CACHE["Reclaimable Caches"]
     RAM --> FREE["Truly Free Pages"]
-    USER --> ANON["Anonymous Pages\nheap, stack, mmap"]
-    USER --> SHM["Shared Memory\ntmpfs, IPC, /dev/shm"]
-    CACHE --> PAGE["Page Cache\nfile contents"]
-    CACHE --> BUF["Buffer Cache\nblock device metadata"]
-    CACHE --> SLAB["Slab Cache\nkernel objects"]
-    CACHE -.->|"reclaimed on demand"| AVAIL["MemAvailable"]
+    CACHE --> PAGE["Cached file contents<br/>(page cache)"]
+    CACHE --> SLAB["Kernel object cache<br/>(slab cache)"]
+    CACHE -.-> AVAIL["Memory the kernel can give back<br/>(MemAvailable)"]
     FREE -.-> AVAIL
 ```
 

@@ -101,9 +101,6 @@ flowchart TD
     APPDEF["Application identity setup<br/>(app registration)"]
     LOCALAPP["Workload identity in this tenant<br/>(service principal)"]
     PIPELINE["Automation that deploys<br/>(CI/CD pipeline)"]
-    SCOPE["Where access applies<br/>(resource group scope)"]
-    ROLE["Allowed actions<br/>(Azure RBAC role)"]
-    APP["Running orders service<br/>(Azure resource)"]
 
     HOME --> USER
     HOME --> GROUP
@@ -111,17 +108,12 @@ flowchart TD
     APPDEF --> LOCALAPP
     USER --> GROUP
     PIPELINE --> LOCALAPP
-    GROUP -. "can receive a role assignment" .-> SCOPE
-    LOCALAPP -. "can receive a role assignment" .-> SCOPE
-    ROLE -. "is joined with identity and scope" .-> SCOPE
-    SCOPE --> APP
 ```
 
 The solid lines show where identity objects live or how the app identity is represented.
-The dotted lines are permission relationships.
-A group does not contain the resource group.
-A service principal does not contain the Container App.
-They can be granted access to a scope through Azure RBAC.
+Permission relationships are intentionally not drawn here.
+A group or service principal can receive an Azure RBAC role assignment at a scope, but that is a permission binding, not containment.
+A group does not contain the resource group, and a service principal does not contain the Container App.
 
 For `devpolaris-orders-api`, the human maintainers might be in a group called `grp-orders-api-deployers`.
 The pipeline might authenticate as a service principal called `sp-devpolaris-orders-ci`.

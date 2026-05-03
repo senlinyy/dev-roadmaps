@@ -95,7 +95,6 @@ If a word does not help the path, we will keep it light.
 
 Here is the beginner map.
 Read the solid arrows as customer traffic.
-Read the dotted arrows as rules, checks, or supporting calls.
 
 ```mermaid
 flowchart TD
@@ -104,22 +103,18 @@ flowchart TD
     ENTRY --> TARGETS["Healthy backend list<br/>(target group)"]
     TARGETS --> TASKS["Running Node.js backend<br/>(ECS tasks on Fargate)"]
     TASKS --> DATABASE["Private order records<br/>(RDS database)"]
-
-    CERT["Certificate for the name<br/>(TLS certificate)"] -.-> ENTRY
-    PORTS["Who can reach each port<br/>(security groups)"] -.-> ENTRY
-    PORTS -.-> TASKS
-    PORTS -.-> DATABASE
-    ROUTES["Which next hop to use<br/>(route tables)"] -.-> ENTRY
-    ROUTES -.-> TASKS
-    TASKS -.-> SECRETS["Private config values<br/>(Secrets Manager)"]
-    TASKS -.-> FILES["Export files<br/>(S3)"]
-    TASKS -.-> LOGS["Runtime evidence<br/>(CloudWatch Logs)"]
-    IAM["AWS API permission check<br/>(IAM role)"] -.-> SECRETS
-    IAM -.-> FILES
-    IAM -.-> LOGS
 ```
 
-This diagram intentionally keeps IAM off the main customer traffic path.
+Now put the side checks back in your head, but do not treat them as extra hops in the customer request:
+
+| Supporting Check | What It Proves |
+|------------------|----------------|
+| TLS certificate | The HTTPS listener can prove it owns `orders.devpolaris.com`. |
+| Security groups | The ALB, task, and database ports allow the right source. |
+| Route tables | Each subnet has the next hop it needs. |
+| IAM task role | The ECS task can call AWS APIs like Secrets Manager, S3, and CloudWatch Logs. |
+
+This table intentionally keeps IAM off the main customer traffic path.
 IAM matters, but it answers a different question.
 It decides whether the ECS task role can call AWS APIs like `secretsmanager:GetSecretValue`, `s3:PutObject`, or `logs:PutLogEvents`.
 It does not automatically make a database port reachable.

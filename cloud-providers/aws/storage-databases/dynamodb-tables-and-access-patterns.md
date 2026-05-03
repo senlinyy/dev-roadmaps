@@ -44,11 +44,11 @@ Here is the shape:
 ```mermaid
 flowchart TD
     REQUEST["Checkout request"]
-    API["devpolaris-orders-api<br/>(Node.js)"]
-    IDEMPOTENCY["DynamoDB<br/>Idempotency key"]
-    JOB["DynamoDB<br/>Checkout job status"]
-    SESSION["DynamoDB<br/>Cart/session state"]
-    RDS["RDS<br/>Final order records"]
+    API["Orders API<br/>(devpolaris-orders-api)"]
+    IDEMPOTENCY["Idempotency keys<br/>(DynamoDB items)"]
+    JOB["Checkout job status<br/>(DynamoDB items)"]
+    SESSION["Cart/session state<br/>(DynamoDB items)"]
+    RDS["Final order records<br/>(RDS database)"]
 
     REQUEST --> API
     API --> IDEMPOTENCY

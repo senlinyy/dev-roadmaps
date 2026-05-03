@@ -186,16 +186,12 @@ The "masking" you saw in the Phase 2 log is the work of a small log filter that 
 
 ```mermaid
 flowchart TD
-    A[Pipeline reaches withCredentials] --> B[Controller decrypts credential]
-    B --> C[Plugin registers secret strings<br/>with the build's log filter]
-    C --> D[Step runs; stdout/stderr stream<br/>through the filter]
-    D --> E{Output contains<br/>a registered secret?}
-    E -->|Yes| F[Replace with ****]
-    E -->|No| G[Pass through unchanged]
-    F --> H[Write to build log]
-    G --> H
-    H --> I[Step finishes]
-    I --> J[Plugin removes binding;<br/>env var disappears]
+    A["Pipeline reaches<br/>withCredentials"] --> B["Controller decrypts credential"]
+    B --> C["Plugin registers secret<br/>with the log filter"]
+    C --> D["Step output streams<br/>through the filter"]
+    D --> E["Matching secret text<br/>becomes ****"]
+    E --> F["Filtered output reaches<br/>the build log"]
+    F --> G["Binding is removed<br/>after the step"]
 ```
 
 The filter does **substring matching** on the registered secret string. That is enough to handle the common case (a tool that accidentally echoes `$AWS_SECRET_ACCESS_KEY`) but it has four well-known failure modes that you need to internalize.

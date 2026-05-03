@@ -110,13 +110,13 @@ For `devpolaris-orders-api`, the important AWS objects look like this:
 
 ```mermaid
 flowchart TD
-    App["ECS task<br/>devpolaris-orders-api"]
-    Secret["Secret<br/>orders/prod/postgres"]
-    SGApp["Security group<br/>orders-api-sg"]
-    SGRds["Security group<br/>orders-rds-sg"]
-    Subnets["Private database subnets<br/>DB subnet group"]
-    RDS["RDS PostgreSQL<br/>orders-prod"]
-    Endpoint["RDS endpoint<br/>orders-prod.xxxxxx.us-east-1.rds.amazonaws.com"]
+    App["Orders API<br/>(ECS task)"]
+    Secret["Database credentials<br/>(Secrets Manager secret)"]
+    SGApp["API network rules<br/>(orders-api-sg security group)"]
+    SGRds["Database network rules<br/>(orders-rds-sg security group)"]
+    Subnets["Private database subnets<br/>(DB subnet group)"]
+    RDS["Orders database<br/>(RDS PostgreSQL)"]
+    Endpoint["Database hostname<br/>(RDS endpoint)"]
 
     App --> Secret
     App --> SGApp

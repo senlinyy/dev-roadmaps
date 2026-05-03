@@ -90,13 +90,13 @@ The rollout path looks like this:
 
 ```mermaid
 graph TD
-    START["4 healthy tasks\non orders-api:41"] --> REGISTER["Register orders-api:42"]
+    START["Healthy old runtime<br/>(4 tasks on orders-api:41)"] --> REGISTER["Register orders-api:42"]
     REGISTER --> UPDATE["Update ECS service"]
     UPDATE --> NEWTASK["Start new tasks"]
-    NEWTASK --> HEALTH["ALB target health\nturns healthy"]
+    NEWTASK --> HEALTH["Backend health check<br/>(ALB target health)"]
     HEALTH --> DRAIN["Old tasks drain"]
     DRAIN --> WATCH["Watch errors\nand latency"]
-    WATCH --> FULL["Service steady state\non orders-api:42"]
+    WATCH --> FULL["Stable new runtime<br/>(orders-api:42)"]
     WATCH --> STOP
 ```
 

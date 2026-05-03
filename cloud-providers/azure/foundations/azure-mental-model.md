@@ -142,30 +142,24 @@ graph TD
     SUB["Operating boundary<br/>(subscription)"]
     RG["App folder<br/>(resource group)"]
     REGION["Where it runs<br/>(region)"]
-    APP["Running service<br/>(Container Apps resource)"]
-    DB["Order data<br/>(database resource)"]
-    LOGS["Signals<br/>(log workspace resource)"]
+    RESOURCES["App, data, and signals<br/>(Azure resources)"]
     ARM["Request front door<br/>(Azure Resource Manager)"]
     IDENTITY["Access rule check<br/>(identity and RBAC)"]
 
     TEAM --> SUB
     SUB --> RG
     RG --> REGION
-    REGION --> APP
-    REGION --> DB
-    REGION --> LOGS
-    ARM -. "creates, updates, deletes" .-> RG
-    IDENTITY -. "allows or blocks actions" .-> APP
-    IDENTITY -. "allows or blocks actions" .-> DB
-    IDENTITY -. "allows or blocks actions" .-> LOGS
+    REGION --> RESOURCES
+    ARM -. "receives changes" .-> RG
+    IDENTITY -. "allows or blocks actions" .-> RESOURCES
 ```
 
 Read the solid path from top to bottom.
-The service lives inside a team workspace, then inside an operating boundary, then inside an app folder, then in a real Azure region.
+The service lives inside a team workspace, then inside an operating boundary, then inside an app folder, then in a real Azure region with managed resources.
 The dotted arrows are not places.
 They are checks and rules.
-Azure Resource Manager receives change requests.
-Identity decides whether a person, pipeline, or app is allowed to do the requested action.
+Azure Resource Manager receives change requests for the resource group.
+Identity decides whether a person, pipeline, or app is allowed to act on those resources.
 
 This distinction matters.
 Many beginner mistakes happen because people mix up place and permission.

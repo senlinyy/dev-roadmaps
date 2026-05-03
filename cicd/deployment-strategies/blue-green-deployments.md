@@ -91,9 +91,9 @@ The traffic switch looks like this:
 
 ```mermaid
 graph TD
-    USERS["Users"] --> ALB["Application Load Balancer\nproduction listener"]
-    ALB --> BLUE["Blue target group\norders-api:41\n100% traffic"]
-    GREEN["Green target group\norders-api:42\n0% traffic"] --> TEST["ALB test listener"]
+    USERS["Users"] --> ALB["Production listener<br/>(Application Load Balancer)"]
+    ALB --> BLUE["Live backend pool<br/>(blue target group orders-api:41)\n100% traffic"]
+    GREEN["Prepared backend pool<br/>(green target group orders-api:42)\n0% traffic"] --> TEST["ALB test listener"]
     TEST --> CHECK["Readiness and\nsmoke tests"]
     CHECK --> SWITCH["Move 100% traffic\nto green"]
     SWITCH --> LIVE["Green serves users"]

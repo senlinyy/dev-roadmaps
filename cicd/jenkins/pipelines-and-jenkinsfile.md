@@ -77,21 +77,13 @@ The controller-side flow looks like this. The pipeline's `agent` block reserves 
 
 ```mermaid
 flowchart TD
-    A[Webhook from GitHub] --> B[Controller queues build]
-    B --> C[Agent with label linux-docker picks up]
-    C --> D[Checkout]
-    D --> E[Lint]
-    E --> F[Test parallel]
-    F --> F1[unit tests]
-    F --> F2[integration tests]
-    F1 --> G[Build Image]
-    F2 --> G
-    G --> H[Push to ECR]
-    H --> I{branch == main?}
-    I -->|yes| J[Deploy to staging]
-    I -->|no| K[Skip deploy]
-    J --> L[post: junit, slack, cleanWs]
-    K --> L
+    A["Webhook from GitHub"] --> B["Controller queues build"]
+    B --> C["Agent with linux-docker label"]
+    C --> D["Checkout and lint"]
+    D --> E["Run test suites"]
+    E --> F["Build and push image"]
+    F --> G["Deploy only from main"]
+    G --> H["Post actions<br/>(JUnit, Slack, cleanup)"]
 ```
 
 That diagram is what the team is aiming for. The current Jenkinsfile is one box where every step is fused. The next two sections walk through breaking it apart.

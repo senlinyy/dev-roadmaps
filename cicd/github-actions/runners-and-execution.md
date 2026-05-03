@@ -39,19 +39,14 @@ In the GitHub Actions ecosystem, the machine that executes your code is called a
 A runner is simply a server (usually a Virtual Machine) that has a specific piece of software installed on it: the GitHub Actions Runner application. This application is a lightweight agent. Its only job is to open a long-lived outbound connection to GitHub's API, wait for a job to be assigned to it, execute the steps in that job one by one, and stream the logs back to the GitHub UI.
 
 ```mermaid
-%%{init: {"themeVariables": {"clusterBkg": "transparent"}}}%%
 graph TD
-    A[GitHub Event: pull_request] --> B[Workflow Queued]
-    B --> C{GitHub Dispatcher}
-    C -->|Assigns Job| D[Runner Application]
-    
-    subgraph VM [Virtual Machine]
-        D --> E[Step 1: Checkout Code]
-        E --> F[Step 2: npm install]
-        F --> G[Step 3: npm test]
-    end
-    
-    G -->|Streams Logs| H[GitHub Web UI]
+    A["Repository event<br/>(pull_request)"] --> B["Workflow run queued"]
+    B --> C["GitHub assigns job"]
+    C --> D["Runner application<br/>(on a virtual machine)"]
+    D --> E["Checkout code"]
+    E --> F["Install dependencies"]
+    F --> G["Run tests"]
+    G --> H["Logs stream back<br/>(GitHub UI)"]
 ```
 
 When you define a job in your YAML file, you must explicitly tell GitHub what kind of runner you need. This is the single most important decision you make when configuring a job, because it dictates the entire environment your code will run in.

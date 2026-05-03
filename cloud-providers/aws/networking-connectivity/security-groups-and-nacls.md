@@ -62,17 +62,17 @@ That path has three main network hops:
 
 ```mermaid
 flowchart TD
-    INTERNET["Internet clients<br/>customers and browsers"]
-    ALB["Public front door<br/>ALB security group"]
-    TASK["Private app task<br/>ECS task security group"]
-    DB["Private database<br/>RDS security group"]
+    INTERNET["Internet clients<br/>(customers and browsers)"]
+    ALB["Public front door<br/>(ALB security group)"]
+    TASK["Private app task<br/>(ECS task security group)"]
+    DB["Private database<br/>(RDS security group)"]
 
     INTERNET -->|"HTTPS 443"| ALB
     ALB -->|"HTTP 3000"| TASK
     TASK -->|"Postgres 5432"| DB
 
-    IAM["IAM task role<br/>AWS API permissions"]
-    SECRET["Secrets Manager<br/>database URL"]
+    IAM["AWS API permission check<br/>(IAM task role)"]
+    SECRET["Private database URL<br/>(Secrets Manager)"]
     IAM -.->|"allows GetSecretValue"| SECRET
     TASK -.->|"uses secret value"| SECRET
 ```

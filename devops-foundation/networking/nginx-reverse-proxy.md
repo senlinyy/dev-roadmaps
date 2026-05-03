@@ -35,11 +35,11 @@ Here is what a reverse proxy gives you in concrete terms:
 - **Rate limiting and request buffering**: Nginx can reject abusive traffic before it reaches your app.
 
 ```mermaid
-flowchart LR
-    Client["Client\n(Browser)"]
-    Nginx["Nginx\n(Reverse Proxy)"]
-    App1["App Server\n:3000"]
-    Static["Static Files\n/var/www"]
+flowchart TD
+    Client["Browser<br/>(client)"]
+    Nginx["Reverse proxy<br/>(Nginx)"]
+    App1["App server<br/>(:3000)"]
+    Static["Static files<br/>(/var/www)"]
 
     Client -->|"HTTPS :443"| Nginx
     Nginx -->|"HTTP :3000"| App1
@@ -458,7 +458,7 @@ This configuration says: if a backend fails 3 times within 30 seconds, stop send
 ```mermaid
 flowchart TD
     Client["Client"]
-    Nginx["Nginx\nLoad Balancer"]
+    Nginx["Load balancer<br/>(Nginx)"]
     A["App :3001"]
     B["App :3002"]
     C["App :3003"]

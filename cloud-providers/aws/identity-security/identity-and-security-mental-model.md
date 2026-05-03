@@ -94,19 +94,12 @@ Read the dotted lines as checks or records around that path.
 flowchart TD
     USER["Customer request"] --> LB["Public front door<br/>(load balancer)"]
     LB --> TASK["Running backend<br/>(ECS Fargate task)"]
-    TASK --> DB["Order records<br/>(RDS database)"]
-    TASK --> FILES["Export files<br/>(S3 bucket)"]
-    TASK --> LOGS["Runtime logs<br/>(CloudWatch Logs)"]
+    TASK --> DATA["Protected data<br/>(RDS database and S3 bucket)"]
+    TASK --> RECORDS["Runtime and change records<br/>(CloudWatch Logs and CloudTrail)"]
 
-    PRINCIPAL["Who is asking<br/>(principal)"] -.-> TASK
-    PERMISSION["What can they do<br/>(IAM policy)"] -.-> TASK
-    RESOURCE["Resource's own rule<br/>(bucket or key policy)"] -.-> FILES
-    NETWORK["Can packets reach<br/>(security groups)"] -.-> DB
-    SECRETS["Private values<br/>(Secrets Manager)"] -.-> TASK
-    ENCRYPTION["Readable data guard<br/>(KMS encryption)"] -.-> DB
-    ENCRYPTION -.-> FILES
-    AUDIT["Who changed what<br/>(CloudTrail)"] -.-> PERMISSION
-    AUDIT -.-> NETWORK
+    ACCESS["Who can use AWS APIs<br/>(principal and IAM policy)"] -.-> TASK
+    NETWORK["Can packets reach data<br/>(security groups)"] -.-> DATA
+    SECRETS["Private runtime values<br/>(Secrets Manager and KMS)"] -.-> TASK
 ```
 
 This diagram avoids one common mistake.

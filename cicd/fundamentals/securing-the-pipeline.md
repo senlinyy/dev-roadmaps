@@ -34,25 +34,16 @@ In this article, we will look at how modern pipelines act as an automated securi
 
 ## The Shift-Left Mental Model
 
-Imagine a timeline of software development drawn from left to right. On the far left, a developer is typing code on their laptop. In the middle, the CI/CD pipeline runs. On the far right, the code is running in production.
+Imagine a timeline of software development. At the start, a developer is typing code on their laptop. In the middle, the CI/CD pipeline runs. At the end, the code is running in production.
 
 For decades, security lived exclusively on the far right. The primary goal of DevSecOps (Development, Security, and Operations) is to "Shift Left", moving security checks as far left on that timeline as possible.
 
 ```mermaid
-%%{init: {"themeVariables": {"clusterBkg": "transparent"}}}%%
 graph TD
-    subgraph traditional ["Traditional Model (Shift Right)"]
-        A1[Write Code] --> B1[Deploy to Staging]
-        B1 --> C1[Manual Security Audit]
-        C1 -->|Finds Bug| D1[Delay Release & Rewrite]
-    end
-    
-    subgraph modern ["DevSecOps Model (Shift Left)"]
-        A2[Write Code] --> B2[CI Pipeline Runs]
-        B2 --> C2{Automated Security Scan}
-        C2 -->|Fails| D2[Developer Fixes Immediately]
-        C2 -->|Passes| E2[Deploy to Production]
-    end
+    A["Developer writes code"] --> B["Pipeline runs security checks"]
+    B --> C{"Checks pass?"}
+    C -- "No" --> D["Developer fixes before merge"]
+    C -- "Yes" --> E["Change can continue"]
 ```
 
 The earlier you catch a security flaw, the cheaper it is to fix. 

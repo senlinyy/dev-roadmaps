@@ -185,19 +185,15 @@ Here is the decision path as a compact flow:
 
 ```mermaid
 flowchart TD
-    A["Describe the work"] --> B{"Must stay alive<br/>and listen?"}
-    B -->|Yes| C{"Container image<br/>is the package?"}
-    B -->|No| D{"Runs because<br/>an event arrived?"}
-    C -->|Yes| E{"Needs host OS<br/>control?"}
-    C -->|No| F{"Needs normal VM<br/>deployment model?"}
-    E -->|No| G["Choose ECS service<br/>on Fargate"]
-    E -->|Yes| H["Choose EC2<br/>for that component"]
-    F -->|Yes| H
-    F -->|No| I["Revisit packaging<br/>and deployment"]
-    D -->|Yes| J{"Can finish inside<br/>function limits?"}
-    D -->|No| L["Treat it like a service<br/>and revisit packaging"]
-    J -->|Yes| K["Choose Lambda"]
-    J -->|No| M["Use ECS or EC2<br/>for longer-running work"]
+    B{"Must stay alive<br/>and listen?"}
+    B -->|Yes| C{"Needs host OS<br/>control?"}
+    C -->|Yes| EC2["Choose server control<br/>(EC2 instance)"]
+    C -->|No| D{"Container image<br/>is the package?"}
+    D -->|Yes| ECS["Choose managed containers<br/>(ECS service on Fargate)"]
+    D -->|No| EC2
+    B -->|No| E{"Event-driven<br/>and short?"}
+    E -->|Yes| LAMBDA["Choose event function<br/>(Lambda function)"]
+    E -->|No| MIXED["Use long-running compute<br/>(ECS service or EC2 instance)"]
 ```
 
 Read the diagram as a practical guide, not a law.

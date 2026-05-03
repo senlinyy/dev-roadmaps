@@ -95,21 +95,14 @@ The `/tmp` directory is scratch space for temporary files. On most modern distri
 
 ```mermaid
 graph TD
-    ROOT["/\nRoot directory"]
-    ROOT --> BIN["/bin\nEssential\nbinaries"]
-    ROOT --> ETC["/etc\nSystem\nconfiguration"]
-    ROOT --> HOME["/home\nUser home\ndirectories"]
-    ROOT --> USR["/usr\nPrograms\n& libraries"]
-    ROOT --> VAR["/var\nVariable data\nlogs, cache"]
-    ROOT --> TMP["/tmp\nTemporary\nfiles"]
-    USR --> USRBIN["/usr/bin\nUser binaries"]
-    USR --> USRLIB["/usr/lib\nShared libraries"]
-    USR --> USRLOCAL["/usr/local\nLocally compiled"]
-    VAR --> VARLOG["/var/log\nSystem logs"]
-    VAR --> VARTMP["/var/tmp\nPersistent temp"]
-    ROOT -.-> PROC["/proc\nVirtual: live\nprocess info"]
-    ROOT -.-> DEV["/dev\nVirtual:\ndevice files"]
-    ROOT -.-> SYS["/sys\nVirtual:\nhardware info"]
+    ROOT["Root directory<br/>(/)"]
+    ROOT --> BIN["Essential binaries<br/>(/bin)"]
+    ROOT --> ETC["System configuration<br/>(/etc)"]
+    ROOT --> HOME["User home directories<br/>(/home)"]
+    ROOT --> USR["Programs and libraries<br/>(/usr)"]
+    ROOT --> VAR["Variable data for logs and cache<br/>(/var)"]
+    ROOT --> TMP["Temporary files<br/>(/tmp)"]
+    ROOT -.-> VIRTUAL["Live kernel views<br/>(/proc, /dev, /sys)"]
 ```
 
 The solid lines in the diagram above represent real directories backed by storage on disk. The dotted lines represent virtual filesystems, which look like ordinary directories but are generated on the fly by the kernel. These are some of the most interesting parts of the Linux filesystem.

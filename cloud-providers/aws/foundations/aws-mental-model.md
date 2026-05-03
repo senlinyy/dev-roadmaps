@@ -420,12 +420,12 @@ For `devpolaris-orders-api`, a basic production shape might be:
 
 ```mermaid
 graph TD
-    USER["User browser"] --> DNS["Route 53 DNS name"]
-    DNS --> ALB["Application Load Balancer"]
-    ALB --> ECS["ECS service\norders-api-prod"]
-    ECS --> RDS["RDS database\norders-prod"]
-    ECS --> S3["S3 bucket\norder exports"]
-    ECS --> CW["CloudWatch\nlogs and metrics"]
+    USER["User browser"] --> DNS["Public service name<br/>(Route 53 DNS)"]
+    DNS --> ALB["Public traffic entry<br/>(Application Load Balancer)"]
+    ALB --> ECS["Running backend<br/>(ECS service orders-api-prod)"]
+    ECS --> RDS["Order records<br/>(RDS database orders-prod)"]
+    ECS --> S3["Order exports<br/>(S3 bucket)"]
+    ECS --> CW["Logs and metrics<br/>(CloudWatch)"]
     IAM["IAM roles"] --> ECS
 ```
 

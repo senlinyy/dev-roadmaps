@@ -182,21 +182,11 @@ One of the most complex challenges in Continuous Integration is handling state. 
 A junior mistake is pointing the CI pipeline to a persistent "staging" database that the whole team shares. This causes a disaster. If two developers open Pull Requests at the same time, the CI server will run two testing pipelines in parallel. Both pipelines will connect to the same staging database, insert conflicting test data, and cause both test suites to fail randomly.
 
 ```mermaid
-%%{init: {"themeVariables": {"clusterBkg": "transparent"}}}%%
 graph TD
-    subgraph bad ["Bad Approach: Shared Database"]
-        A1["PR 1 Tests"] --> C1[("Shared<br>Staging DB")]
-        B1["PR 2 Tests"] --> C1
-        C1 -.-|"Data<br>Conflicts"| A1
-    end
-    
-    subgraph good ["Good Approach: Ephemeral Databases"]
-        A2["PR 1 Tests"] --> C2[("Ephemeral<br>DB Container")]
-        B2["PR 2 Tests"] --> C3[("Ephemeral<br>DB Container")]
-    end
-    
-    style bad fill:#fca5a5,stroke:#000000,stroke-width:2px,color:#000000
-    style good fill:#bbf7d0,stroke:#000000,stroke-width:2px,color:#000000
+    A["PR 1 test run"] --> B[("Fresh database<br/>(ephemeral container)")]
+    C["PR 2 test run"] --> D[("Fresh database<br/>(ephemeral container)")]
+    B --> E["No shared test data"]
+    D --> E
 ```
 
 The solution is an **Ephemeral Database**. Because the CI runner is an isolated Virtual Machine, you can instruct it to spin up a completely fresh, empty database as a Docker container strictly for the duration of the test run. 

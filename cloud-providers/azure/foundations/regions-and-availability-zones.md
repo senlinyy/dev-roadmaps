@@ -169,32 +169,22 @@ Plain labels come first, and the Azure term follows in parentheses.
 flowchart TD
     USERS["Customers<br/>(users)"]
     REGION["Chosen Azure place<br/>(region: eastus2)"]
-    Z1["Local failure area 1<br/>(availability zone 1)"]
-    Z2["Local failure area 2<br/>(availability zone 2)"]
-    Z3["Local failure area 3<br/>(availability zone 3)"]
-    APP1["API copy<br/>(Container Apps or App Service instance)"]
-    APP2["API copy<br/>(Container Apps or App Service instance)"]
-    APP3["API copy<br/>(Container Apps or App Service instance)"]
-    SQL["Order database<br/>(Azure SQL)"]
-    BLOB["Receipt files<br/>(Blob Storage)"]
+    ZONES["Separated local failure areas<br/>(availability zones)"]
+    APP["App copies across zones<br/>(Container Apps or App Service instances)"]
+    DATA["Data that must survive<br/>(Azure SQL or Blob Storage)"]
     MON["Logs and metrics<br/>(Azure Monitor)"]
     SECONDARY["Recovery place<br/>(secondary region candidate)"]
 
     USERS --> REGION
-    REGION --> Z1
-    REGION --> Z2
-    REGION --> Z3
-    Z1 --> APP1
-    Z2 --> APP2
-    Z3 --> APP3
-    REGION --> SQL
-    REGION --> BLOB
+    REGION --> ZONES
+    ZONES --> APP
+    REGION --> DATA
     REGION --> MON
     REGION -.-> SECONDARY
 ```
 
-The app copies sit under zones because you usually care where compute runs.
-The database, storage, and monitoring boxes are attached to the region because their exact zone behavior depends on the service, tier, and configuration.
+The zone box groups the app copies because you usually care whether compute can keep serving after one local failure area has trouble.
+The data and monitoring boxes stay attached to the region because their exact zone behavior depends on the service, tier, and configuration.
 Some services let you choose zones.
 Some services distribute across zones for you.
 Some services are regional or nonzonal.

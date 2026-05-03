@@ -235,13 +235,13 @@ The right side is mostly evidence and recovery.
 
 ```mermaid
 flowchart TD
-    USERS["Customers<br/>place orders"] --> ALB["ALB<br/>traffic entry"]
-    ALB --> ECS["ECS Fargate<br/>orders tasks"]
-    ECS --> RDS["RDS<br/>orders database"]
-    ECS --> S3["S3<br/>receipts and exports"]
-    ECS --> LOGS["CloudWatch Logs<br/>runtime evidence"]
-    RDS --> BACKUPS["Backups<br/>restore points"]
-    S3 --> VERSIONS["S3 versions<br/>object recovery"]
+    USERS["Customers<br/>place orders"] --> ALB["Traffic entry<br/>(ALB)"]
+    ALB --> ECS["Orders tasks<br/>(ECS Fargate)"]
+    ECS --> RDS["Order records<br/>(RDS database)"]
+    ECS --> S3["Receipt and export files<br/>(S3 objects)"]
+    ECS --> LOGS["Runtime evidence<br/>(CloudWatch Logs)"]
+    RDS --> RECOVERY["Restore copies<br/>(RDS backups and S3 versions)"]
+    S3 --> RECOVERY
     LOGS --> DIAG["Diagnosis<br/>what changed"]
 ```
 

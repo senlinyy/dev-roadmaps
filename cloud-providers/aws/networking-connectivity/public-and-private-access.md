@@ -75,27 +75,20 @@ The first AWS shape looks like this:
 
 ```mermaid
 flowchart TD
-    USER["Customer browser<br/>or mobile app"] --> ALB["Public entry point<br/>Application Load Balancer"]
-    ALB --> TASKS["Private app workers<br/>ECS tasks"]
-    TASKS --> RDS["Private data store<br/>RDS database"]
-    TASKS --> AWSAPI["AWS service access<br/>ECR, Logs, Secrets, S3"]
-    TASKS --> OUTSIDE["Optional outside APIs<br/>tax, fraud, packages"]
-
-    IGW["Internet gateway<br/>public route target"] --> ALB
-    NAT["NAT gateway<br/>outbound path"] --> OUTSIDE
-    ENDPOINTS["VPC endpoints<br/>private AWS API path"] --> AWSAPI
-
-    ALB -. "lives in" .-> PUBSUB["Public subnets"]
-    NAT -. "lives in" .-> PUBSUB
-    TASKS -. "live in" .-> PRIVSUB["Private subnets"]
-    RDS -. "lives in" .-> PRIVSUB
-    ENDPOINTS -. "live in" .-> PRIVSUB
+    USER["Customer<br/>(browser or mobile app)"] --> ALB["Public entry point<br/>(Application Load Balancer)"]
+    ALB --> TASKS["Private app workers<br/>(ECS tasks)"]
+    TASKS --> RDS["Private data store<br/>(RDS database)"]
+    TASKS --> ENDPOINTS["Private AWS API path<br/>(VPC endpoints)"]
+    ENDPOINTS --> AWSAPI["AWS service access<br/>(ECR, Logs, Secrets, S3)"]
+    TASKS --> NAT["Outbound internet path<br/>(NAT gateway)"]
+    NAT --> OUTSIDE["Optional outside calls<br/>(tax, fraud, package APIs)"]
 ```
 
 Read the diagram from top to bottom.
 The customer reaches the Application Load Balancer, usually shortened to ALB.
 The ALB is the public front door.
 It accepts HTTPS from the internet and forwards clean, controlled traffic to the ECS tasks.
+In AWS placement terms, that usually means the ALB lives in public subnets with a route to an internet gateway.
 
 The ECS tasks are private.
 They run the application code, but they do not need public IP addresses.
@@ -108,7 +101,7 @@ The ALB does not connect to the database.
 Only the application tasks should connect to the database port.
 That keeps the most sensitive resource away from direct internet reachability.
 
-The interesting part is the right side of the diagram.
+The outbound part is where beginners often get surprised.
 The private ECS tasks may still need access outward.
 During startup, the platform may need to pull the container image from ECR.
 At runtime, the app may need Secrets Manager, CloudWatch Logs, S3, or an external tax API.
@@ -318,10 +311,10 @@ The flow looks like this:
 
 ```mermaid
 flowchart TD
-    TASK["Private ECS task<br/>10.40.12.25"] --> RT["Private route table<br/>0.0.0.0/0 to NAT"]
-    RT --> NAT["NAT gateway<br/>public subnet"]
-    NAT --> IGW["Internet gateway"]
-    IGW --> API["Outside API<br/>api.taxvendor.example"]
+    TASK["Private app worker<br/>(ECS task 10.40.12.25)"] --> RT["Default outbound route<br/>(0.0.0.0/0 to NAT)"]
+    RT --> NAT["Outbound internet path<br/>(NAT gateway in public subnet)"]
+    NAT --> IGW["Internet edge<br/>(Internet gateway)"]
+    IGW --> API["External tax service<br/>(api.taxvendor.example)"]
     API --> IGW
     IGW --> NAT
     NAT --> TASK

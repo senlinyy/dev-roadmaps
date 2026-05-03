@@ -43,16 +43,14 @@ Most distributions run both at once. journald captures everything systemd touche
 
 ```mermaid
 flowchart TD
-    APP["Application\nstdout / stderr"] --> JD["systemd-journald"]
-    LIBC["libc syslog()"] --> RS["rsyslog"]
-    KERN["Kernel\nprintk()"] --> KMSG["/dev/kmsg"]
+    APP["Application output<br/>(stdout / stderr)"] --> JD["systemd-journald"]
+    KERN["Kernel messages<br/>(printk())"] --> KMSG["/dev/kmsg"]
     KMSG --> JD
-    KMSG --> RS
-    JD -->|"binary, indexed"| JNL["/var/log/journal/"]
-    JD -->|"forward"| RS
-    RS --> SYS["/var/log/syslog\n/var/log/auth.log\n/var/log/kern.log"]
-    JNL -->|"journalctl"| OPS["You"]
-    SYS -->|"grep / awk / less"| OPS
+    JD --> JNL["Structured journal<br/>(/var/log/journal/)"]
+    JD --> RS["Forwarded text copy<br/>(rsyslog)"]
+    RS --> SYS["Plain text logs<br/>(/var/log/syslog, auth.log, kern.log)"]
+    JNL --> OPS["Read with journalctl"]
+    SYS --> OPS2["Read with grep, awk, or less"]
 ```
 
 > A log message that nobody can find is the same as a log message that was never written.

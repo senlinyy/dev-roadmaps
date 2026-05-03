@@ -70,10 +70,10 @@ Here is the big picture:
 
 ```mermaid
 flowchart TD
-    IMAGE["Container image<br/>app code and dependencies"] --> TASK["ECS task on Fargate<br/>runtime starts container"]
-    TASK --> APP["Node.js process<br/>devpolaris-orders-api"]
-    APP --> LOGS["CloudWatch Logs<br/>startup and request evidence"]
-    CUSTOMER["Customer traffic<br/>after target is healthy"] --> ALB["Traffic gate<br/>(Application Load Balancer)"]
+    IMAGE["Packaged app<br/>(container image)"] --> TASK["Running container<br/>(ECS task on Fargate)"]
+    TASK --> APP["Running backend<br/>(Node.js process)"]
+    APP --> LOGS["Runtime evidence<br/>(CloudWatch Logs)"]
+    CUSTOMER["Allowed customer traffic<br/>(after target is healthy)"] --> ALB["Traffic gate<br/>(Application Load Balancer)"]
     ALB --> HEALTH["Readiness check<br/>(GET /health)"]
     HEALTH --> APP
     SUPPORT["Runtime inputs and permissions<br/>(config, secrets, roles)"] -.-> TASK
