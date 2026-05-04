@@ -1,0 +1,142 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "The DevPolaris team is reviewing Azure Container Apps for `devpolaris-orders-api`. The review note says the relevant job is container runtime without managing a cluster, and the evidence available includes image reference, app settings, health checks, revision or slot state, logs, and scale signals. What is the best first framing?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Treat this as a runtime shape decision and use the evidence to decide which Azure component owns the behavior."
+        },
+        {
+          "id": "b",
+          "text": "Start with database tuning because most APIs eventually touch the database."
+        },
+        {
+          "id": "c",
+          "text": "Change DNS first because users reach the app through a public name."
+        },
+        {
+          "id": "d",
+          "text": "Use the resource group name and tags as the main proof, then inspect service behavior only if the first fix fails."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The article is about recognizing the job before changing resources. The best answer keeps the focus on container runtime without managing a cluster and uses concrete evidence. The distractors are plausible shortcuts, but they skip the boundary between service responsibility, ownership metadata, and runtime behavior."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A production symptom appears while the team is studying Azure Container Apps: the deployment succeeded but the new backend copy never becomes ready. The release record does not show a code change in the checkout handler. Which first check fits the article best?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Start with the service the on-call engineer knows best, then compare evidence if that first check is inconclusive."
+        },
+        {
+          "id": "b",
+          "text": "Start with a broad permission increase, because access issues can block many Azure operations."
+        },
+        {
+          "id": "c",
+          "text": "Create a parallel replacement resource if it can be done quickly, then compare behavior before investigating deeper."
+        },
+        {
+          "id": "d",
+          "text": "Compare the artifact, runtime configuration, identity, health endpoint, logs, and scale behavior."
+        }
+      ],
+      "correct": [
+        "d"
+      ],
+      "explanation": "The scenario gives a symptom and asks for the first evidence-based check. Azure Container Apps teaches the team to inspect the responsible Azure layer before making broad changes. Familiarity, broad permissions, and replacement resources can all create risk before the team understands the failure."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "Before changing production, Maya wants a small evidence bundle for Azure Container Apps. The bundle should help a reviewer understand the current state without relying on memory or portal screenshots. Which evidence belongs in the bundle?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The intended owner, environment, and rollback or recovery expectation for the change."
+        },
+        {
+          "id": "b",
+          "text": "The deployment tool and command used, if the tool context changed which subscription or resource was updated."
+        },
+        {
+          "id": "c",
+          "text": "The exact Azure resources involved in container runtime without managing a cluster, including names, resource groups, and resource IDs where useful."
+        },
+        {
+          "id": "d",
+          "text": "Recent evidence from image reference, app settings, health checks, revision or slot state, logs, and scale signals."
+        }
+      ],
+      "correct": [
+        "a",
+        "c",
+        "d"
+      ],
+      "explanation": "A useful review bundle combines exact resources, current service evidence, ownership, environment, and rollback or recovery expectations. Personal tooling preference does not explain why Azure will accept traffic, run code, store data, emit signals, or recover."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "A teammate says, `Azure Container Apps is just another Azure product page. We can pick the default and learn the details later.` The production service already has users, private data, monitoring, and a rollback expectation. What response best matches the course style?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Record only that the provider default was used, because defaults are designed to be reasonable starting points."
+        },
+        {
+          "id": "b",
+          "text": "Start with the job and risk: container runtime without managing a cluster, the service behavior, and the evidence needed to prove the decision is safe."
+        },
+        {
+          "id": "c",
+          "text": "Accept the default for now, then create an incident note if users report a problem."
+        },
+        {
+          "id": "d",
+          "text": "Let the deployment pipeline choose the service behavior, because successful deployment proves the design."
+        }
+      ],
+      "correct": [
+        "b"
+      ],
+      "explanation": "The course tone is practical: defaults are not wrong by themselves, but production decisions need a reason and a way to verify them. A successful deploy is not the same as an understood operating choice."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A change related to Azure Container Apps is proposed during a release freeze. The proposed fix might affect Container Apps, environments, revisions, ingress, scaling, identity, and logs. What is the safest review question before approval?",
+      "options": [
+        {
+          "id": "a",
+          "text": "What exact symptom or requirement does this change address, what evidence proves it, and how will the team reverse or repair it if the assumption is wrong?"
+        },
+        {
+          "id": "b",
+          "text": "Can we make the change quickly enough that users do not notice the review step?"
+        },
+        {
+          "id": "c",
+          "text": "Can we apply the change to every environment so there are fewer differences to explain?"
+        },
+        {
+          "id": "d",
+          "text": "Can we treat the previous successful change as enough validation if the current diff looks small?"
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The best review question ties action to evidence and rollback. Speed, environment-wide changes, and past familiarity can be useful context, but none of them replaces current production evidence."
+    }
+  ]
+}

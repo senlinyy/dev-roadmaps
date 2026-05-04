@@ -1,0 +1,142 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "An inventory export contains:\n\n- `rg-devpolaris-orders-prod`, tags `app=orders`, `env=prod`, `owner=checkout`, subscription `sub-prod-001`\n- `rg-devpolaris-orders-test`, tags `app=orders`, `env=test`, `owner=checkout`, subscription `sub-sandbox-001`\n- `rg-devpolaris-payments-prod`, tags `app=payments`, `env=prod`, `owner=payments`, subscription `sub-prod-001`\n\nWhich row should a cost report for production orders start from?",
+      "options": [
+        {
+          "id": "a",
+          "text": "`rg-devpolaris-orders-prod`, because both tags and subscription evidence point to production orders ownership."
+        },
+        {
+          "id": "b",
+          "text": "`rg-devpolaris-orders-test`, because it has the same app tag and is cheaper to inspect."
+        },
+        {
+          "id": "c",
+          "text": "`rg-devpolaris-payments-prod`, because it is production and in the production subscription."
+        },
+        {
+          "id": "d",
+          "text": "All three rows, because any resource group containing `prod` or `orders` must be charged to the same service."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The best match combines app, environment, owner, and subscription evidence. Single clues like `prod` or `orders` are not enough when multiple services and environments exist."
+    },
+    {
+      "id": "q2",
+      "type": "multiple",
+      "scenario": "The same inventory has several resources with missing or inconsistent tags. The finance dashboard, incident runbook, and cleanup job all depend on tags as one piece of evidence. Which problems can that create?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Cost reports may miss or misclassify spend by app, owner, or environment."
+        },
+        {
+          "id": "b",
+          "text": "Incident responders may struggle to find the owning team quickly."
+        },
+        {
+          "id": "c",
+          "text": "Cleanup jobs may target the wrong resources or skip resources that should be reviewed."
+        },
+        {
+          "id": "d",
+          "text": "Access reviews may still work through RBAC, but the team may lose useful ownership evidence during incidents."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "Tags support inventory and operations, especially cost, ownership, and cleanup. RBAC does not depend on tags alone, but poor tags still make operations riskier."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "A cleanup script plans to delete resources tagged `env=preview`. One resource has no `env` tag but lives in `rg-devpolaris-orders-preview`. What should the reviewer do?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Flag it for human review or add a safer rule that checks resource ID, group, owner, and tags instead of deleting by assumption."
+        },
+        {
+          "id": "b",
+          "text": "Delete it if the resource group name says `preview`, but log the decision for later review."
+        },
+        {
+          "id": "c",
+          "text": "Keep it out of cleanup forever until every missing tag is fixed across the subscription."
+        },
+        {
+          "id": "d",
+          "text": "Move it into the production group first, then let the normal production process decide."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Missing tags create uncertainty. The safe action is to add evidence or require review, not blindly delete or preserve based on one clue."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "A dashboard groups resources by `resourceGroup`. It shows `rg-devpolaris-orders-prod` in `eastus`, but the app placement record says production should be in `westeurope`. What should the team inspect?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The resource IDs and locations of the child resources, because resource group name alone does not prove the intended placement."
+        },
+        {
+          "id": "b",
+          "text": "The display name and tags first, because they are the evidence most dashboards use."
+        },
+        {
+          "id": "c",
+          "text": "The tenant and subscription first, because those boundaries are more important than per-resource location."
+        },
+        {
+          "id": "d",
+          "text": "The public DNS and endpoint settings first, because user traffic reveals the real region."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Location evidence should come from resource metadata and IDs, not only names. The mismatch may be harmless or serious, but it deserves inspection."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A cost spike appears in `sub-prod-001`, but the top resource has tags `app=unknown` and `owner=none`. The resource is expensive, but the activity log shows recent writes. What is the best operational response?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Use resource ID, type, resource group, activity logs, and neighboring resources to identify ownership, then fix the tags after confirming."
+        },
+        {
+          "id": "b",
+          "text": "Pause the expensive resource first if it looks noncritical, then identify the owner after the cost stops growing."
+        },
+        {
+          "id": "c",
+          "text": "Move the spend into a shared platform bucket until the owner tags can be repaired."
+        },
+        {
+          "id": "d",
+          "text": "Rename the subscription, because subscription names repair missing tags."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Unknown tags are a signal to investigate, not proof that a resource is unused. Resource IDs, logs, resource groups, and related resources help reconstruct ownership."
+    }
+  ]
+}

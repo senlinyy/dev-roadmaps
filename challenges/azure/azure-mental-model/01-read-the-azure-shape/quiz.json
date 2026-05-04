@@ -1,0 +1,142 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A new teammate opens the Azure portal during a production onboarding session. They see App Service, Container Apps, Virtual Network, Key Vault, Azure SQL, Blob Storage, Monitor, and Front Door. They ask which list to memorize first. What coaching gives them the most useful mental map?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Group the services by the job they do: where the app runs, where data lives, how traffic reaches it, what identity can do, who owns cost, and where signals appear."
+        },
+        {
+          "id": "b",
+          "text": "Start by memorizing the exact product catalog because Azure decisions are mostly name recall under pressure."
+        },
+        {
+          "id": "c",
+          "text": "Start with whichever service has the lowest price in the portal because cost decides the architecture before traffic, data, or identity."
+        },
+        {
+          "id": "d",
+          "text": "Start with deployment commands because once a command succeeds, the team can infer the boundaries later."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The article teaches Azure as organized responsibilities before product memorization. The tempting shortcut is to learn names first, but names do not tell you whether you are checking runtime, data, network, identity, cost, or telemetry."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "The team writes this first production note for `devpolaris-orders-api`:\n\n- Runs a Node.js backend when no laptop is open\n- Stores order records outside the container\n- Exposes `https://orders.devpolaris.example`\n- Reads payment secrets without baking them into the image\n- Sends logs and request signals somewhere the team can search\n\nWhat is Azure mainly providing here, and what does the team still own?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Azure provides managed resources for runtime, data, traffic, identity, and signals. The team still owns the application behavior, configuration choices, and operating decisions."
+        },
+        {
+          "id": "b",
+          "text": "Azure provides the application behavior too, so the team should treat backend bugs as Microsoft-owned once the service is deployed."
+        },
+        {
+          "id": "c",
+          "text": "Azure provides a control plane that the portal shows, so the team should be careful not to treat the portal view as the whole system."
+        },
+        {
+          "id": "d",
+          "text": "Azure provides managed service responsibilities at different levels, so the team must know which parts are provider-managed and which parts remain theirs."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Azure gives the team API-managed cloud resources, but the team still owns product logic and operational judgment. The portal, CLI, SDKs, pipelines, and Terraform all talk to Azure APIs. The other options are tempting only if Azure is misunderstood as a UI or as raw machines."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "Maya is about to update an Azure resource from the portal. The page title says `devpolaris-orders`, but the browser was already open from another task. Which checks reduce the chance of changing the wrong thing?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Confirm the tenant and subscription currently selected by the portal or tool."
+        },
+        {
+          "id": "b",
+          "text": "Confirm the resource group, resource type, region, and full resource ID."
+        },
+        {
+          "id": "c",
+          "text": "Check tags such as `app`, `env`, `owner`, and `cost-center` when they exist."
+        },
+        {
+          "id": "d",
+          "text": "Use the visible display name as a first clue, then stop there if it matches the incident ticket."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "A portal page can still point at the wrong tenant, subscription, resource group, or similarly named resource. Tags and resource IDs are useful safety checks. The display name alone is not enough because naming rules vary by service and scope."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "A storage account was created in the portal. Later, Terraform imports it, a pipeline updates its tags through the Azure CLI, and an engineer checks it with the SDK. Which model keeps the team from treating these as separate copies?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The portal, Terraform, CLI, SDKs, and pipelines are different doorways into Azure Resource Manager and service APIs."
+        },
+        {
+          "id": "b",
+          "text": "The portal owns resources it creates, while Terraform and CLI resources live in separate Azure inventories."
+        },
+        {
+          "id": "c",
+          "text": "Terraform state is the real cloud inventory, so portal changes are not real until Terraform approves them."
+        },
+        {
+          "id": "d",
+          "text": "CLI-created resources are easiest to automate later, so the team should recreate portal resources from the CLI before tracking them."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The resource is an Azure resource no matter which tool touches it. Terraform state matters for automation, but it does not create a second cloud. The safe habit is to reason about APIs, permissions, and resource IDs."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A deployment fails while creating an export storage account:\n\n`AuthorizationFailed: client maya@devpolaris.example cannot perform Microsoft.Storage/storageAccounts/write over /subscriptions/sub-prod-001/resourceGroups/rg-devpolaris-orders-prod`\n\nWhat should Maya inspect first?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The caller identity, denied action, subscription, resource group scope, and role assignments at or above that scope."
+        },
+        {
+          "id": "b",
+          "text": "The Node.js route handler, because a storage account creation failure usually starts inside application code."
+        },
+        {
+          "id": "c",
+          "text": "The selected availability zone, because zone placement decides whether Azure allows write actions."
+        },
+        {
+          "id": "d",
+          "text": "The active deployment environment, because a wrong environment can also point at a subscription where the role is missing."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The error names the caller, action, subscription, and resource group. That points to Azure RBAC or the current tool context. App code, DNS, and availability zones may matter elsewhere, but they do not explain this authorization evidence."
+    }
+  ]
+}

@@ -106,6 +106,7 @@ type ChallengeGroupMeta = {
   description: string;
   difficulty: string;
   order: number;
+  articleId?: string;
   articleSlug?: string;
   practiceOnly: boolean;
   tags: ContentTags;
@@ -161,7 +162,9 @@ type Manifest = {
   categories: ChallengeCategoryMeta[];
   groupsByCategory: Record<string, ChallengeGroupMeta[]>;
   groupsByArticle: Record<string, ChallengeGroupMeta[]>;
+  groupsByArticleId: Record<string, ChallengeGroupMeta[]>;
   sectionPracticeByArticle: Record<string, Record<string, SectionPracticeLink[]>>;
+  sectionPracticeByArticleId: Record<string, Record<string, SectionPracticeLink[]>>;
 };
 
 function asString(value: unknown, fallback: string): string {
@@ -188,8 +191,9 @@ function slugifyTitle(title: string): string {
   return title
     .toLowerCase()
     .trim()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '');
+    .replace(/&/g, 'and')
+    .replace(/[^\w\s-]/g, '')
+    .replace(/\s+/g, '-');
 }
 
 function getFallbackArticleId(contentPath: string): string {
@@ -529,6 +533,7 @@ function loadGroupsForCategory(categoryId: string): ChallengeGroupMeta[] {
       description: asString(parsed.data.description, parsed.content.trim()),
       difficulty: asString(parsed.data.difficulty, 'easy'),
       order: asNumber(parsed.data.order, 999),
+      articleId: asOptionalString(parsed.data.articleId),
       articleSlug: asOptionalString(parsed.data.articleSlug),
       practiceOnly: asBoolean(parsed.data.practiceOnly, false),
       tags: asStringArray(parsed.data.tags),
@@ -560,6 +565,7 @@ function loadGroup(categoryId: string, groupId: string): ChallengeGroupFull | nu
     description: asString(parsed.data.description, parsed.content.trim()),
     difficulty: asString(parsed.data.difficulty, 'easy'),
     order: asNumber(parsed.data.order, 999),
+    articleId: asOptionalString(parsed.data.articleId),
     articleSlug: asOptionalString(parsed.data.articleSlug),
     practiceOnly: asBoolean(parsed.data.practiceOnly, false),
     tags: asStringArray(parsed.data.tags),
@@ -570,7 +576,7 @@ function loadGroup(categoryId: string, groupId: string): ChallengeGroupFull | nu
 }
 
 function buildSectionPracticeMap(
-  articleSlug: string,
+  articleId: string,
   categories: ChallengeCategoryMeta[],
   groupsByCategory: Record<string, ChallengeGroupMeta[]>,
 ): Record<string, SectionPracticeLink[]> {
@@ -582,7 +588,7 @@ function buildSectionPracticeMap(
     }
 
     for (const meta of groupsByCategory[category.id] ?? []) {
-      if (meta.articleSlug !== articleSlug) {
+      if (meta.articleId !== articleId) {
         continue;
       }
 
@@ -665,6 +671,68 @@ function buildArticleCatalog(roadmapData: RootModule[]): ArticleCatalogItem[] {
   return catalog.sort((left, right) => left.id.localeCompare(right.id));
 }
 
+const CHALLENGE_ARTICLE_PREFIXES: Record<string, string> = {
+  aws: 'cloud-providers/aws/',
+  azure: 'cloud-providers/azure/',
+  gcp: 'cloud-providers/gcp/',
+  cicd: 'cicd/',
+  linux: 'devops-foundation/linux/',
+  networking: 'devops-foundation/networking/',
+};
+
+function articleMatchesKey(article: ArticleCatalogItem, key: string): boolean {
+  return article.id === key
+    || article.slug === key
+    || article.contentPath === key
+    || article.aliases.includes(key);
+}
+
+function resolveChallengeArticleId(group: ChallengeGroupMeta, catalog: ArticleCatalogItem[]): string | undefined {
+  if (group.articleId) {
+    if (!catalog.some((article) => article.id === group.articleId)) {
+      throw new Error(`Challenge group ${group.category}/${group.id} links to unknown articleId ${group.articleId}.`);
+    }
+    return group.articleId;
+  }
+
+  if (!group.articleSlug) {
+    return undefined;
+  }
+
+  const articleSlug = group.articleSlug;
+  const matches = catalog.filter((article) => articleMatchesKey(article, articleSlug));
+  const categoryPrefix = CHALLENGE_ARTICLE_PREFIXES[group.category];
+  const scopedMatches = categoryPrefix
+    ? matches.filter((article) => article.contentPath?.startsWith(categoryPrefix))
+    : matches;
+  const candidates = scopedMatches.length > 0 ? scopedMatches : matches;
+
+  if (candidates.length === 1) {
+    return candidates[0].id;
+  }
+
+  if (candidates.length > 1) {
+    throw new Error(`Challenge group ${group.category}/${group.id} has ambiguous articleSlug ${articleSlug}. Add articleId.`);
+  }
+
+  throw new Error(`Challenge group ${group.category}/${group.id} links to unknown articleSlug ${articleSlug}.`);
+}
+
+function resolveArticleIdsForGroups(
+  groupsByCategory: Record<string, ChallengeGroupMeta[]>,
+  catalog: ArticleCatalogItem[],
+): Record<string, ChallengeGroupMeta[]> {
+  return Object.fromEntries(
+    Object.entries(groupsByCategory).map(([categoryId, groups]) => [
+      categoryId,
+      groups.map((group) => {
+        const articleId = resolveChallengeArticleId(group, catalog);
+        return articleId ? { ...group, articleId } : group;
+      }),
+    ]),
+  );
+}
+
 function writeArticleArtifacts(versionRoot: string, roadmapData: RootModule[]): void {
   for (const contentPath of walkRoadmapArticles(roadmapData)) {
     const sourcePath = path.join(ROOT_DIR, contentPath);
@@ -687,20 +755,27 @@ function writeGroupArtifacts(
         continue;
       }
 
-      writeJson(path.join(versionRoot, 'groups', category.id, `${group.id}.json`), fullGroup);
+      writeJson(path.join(versionRoot, 'groups', category.id, `${group.id}.json`), {
+        ...fullGroup,
+        articleId: group.articleId,
+      });
     }
   }
 }
 
 function buildManifest(): Manifest {
   const roadmapData = loadRoadmapData();
+  const articleCatalog = buildArticleCatalog(roadmapData);
   const categories = loadCategories();
-  const groupsByCategory = Object.fromEntries(
+  const rawGroupsByCategory = Object.fromEntries(
     categories.map((category) => [category.id, loadGroupsForCategory(category.id)]),
   );
+  const groupsByCategory = resolveArticleIdsForGroups(rawGroupsByCategory, articleCatalog);
 
   const groupsByArticle: Record<string, ChallengeGroupMeta[]> = {};
+  const groupsByArticleId: Record<string, ChallengeGroupMeta[]> = {};
   const articleSlugs = new Set<string>();
+  const articleIds = new Set<string>();
 
   for (const category of categories) {
     if (!category.available) {
@@ -708,31 +783,47 @@ function buildManifest(): Manifest {
     }
 
     for (const group of groupsByCategory[category.id] ?? []) {
-      if (!group.articleSlug) {
-        continue;
+      if (group.articleSlug) {
+        const bucket = groupsByArticle[group.articleSlug] ?? [];
+        bucket.push(group);
+        groupsByArticle[group.articleSlug] = bucket;
+        articleSlugs.add(group.articleSlug);
       }
 
-      const bucket = groupsByArticle[group.articleSlug] ?? [];
-      bucket.push(group);
-      groupsByArticle[group.articleSlug] = bucket;
-      articleSlugs.add(group.articleSlug);
+      if (group.articleId) {
+        const bucket = groupsByArticleId[group.articleId] ?? [];
+        bucket.push(group);
+        groupsByArticleId[group.articleId] = bucket;
+        articleIds.add(group.articleId);
+      }
     }
   }
 
   const sectionPracticeByArticle: Record<string, Record<string, SectionPracticeLink[]>> = {};
   for (const articleSlug of articleSlugs) {
-    sectionPracticeByArticle[articleSlug] = buildSectionPracticeMap(articleSlug, categories, groupsByCategory);
+    const groups = groupsByArticle[articleSlug] ?? [];
+    const articleId = groups.find((group) => group.articleId)?.articleId;
+    sectionPracticeByArticle[articleSlug] = articleId
+      ? buildSectionPracticeMap(articleId, categories, groupsByCategory)
+      : {};
+  }
+
+  const sectionPracticeByArticleId: Record<string, Record<string, SectionPracticeLink[]>> = {};
+  for (const articleId of articleIds) {
+    sectionPracticeByArticleId[articleId] = buildSectionPracticeMap(articleId, categories, groupsByCategory);
   }
 
   return {
     version: VERSION,
     generatedAt: GENERATED_AT,
-    articleCatalog: buildArticleCatalog(roadmapData),
+    articleCatalog,
     roadmapData,
     categories,
     groupsByCategory,
     groupsByArticle,
+    groupsByArticleId,
     sectionPracticeByArticle,
+    sectionPracticeByArticleId,
   };
 }
 

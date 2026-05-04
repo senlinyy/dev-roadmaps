@@ -1,0 +1,142 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A role assignment record says:\n\n- Principal: `mi-orders-prod`\n- Role: `Key Vault Secrets User`\n- Scope: `/subscriptions/sub-prod-001/resourceGroups/rg-security-prod/providers/Microsoft.KeyVault/vaults/kv-orders-prod`\n\nWhat does this assignment mainly say?",
+      "options": [
+        {
+          "id": "a",
+          "text": "That this identity has the role's secret-related permissions at the named Key Vault scope."
+        },
+        {
+          "id": "b",
+          "text": "That this identity can write any resource in the production subscription."
+        },
+        {
+          "id": "c",
+          "text": "That every app in the same resource group can read the same secrets."
+        },
+        {
+          "id": "d",
+          "text": "That the Key Vault can deploy new versions of the orders API."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "RBAC combines principal, role, and scope. This record is not subscription-wide Contributor access and it does not automatically include every app in the group."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A developer has `Reader` on `sub-prod-001` and `Contributor` on `rg-devpolaris-orders-dev`. They can view production resources but cannot change them. Why? The access review shows two separate assignments for the same user, and the production change request depends on understanding which scope can write.",
+      "options": [
+        {
+          "id": "a",
+          "text": "The production subscription role allows read, while the write role is scoped to the dev resource group."
+        },
+        {
+          "id": "b",
+          "text": "Contributor on any resource group grants write to every similarly named production group."
+        },
+        {
+          "id": "c",
+          "text": "Reader blocks all write roles in the tenant, including dev permissions."
+        },
+        {
+          "id": "d",
+          "text": "Production resources require portal access, while dev resources can use CLI access."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The role and scope explain the behavior. Reader at subscription allows read. Contributor on a dev group does not grant production writes."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "Which fields should be present in a useful RBAC review record? The security team is exporting role assignments into a review spreadsheet and wants each row to be useful without opening the portal.",
+      "options": [
+        {
+          "id": "a",
+          "text": "Principal name and object ID."
+        },
+        {
+          "id": "b",
+          "text": "Role name or role definition ID."
+        },
+        {
+          "id": "c",
+          "text": "Scope where the role is assigned."
+        },
+        {
+          "id": "d",
+          "text": "The engineer's preferred terminal prompt."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "RBAC evidence needs caller, permission set, and scope. Human preferences are not access evidence, and they do not help a reviewer understand blast radius later."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "An engineer says, `The pipeline has Contributor, so it can assign Key Vault access to itself.` The pipeline gets denied on `Microsoft.Authorization/roleAssignments/write`. What is the missing distinction?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Contributor can manage many resources but does not grant the ability to assign Azure RBAC roles."
+        },
+        {
+          "id": "b",
+          "text": "Contributor only works on virtual machines, so it cannot deploy web apps."
+        },
+        {
+          "id": "c",
+          "text": "Role assignments can only be created by users, not service principals."
+        },
+        {
+          "id": "d",
+          "text": "Key Vault access is controlled only by DNS, so RBAC role assignment is unrelated."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Role assignment creation is a powerful authorization action and is not included in normal Contributor. This is why RBAC evidence needs the exact action, not just a broad role name."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A support engineer needs to read logs for `app-orders-prod`, but a request asks for `Contributor` at the production resource group. What is the better first response?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Find a narrower role and scope that allows log reading without general resource modification."
+        },
+        {
+          "id": "b",
+          "text": "Approve Contributor because log reading and resource modification are usually reviewed together."
+        },
+        {
+          "id": "c",
+          "text": "Grant Owner temporarily because it is easier to remove later than Contributor."
+        },
+        {
+          "id": "d",
+          "text": "Move the logs into the app resource so Contributor is no longer needed."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The requested job is read-only operational evidence. A narrower role and scope better match least privilege. Contributor or Owner grants more power than the task needs."
+    }
+  ]
+}

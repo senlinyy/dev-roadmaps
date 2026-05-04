@@ -1,0 +1,142 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A release engineer asks for access because `the orders API deploy is blocked`. The pipeline error says:\n\n`AuthorizationFailed: client spn-release-devpolaris cannot perform Microsoft.Web/sites/config/write over /subscriptions/sub-prod-001/resourceGroups/rg-devpolaris-orders-prod/providers/Microsoft.Web/sites/app-orders-prod`\n\nWhat is the best first framing of the problem?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Identify the caller, action, target scope, and current role assignments before changing permissions."
+        },
+        {
+          "id": "b",
+          "text": "Grant subscription Owner to the release engineer, because deployment errors should be unblocked quickly."
+        },
+        {
+          "id": "c",
+          "text": "Check the application source code first, because a config write denial usually means the API route is broken."
+        },
+        {
+          "id": "d",
+          "text": "Create a new resource group with the same app name, because the existing group is probably locked to old deployments."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The error gives the caller, denied action, and target scope. That is the permission question. Broad Owner access may unblock the deploy but hides the real scope issue. App code and new resource groups do not explain this RBAC evidence."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "Maya can open the Azure portal page for `app-orders-prod`, but the Save button fails when she changes an app setting. She says, `I can see it, so I should be allowed to edit it.` What should you explain?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Seeing a resource and changing a resource are different actions, and Azure RBAC can allow read while denying write."
+        },
+        {
+          "id": "b",
+          "text": "The portal page proves she has full access, so the failure is likely a browser rendering problem."
+        },
+        {
+          "id": "c",
+          "text": "App settings are controlled by DNS, so she should check the custom domain first."
+        },
+        {
+          "id": "d",
+          "text": "The resource group name decides edit access, so a clearer name would fix the Save button."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Azure permissions are action-based. Reader-style access can show a resource while write actions still fail. DNS and naming are useful context elsewhere, but they do not grant write permission."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "A production checklist asks, `Can `devpolaris-orders-api` read its payment secret?` Which pieces of evidence belong in the security review? The release note names `app-orders-prod`, managed identity `mi-orders-prod`, and vault `kv-orders-prod`, but the checklist is still missing evidence for the actual read.",
+      "options": [
+        {
+          "id": "a",
+          "text": "The runtime identity assigned to the app."
+        },
+        {
+          "id": "b",
+          "text": "The Key Vault or secret scope where access is granted."
+        },
+        {
+          "id": "c",
+          "text": "The specific secret operation the app needs, such as read secret value."
+        },
+        {
+          "id": "d",
+          "text": "The public DNS record for the customer-facing API."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "Secret access needs a caller, a target, and an allowed action. DNS may be part of the traffic path, but it does not prove that the app can read a secret."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "A teammate proposes one shared service principal for deployments, runtime secret reads, and manual break-glass work. They say fewer identities make Azure easier. What is the best response?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Separate identities by job where possible, because deployment, runtime, and emergency access have different scopes, lifetimes, and audit needs."
+        },
+        {
+          "id": "b",
+          "text": "Use one identity if it has a strong display name, because logs will still be understandable."
+        },
+        {
+          "id": "c",
+          "text": "Use personal accounts for runtime access, because people can rotate passwords more easily than apps."
+        },
+        {
+          "id": "d",
+          "text": "Avoid Azure identities and put secrets in app settings so RBAC is not involved."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "A smaller number of identities is not automatically simpler if one identity becomes too powerful. Separate job-based identities make scope, rotation, and audit clearer. Display names and personal accounts do not solve blast radius."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "During an incident, checkout fails only in production. The error says `Forbidden` from Key Vault. The app revision is healthy, the database is reachable, and the secret exists. Which security question should move to the top?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Which identity is the production app using, and does that identity have the right secret-read permission at the vault or secret scope?"
+        },
+        {
+          "id": "b",
+          "text": "Which frontend route is slow, because Key Vault errors usually mean the browser could not load the page."
+        },
+        {
+          "id": "c",
+          "text": "Which database table changed, because existing secrets become unreadable when schemas change."
+        },
+        {
+          "id": "d",
+          "text": "Which region is cheapest, because secret reads are denied when the region cost changes."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "A Key Vault `Forbidden` after the secret exists points to identity and authorization. App health and database reachability narrow the investigation away from runtime startup and data connectivity."
+    }
+  ]
+}

@@ -22,25 +22,47 @@ id: article-cloud-providers-azure-deployment-runtime-operations-mental-model
 
 ## A Release Changes More Than Code
 
-The build passed, the container image exists, and the pull request is merged. That is good news, but it still does not mean production is safe.
+The build passed, the container image exists, and the
+pull request is merged. That is good news, but it still
+does not mean production is safe. A deployment is the
+act of moving a specific version of an application into
+a runtime where users can reach it. Runtime means the
+place where the code actually runs, such as Azure App
+Service or Azure Container Apps. A release is the
+larger operating event around that deployment. It
+includes the version, configuration, secret access,
+traffic movement, health checks, monitoring, and
+rollback decision. That difference matters because many
+production problems are not caused by bad application
+code alone.
 
-A deployment is the act of moving a specific version of an application into a runtime where users can reach it. Runtime means the place where the code actually runs, such as Azure App Service or Azure Container Apps.
+The artifact may be correct, but the environment
+variable may be missing. The image may start, but the
+health endpoint may fail. The app may run in staging,
+but the production managed identity may not read Key
+Vault. The new revision may work for direct testing,
+then fail once real traffic reaches it. Azure gives you
+tools to control those changes. App Service has
+deployment slots. Container Apps has revisions and
+traffic splitting. App settings, secrets, managed
+identity, Application Insights, Azure Monitor, and
+health checks all play supporting roles. This module
+uses `devpolaris-orders-api` as the running example. It
+is a Node.js backend that handles checkout, writes
+order records to Azure SQL Database, uploads receipt
+files to Blob Storage, and emits telemetry to
+Application Insights.
 
-A release is the larger operating event around that deployment. It includes the version, configuration, secret access, traffic movement, health checks, monitoring, and rollback decision.
-
-That difference matters because many production problems are not caused by bad application code alone.
-
-The artifact may be correct, but the environment variable may be missing. The image may start, but the health endpoint may fail. The app may run in staging, but the production managed identity may not read Key Vault. The new revision may work for direct testing, then fail once real traffic reaches it.
-
-Azure gives you tools to control those changes. App Service has deployment slots. Container Apps has revisions and traffic splitting. App settings, secrets, managed identity, Application Insights, Azure Monitor, and health checks all play supporting roles.
-
-This module uses `devpolaris-orders-api` as the running example. It is a Node.js backend that handles checkout, writes order records to Azure SQL Database, uploads receipt files to Blob Storage, and emits telemetry to Application Insights.
-
-The goal is not to memorize every deployment feature in Azure. The goal is to understand the release as a set of promises that must stay true while production changes.
+The goal is not to memorize every deployment feature in
+Azure. The goal is to understand the release as a set
+of promises that must stay true while production
+changes.
 
 ## If You Know AWS Deployments
 
-If you have learned AWS, the Azure ideas will feel familiar in shape. The names are different, but the operating questions are similar.
+If you have learned AWS, the Azure ideas will feel
+familiar in shape. The names are different, but the
+operating questions are similar.
 
 | AWS idea you may know | Azure idea to compare first | Shared release question |
 |---|---|---|
@@ -50,7 +72,8 @@ If you have learned AWS, the Azure ideas will feel familiar in shape. The names 
 | Parameter Store or Secrets Manager | App settings, Container Apps secrets, and Key Vault | Does the runtime have the values and permissions it needs? |
 | CloudWatch alarms and logs | Azure Monitor and Application Insights | What evidence proves the release is healthy? |
 
-The useful habit is not name translation. The useful habit is asking what changed:
+The useful habit is not name translation. The useful
+habit is asking what changed:
 
 - Did the artifact change?
 - Did the config change?
@@ -58,7 +81,8 @@ The useful habit is not name translation. The useful habit is asking what change
 - Did traffic move?
 - Did the health signal change?
 
-Those questions work in any cloud provider. Azure gives you its own tools for answering them.
+Those questions work in any cloud provider. Azure gives
+you its own tools for answering them.
 
 ## The Four Things A Release Moves
 
@@ -69,7 +93,9 @@ A safe Azure release usually moves four things:
 - The production traffic.
 - The team's confidence from "we think this works" to "we have evidence this works."
 
-Those are different steps. When teams blur them together, releases become hard to debug. Here is the simple mental model.
+Those are different steps. When teams blur them
+together, releases become hard to debug. Here is the
+simple mental model.
 
 ```mermaid
 flowchart TD
@@ -85,21 +111,30 @@ flowchart TD
     Traffic --> Decision
 ```
 
-The order matters. Traffic should be the last thing to move.
+The order matters. Traffic should be the last thing to
+move. If the version is unknown, you cannot explain
+what users are running. If config is wrong, the app may
+fail even when the code is fine. If health is not
+checked, you are guessing. If traffic moved too early,
+users become the test. Azure's rollout tools exist to
+help separate these steps. Deployment slots let an App
+Service app run a candidate version before swapping
+production traffic. Container Apps revisions let a
+container app keep older and newer versions visible in
+the platform, then route traffic according to revision
+mode and rules.
 
-If the version is unknown, you cannot explain what users are running. If config is wrong, the app may fail even when the code is fine. If health is not checked, you are guessing. If traffic moved too early, users become the test.
-
-Azure's rollout tools exist to help separate these steps. Deployment slots let an App Service app run a candidate version before swapping production traffic. Container Apps revisions let a container app keep older and newer versions visible in the platform, then route traffic according to revision mode and rules.
-
-Neither tool removes the need for judgment. They give you safer handles for that judgment.
+Neither tool removes the need for judgment. They give
+you safer handles for that judgment.
 
 ## The Orders API Release Has A Shape
 
-The `devpolaris-orders-api` release is not abstract. It has a real shape.
-
-The team builds a container image or deployable app package. The app expects runtime settings, database access, Blob Storage access, telemetry, a health endpoint, and a way to move traffic safely.
-
-A release note might look like this:
+The `devpolaris-orders-api` release is not abstract. It
+has a real shape. The team builds a container image or
+deployable app package. The app expects runtime
+settings, database access, Blob Storage access,
+telemetry, a health endpoint, and a way to move traffic
+safely. A release note might look like this:
 
 ```text
 service: devpolaris-orders-api
@@ -114,26 +149,39 @@ health endpoint: GET /health
 primary risk: receipt upload path
 ```
 
-This record is not paperwork for its own sake. It answers the first questions people ask when a release goes bad:
+This record is not paperwork for its own sake. It
+answers the first questions people ask when a release
+goes bad:
 
 - What version is running?
 - What changed?
 - Was configuration changed too?
 - Where should we look first?
 
-The record also separates code change from runtime change. If the code did not change but config changed, rollback may mean reverting config rather than redeploying the previous image. If the image changed but config stayed stable, rollback may mean returning traffic to the previous slot or revision.
-
-That distinction is the heart of runtime operations.
+The record also separates code change from runtime
+change. If the code did not change but config changed,
+rollback may mean reverting config rather than
+redeploying the previous image. If the image changed
+but config stayed stable, rollback may mean returning
+traffic to the previous slot or revision. That
+distinction is the heart of runtime operations.
 
 ## The Runtime Must Agree With The Artifact
 
-An artifact is the thing you deploy. For a container workflow, it is usually a container image. For a direct App Service workflow, it may be a package or app content.
+An artifact is the thing you deploy. For a container
+workflow, it is usually a container image. For a direct
+App Service workflow, it may be a package or app
+content. The runtime is the Azure environment that
+starts the artifact. The runtime and artifact must
+agree. The app may expect `PORT`, `DATABASE_URL` or
+separate database settings, an Application Insights
+connection string, a managed identity that can read Key
+Vault, and a health endpoint that is reachable on the
+configured port.
 
-The runtime is the Azure environment that starts the artifact. The runtime and artifact must agree. The app may expect `PORT`, `DATABASE_URL` or separate database settings, an Application Insights connection string, a managed identity that can read Key Vault, and a health endpoint that is reachable on the configured port.
-
-When these do not line up, the artifact can be perfectly valid and still fail in Azure.
-
-Here is a realistic failure:
+When these do not line up, the artifact can be
+perfectly valid and still fail in Azure. Here is a
+realistic failure:
 
 ```text
 revision: devpolaris-orders-api--4c91b7f
@@ -144,24 +192,32 @@ last log:
   Error: Missing required environment variable ORDERS_DB_NAME
 ```
 
-That is not a bad container registry problem, and it is not a traffic splitting problem. The app started in a runtime that did not provide a required value.
-
-The next check is configuration:
+That is not a bad container registry problem, and it is
+not a traffic splitting problem. The app started in a
+runtime that did not provide a required value. The next
+check is configuration:
 
 - Which setting is missing?
 - Should it be an App Service app setting, a Container Apps environment variable, or a secret reference?
 - Was it different between staging and production?
 - Was it marked as a slot setting if slots are used?
 
-Deployment is where code and runtime meet. Most useful debugging starts by asking which side of that meeting broke.
+Deployment is where code and runtime meet. Most useful
+debugging starts by asking which side of that meeting
+broke.
 
 ## Traffic Is The Last Thing To Move
 
-Traffic means real user requests. Moving traffic is the moment a release becomes user-visible, so Azure rollout tools try to give you a place to test before traffic fully moves.
-
-In App Service, a staging slot can run the new version with its own hostname. The team can warm it up and validate it before swapping it into production.
-
-In Container Apps, a new revision can exist beside an old revision. Depending on revision mode, traffic may move automatically when ready, or the team may split traffic across revisions.
+Traffic means real user requests. Moving traffic is the
+moment a release becomes user-visible, so Azure rollout
+tools try to give you a place to test before traffic
+fully moves. In App Service, a staging slot can run the
+new version with its own hostname. The team can warm it
+up and validate it before swapping it into production.
+In Container Apps, a new revision can exist beside an
+old revision. Depending on revision mode, traffic may
+move automatically when ready, or the team may split
+traffic across revisions.
 
 The important idea is the same:
 
@@ -180,18 +236,22 @@ A release flow might be:
 8. Continue watching.
 ```
 
-That list looks procedural, but the reason is causal. Each step prevents a different failure from reaching users.
-
-Startup checks catch missing settings. Health checks catch a process that starts but cannot serve. Smoke tests catch a route that starts but cannot complete its main job. Telemetry catches slower or less obvious dependency failures.
-
-Traffic moves after those checks because users deserve the version that already proved it can run.
+That list looks procedural, but the reason is causal.
+Each step prevents a different failure from reaching
+users. Startup checks catch missing settings. Health
+checks catch a process that starts but cannot serve.
+Smoke tests catch a route that starts but cannot
+complete its main job. Telemetry catches slower or less
+obvious dependency failures. Traffic moves after those
+checks because users deserve the version that already
+proved it can run.
 
 ## Health Is Evidence Not Hope
 
-Health is not a feeling. It is evidence.
-
-For a backend API, the first health evidence is usually a health endpoint. A health endpoint is an HTTP path that returns success only when the app is ready to serve.
-
+Health is not a feeling. It is evidence. For a backend
+API, the first health evidence is usually a health
+endpoint. A health endpoint is an HTTP path that
+returns success only when the app is ready to serve.
 For `devpolaris-orders-api`, that might be:
 
 ```text
@@ -205,13 +265,23 @@ checks:
   config: ok
 ```
 
-The exact response format is your team's choice. The important part is what the endpoint means.
+The exact response format is your team's choice. The
+important part is what the endpoint means. If it
+returns success while the database connection is
+broken, it is not a useful release gate for checkout.
+If it performs heavy writes or risky side effects, it
+may be too dangerous for frequent checks. The endpoint
+should prove the app is ready without causing harm.
+Azure uses health signals differently depending on the
+runtime. App Service Health check pings a path you
+choose and can route away from unhealthy instances.
+Container Apps health probes can check startup,
+liveness, and readiness. Application Insights and Azure
+Monitor show request failures, dependency failures,
+response times, and alerts.
 
-If it returns success while the database connection is broken, it is not a useful release gate for checkout. If it performs heavy writes or risky side effects, it may be too dangerous for frequent checks. The endpoint should prove the app is ready without causing harm.
-
-Azure uses health signals differently depending on the runtime. App Service Health check pings a path you choose and can route away from unhealthy instances. Container Apps health probes can check startup, liveness, and readiness. Application Insights and Azure Monitor show request failures, dependency failures, response times, and alerts.
-
-Those are different forms of evidence. Together, they answer:
+Those are different forms of evidence. Together, they
+answer:
 
 - Did the new version start?
 - Is it ready for requests?
@@ -220,11 +290,18 @@ Those are different forms of evidence. Together, they answer:
 
 ## Rollback Means Returning Users To A Known Working Path
 
-Rollback is not a punishment for a bad deploy. Rollback is returning users to a known working path.
-
-In Azure, the rollback action depends on what changed and which runtime you use. For App Service with slots, rollback may mean swapping back to the previous slot state. For Container Apps, rollback may mean routing traffic back to an older revision. For a config-only problem, rollback may mean restoring the previous app setting or secret reference. For a database migration issue, rollback may be more careful because the data may have changed.
-
-Before anyone says "roll back," ask two questions:
+Rollback is not a punishment for a bad deploy. Rollback
+is returning users to a known working path. In Azure,
+the rollback action depends on what changed and which
+runtime you use. For App Service with slots, rollback
+may mean swapping back to the previous slot state. For
+Container Apps, rollback may mean routing traffic back
+to an older revision. For a config-only problem,
+rollback may mean restoring the previous app setting or
+secret reference. For a database migration issue,
+rollback may be more careful because the data may have
+changed. Before anyone says "roll back," ask two
+questions:
 
 - What is the known working path?
 - Can we return traffic there safely?
@@ -240,11 +317,15 @@ data action: none, no migration
 post-rollback check: failed checkout rate below 1% for 15 minutes
 ```
 
-That note is short, but it keeps the team from making a vague rollback decision. Rollback is safest when you know what you are returning to.
+That note is short, but it keeps the team from making a
+vague rollback decision. Rollback is safest when you
+know what you are returning to.
 
 ## Failure Modes During Azure Releases
 
-Release failures usually have a shape. Naming the shape helps the team inspect the right part of the system first.
+Release failures usually have a shape. Naming the shape
+helps the team inspect the right part of the system
+first.
 
 | Symptom | First check |
 |---|---|
@@ -258,13 +339,15 @@ The practical lesson is simple:
 
 > Do not assume every release failure is a bad image.
 
-Azure releases can fail because of version, config, identity, network, data, traffic, or health checks. Good runtime operations keep those causes visible.
+Azure releases can fail because of version, config,
+identity, network, data, traffic, or health checks.
+Good runtime operations keep those causes visible.
 
 ## A Practical Release Record
 
-A release record should be small enough that teams actually write it and specific enough to help during an incident.
-
-Use this shape:
+A release record should be small enough that teams
+actually write it and specific enough to help during an
+incident. Use this shape:
 
 ```text
 service:
@@ -302,9 +385,12 @@ rollback target: revision devpolaris-orders-api--b71a22c
 release owner: orders-api on-call
 ```
 
-This record is not a ceremony. It is a debugging shortcut. When something goes wrong, the team starts from facts instead of memory.
-
-That is what Azure deployment and runtime operations are really about: make change visible, move traffic carefully, and keep enough evidence to decide what to do next.
+This record is not a ceremony. It is a debugging
+shortcut. When something goes wrong, the team starts
+from facts instead of memory. That is what Azure
+deployment and runtime operations are really about:
+make change visible, move traffic carefully, and keep
+enough evidence to decide what to do next.
 
 ---
 

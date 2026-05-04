@@ -1,6 +1,7 @@
 ---
 title: "Text Processing"
 description: "Search, filter, transform, and analyze text using grep, sed, pipelines, and supporting utilities. Each step targets a key section of the Text Processing article."
+articleId: article-devops-foundation-linux-linux-basics-text-processing
 articleSlug: text-processing
 difficulty: medium
 order: 2

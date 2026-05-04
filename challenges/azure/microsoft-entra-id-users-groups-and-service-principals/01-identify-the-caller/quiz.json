@@ -1,0 +1,142 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A ticket says, `Give deploy access to Alex.` The comments later mention `alex@devpolaris.example`, `DevPolaris Release Bot`, and `spn-orders-deploy-prod`. What should the reviewer ask before granting anything?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Which exact identity is the caller: a user, group, app registration, or service principal, and what object ID identifies it?"
+        },
+        {
+          "id": "b",
+          "text": "Which display name is easiest to recognize, because display names are enough for Azure role assignments."
+        },
+        {
+          "id": "c",
+          "text": "Which region the identity belongs to, because identities live in the same region as resources."
+        },
+        {
+          "id": "d",
+          "text": "Which resource group has the shortest name, because access should be granted at the shortest scope."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The first security question is caller identity. Display names can collide or change. Identities live in Entra ID, not in resource regions, and resource group name length does not identify the caller."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A production alert says `spn-orders-deploy-prod changed app settings`. A teammate asks which human clicked the Save button. What should the team understand first?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The action was performed by a non-human identity, so the audit path should follow the pipeline, credentials, owners, and role assignments for that service principal."
+        },
+        {
+          "id": "b",
+          "text": "The service principal name proves a human named `orders-deploy-prod` signed in."
+        },
+        {
+          "id": "c",
+          "text": "Service principals cannot change resources, so the audit log must be wrong."
+        },
+        {
+          "id": "d",
+          "text": "The action was anonymous because non-human identities are not auditable."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "A service principal is an app identity in the tenant. It can be audited, but the human accountability path goes through the automation owner, credential handling, and approvals."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "Which identity facts should be captured before granting production access to a new automation? The automation will deploy production changes every week, so the access record needs to survive team changes and future audits.",
+      "options": [
+        {
+          "id": "a",
+          "text": "The service principal or managed identity object ID."
+        },
+        {
+          "id": "b",
+          "text": "The owning team and intended job of the identity."
+        },
+        {
+          "id": "c",
+          "text": "The requested role and target scope."
+        },
+        {
+          "id": "d",
+          "text": "The local laptop username of the engineer who opened the ticket."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "Object ID, ownership, job, role, and scope are useful access evidence. A local laptop username does not identify the Azure caller."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "Two Entra groups are named `Orders Operators`: one in the DevPolaris tenant and one in a partner tenant. The reviewer sees only the display name in a pasted screenshot. What is the safest next step?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Ask for tenant context and object ID before assigning any role."
+        },
+        {
+          "id": "b",
+          "text": "Use the group with the most members, because larger groups are usually production groups."
+        },
+        {
+          "id": "c",
+          "text": "Use the group in the first search result, because Azure sorts exact matches by safety."
+        },
+        {
+          "id": "d",
+          "text": "Grant access to both groups temporarily, then remove the wrong one after testing."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Display names are not enough. Tenant and object ID make the identity specific. Granting both groups expands access before the reviewer knows who is included."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "Maya signs in successfully to the DevPolaris tenant but cannot list production resource groups. What does this prove? The portal shows the correct directory name, but the subscription list is empty for her account.",
+      "options": [
+        {
+          "id": "a",
+          "text": "Authentication succeeded, but authorization to the production subscription or resource groups may still be missing."
+        },
+        {
+          "id": "b",
+          "text": "The tenant is broken, because signing in should grant read access to every subscription."
+        },
+        {
+          "id": "c",
+          "text": "Her password needs to be stored in Key Vault before Azure lets her list resource groups."
+        },
+        {
+          "id": "d",
+          "text": "She must use a service principal because users cannot read Azure resources."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Signing in proves who Maya is. It does not prove she is allowed to read every subscription. Authentication and authorization are separate checks."
+    }
+  ]
+}

@@ -1,0 +1,142 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "An incident report says:\n\n- `devpolaris-orders-api` has three running copies\n- All copies are in zone 1\n- Zone 1 has a platform issue\n- Azure SQL is reachable from zones 2 and 3\n\nWhat is the main design weakness?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The API copies are not spread across failure boundaries, so a single zone issue can remove all running copies."
+        },
+        {
+          "id": "b",
+          "text": "The API has enough replicas, but the scale rule may need to add more replicas during a zone issue."
+        },
+        {
+          "id": "c",
+          "text": "The database is reachable, so the incident response can focus only on the traffic entry layer."
+        },
+        {
+          "id": "d",
+          "text": "The DNS record can point to a regional endpoint, so check DNS before reviewing app replica placement."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Availability zones are local failure boundaries. Multiple copies only help if they are placed across the right boundaries. A healthy database does not save an app tier that all landed in one failed zone."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "The database is zone-redundant, but the API runs as one VM in one zone. During a zone issue, the database stays available but users still cannot checkout. What lesson should the team take?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Each part of the request path needs its own availability shape. A resilient database does not, by itself, make the app tier resilient."
+        },
+        {
+          "id": "b",
+          "text": "The database design is strong enough, so the next step is to check browser or CDN behavior before app placement."
+        },
+        {
+          "id": "c",
+          "text": "The API should move subscriptions, because subscription separation gives each app copy a different failure boundary."
+        },
+        {
+          "id": "d",
+          "text": "Backups are enough for data recovery, so the team can accept a single running app copy for live traffic."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Resilience has to cover the whole path: traffic entry, compute, data, secrets, and signals. Backups help recovery, but they do not keep a single-zone app copy serving live traffic."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "The team wants the orders API to tolerate a single zone problem inside one region. They have a traffic entry, several app copies, Azure SQL, Key Vault, and monitoring on the request path. Which actions move in the right direction?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Run more than one app copy and spread those copies across supported zones."
+        },
+        {
+          "id": "b",
+          "text": "Use zone-redundant options for services on the critical path when the service supports them."
+        },
+        {
+          "id": "c",
+          "text": "Test or document what happens when one zone is unavailable."
+        },
+        {
+          "id": "d",
+          "text": "Keep the database zone-redundant but leave the app tier single-zone until the next major release."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "Spreading app copies, using zone-redundant services, and testing the failure story all improve the design. Keeping everything in one zone can be simpler, but it concentrates risk."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "A teammate says, `We have nightly database backups, so we do not need availability zones.` The service has an uptime target, and users expect checkout to continue during a local platform issue. What correction is most accurate?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Backups help restore data after loss or corruption. Zones help keep service capacity available when part of a region has a problem."
+        },
+        {
+          "id": "b",
+          "text": "Backups and zones are identical because both create a second copy somewhere."
+        },
+        {
+          "id": "c",
+          "text": "Zones are mainly for stateless compute, while backups are enough for databases and secrets."
+        },
+        {
+          "id": "d",
+          "text": "Backups can restore the database after a loss, so they are a reasonable substitute for live capacity during short zone incidents."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Backups and availability are related but different. Backups are recovery points. Zone spread is about live capacity and local failure tolerance."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "After a small outage, the team sees this placement:\n\n- API revision: 2 replicas, zone spread unknown\n- Database: zone redundant\n- Key Vault: region service\n- Front door: healthy\n\nWhat is the most useful follow-up question?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Can we prove where the running API replicas were placed, and would one zone issue remove all of them?"
+        },
+        {
+          "id": "b",
+          "text": "Can we rename Key Vault to include the zone number?"
+        },
+        {
+          "id": "c",
+          "text": "Can we delete the placement record because the front door was healthy?"
+        },
+        {
+          "id": "d",
+          "text": "Can we move the tenant into the database zone?"
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The unknown part is compute placement. Healthy traffic entry and database layers do not prove app replicas survived a zone issue. The follow-up should close that evidence gap."
+    }
+  ]
+}

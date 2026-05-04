@@ -1,0 +1,142 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "After rotation, Key Vault has these versions for `payment-api-key`:\n\n- `v1`: disabled\n- `v2`: enabled\n\nThe app setting references `payment-api-key/v1`. Checkout fails. What is the best fix direction?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Update the app reference to use the enabled version or versionless secret reference according to the team's rotation model, then verify checkout."
+        },
+        {
+          "id": "b",
+          "text": "Grant the app broader RBAC so it can read disabled secret versions."
+        },
+        {
+          "id": "c",
+          "text": "Move the secret into source control so deployments and rotations stay together."
+        },
+        {
+          "id": "d",
+          "text": "Create a second vault for `v2`, because versions cannot coexist inside one secret name."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The failure is version selection after rotation. Broader RBAC should not be used to read disabled values, and source control is not secret storage."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A team rotates a database password in Key Vault but forgets to update the database itself. The app reads the new secret successfully, then database login fails. What does this teach?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Secret rotation must coordinate the stored secret value, the downstream system that accepts it, and the app rollout."
+        },
+        {
+          "id": "b",
+          "text": "If Key Vault read succeeds, downstream systems automatically accept the new value."
+        },
+        {
+          "id": "c",
+          "text": "The app should stop using Key Vault because rotation creates too many versions."
+        },
+        {
+          "id": "d",
+          "text": "Database passwords should be placed in tags so they update with the database resource."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Reading a new secret is only one part of rotation. The target system and the app's rollout need to agree on the value and timing."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "Which checks belong in a safe secret rotation runbook? The rotation affects the orders API, a background worker, and a rollback plan that may need the previous value for a short window.",
+      "options": [
+        {
+          "id": "a",
+          "text": "Which apps or jobs read the secret."
+        },
+        {
+          "id": "b",
+          "text": "Whether the downstream service accepts the new value."
+        },
+        {
+          "id": "c",
+          "text": "How rollback or previous-version access will work if the new value fails."
+        },
+        {
+          "id": "d",
+          "text": "Whether the secret name is short enough to type during an incident."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "Rotation is an operating process. The team needs consumers, downstream acceptance, and rollback behavior. Name length is not the safety control."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "A storage account uses Microsoft-managed encryption at rest. A teammate says, `Then Key Vault and key planning never matter.` What is the accurate correction? The product has ordinary storage accounts today, but a future enterprise customer has started asking about key ownership and audit evidence.",
+      "options": [
+        {
+          "id": "a",
+          "text": "Managed encryption at rest is valuable, but some systems still need secrets, certificates, or customer-managed key decisions depending on risk and requirements."
+        },
+        {
+          "id": "b",
+          "text": "Encryption at rest means every secret is automatically rotated by the storage account."
+        },
+        {
+          "id": "c",
+          "text": "Key Vault is only for databases, so storage encryption makes it irrelevant."
+        },
+        {
+          "id": "d",
+          "text": "Customer-managed keys are required for every Azure resource before it can store production data."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Encryption at rest and secret management solve different problems. Customer-managed keys are a requirements-driven choice, not a universal default for every beginner system."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A rollback uses the previous container image, but the old image expects a secret name that was deleted during cleanup. What should be improved? The cleanup happened in the same release window as the image rollback, so the team needs to know which release record was incomplete.",
+      "options": [
+        {
+          "id": "a",
+          "text": "Release records should include secret names, versions or reference style, and cleanup timing so rollback compatibility is reviewed."
+        },
+        {
+          "id": "b",
+          "text": "Rollback should ignore secret references because old images should work without configuration."
+        },
+        {
+          "id": "c",
+          "text": "All old secrets should be deleted before every release so teams know rollback is impossible."
+        },
+        {
+          "id": "d",
+          "text": "Secret names should be random so old images cannot guess them."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Secrets and configuration are part of release compatibility. Cleanup and rotation need to consider rollback windows instead of only the newest image."
+    }
+  ]
+}

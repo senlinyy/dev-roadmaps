@@ -1,0 +1,142 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A pipeline deploys only `devpolaris-orders-api` resources inside `rg-devpolaris-orders-prod`. It does not need to touch networking shared by other apps. What is the safest starting scope for deployment access?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The orders production resource group, if the needed actions are contained there."
+        },
+        {
+          "id": "b",
+          "text": "The whole production subscription, because deployment tools work best with the broadest scope."
+        },
+        {
+          "id": "c",
+          "text": "The management group, because it includes every future environment automatically."
+        },
+        {
+          "id": "d",
+          "text": "The tenant root, because runtime resources and identities both live there."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Scope should fit the job. If the pipeline only changes resources in one group, resource-group scope is a safer starting point than subscription or management group scope."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A central networking team manages shared VNets and private DNS zones used by several apps. The orders team asks for write access to the shared network resource group to fix one private endpoint. What should a reviewer consider?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Whether a narrower workflow, delegated action, or platform-owned change is safer than giving app teams broad write access to shared network resources."
+        },
+        {
+          "id": "b",
+          "text": "Whether the orders app and shared network have similar names, because matching names make broad access safe."
+        },
+        {
+          "id": "c",
+          "text": "Whether the database is in the same region, because region match grants network write access."
+        },
+        {
+          "id": "d",
+          "text": "Whether the orders app has enough replicas, because runtime scale limits network RBAC."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Shared resource groups have wider blast radius. A reviewer should look for a controlled workflow or narrower delegation before granting broad write access."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "Which signs suggest a requested RBAC scope is too broad? A reviewer is comparing several access tickets for the orders API and wants to spot which requests expand blast radius beyond the stated task.",
+      "options": [
+        {
+          "id": "a",
+          "text": "The job mentions one resource, but the request asks for subscription-wide access."
+        },
+        {
+          "id": "b",
+          "text": "The role allows write or delete actions unrelated to the requested task."
+        },
+        {
+          "id": "c",
+          "text": "The assignment has no owner, expiry, or review path for temporary access."
+        },
+        {
+          "id": "d",
+          "text": "The request includes the exact resource ID and the smallest role that matches the job."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "Too-broad scope shows up when the job is narrow but the role, scope, or duration is wide. Exact target evidence and a narrow role are good signs, not warning signs."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "A data analyst needs to inspect production cost by resource group and tag. They do not need to restart apps, change secrets, or modify databases. Which access shape fits best?",
+      "options": [
+        {
+          "id": "a",
+          "text": "A read-focused role at the needed subscription or cost-management scope, with no general resource write permission."
+        },
+        {
+          "id": "b",
+          "text": "Contributor on every production resource group, because cost reports may reference any resource."
+        },
+        {
+          "id": "c",
+          "text": "Key Vault Administrator, because cost reports may include secret-backed services."
+        },
+        {
+          "id": "d",
+          "text": "Owner on the tenant, because billing questions cross every boundary."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Cost inspection is a read and reporting task. The role and scope should support that job without granting operational write, secret admin, or tenant-wide control."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A temporary incident role was granted at subscription scope for a database outage. The incident is over. What should happen next? The emergency role was created during a Friday outage, and no one remembers whether it was meant to last beyond the database repair.",
+      "options": [
+        {
+          "id": "a",
+          "text": "Review and remove or narrow the temporary assignment, then record why any remaining access is still needed."
+        },
+        {
+          "id": "b",
+          "text": "Leave it in place because proven incident access is useful for the next outage."
+        },
+        {
+          "id": "c",
+          "text": "Rename the role assignment so auditors know it was temporary."
+        },
+        {
+          "id": "d",
+          "text": "Move the database to a different resource group so the broad role no longer matters."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Temporary broad access should be reviewed after the incident. Renaming does not reduce power, and moving resources does not fix an overly broad subscription assignment."
+    }
+  ]
+}

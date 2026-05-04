@@ -1,0 +1,142 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A security review finds an app registration named `orders-api-ci` and a service principal with the same display name. The role assignment is attached to the service principal object ID. Why does that matter?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Role assignments authorize the service principal that acts in the tenant, not just the app registration template."
+        },
+        {
+          "id": "b",
+          "text": "The app registration holds the production resource group, so the service principal role is ignored."
+        },
+        {
+          "id": "c",
+          "text": "The display name is the real security boundary, so object IDs are only for search."
+        },
+        {
+          "id": "d",
+          "text": "App registrations and service principals are identical objects, so the distinction is not useful."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "For Azure resource access, the service principal is the security principal receiving the role assignment. The app registration describes the application, but the object receiving access must be clear."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A pipeline uses a client ID and secret stored in the CI system. The secret is 14 months old, and nobody knows which team owns the app registration. What is the most important review concern?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The non-human identity has unclear ownership and credential lifecycle, so rotation and accountability are weak."
+        },
+        {
+          "id": "b",
+          "text": "Client secrets are fine if the display name says production, so ownership can be inferred."
+        },
+        {
+          "id": "c",
+          "text": "The pipeline should switch to a shared human account because passwords are easier to remember."
+        },
+        {
+          "id": "d",
+          "text": "The app registration should be moved to the resource group so resource tags handle rotation."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Service principals need ownership and credential lifecycle. A stale secret with unclear ownership is risky. Display names, shared humans, and resource tags do not solve credential accountability."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "A developer creates a new app registration for local testing, then asks for production Key Vault access using its display name `orders-api`. What should the reviewer do?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Verify the object ID, owner, intended environment, and whether this identity should exist for production at all."
+        },
+        {
+          "id": "b",
+          "text": "Grant access if the display name matches the app, then clean it up during the next audit."
+        },
+        {
+          "id": "c",
+          "text": "Grant access at subscription scope because local testing and production use the same code."
+        },
+        {
+          "id": "d",
+          "text": "Ask the developer to rename the app registration to include `prod`, then approve it."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "A matching name is not enough. The reviewer should confirm identity, owner, environment, and purpose before letting a local-test identity touch production secrets."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "Which choices make non-human Azure identities easier to operate safely? The team is cleaning up a set of old CI identities and wants future audit logs to show which automation did which job.",
+      "options": [
+        {
+          "id": "a",
+          "text": "Use descriptive names plus object IDs in records and runbooks."
+        },
+        {
+          "id": "b",
+          "text": "Record the owning team and intended job of each identity."
+        },
+        {
+          "id": "c",
+          "text": "Prefer managed identity or federated workload identity where it removes long-lived secrets."
+        },
+        {
+          "id": "d",
+          "text": "Let several unrelated pipelines share one service principal so fewer identities appear in the portal."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "Good identity records include names, object IDs, owners, and purpose. Reducing long-lived secrets is also safer. Sharing one principal across unrelated jobs makes audit and blast radius worse."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "The activity log shows object ID `2f4a...` changed Key Vault access. The display name has since been renamed from `orders-release` to `platform-release`. What should the team use to track the identity?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The object ID and audit history, with the current display name as supporting context."
+        },
+        {
+          "id": "b",
+          "text": "Only the current display name, because names are more stable than IDs."
+        },
+        {
+          "id": "c",
+          "text": "Only the old display name, because audit logs freeze all future identity changes."
+        },
+        {
+          "id": "d",
+          "text": "The Key Vault name, because the vault owns identities that change access."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Object IDs are stable identity evidence. Display names help humans but can change. The vault is the target, not the caller identity."
+    }
+  ]
+}

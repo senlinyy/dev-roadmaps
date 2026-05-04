@@ -1,0 +1,142 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A failed deploy shows:\n\n`client spn-orders-release cannot perform Microsoft.ContainerRegistry/registries/pull/read over /subscriptions/sub-prod-001/resourceGroups/rg-platform-prod/providers/Microsoft.ContainerRegistry/registries/acrdevpolarisprod`\n\nWhat should the team inspect first?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Whether the release identity has the needed ACR pull permission at the registry or relevant scope."
+        },
+        {
+          "id": "b",
+          "text": "Whether the app has Key Vault access, because image pull failures usually come from missing secrets."
+        },
+        {
+          "id": "c",
+          "text": "Whether the SQL database firewall is open, because container registries require database connectivity."
+        },
+        {
+          "id": "d",
+          "text": "Whether the public DNS record points to the registry, because ACR pulls are controlled by custom domains."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The denied action and scope point directly at Container Registry access. Key Vault, SQL, and public DNS can matter elsewhere, but not as the first interpretation of this error."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "An engineer can assign `Reader` but cannot assign `Contributor` at the same scope. What does that suggest? The engineer is using the same subscription and resource group in both attempts, so the difference appears to be the role being assigned.",
+      "options": [
+        {
+          "id": "a",
+          "text": "Their permissions may allow limited role assignment or a constrained workflow, so the exact role assignment authority needs review."
+        },
+        {
+          "id": "b",
+          "text": "Contributor is not a valid Azure role, so the portal blocks it for everyone."
+        },
+        {
+          "id": "c",
+          "text": "Reader and Contributor are controlled by regions, so moving regions would fix it."
+        },
+        {
+          "id": "d",
+          "text": "The engineer is signed in to the wrong browser profile, because role choice is stored locally."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Role assignment permissions can be constrained. The exact allowed role definitions and scope matter. The behavior does not prove the role is invalid or regional."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "A production app receives `Forbidden` when writing blobs. The assigned role is `Storage Blob Data Reader` at the storage account scope. What is the best conclusion?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The identity has read-oriented data-plane access, but the write operation needs a different storage data role or scope."
+        },
+        {
+          "id": "b",
+          "text": "The identity can write if the blob name includes `prod`, because names influence data-plane writes."
+        },
+        {
+          "id": "c",
+          "text": "The app needs subscription Contributor, because all blob writes are management-plane operations."
+        },
+        {
+          "id": "d",
+          "text": "The storage account should move to the app resource group, because data roles only work inside app groups."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The role name itself is evidence: reader access is not writer access. Blob data operations are controlled by data-plane permissions and scopes, not by naming conventions."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "Which evidence should appear in a good RBAC incident note? The incident note will be handed to a security reviewer who was not on the call, so vague wording will not be enough.",
+      "options": [
+        {
+          "id": "a",
+          "text": "The exact denied action from the error message."
+        },
+        {
+          "id": "b",
+          "text": "The principal object ID or managed identity involved."
+        },
+        {
+          "id": "c",
+          "text": "The scope where the action was attempted."
+        },
+        {
+          "id": "d",
+          "text": "A broad statement that Azure permissions were broken."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "A useful incident note records concrete evidence: action, principal, and scope. A vague statement does not help a reviewer decide whether the fix was narrow and correct."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A role assignment fix grants `Contributor` to the runtime managed identity so it can read one Key Vault secret. What should a reviewer say? The app already has a managed identity, and the requested job is a single secret read during startup.",
+      "options": [
+        {
+          "id": "a",
+          "text": "The fix is too broad for the job. The app needs a secret-read path, not general resource modification power."
+        },
+        {
+          "id": "b",
+          "text": "Contributor is the safest Key Vault role because it includes fewer secret actions than read-only roles."
+        },
+        {
+          "id": "c",
+          "text": "Runtime identities should usually be subscription Contributors so app code can repair its own resources."
+        },
+        {
+          "id": "d",
+          "text": "The role is fine if the app resource and Key Vault are in the same region."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The requested job is reading a secret. Contributor grants management power that does not match the need. Region does not make a broad role safe."
+    }
+  ]
+}

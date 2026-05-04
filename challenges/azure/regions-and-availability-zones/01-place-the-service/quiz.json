@@ -1,0 +1,142 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "The team is choosing a first region for `devpolaris-orders-api`.\n\nEvidence:\n- Most customers are in Western Europe\n- Order data must stay in the EU\n- Azure Container Apps and Azure SQL are available in `westeurope` and `northeurope`\n- The current DevPolaris team operates during UK and EU hours\n\nWhich choice is the best first placement?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Choose a nearby EU region such as West Europe, then record why it fits users, data rules, service availability, and operations."
+        },
+        {
+          "id": "b",
+          "text": "Choose the cheapest visible region even if it is outside the EU, because price beats data placement for a first deploy."
+        },
+        {
+          "id": "c",
+          "text": "Choose a region where the database SKU is available and run compute in a nearby region if the compute option is missing."
+        },
+        {
+          "id": "d",
+          "text": "Choose the team's old default cloud region unless a hard blocker appears during deployment."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Region choice should consider users, data rules, service availability, and operations. Tags help inventory, but they do not remove the need to plan placement or migration."
+    },
+    {
+      "id": "q2",
+      "type": "multiple",
+      "scenario": "A placement record is being written for a new production API after the team chooses West Europe. The record should help a future on-call engineer understand why the app lives there and what failure boundary the team accepted. Which facts belong in that record?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Chosen region and the reason it was chosen."
+        },
+        {
+          "id": "b",
+          "text": "Whether key services are zonal, zone-redundant, or regional."
+        },
+        {
+          "id": "c",
+          "text": "Data residency or latency assumptions that influenced the choice."
+        },
+        {
+          "id": "d",
+          "text": "The release date and launch owner, without the placement assumptions that affect runtime behavior."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "A useful placement record explains why the region and zone shape were selected. Personal tooling preferences do not help future operators understand the production placement."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "The preferred region is close to users, but one required service SKU is not available there. The product manager asks whether the team can deploy anyway and clean it up later because the launch is near. What is the most responsible next step?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Compare nearby supported regions and document the tradeoff instead of forcing an unsupported design."
+        },
+        {
+          "id": "b",
+          "text": "Create the resource in the unsupported region anyway because Azure will enable the SKU after deployment starts."
+        },
+        {
+          "id": "c",
+          "text": "Put the service in any far-away region and hide the latency with a resource group name."
+        },
+        {
+          "id": "d",
+          "text": "Use a different SKU in the same region without checking whether the behavior still matches the app's needs."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Service availability is a real placement constraint. The team may choose another nearby region or change the service shape, but it should document the tradeoff."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "An API in `eastus` calls an Azure SQL database in `westeurope` on every checkout request. Customers are mostly in Europe, and p95 checkout latency is high. Which placement question should the team revisit first?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Whether compute and data should live closer together in the same EU region for this request path."
+        },
+        {
+          "id": "b",
+          "text": "Whether adding a CDN for static assets would hide latency on checkout writes."
+        },
+        {
+          "id": "c",
+          "text": "Whether increasing API replicas in `eastus` would hide the repeated database round trip."
+        },
+        {
+          "id": "d",
+          "text": "Whether moving only the public DNS zone to Europe would make backend calls local."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "A request path that crosses regions on every checkout can add latency and operational complexity. Names and tags help management, but they do not shorten the network path."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A team says, `We can always move regions later if this one is wrong.` The current design includes a database, private network paths, Key Vault references, public DNS, backups, and monitoring. Which response best matches a beginner-safe Azure mindset?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Some resources can be recreated or migrated, but region moves can affect data, DNS, networking, identity references, backup, and downtime, so choose and record the region deliberately."
+        },
+        {
+          "id": "b",
+          "text": "Stateless compute is often easier to recreate, so apply the same assumption to the database, private endpoints, and backups."
+        },
+        {
+          "id": "c",
+          "text": "Move the public entry first and leave data services where they are, then decide later whether the request path matters."
+        },
+        {
+          "id": "d",
+          "text": "Treat the first region as permanent unless the provider announces an outage."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The safe answer is balanced. Region mistakes are fixable, but not magically free. The team should understand migration impact instead of treating region as a cosmetic label."
+    }
+  ]
+}

@@ -1,0 +1,142 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "The app gets `Forbidden` from Key Vault. The private endpoint resolves correctly, and network tests from the app subnet reach the vault private IP. What is the best next check?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The app identity's Key Vault permission model and secret-read authorization."
+        },
+        {
+          "id": "b",
+          "text": "The VNet route table only, because reaching the private IP proves permission is correct."
+        },
+        {
+          "id": "c",
+          "text": "The public DNS record for the website, because website DNS grants Key Vault reads."
+        },
+        {
+          "id": "d",
+          "text": "The database firewall, because Key Vault authorization depends on SQL connectivity."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Network reachability and authorization are separate doors. If network evidence is healthy and the response is `Forbidden`, identity and permission deserve the next look."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "The app gets a timeout when reading Key Vault. The same identity can read the secret from another app inside a different VNet. What should the team inspect first?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The network path to the vault from this app, including private endpoint DNS, subnet routing, and firewall settings."
+        },
+        {
+          "id": "b",
+          "text": "The secret value length, because long secrets create network timeouts."
+        },
+        {
+          "id": "c",
+          "text": "The role assignment only, because a timeout is the same as a denied action."
+        },
+        {
+          "id": "d",
+          "text": "The app's public custom domain, because Key Vault reads flow through the public website host."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "A timeout is reachability evidence. Since the identity works elsewhere, network path and private access configuration are stronger first suspects."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "A deployment adds a private endpoint for Key Vault, then disables public network access. Production apps start failing, but staging still works. What is the most likely missing review?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Whether production app networking and private DNS were updated to reach the vault through the private endpoint."
+        },
+        {
+          "id": "b",
+          "text": "Whether staging has a newer secret version than production."
+        },
+        {
+          "id": "c",
+          "text": "Whether the vault has enough tags for encryption to run."
+        },
+        {
+          "id": "d",
+          "text": "Whether the public website certificate was renewed at the same time."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Disabling public access changes the network door. Production needs the private endpoint and DNS path. Secret version and public website certificate may be separate concerns."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "Which evidence helps separate a Key Vault network problem from a permission problem? The app sometimes gets `Forbidden` and sometimes gets connection timeouts depending on which environment is tested.",
+      "options": [
+        {
+          "id": "a",
+          "text": "Whether the app can resolve the vault name to the expected private or public address."
+        },
+        {
+          "id": "b",
+          "text": "Whether the error is timeout, connection failure, `Forbidden`, or secret not found."
+        },
+        {
+          "id": "c",
+          "text": "Which identity is attached to the running app and what access it has."
+        },
+        {
+          "id": "d",
+          "text": "Whether the resource group name contains the word `secure`."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "DNS and connection symptoms help with the network door. Identity and access evidence help with authorization. A name is not enough proof."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A developer can read the secret from their laptop using Azure CLI, but the deployed app times out. What is the safest conclusion? The laptop is outside the production VNet, while the deployed app uses a private endpoint path from its subnet.",
+      "options": [
+        {
+          "id": "a",
+          "text": "The laptop test proves one identity and network path work, but the deployed app has its own identity and network path that still need checking."
+        },
+        {
+          "id": "b",
+          "text": "The app should work because any successful secret read proves the vault is healthy for all callers."
+        },
+        {
+          "id": "c",
+          "text": "The Key Vault should be moved to the developer's local network path."
+        },
+        {
+          "id": "d",
+          "text": "The app should use the developer's CLI token in production to match the test."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Local tests can be useful, but they do not prove runtime identity or runtime network path. The deployed app is a different caller from a different place."
+    }
+  ]
+}

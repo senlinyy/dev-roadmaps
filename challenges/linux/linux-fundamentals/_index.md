@@ -1,6 +1,7 @@
 ---
 title: "Linux Fundamentals"
 description: "Navigate the filesystem, explore the FHS directory hierarchy, discover virtual filesystems, hunt down files, and check disk space. Each step targets a specific section of the Filesystem & Navigation article."
+articleId: article-devops-foundation-linux-linux-basics-filesystem-navigation
 articleSlug: filesystem-and-navigation
 difficulty: easy
 order: 1

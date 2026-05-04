@@ -22,65 +22,44 @@ id: article-cloud-providers-azure-storage-databases-choosing-right-data-service
 
 ## The Choice Starts With A Promise
 
-Choosing a data service means choosing what kind of promise the application needs.
+Choosing a data service means choosing what kind of
+promise the application needs. That promise might be:
+keep this checkout record consistent. Store this PDF
+receipt so the customer can download it later. Remember
+that this payment request already ran. Let this VM boot
+and keep its application files. Let several legacy
+workers see the same folder. Those are different
+promises. They should not all become "put it in the
+database." They should not all become "upload it to
+Blob Storage."
 
-That promise might be:
+Azure gives you several data services because
+application data does not all behave the same way.
+Azure Blob Storage stores file-like objects. Azure SQL
+Database stores relational records with SQL queries and
+transactions. Azure Cosmos DB stores NoSQL items when
+the access pattern is clear. Azure Managed Disks
+provide disk-like storage for VMs. Azure Files provides
+managed file shares. The confusing part is that many
+features can be forced into more than one service. You
+can store JSON in Blob Storage. You can store a PDF in
+a SQL column. You can put order state in Cosmos DB.
 
-keep this checkout record consistent.
-
-store this PDF receipt so the customer can download it later.
-
-remember that this payment request already ran.
-
-let this VM boot and keep its application files.
-
-let several legacy workers see the same folder.
-
-Those are different promises.
-
-They should not all become "put it in the database."
-
-They should not all become "upload it to Blob Storage."
-
-Azure gives you several data services because application data does not all behave the same way.
-
-Azure Blob Storage stores file-like objects.
-
-Azure SQL Database stores relational records with SQL queries and transactions.
-
-Azure Cosmos DB stores NoSQL items when the access pattern is clear.
-
-Azure Managed Disks provide disk-like storage for VMs.
-
-Azure Files provides managed file shares.
-
-The confusing part is that many features can be forced into more than one service.
-
-You can store JSON in Blob Storage.
-
-You can store a PDF in a SQL column.
-
-You can put order state in Cosmos DB.
-
-You can write exports to a VM disk.
-
-Some of those choices work for a demo and hurt later.
-
-This article uses `devpolaris-orders-api` as a review exercise.
-
-The service needs order records, receipt files, export files, idempotency checks, job status, and maybe VM-backed legacy work.
-
-The goal is to build the habit of asking better questions before choosing.
+You can write exports to a VM disk. Some of those
+choices work for a demo and hurt later. This article
+uses `devpolaris-orders-api` as a review exercise. The
+service needs order records, receipt files, export
+files, idempotency checks, job status, and maybe
+VM-backed legacy work. The goal is to build the habit
+of asking better questions before choosing.
 
 > Start with what the app must remember, how it will read it, and what failure would hurt most.
 
 ## If You Know AWS Data Choices
 
-AWS experience can help you get oriented.
-
-It can also make you too confident if you skip Azure's details.
-
-Use this bridge as a first map.
+AWS experience can help you get oriented. It can also
+make you too confident if you skip Azure's details. Use
+this bridge as a first map.
 
 | AWS starting point | Azure starting point | Shared idea |
 |---|---|---|
@@ -90,97 +69,47 @@ Use this bridge as a first map.
 | EBS | Managed Disks | Disk attached to compute |
 | EFS | Azure Files | Managed shared file path |
 
-The most important shared habit is not the product mapping.
-
-It is the review style.
-
-For any cloud provider, ask:
-
-is this data a file, record, item, disk, or shared folder?
-
-who writes it?
-
-who reads it?
-
-does it change in place?
-
-does it need transactions?
-
-does it need to expire?
-
-does it need to survive a process, container, VM, or region failure?
-
-These questions transfer across providers.
-
-The service details do not.
+The most important shared habit is not the product
+mapping. It is the review style. For any cloud
+provider, ask: is this data a file, record, item, disk,
+or shared folder? Who writes it? Who reads it? Does it
+change in place? Does it need transactions? Does it
+need to expire? Does it need to survive a process,
+container, VM, or region failure? These questions
+transfer across providers. The service details do not.
 
 ## Ask What The Data Is Doing
 
-Before naming a service, describe the data in plain English.
+Before naming a service, describe the data in plain
+English. For `devpolaris-orders-api`, a useful review
+asks six questions. What is the unit of data? Is it one
+order row, one receipt PDF, one idempotency item, one
+VM disk, or one shared folder? Who writes it? The
+checkout API writes orders. The receipt worker writes
+PDFs. The export worker writes CSV files. The UI reads
+job status. The legacy importer may write scratch
+files. How does the app read it? Does it fetch by order
+ID? Does it list all orders for one customer? Does it
+download by blob name?
 
-For `devpolaris-orders-api`, a useful review asks six questions.
+Does it poll by job ID? Does it mount a folder path?
+Does the data change in place? Order status changes.
+Receipt files usually do not. Job status changes for a
+short time. Temporary files may disappear. What rule
+must not break? No duplicate paid orders. No customer
+reading another customer's receipt. No export marked
+ready before the blob exists. No VM scratch directory
+treated as durable product storage. How will the team
+recover?
 
-What is the unit of data?
-
-Is it one order row, one receipt PDF, one idempotency item, one VM disk, or one shared folder?
-
-Who writes it?
-
-The checkout API writes orders.
-
-The receipt worker writes PDFs.
-
-The export worker writes CSV files.
-
-The UI reads job status.
-
-The legacy importer may write scratch files.
-
-How does the app read it?
-
-Does it fetch by order ID?
-
-Does it list all orders for one customer?
-
-Does it download by blob name?
-
-Does it poll by job ID?
-
-Does it mount a folder path?
-
-Does the data change in place?
-
-Order status changes.
-
-Receipt files usually do not.
-
-Job status changes for a short time.
-
-Temporary files may disappear.
-
-What rule must not break?
-
-No duplicate paid orders.
-
-No customer reading another customer's receipt.
-
-No export marked ready before the blob exists.
-
-No VM scratch directory treated as durable product storage.
-
-How will the team recover?
-
-That question often decides whether the first design is serious enough.
-
-A service choice without a recovery story is only half a choice.
+That question often decides whether the first design is
+serious enough. A service choice without a recovery
+story is only half a choice.
 
 ## Decision Table For Everyday Azure Data Choices
 
-Use this table as a first sorting tool.
-
-It is not a law.
-
-It is a way to make the conversation concrete.
+Use this table as a first sorting tool. It is not a
+law. It is a way to make the conversation concrete.
 
 | Data behavior | Good Azure service to inspect first | Why it fits | Question before you commit |
 |---|---|---|---|
@@ -193,43 +122,30 @@ It is a way to make the conversation concrete.
 | Temporary unzip workspace | Temporary disk or data disk | Data is disposable scratch | Is every important result copied somewhere durable? |
 | Product image or public asset | Blob Storage, often with a delivery layer later | File-like data addressed by name | Who can upload and replace it? |
 
-The best column is the last one.
-
-It turns a service guess into a design review.
-
-For example, idempotency can live in Cosmos DB or Azure SQL Database.
-
-If the idempotency write must be in the same SQL transaction as the order write, SQL may be simpler.
-
-If the idempotency check is a separate high-volume key lookup with clear expiry, Cosmos DB may be a good fit.
-
-The data behavior decides.
+The best column is the last one. It turns a service
+guess into a design review. For example, idempotency
+can live in Cosmos DB or Azure SQL Database. If the
+idempotency write must be in the same SQL transaction
+as the order write, SQL may be simpler. If the
+idempotency check is a separate high-volume key lookup
+with clear expiry, Cosmos DB may be a good fit. The
+data behavior decides.
 
 ## Feature Review: Order Records
 
-Order records are the core of the checkout system.
+Order records are the core of the checkout system. They
+are not just blobs of JSON. They are connected business
+facts. An order belongs to a customer. An order has
+line items. Payment attempts belong to the order.
+Receipt metadata points to a file and a customer. Those
+facts need relationships and rules. For this feature,
+Azure SQL Database is the normal first candidate. The
+important review is not "SQL can store rows."
 
-They are not just blobs of JSON.
-
-They are connected business facts.
-
-An order belongs to a customer.
-
-An order has line items.
-
-Payment attempts belong to the order.
-
-Receipt metadata points to a file and a customer.
-
-Those facts need relationships and rules.
-
-For this feature, Azure SQL Database is the normal first candidate.
-
-The important review is not "SQL can store rows."
-
-The important review is which invariants the database protects.
-
-An invariant is a rule that should stay true even when requests fail, retry, or arrive close together.
+The important review is which invariants the database
+protects. An invariant is a rule that should stay true
+even when requests fail, retry, or arrive close
+together.
 
 | Invariant | Why it matters |
 |---|---|
@@ -238,41 +154,27 @@ An invariant is a rule that should stay true even when requests fail, retry, or 
 | A payment attempt should point to one order | Support needs an audit trail |
 | A receipt pointer should match the order owner | File download must follow authorization |
 
-Those are relational promises.
-
-A relational database is not chosen because it is traditional.
-
-It is chosen because the data has relationships and consistency rules.
-
-If the team instead puts each order in one blob, the first checkout demo may pass.
-
-The trouble appears later.
-
-Support needs all failed payments for a customer.
-
-Finance needs paid order totals by month.
-
+Those are relational promises. A relational database is
+not chosen because it is traditional. It is chosen
+because the data has relationships and consistency
+rules. If the team instead puts each order in one blob,
+the first checkout demo may pass. The trouble appears
+later. Support needs all failed payments for a
+customer. Finance needs paid order totals by month.
 Product needs orders that include two specific SKUs.
-
-The app now has to list and parse files to answer database questions.
-
-That is a sign the storage choice is wrong.
+The app now has to list and parse files to answer
+database questions. That is a sign the storage choice
+is wrong.
 
 ## Feature Review: Receipt Files And Export Files
 
-Receipt PDFs and export CSVs behave like files.
-
-The app writes them once, stores them durably, and lets an authorized user download them later.
-
-That points toward Blob Storage.
-
-The database still matters.
-
-The database should store the receipt row, order owner, status, and blob pointer.
-
-Blob Storage should store the bytes.
-
-Here is the useful split.
+Receipt PDFs and export CSVs behave like files. The app
+writes them once, stores them durably, and lets an
+authorized user download them later. That points toward
+Blob Storage. The database still matters. The database
+should store the receipt row, order owner, status, and
+blob pointer. Blob Storage should store the bytes. Here
+is the useful split.
 
 | Piece | Home | Why |
 |---|---|---|
@@ -281,51 +183,39 @@ Here is the useful split.
 | Receipt status | Azure SQL Database | App workflow state |
 | Blob name | Azure SQL Database row plus Blob Storage object | Pointer from business record to object |
 
-This prevents two common mistakes.
-
-The first mistake is putting large files directly into SQL because "the receipt belongs to the order."
-
-The receipt does belong to the order in the business sense.
-
-The bytes do not need to live in the order row.
-
-The second mistake is making the blob path the only source of truth.
-
-A path like `receipts/cus_77/ord_1042.pdf` looks informative, but the app should still check the database before download.
-
-Authorization belongs in the application and data model, not only in a naming convention.
+This prevents two common mistakes. The first mistake is
+putting large files directly into SQL because "the
+receipt belongs to the order." The receipt does belong
+to the order in the business sense. The bytes do not
+need to live in the order row. The second mistake is
+making the blob path the only source of truth. A path
+like `receipts/cus_77/ord_1042.pdf` looks informative,
+but the app should still check the database before
+download. Authorization belongs in the application and
+data model, not only in a naming convention.
 
 ## Feature Review: Idempotency And Job Status
 
-Idempotency records and job-status records are smaller and more direct.
+Idempotency records and job-status records are smaller
+and more direct. They may fit Cosmos DB, Azure SQL
+Database, or sometimes both depending on the workflow.
+The idempotency question is: does this duplicate
+request check need to be part of the same SQL
+transaction as the order write? If yes, keeping the
+idempotency marker in Azure SQL Database may be
+simpler. The SQL unique constraint can protect the
+checkout path. If the idempotency record is a separate
+key-based lookup with a short lifetime, Cosmos DB may
+be a good candidate. The job-status question is: who
+reads it, and how?
 
-They may fit Cosmos DB, Azure SQL Database, or sometimes both depending on the workflow.
-
-The idempotency question is:
-
-does this duplicate request check need to be part of the same SQL transaction as the order write?
-
-If yes, keeping the idempotency marker in Azure SQL Database may be simpler.
-
-The SQL unique constraint can protect the checkout path.
-
-If the idempotency record is a separate key-based lookup with a short lifetime, Cosmos DB may be a good candidate.
-
-The job-status question is:
-
-who reads it, and how?
-
-If the UI only asks "what is happening with job `job_913`?", Cosmos DB can fit nicely.
-
-If support needs rich reporting across jobs, customers, dates, worker versions, and failure reasons, SQL may be more comfortable.
-
-This is why the same data label can lead to different choices.
-
-"Job status" is not enough.
-
-The access pattern decides.
-
-Here is a review table.
+If the UI only asks "what is happening with job
+`job_913`?", Cosmos DB can fit nicely. If support needs
+rich reporting across jobs, customers, dates, worker
+versions, and failure reasons, SQL may be more
+comfortable. This is why the same data label can lead
+to different choices. "Job status" is not enough. The
+access pattern decides. Here is a review table.
 
 | Feature | Key question | Likely first choice |
 |---|---|---|
@@ -334,83 +224,66 @@ Here is a review table.
 | Export reporting | Does support need filters and reports? | Azure SQL Database can fit |
 | Temporary session state | Should it expire naturally? | Cosmos DB with TTL can fit |
 
-There is no prize for forcing all small records into one service.
-
-Choose the service that matches the read path and failure rule.
+There is no prize for forcing all small records into
+one service. Choose the service that matches the read
+path and failure rule.
 
 ## Feature Review: VM Disks And Shared Folders
 
-Managed Disks and Azure Files appear when the workload expects operating-system storage.
+Managed Disks and Azure Files appear when the workload
+expects operating-system storage. This is different
+from storing product data. For example, a legacy import
+worker may run on an Azure VM. The VM needs an OS disk.
+It may need a data disk for scratch work. That points
+toward Managed Disks. The same worker may depend on a
+mounted folder of templates. If several workers must
+see the same folder, Azure Files may be useful. But if
+the worker only writes the final CSV export for
+download, Blob Storage is usually better. The final
+file should not live only on a VM disk.
 
-This is different from storing product data.
-
-For example, a legacy import worker may run on an Azure VM.
-
-The VM needs an OS disk.
-
-It may need a data disk for scratch work.
-
-That points toward Managed Disks.
-
-The same worker may depend on a mounted folder of templates.
-
-If several workers must see the same folder, Azure Files may be useful.
-
-But if the worker only writes the final CSV export for download, Blob Storage is usually better.
-
-The final file should not live only on a VM disk.
-
-The useful question is:
-
-does the application need filesystem behavior, or does it need durable file storage?
-
-Filesystem behavior means mounted paths, directories, file handles, and sometimes shared access.
-
-Durable file storage means "put these bytes somewhere the app can read later by name."
-
-Those are not the same promise.
+The useful question is: does the application need
+filesystem behavior, or does it need durable file
+storage? Filesystem behavior means mounted paths,
+directories, file handles, and sometimes shared access.
+Durable file storage means "put these bytes somewhere
+the app can read later by name." Those are not the same
+promise.
 
 ## Failure Patterns That Tell You The Choice Is Wrong
 
-Bad data choices often reveal themselves through repeated pain.
+Bad data choices often reveal themselves through
+repeated pain. The app stores order records as blobs,
+then every report becomes a batch job that lists and
+parses thousands of files. That points back toward
+relational storage. The app stores receipt PDFs in SQL,
+then backups grow slowly and query performance suffers
+around large binary columns. That points toward Blob
+Storage plus SQL metadata. The app stores job status in
+SQL, but the UI polls thousands of times per minute and
+the query pattern is always by job ID. That might point
+toward a key-based store or a different polling design.
 
-The app stores order records as blobs, then every report becomes a batch job that lists and parses thousands of files.
-
-That points back toward relational storage.
-
-The app stores receipt PDFs in SQL, then backups grow slowly and query performance suffers around large binary columns.
-
-That points toward Blob Storage plus SQL metadata.
-
-The app stores job status in SQL, but the UI polls thousands of times per minute and the query pattern is always by job ID.
-
-That might point toward a key-based store or a different polling design.
-
-The app stores generated exports on a VM disk, then a deployment replaces the VM and files disappear.
-
-That points toward Blob Storage.
-
-The app uses Azure Files for a new service that only needs to store final files, then the team spends time debugging mounts and locks.
-
-That points toward object storage.
-
-The app uses Cosmos DB for business records, then product asks for flexible reports every week and each new query causes redesign.
-
+The app stores generated exports on a VM disk, then a
+deployment replaces the VM and files disappear. That
+points toward Blob Storage. The app uses Azure Files
+for a new service that only needs to store final files,
+then the team spends time debugging mounts and locks.
+That points toward object storage. The app uses Cosmos
+DB for business records, then product asks for flexible
+reports every week and each new query causes redesign.
 That points toward SQL or a separate analytics path.
+These are not moral failures. They are feedback from
+the system.
 
-These are not moral failures.
-
-They are feedback from the system.
-
-When the same kind of pain repeats, inspect whether the storage shape matches the data behavior.
+When the same kind of pain repeats, inspect whether the
+storage shape matches the data behavior.
 
 ## A Decision Record You Can Reuse
 
-A good decision record is short enough to write before implementation.
-
-It should be specific enough to catch a weak choice.
-
-Use this format:
+A good decision record is short enough to write before
+implementation. It should be specific enough to catch a
+weak choice. Use this format:
 
 ```text
 Feature:
@@ -444,13 +317,10 @@ What we are not using: VM disk or Azure Files for receipt storage
 First recovery plan: restore missing blob if protected, or regenerate from order data if supported
 ```
 
-That record is not long.
-
-It is clear.
-
-It tells a reviewer why the service choice matches the feature.
-
-That is the standard you want for everyday Azure data decisions.
+That record is not long. It is clear. It tells a
+reviewer why the service choice matches the feature.
+That is the standard you want for everyday Azure data
+decisions.
 
 ---
 

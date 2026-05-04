@@ -1,0 +1,142 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "The first production map for `devpolaris-orders-api` has this empty row:\n\nJob: run the backend container and restart it if a copy stops\nEvidence wanted: health status, current revision, logs from each running copy\n\nWhich resource family best belongs in that row?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Azure Container Apps or another Azure compute host, because the job is to run the application process and keep copies alive."
+        },
+        {
+          "id": "b",
+          "text": "Azure SQL Database, because the API depends on order data and runtime issues often show up near the database."
+        },
+        {
+          "id": "c",
+          "text": "Azure DNS, because DNS decides whether a process is running."
+        },
+        {
+          "id": "d",
+          "text": "Cost Management, because cost ownership is the same job as runtime scheduling."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The row describes runtime: starting, restarting, scaling, and observing running app copies. Azure SQL, DNS, and Cost Management are important, but they answer different questions."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A junior engineer suggests writing uploaded invoice PDFs into the local filesystem of the running container because it is close to the app code. What is the safer first correction?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Use a storage resource such as Blob Storage for file-like data, then let the app store references or metadata separately."
+        },
+        {
+          "id": "b",
+          "text": "Use the container filesystem and add more CPU, because local disk becomes durable when the app has enough capacity."
+        },
+        {
+          "id": "c",
+          "text": "Key Vault, if the PDFs contain private customer information and access needs to be tightly controlled."
+        },
+        {
+          "id": "d",
+          "text": "Azure Monitor logs, if the team mostly needs to search for upload and download events during support."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Container filesystems are runtime storage, not durable application data. Blob Storage fits file-like objects. Key Vault is for secrets and keys, while Monitor is for telemetry, not user documents."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "The team wants a minimal first Azure shape for the orders API. The review goal is not to choose every future service, but to make sure the first production map has somewhere to run, somewhere to keep data, and a safe way to access private configuration. Which pieces belong in the map before the team argues about advanced architecture?",
+      "options": [
+        {
+          "id": "a",
+          "text": "A compute home for the backend process."
+        },
+        {
+          "id": "b",
+          "text": "A data store for order records or exported files, depending on what the app must keep."
+        },
+        {
+          "id": "c",
+          "text": "A way for the app to prove its identity before reading secrets or calling Azure services."
+        },
+        {
+          "id": "d",
+          "text": "A second cloud provider, because a first production map is incomplete unless it is multi-cloud."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "The first map should cover runtime, data, and identity. Traffic and signals usually follow close behind. Multi-cloud is a separate resilience and ownership decision, not a required foundation for understanding Azure placement."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "Users can place orders, but the team cannot find request logs after an incident. The service map shows compute and database rows, but the signals row is blank. Which Azure area should be added to the map?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Azure Monitor, Log Analytics, or Application Insights, because the missing job is collecting and searching runtime evidence."
+        },
+        {
+          "id": "b",
+          "text": "A second Azure SQL database, because logs should be kept beside transactional rows."
+        },
+        {
+          "id": "c",
+          "text": "A resource group convention that tells the team which service should own telemetry configuration."
+        },
+        {
+          "id": "d",
+          "text": "A new DNS zone, because DNS records contain the request history for public endpoints."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The symptom is missing operational evidence, not missing business data. Monitor, Log Analytics, and Application Insights are the Azure services that help collect logs, metrics, traces, and request evidence."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A deployment note says: `PAYMENT_API_KEY is baked into the container image during build so the app can start in Azure.` What is the best foundation-level correction?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Keep the image generic, store the secret in Key Vault or an equivalent secret store, and let the running app read it using a managed identity or configured secret reference."
+        },
+        {
+          "id": "b",
+          "text": "Keep the key in the image only for production and rotate the image whenever the key changes."
+        },
+        {
+          "id": "c",
+          "text": "Move the key into the public DNS record because DNS is already available before the app starts."
+        },
+        {
+          "id": "d",
+          "text": "Put the key in deployment variables controlled by the pipeline without separating secret storage from build output."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Secrets should not be baked into reusable artifacts. The safer Azure shape separates image, runtime configuration, secret storage, and runtime identity. Rotating image tags does not make a secret safe."
+    }
+  ]
+}

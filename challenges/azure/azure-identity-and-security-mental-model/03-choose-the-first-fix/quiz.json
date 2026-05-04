@@ -1,0 +1,142 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "The deployment pipeline fails with `AuthorizationFailed` for `Microsoft.Authorization/roleAssignments/write` at subscription scope. The pipeline identity can deploy app resources in one resource group. What is the safest interpretation?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The pipeline can deploy some resources, but creating role assignments at subscription scope needs a different permission and should be reviewed carefully."
+        },
+        {
+          "id": "b",
+          "text": "The pipeline is broken for all Azure operations, so replacing the service principal is the first fix."
+        },
+        {
+          "id": "c",
+          "text": "The app resource group is unhealthy, so role assignments should be retried in a new group."
+        },
+        {
+          "id": "d",
+          "text": "The region is not available, so Azure reports role assignment errors instead of service availability errors."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The denied action is specifically role assignment creation at a broad scope. That is a sensitive permission. Existing deploy ability inside one group does not imply authority to grant access."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "The app fails after a secret rotation. Logs show it is still requesting version `v1`, while Key Vault has enabled version `v2` and disabled `v1`. Which fix direction matches the evidence?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Update the app configuration or secret reference so it no longer pins the disabled version, then verify the new version works."
+        },
+        {
+          "id": "b",
+          "text": "Grant the app Owner on the subscription, because Owner can read disabled secret versions."
+        },
+        {
+          "id": "c",
+          "text": "Move the vault into the app resource group, because version pinning is caused by group boundaries."
+        },
+        {
+          "id": "d",
+          "text": "Add another managed identity, because multiple identities automatically choose the newest secret version."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The problem is version selection and rotation behavior. Broader RBAC or another identity does not repair an app that still points at a disabled version."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "A developer says production secret reads work from their laptop using `az login`, but the deployed app gets `Forbidden`. What is the most likely confusion? The developer test used `az login` from a laptop, while production uses a managed identity attached to the running app revision.",
+      "options": [
+        {
+          "id": "a",
+          "text": "The developer's user identity and the app's runtime identity are different callers with different permissions."
+        },
+        {
+          "id": "b",
+          "text": "The laptop and the app share all Azure permissions once they use the same subscription."
+        },
+        {
+          "id": "c",
+          "text": "The deployed app needs the developer to stay signed in for managed identity to work."
+        },
+        {
+          "id": "d",
+          "text": "The production app cannot use Key Vault unless every developer also has vault access."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "This is a classic caller mix-up. A successful laptop test proves that the developer's identity can read the secret, not that the app's runtime identity can."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "Which fixes reduce risk when a production access issue appears? The incident is active, but the team knows every permission change will be reviewed afterward by the security owner.",
+      "options": [
+        {
+          "id": "a",
+          "text": "Confirm the caller identity before granting new access."
+        },
+        {
+          "id": "b",
+          "text": "Grant the smallest role at the smallest useful scope."
+        },
+        {
+          "id": "c",
+          "text": "Record the reason, owner, and expiry or review date for unusual access."
+        },
+        {
+          "id": "d",
+          "text": "Grant broad access first and plan to clean it up after the incident without recording why."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "Good incident fixes still preserve auditability and blast-radius control. Broad temporary access may happen in rare emergencies, but it should not be the default and should not be undocumented."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "An access review finds `Contributor` assigned to `All Engineers` at the production subscription. The team only needs a few people to restart the orders app and read logs. What is the best first remediation plan?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Replace the broad assignment with narrower roles and scopes that match restart and log-read tasks, then review who actually needs them."
+        },
+        {
+          "id": "b",
+          "text": "Keep Contributor because production access is easier if everyone can fix anything."
+        },
+        {
+          "id": "c",
+          "text": "Move production to a new region, because region separation is the right fix for broad RBAC."
+        },
+        {
+          "id": "d",
+          "text": "Rename the group to `Production Operators`, because Azure treats clearer names as narrower permissions."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The issue is excessive role and scope. Narrower roles, narrower scope, and group membership review reduce blast radius. Renaming or moving regions does not change the access power."
+    }
+  ]
+}

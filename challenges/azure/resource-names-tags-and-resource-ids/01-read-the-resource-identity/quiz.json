@@ -1,0 +1,142 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A deployment log shows this target:\n\n`/subscriptions/sub-prod-001/resourceGroups/rg-devpolaris-orders-prod/providers/Microsoft.Storage/storageAccounts/stdevpolarisordersprod`\n\nWhich fact can you read directly from the resource ID?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The subscription, resource group, provider namespace, resource type, and resource name."
+        },
+        {
+          "id": "b",
+          "text": "The resource owner's phone number and on-call schedule."
+        },
+        {
+          "id": "c",
+          "text": "The exact monthly cost and whether the resource is safe to delete."
+        },
+        {
+          "id": "d",
+          "text": "The app's runtime language and current image tag."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "A resource ID gives scope and type evidence. It does not replace tags, cost reports, ownership records, or runtime details."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "The team has two resources named `orders-prod`: one is a resource group and one is an Application Insights component. A script author wants to use only the visible name because both resources belong to the same app. Why is name-only automation risky?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Names are scoped differently by service, so automation should include resource type, subscription, resource group, and ideally the full resource ID."
+        },
+        {
+          "id": "b",
+          "text": "Azure forbids two resources from sharing any visible name anywhere in a tenant."
+        },
+        {
+          "id": "c",
+          "text": "Application Insights names are not real resource names."
+        },
+        {
+          "id": "d",
+          "text": "Resource group names are useful context, so a matching group name is enough for human review but not for automation."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Azure naming rules vary by service and scope. A human-friendly name is not enough for safe automation. Full IDs reduce ambiguity."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "A review tool shows a resource name, tags, and the full Azure resource ID for each production resource. The reviewer wants to know which piece of evidence to use for human recognition, inventory, and exact automation scope. Which statements describe the different jobs of names, tags, and resource IDs?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Names help humans recognize a resource quickly."
+        },
+        {
+          "id": "b",
+          "text": "Tags help inventory, ownership, cost, environment, and search when teams use them consistently."
+        },
+        {
+          "id": "c",
+          "text": "Resource IDs give exact Azure scope and type for automation, RBAC, policy, and logs."
+        },
+        {
+          "id": "d",
+          "text": "Tags grant runtime permission to read secrets without RBAC or managed identity."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "Names, tags, and IDs complement each other. Tags are metadata, not permission grants. Runtime access still needs identity and authorization."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "A resource is tagged `env=prod`, but its ID is under `/subscriptions/sub-dev-001/`. The change request says it is safe because the tag is the value the dashboard uses. What should a reviewer do before approving a production change?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Treat the mismatch as a warning and verify subscription, resource group, owner, and intended environment before changing anything."
+        },
+        {
+          "id": "b",
+          "text": "Trust the tag first, because the dashboard and cost reports use tags to decide environment."
+        },
+        {
+          "id": "c",
+          "text": "Trust the subscription first, but open a follow-up ticket to repair the misleading tag after the change."
+        },
+        {
+          "id": "d",
+          "text": "Ignore the mismatch if the resource name contains `orders`."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Mismatched evidence is exactly why names, tags, and IDs should be read together. Neither tag nor subscription should be blindly ignored without review."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "An incident ticket says `restart orders api`, but there are resources named `orders-api` in dev, staging, and prod. What is the safest target format for an automation runbook?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The full resource ID for the intended production resource, plus tags or owner notes as human confirmation."
+        },
+        {
+          "id": "b",
+          "text": "The visible resource name plus the environment tag, because that is usually enough for an operator to recognize the target."
+        },
+        {
+          "id": "c",
+          "text": "A name prefix such as `orders`, as long as the runbook says production in the title."
+        },
+        {
+          "id": "d",
+          "text": "The public URL plus the resource group name, because those are the clues most responders see first."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Runbooks should remove ambiguity. A full resource ID is much safer than a partial name or public URL when several environments share similar names."
+    }
+  ]
+}

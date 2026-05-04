@@ -1,6 +1,7 @@
 ---
 title: "Cost Visibility and Right-Sizing"
 description: "Practice using tags, Cost Explorer, budgets, monthly snapshots, right-sizing, and spend-jump diagnosis."
+articleId: article-cloud-iac-finops-resilience-cost-management
 articleSlug: cost-visibility-and-right-sizing
 difficulty: medium
 order: 37

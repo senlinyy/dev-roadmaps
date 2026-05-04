@@ -1,0 +1,142 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "DevPolaris is launching the orders API for one market. The team has one on-call group, one database, and no proven cross-region failover process yet. What is the most reasonable first resilience target?",
+      "options": [
+        {
+          "id": "a",
+          "text": "A single region with deliberate zone-aware choices for critical services, plus clear backups and restore testing."
+        },
+        {
+          "id": "b",
+          "text": "Active-active multi-region on day one, even if nobody has tested data conflict handling or failover."
+        },
+        {
+          "id": "c",
+          "text": "One VM in one zone because all additional resilience makes debugging impossible."
+        },
+        {
+          "id": "d",
+          "text": "No backup plan until the first outage proves which data matters."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "For many beginner production systems, single-region with thoughtful zone and backup choices is a reasonable first step. Multi-region can be valuable, but only with real operational and data design behind it."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "The product team asks for multi-region because the phrase sounds safer. The database has writes on every checkout, and the team has not decided how conflicts, failover, DNS, secrets, or monitoring would work. What should the platform team say?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Multi-region may be a future goal, but the team should first define data consistency, failover ownership, traffic routing, and recovery tests."
+        },
+        {
+          "id": "b",
+          "text": "Multi-region gives more options during incidents, so start by copying compute to another region before deciding data behavior."
+        },
+        {
+          "id": "c",
+          "text": "Multi-region can start at the frontend and API layer while the database and secrets stay in one region until a later phase."
+        },
+        {
+          "id": "d",
+          "text": "A second region can act as the backup strategy if the team keeps enough recent data there."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Multi-region is not just more copies. It adds data, traffic, identity, monitoring, cost, and failover decisions. Without those decisions, it can create a more complicated failure mode."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "During architecture review, the team wants to know whether a production symptom points to region or zone placement instead of application code. Which signals suggest the team should revisit region or zone placement rather than only tuning application code?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Every checkout request crosses regions between compute and database."
+        },
+        {
+          "id": "b",
+          "text": "All app replicas are in one zone, and the service has an uptime target that expects zone tolerance."
+        },
+        {
+          "id": "c",
+          "text": "A required service is not available in the chosen region."
+        },
+        {
+          "id": "d",
+          "text": "The API route handler has a typo in the JSON response body."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "Cross-region request paths, single-zone concentration, and service availability gaps are placement concerns. A response-body typo is application code, not a region or zone design problem."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "A compliance review says order data must stay in the EU. A proposed failover region is outside the EU because it is cheaper. What should happen before approving that design?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Stop and review data residency requirements, supported EU regions, and the recovery design before placing order data there."
+        },
+        {
+          "id": "b",
+          "text": "Approve it if the resource group has a `prod` tag, because tags satisfy residency requirements."
+        },
+        {
+          "id": "c",
+          "text": "Approve it only for standby resources if the team promises not to write customer data there during normal operation."
+        },
+        {
+          "id": "d",
+          "text": "Route EU users through an EU public endpoint and review data placement after the first failover test."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Data residency is a placement requirement, not a cosmetic label. Tags and DNS names do not change where data is stored or processed."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A team is not ready for multi-region, but wants a better first operating habit for a single-region production system. They want something useful for on-call engineers and future architecture reviews. Which action gives practical value without pretending to solve every outage?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Document the chosen region and zone shape, test restore, and write clear conditions for when the team would consider multi-region."
+        },
+        {
+          "id": "b",
+          "text": "Create empty resources in a second region and call the service highly available."
+        },
+        {
+          "id": "c",
+          "text": "Disable monitoring until the architecture is more mature."
+        },
+        {
+          "id": "d",
+          "text": "Prefer services with global names where possible, then document region-specific dependencies later."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "A clear placement record, restore test, and future decision criteria make the design more operable. Empty resources or vague global names do not create real resilience."
+    }
+  ]
+}

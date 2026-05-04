@@ -1,6 +1,7 @@
 ---
 title: "EC2 Virtual Servers"
 description: "Practice operating devpolaris-orders-api on EC2 by reading launch choices, access paths, systemd evidence, and failure signals."
+articleId: article-cloud-providers-aws-compute-application-hosting-ec2-virtual-servers
 articleSlug: ec2-virtual-servers
 difficulty: medium
 order: 16

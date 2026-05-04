@@ -1,0 +1,142 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "Users report `502 Bad Gateway` at `https://orders.devpolaris.example`. Application logs show no matching request IDs for the failed calls, and the database CPU is normal. Which part of the map should the team inspect first?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Traffic entry and backend health, because the failed requests may not be reaching the app."
+        },
+        {
+          "id": "b",
+          "text": "Database schema migrations, because normal CPU proves the database changed shape."
+        },
+        {
+          "id": "c",
+          "text": "Blob Storage download settings, because some user-facing errors come from export files rather than checkout."
+        },
+        {
+          "id": "d",
+          "text": "Quota and scale settings, because capacity pressure can sometimes make backend targets unhealthy."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The absence of app request logs is strong evidence. Start at the public entry, routing, target health, and backend list before diving into database or storage."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A new revision is deployed, but Container Apps keeps running the previous revision. The image reference in the revision says `acrdevpolaris.azurecr.io/orders-api:1.8.4`, while the registry only has tags `1.8.3` and `latest`. What should the team check first?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The artifact and deployment path: whether the expected image tag or digest exists in Azure Container Registry and is referenced by the revision."
+        },
+        {
+          "id": "b",
+          "text": "The SQL firewall, because missing image tags are caused by blocked database traffic."
+        },
+        {
+          "id": "c",
+          "text": "The public endpoint configuration, because users reach the API through that endpoint after the deploy."
+        },
+        {
+          "id": "d",
+          "text": "The resource group lock settings, because locks can prevent infrastructure changes during release."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The evidence points to the image artifact path. Before debugging runtime code, confirm the expected image exists and the revision points at it."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "The API logs show `ETIMEDOUT` when connecting to Azure SQL. The database exists, the connection string server name is correct, and the managed identity can authenticate. Which map area is the next best suspect?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Network and database access rules, such as private endpoint, firewall, subnet, or route configuration."
+        },
+        {
+          "id": "b",
+          "text": "Application Insights sampling, because sampling blocks database TCP traffic."
+        },
+        {
+          "id": "c",
+          "text": "Container Registry permissions, because image pull access controls SQL timeouts."
+        },
+        {
+          "id": "d",
+          "text": "Cost Management tags, because missing tags block database sockets."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "After identity and name are cleared, a timeout points toward reachability. The map helps narrow the next check to network and database access rules."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "During an incident, the team has several symptoms from different places in the system. They want to avoid jumping straight to code changes when the evidence points to traffic, identity, or storage instead. Which observations are good reasons to move to a different row of the service map?",
+      "options": [
+        {
+          "id": "a",
+          "text": "No app logs for failed requests, so inspect traffic entry before app internals."
+        },
+        {
+          "id": "b",
+          "text": "Key Vault returns `Forbidden`, so inspect identity and secret access before database tuning."
+        },
+        {
+          "id": "c",
+          "text": "Only export downloads fail, so inspect Blob Storage path and permissions before changing checkout tables."
+        },
+        {
+          "id": "d",
+          "text": "The deployment package changed, so inspect the image and release record before assuming a package upgrade is the right fix."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "A service map helps match symptoms to the likely responsibility area. Runtime language matters sometimes, but it is not a universal first suspect."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A monthly cost spike appears. The map shows the API, database, storage, and monitor resources, but tags are inconsistent and two resource groups have unclear owners. What is the best first debugging move?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Use resource IDs, tags, resource groups, and cost records together to identify which service area and owner produced the spend."
+        },
+        {
+          "id": "b",
+          "text": "Pause the largest expensive resource first, then investigate ownership after spend stops growing."
+        },
+        {
+          "id": "c",
+          "text": "Restart the API first, because a sudden spike can come from runaway retries or noisy logs."
+        },
+        {
+          "id": "d",
+          "text": "Start with the public entry service, because every customer-facing service usually appears near the edge."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Cost debugging is still map work. The team needs ownership, resource identity, service type, and cost evidence before changing or deleting anything."
+    }
+  ]
+}

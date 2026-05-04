@@ -22,15 +22,23 @@ id: article-cloud-providers-azure-deployment-runtime-operations-release-verifica
 
 ## The Release Is Not Done When Traffic Moves
 
-Traffic moved to the new version. That is not the end of the release. It is the beginning of the watch window.
+Traffic moved to the new version. That is not the end
+of the release. It is the beginning of the watch
+window. A watch window is the period after traffic
+moves when the team actively looks for evidence that
+the release is healthy. This matters because some
+failures only appear under real traffic. A health
+endpoint may pass, and a fake checkout may pass. Then
+real users hit a rare payment provider path, one region
+has slower storage calls, or the app works for new
+customers but fails for customers with old data.
+Release verification is the practice of checking
+evidence after deployment. Rollback decision-making is
+the practice of choosing what to do if the evidence is
+bad.
 
-A watch window is the period after traffic moves when the team actively looks for evidence that the release is healthy.
-
-This matters because some failures only appear under real traffic. A health endpoint may pass, and a fake checkout may pass. Then real users hit a rare payment provider path, one region has slower storage calls, or the app works for new customers but fails for customers with old data.
-
-Release verification is the practice of checking evidence after deployment. Rollback decision-making is the practice of choosing what to do if the evidence is bad.
-
-For `devpolaris-orders-api`, verification should answer:
+For `devpolaris-orders-api`, verification should
+answer:
 
 - Are checkout requests succeeding?
 - Is response time normal?
@@ -40,13 +48,17 @@ For `devpolaris-orders-api`, verification should answer:
 - Are alerts firing?
 - Are users affected?
 
-The release owner should not wait for a vague feeling. They should look at known signals.
+The release owner should not wait for a vague feeling.
+They should look at known signals.
 
 ## If You Know AWS Release Checks
 
-If you have learned AWS deployments, the shape is familiar. You may have watched CloudWatch alarms after an ECS deploy, checked Lambda errors after shifting an alias, or inspected X-Ray traces or load balancer target health.
-
-Azure uses different tools, but the release judgment is the same.
+If you have learned AWS deployments, the shape is
+familiar. You may have watched CloudWatch alarms after
+an ECS deploy, checked Lambda errors after shifting an
+alias, or inspected X-Ray traces or load balancer
+target health. Azure uses different tools, but the
+release judgment is the same.
 
 | AWS idea you may know | Azure idea to compare first | Shared question |
 |---|---|---|
@@ -60,15 +72,21 @@ The useful habit is:
 
 > Verify the release with production-shaped evidence.
 
-Do not rely only on the fact that the deployment command finished. The cloud accepted your change. Users still need the app to work.
+Do not rely only on the fact that the deployment
+command finished. The cloud accepted your change. Users
+still need the app to work.
 
 ## Verification Has Layers
 
-One check is not enough because different checks catch different problems.
-
-Startup checks catch missing config and broken boot. Health checks catch a running process that is not ready. Smoke tests catch the main user path. Application Insights catches request failures, dependency failures, and slow transactions. Azure Monitor alerts catch thresholds that deserve attention. Human review catches context that automation may not know yet.
-
-Here is the layered picture.
+One check is not enough because different checks catch
+different problems. Startup checks catch missing config
+and broken boot. Health checks catch a running process
+that is not ready. Smoke tests catch the main user
+path. Application Insights catches request failures,
+dependency failures, and slow transactions. Azure
+Monitor alerts catch thresholds that deserve attention.
+Human review catches context that automation may not
+know yet. Here is the layered picture.
 
 ```mermaid
 flowchart TD
@@ -86,9 +104,11 @@ flowchart TD
     Alerts --> Decision
 ```
 
-This is not meant to be slow ceremony. It is meant to catch failures at the cheapest point.
-
-If the health check fails, do not send more traffic. If the smoke test fails, stop before users discover it. If real telemetry degrades, make a release decision quickly.
+This is not meant to be slow ceremony. It is meant to
+catch failures at the cheapest point. If the health
+check fails, do not send more traffic. If the smoke
+test fails, stop before users discover it. If real
+telemetry degrades, make a release decision quickly.
 
 ## Health Checks Prove The App Can Serve
 
@@ -96,11 +116,18 @@ A health check should answer:
 
 > Can this app instance or revision serve traffic safely?
 
-For App Service, Health check pings a path you choose. For Container Apps, probes can check startup, liveness, and readiness. The exact platform behavior differs, but the meaning should be clear.
-
-For `devpolaris-orders-api`, `GET /health` should not return success just because the HTTP server process exists. Checkout depends on Azure SQL Database and Blob Storage, so the health check should at least prove the app has required config and can reach critical dependencies. If the team keeps the public health check shallow, it should have a separate readiness check that does the deeper work.
-
-A useful health result might be:
+For App Service, Health check pings a path you choose.
+For Container Apps, probes can check startup, liveness,
+and readiness. The exact platform behavior differs, but
+the meaning should be clear. For
+`devpolaris-orders-api`, `GET /health` should not
+return success just because the HTTP server process
+exists. Checkout depends on Azure SQL Database and Blob
+Storage, so the health check should at least prove the
+app has required config and can reach critical
+dependencies. If the team keeps the public health check
+shallow, it should have a separate readiness check that
+does the deeper work. A useful health result might be:
 
 ```text
 GET /health
@@ -127,17 +154,19 @@ blob_storage: not_checked
 version: 2026.05.03.1842
 ```
 
-Do not overload health with heavy work. It should be safe to call often. But do not make it so shallow that it says healthy while checkout cannot work.
-
-Health is a release gate. Make it meaningful.
+Do not overload health with heavy work. It should be
+safe to call often. But do not make it so shallow that
+it says healthy while checkout cannot work. Health is a
+release gate. Make it meaningful.
 
 ## Smoke Tests Prove The User Path Works
 
-A smoke test is a small test that proves the main path is not obviously broken. The name comes from old hardware testing: turn it on and make sure smoke does not come out.
-
-For a backend API, a smoke test should be safe, repeatable, and close to the user path.
-
-For `devpolaris-orders-api`, the smoke test might:
+A smoke test is a small test that proves the main path
+is not obviously broken. The name comes from old
+hardware testing: turn it on and make sure smoke does
+not come out. For a backend API, a smoke test should be
+safe, repeatable, and close to the user path. For
+`devpolaris-orders-api`, the smoke test might:
 
 - Create a fake checkout with a test payment token.
 - Write an order record to Azure SQL Database.
@@ -145,9 +174,9 @@ For `devpolaris-orders-api`, the smoke test might:
 - Return an order ID.
 - Emit Application Insights telemetry.
 
-The smoke test should not charge a real card, create confusing real customer data, or depend on a developer's laptop.
-
-A release record might show:
+The smoke test should not charge a real card, create
+confusing real customer data, or depend on a
+developer's laptop. A release record might show:
 
 ```text
 smoke test: checkout-test-2026-05-03-1842
@@ -158,13 +187,18 @@ receipt_blob: smoke/2026-05-03/smoke_ord_2026_05_03_1842.pdf
 duration_ms: 812
 ```
 
-That is evidence. If the smoke test fails, the release owner should stop traffic movement and inspect the failure. The smoke test is there to protect users from obvious breakage.
+That is evidence. If the smoke test fails, the release
+owner should stop traffic movement and inspect the
+failure. The smoke test is there to protect users from
+obvious breakage.
 
 ## Application Insights Shows Real Request Behavior
 
-After traffic moves, Application Insights becomes one of the most useful release views. It can show failed requests, slow requests, dependency calls, exceptions, and the database or storage calls inside one checkout request.
-
-For a release window, the team might watch:
+After traffic moves, Application Insights becomes one
+of the most useful release views. It can show failed
+requests, slow requests, dependency calls, exceptions,
+and the database or storage calls inside one checkout
+request. For a release window, the team might watch:
 
 | Signal | Why it matters |
 |---|---|
@@ -174,7 +208,8 @@ For a release window, the team might watch:
 | Blob Storage dependency failures | Shows receipt upload problems |
 | New exception types | Shows code paths not caught by tests |
 
-The important word is "new." Every production system has some background noise. A release owner should ask:
+The important word is "new." Every production system
+has some background noise. A release owner should ask:
 
 > What changed after this version started receiving traffic?
 
@@ -194,13 +229,16 @@ Azure SQL dependency failures: 1 transient timeout
 decision: continue watching, do not increase traffic yet
 ```
 
-That decision is calm. The release is not perfect, but it is not clearly bad. The team keeps watching before increasing traffic.
+That decision is calm. The release is not perfect, but
+it is not clearly bad. The team keeps watching before
+increasing traffic.
 
 ## Azure Monitor Alerts Watch The Release Window
 
-Alerts are useful during release, but only if they are tuned to real action. During a release, the team should know which alerts matter.
-
-For `devpolaris-orders-api`, release-window alerts might include:
+Alerts are useful during release, but only if they are
+tuned to real action. During a release, the team should
+know which alerts matter. For `devpolaris-orders-api`,
+release-window alerts might include:
 
 - Checkout failed request rate above a threshold.
 - Checkout latency above a threshold.
@@ -209,9 +247,8 @@ For `devpolaris-orders-api`, release-window alerts might include:
 - Container revision degraded or not ready.
 - Availability test failures.
 
-An alert should have an owner and a first check. It should not only say "bad thing happened."
-
-For example:
+An alert should have an owner and a first check. It
+should not only say "bad thing happened." For example:
 
 ```text
 alert: checkout-failure-rate-high
@@ -221,7 +258,9 @@ first check: Application Insights failures filtered by version 2026.05.03.1842
 release action: hold traffic increase, consider rollback if dependency failures or new exceptions continue
 ```
 
-This makes the alert useful in a release meeting. It connects the signal to a decision. Without that connection, alerts become noise.
+This makes the alert useful in a release meeting. It
+connects the signal to a decision. Without that
+connection, alerts become noise.
 
 ## Rollback Or Fix Forward Is A Judgment Call
 
@@ -229,9 +268,16 @@ When a release fails, teams often ask:
 
 > Should we roll back or fix forward?
 
-Rollback means return users to a known working version or configuration. Fix forward means keep the new release path and apply a correction. Neither is always right.
-
-Rollback is usually better when users are actively hurt, the old version is compatible, and the rollback path is clear. Fix forward may be better when rollback would be dangerous, the fix is tiny and well understood, or the issue is outside the artifact. Stopping the rollout may be the right answer when evidence is unclear and traffic has not fully moved.
+Rollback means return users to a known working version
+or configuration. Fix forward means keep the new
+release path and apply a correction. Neither is always
+right. Rollback is usually better when users are
+actively hurt, the old version is compatible, and the
+rollback path is clear. Fix forward may be better when
+rollback would be dangerous, the fix is tiny and well
+understood, or the issue is outside the artifact.
+Stopping the rollout may be the right answer when
+evidence is unclear and traffic has not fully moved.
 
 For `devpolaris-orders-api`, consider these cases:
 
@@ -243,9 +289,8 @@ For `devpolaris-orders-api`, consider these cases:
 | Database migration changed data in a way old version cannot read | Stop and plan repair carefully, rollback may not help |
 | One non-critical metric is noisy but users are healthy | Hold rollout and investigate before increasing traffic |
 
-The best decision comes from evidence. Do not roll back blindly, and do not fix forward stubbornly.
-
-Ask:
+The best decision comes from evidence. Do not roll back
+blindly, and do not fix forward stubbornly. Ask:
 
 - Are users affected?
 - Is the old path known good?
@@ -255,7 +300,8 @@ Ask:
 
 ## Failure Scenarios And Decisions
 
-These scenarios are not scripts. They are decision practice.
+These scenarios are not scripts. They are decision
+practice.
 
 | Scenario | Better first decision | First checks |
 |---|---|---|
@@ -265,12 +311,12 @@ These scenarios are not scripts. They are decision practice.
 | The release changed a database migration and old code cannot read the new schema | Do not assume rollback is safe. Stop traffic increase, protect data, and follow the migration recovery plan | Migration record, schema compatibility, data writes since release, and whether old and new code can coexist |
 | An alert fires, but the dashboard looks normal | Hold the rollout and inspect the alert signal before changing traffic | Alert scope, metric aggregation, time window, and whether the alert targets the new version or all traffic |
 
-The goal is to make the next action calm and explainable.
+The goal is to make the next action calm and
+explainable.
 
 ## A Practical Post-Release Checklist
 
 A post-release checklist should be short enough to use.
-
 For `devpolaris-orders-api`, use this:
 
 ```text
@@ -315,9 +361,12 @@ production action: swap completed
 rollback target: swap back to previous production slot state
 ```
 
-The checklist is not there to slow the team down. It keeps the release owner from relying on memory while production is changing.
-
-Good release verification makes the decision visible: keep the rollout moving, hold traffic, roll back, or fix forward. That is the whole operating skill.
+The checklist is not there to slow the team down. It
+keeps the release owner from relying on memory while
+production is changing. Good release verification makes
+the decision visible: keep the rollout moving, hold
+traffic, roll back, or fix forward. That is the whole
+operating skill.
 
 ---
 

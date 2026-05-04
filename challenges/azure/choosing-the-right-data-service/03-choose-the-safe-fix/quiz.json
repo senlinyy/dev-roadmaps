@@ -1,0 +1,142 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A failure review for Choosing The Right Data Service says the first attempted fix did not work. The team changed a nearby resource, but the evidence still points at choosing the data service. What should the next move be?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Move straight to application-code debugging because the symptom is visible to users at the API boundary."
+        },
+        {
+          "id": "b",
+          "text": "Return to the evidence, confirm the exact failing boundary, and choose the smallest fix that addresses that boundary."
+        },
+        {
+          "id": "c",
+          "text": "Apply a broader version of the same fix if the first attempt may have been too narrow."
+        },
+        {
+          "id": "d",
+          "text": "Evaluate a different Azure service family if the current service produced the last two incidents."
+        }
+      ],
+      "correct": [
+        "b"
+      ],
+      "explanation": "When a fix fails, the next move is not automatically a bigger fix. The team should return to the evidence and the boundary named by the article, then make the smallest defensible change."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "The team has two possible fixes for a Choosing The Right Data Service issue. Fix A is narrow and directly tied to the evidence. Fix B is broader and might cover several unknowns but changes Azure SQL, Blob Storage, Cosmos DB, Azure Files, and Managed Disks. Which choice is safer for a beginner team?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Choose the narrow evidence-backed fix first, unless the broader change has a clearly documented reason and rollback plan."
+        },
+        {
+          "id": "b",
+          "text": "Choose the broader fix because changing more resources reduces the chance of missing a hidden dependency."
+        },
+        {
+          "id": "c",
+          "text": "Choose the fix that the current on-call can apply fastest, then document any tradeoff after service is stable."
+        },
+        {
+          "id": "d",
+          "text": "Choose the fix that makes staging and production match more closely, even if the evidence points to a production-only condition."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Narrow, evidence-backed fixes are easier to verify and reverse. Broader changes are sometimes needed, but they deserve explicit reasoning because they increase blast radius."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "Which post-fix checks belong after a change related to Choosing The Right Data Service? The review happens during a production change window, so the answer must be based on current Azure evidence rather than a familiar product name or a broad safety guess.",
+      "options": [
+        {
+          "id": "a",
+          "text": "Inspect fresh evidence from data model, access pattern, durability need, consistency need, retention, and restore evidence."
+        },
+        {
+          "id": "b",
+          "text": "Update the release, incident, or recovery record with the changed resource and reason."
+        },
+        {
+          "id": "c",
+          "text": "Assume success if the portal shows the new setting, because saved configuration is the same as healthy behavior."
+        },
+        {
+          "id": "d",
+          "text": "Re-test the user path or workload behavior that originally failed."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "d"
+      ],
+      "explanation": "Saving a setting is not the same as proving the system works. The team should retest behavior, inspect fresh evidence, and update the operating record."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "A rollback plan for Choosing The Right Data Service says only, `undo the change if it fails`. The change affects Azure SQL, Blob Storage, Cosmos DB, Azure Files, and Managed Disks. What is missing?",
+      "options": [
+        {
+          "id": "a",
+          "text": "A dashboard link and alert name, because monitoring can show whether rollback is needed."
+        },
+        {
+          "id": "b",
+          "text": "A note that the resource is managed by Azure, because managed services reduce some recovery steps."
+        },
+        {
+          "id": "c",
+          "text": "The rollback target, the exact resources or settings to restore, the evidence that proves rollback worked, and the owner who can make the call."
+        },
+        {
+          "id": "d",
+          "text": "A clearer release title and owner note, because operators may already know the technical rollback steps."
+        }
+      ],
+      "correct": [
+        "c"
+      ],
+      "explanation": "Rollback needs concrete targets and proof. Managed services reduce some operations work, but they do not decide which application setting, route, secret, data target, or cost choice should be restored."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "The team wants one final habit from Choosing The Right Data Service to carry into future Azure work. Which habit is most useful? The review happens during a production change window, so the answer must be based on current Azure evidence rather than a familiar product name or a broad safety guess.",
+      "options": [
+        {
+          "id": "a",
+          "text": "Keep the evidence in the incident chat and wait until the monthly review to turn it into a runbook."
+        },
+        {
+          "id": "b",
+          "text": "Write down the job, the Azure resources involved, the evidence to inspect, the safe fix direction, and the rollback or review path."
+        },
+        {
+          "id": "c",
+          "text": "Remember the product name and the portal blade where the team fixed it last time."
+        },
+        {
+          "id": "d",
+          "text": "Prefer a broader setting temporarily if it reduces repeated approvals, then revisit it during the next review."
+        }
+      ],
+      "correct": [
+        "b"
+      ],
+      "explanation": "The reusable habit is a small operating record. Product names matter, but future operators need job, resources, evidence, fix direction, and rollback or review context."
+    }
+  ]
+}

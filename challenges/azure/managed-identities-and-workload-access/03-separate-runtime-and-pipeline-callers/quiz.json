@@ -1,0 +1,142 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "The release pipeline can update Container Apps revisions. After deploy, the running app cannot read Key Vault. Which identity should be checked first for the runtime failure?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The managed identity attached to the running app, not only the service principal used by the pipeline."
+        },
+        {
+          "id": "b",
+          "text": "The pipeline identity only, because it deployed the app and therefore handles all runtime calls."
+        },
+        {
+          "id": "c",
+          "text": "The developer who approved the release, because approvals become runtime identity."
+        },
+        {
+          "id": "d",
+          "text": "The public endpoint identity, because HTTPS hostnames read Key Vault on behalf of apps."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Deployment identity and runtime identity are different callers. A pipeline can deploy successfully while the app's managed identity lacks secret access."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A pipeline test fetches a secret successfully before deployment, but the new production revision fails with `Forbidden`. What was likely tested? The pre-deploy check runs before the Container Apps revision is updated, and the failure appears only after real production traffic hits the new revision.",
+      "options": [
+        {
+          "id": "a",
+          "text": "The pipeline identity's secret access, not the production app revision's runtime identity."
+        },
+        {
+          "id": "b",
+          "text": "The production runtime identity, because any secret test in the pipeline runs as the future app."
+        },
+        {
+          "id": "c",
+          "text": "The user's browser session, because pipelines inherit portal sessions."
+        },
+        {
+          "id": "d",
+          "text": "The database identity, because Key Vault uses database users for secret reads."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "A pre-deploy pipeline step usually runs as the pipeline identity. It does not prove that the deployed workload can read the secret at runtime."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "Which statements should be true in a clean deployment and runtime identity design? The release record has one section for deployment credentials and another section for the identity the running app will use after deployment.",
+      "options": [
+        {
+          "id": "a",
+          "text": "The pipeline identity has permissions to deploy or update the required resources."
+        },
+        {
+          "id": "b",
+          "text": "The runtime identity has permissions to call only the Azure services the app needs while running."
+        },
+        {
+          "id": "c",
+          "text": "Both identities are recorded so logs and access reviews can distinguish deploy actions from app actions."
+        },
+        {
+          "id": "d",
+          "text": "The pipeline and runtime should share one broad secret so role assignments are easier."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "Deployment and runtime jobs are different. Recording both identities helps audit. Sharing broad secrets increases risk and blurs accountability."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "The app works in staging but fails in production. Staging uses `mi-orders-shared`, production uses `mi-orders-prod`, and only the shared identity has Blob write access. What should the team fix?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Grant the production runtime identity the needed Blob permission, or intentionally change which identity production uses after review."
+        },
+        {
+          "id": "b",
+          "text": "Grant the staging identity subscription Owner so production can inherit the working access."
+        },
+        {
+          "id": "c",
+          "text": "Rename the production identity to match staging, because matching names copy role assignments."
+        },
+        {
+          "id": "d",
+          "text": "Move the storage account to staging, because working staging identity proves storage is staged."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The evidence points to different runtime identities and different role assignments. Names do not copy permissions, and staging roles do not automatically apply to production."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A rollback returns the app to the previous container image, but Key Vault access still fails. The identity assignment was changed during the release and not rolled back. What lesson should the team take?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Runtime identity and permission changes are part of release state, not just the container image."
+        },
+        {
+          "id": "b",
+          "text": "Rollbacks only fail when the database schema changed, so identity is not relevant."
+        },
+        {
+          "id": "c",
+          "text": "Managed identity assignments are permanent and should not be tracked in release records."
+        },
+        {
+          "id": "d",
+          "text": "Key Vault access should be handled by the pipeline so runtime rollbacks do not matter."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "A release includes image, configuration, identity, permissions, and sometimes network state. Rolling back only the image may not undo an identity or RBAC change."
+    }
+  ]
+}

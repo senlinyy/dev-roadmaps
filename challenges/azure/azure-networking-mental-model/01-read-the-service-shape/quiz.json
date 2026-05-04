@@ -1,0 +1,142 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "The DevPolaris team is reviewing Azure Networking Mental Model for `devpolaris-orders-api`. The review note says the relevant job is the request path, and the evidence available includes request logs, DNS answers, route tables, security rules, and backend health. What is the best first framing?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Change the backend code because the user-facing symptom appears at the API."
+        },
+        {
+          "id": "b",
+          "text": "Grant broader RBAC because network failures and permission failures often look similar in tickets."
+        },
+        {
+          "id": "c",
+          "text": "Use the resource group name and tags as the main proof, then inspect service behavior only if the first fix fails."
+        },
+        {
+          "id": "d",
+          "text": "Treat this as a traffic path decision and use the evidence to decide which Azure component owns the behavior."
+        }
+      ],
+      "correct": [
+        "d"
+      ],
+      "explanation": "The article is about recognizing the job before changing resources. The best answer keeps the focus on the request path and uses concrete evidence. The distractors are plausible shortcuts, but they skip the boundary between service responsibility, ownership metadata, and runtime behavior."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A production symptom appears while the team is studying Azure Networking Mental Model: users see intermittent timeouts while the app logs show no matching checkout request. The release record does not show a code change in the checkout handler. Which first check fits the article best?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Start with a broad permission increase, because access issues can block many Azure operations."
+        },
+        {
+          "id": "b",
+          "text": "Create a parallel replacement resource if it can be done quickly, then compare behavior before investigating deeper."
+        },
+        {
+          "id": "c",
+          "text": "Follow the request path from public name to entry point, private network, security rules, route, and backend."
+        },
+        {
+          "id": "d",
+          "text": "Start with the service the on-call engineer knows best, then compare evidence if that first check is inconclusive."
+        }
+      ],
+      "correct": [
+        "c"
+      ],
+      "explanation": "The scenario gives a symptom and asks for the first evidence-based check. Azure Networking Mental Model teaches the team to inspect the responsible Azure layer before making broad changes. Familiarity, broad permissions, and replacement resources can all create risk before the team understands the failure."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "Before changing production, Maya wants a small evidence bundle for Azure Networking Mental Model. The bundle should help a reviewer understand the current state without relying on memory or portal screenshots. Which evidence belongs in the bundle?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The deployment tool and command used, if the tool context changed which subscription or resource was updated."
+        },
+        {
+          "id": "b",
+          "text": "The exact Azure resources involved in the request path, including names, resource groups, and resource IDs where useful."
+        },
+        {
+          "id": "c",
+          "text": "Recent evidence from request logs, DNS answers, route tables, security rules, and backend health."
+        },
+        {
+          "id": "d",
+          "text": "The intended owner, environment, and rollback or recovery expectation for the change."
+        }
+      ],
+      "correct": [
+        "b",
+        "c",
+        "d"
+      ],
+      "explanation": "A useful review bundle combines exact resources, current service evidence, ownership, environment, and rollback or recovery expectations. Personal tooling preference does not explain why Azure will accept traffic, run code, store data, emit signals, or recover."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "A teammate says, `Azure Networking Mental Model is just another Azure product page. We can pick the default and learn the details later.` The production service already has users, private data, monitoring, and a rollback expectation. What response best matches the course style?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Start with the job and risk: the request path, the service behavior, and the evidence needed to prove the decision is safe."
+        },
+        {
+          "id": "b",
+          "text": "Accept the default for now, then create an incident note if users report a problem."
+        },
+        {
+          "id": "c",
+          "text": "Let the deployment pipeline choose the service behavior, because successful deployment proves the design."
+        },
+        {
+          "id": "d",
+          "text": "Record only that the provider default was used, because defaults are designed to be reasonable starting points."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The course tone is practical: defaults are not wrong by themselves, but production decisions need a reason and a way to verify them. A successful deploy is not the same as an understood operating choice."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A change related to Azure Networking Mental Model is proposed during a release freeze. The proposed fix might affect Virtual Network, DNS, routes, NSGs, and private endpoints. What is the safest review question before approval?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Can we make the change quickly enough that users do not notice the review step?"
+        },
+        {
+          "id": "b",
+          "text": "Can we apply the change to every environment so there are fewer differences to explain?"
+        },
+        {
+          "id": "c",
+          "text": "Can we treat the previous successful change as enough validation if the current diff looks small?"
+        },
+        {
+          "id": "d",
+          "text": "What exact symptom or requirement does this change address, what evidence proves it, and how will the team reverse or repair it if the assumption is wrong?"
+        }
+      ],
+      "correct": [
+        "d"
+      ],
+      "explanation": "The best review question ties action to evidence and rollback. Speed, environment-wide changes, and past familiarity can be useful context, but none of them replaces current production evidence."
+    }
+  ]
+}

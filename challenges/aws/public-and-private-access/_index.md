@@ -1,6 +1,7 @@
 ---
 title: "Public and Private Access"
 description: "Practice placing DevPolaris front doors, private app and database resources, outbound paths, endpoints, and access diagnostics for AWS networking."
+articleId: article-cloud-providers-aws-networking-connectivity-public-private-access
 articleSlug: public-and-private-access
 difficulty: medium
 order: 11

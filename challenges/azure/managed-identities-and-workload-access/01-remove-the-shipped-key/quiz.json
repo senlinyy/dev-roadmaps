@@ -1,0 +1,142 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A container image build log includes `PAYMENT_API_KEY` as a build argument. The image is pushed to Azure Container Registry and promoted through staging and production. What is the main risk?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The secret can travel with the artifact and be exposed anywhere the image or build logs are available."
+        },
+        {
+          "id": "b",
+          "text": "Build arguments make the container unable to start in Azure Container Apps."
+        },
+        {
+          "id": "c",
+          "text": "Azure Container Registry automatically rotates any secret found in an image."
+        },
+        {
+          "id": "d",
+          "text": "The secret becomes safer after promotion because production images have stricter tags."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Secrets should not be shipped inside artifacts or exposed in build logs. Managed identity and secret stores let runtime fetch private values without baking them into the image."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "The app currently stores a storage account key in an environment variable so it can upload invoices. The team wants to reduce long-lived secrets. What is the better Azure direction?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Use a managed identity with the narrow storage data permission the app needs, then remove the stored account key."
+        },
+        {
+          "id": "b",
+          "text": "Keep the account key but rename it so it is harder to recognize in logs."
+        },
+        {
+          "id": "c",
+          "text": "Put the key in the image label because labels are not part of the app environment."
+        },
+        {
+          "id": "d",
+          "text": "Give every developer the key so failures can be debugged from laptops."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Managed identity replaces stored app passwords for Azure resource access. Renaming or spreading the key does not reduce credential risk."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "Which signs suggest a credential is being shipped or stored in the wrong place? The team is reviewing a production release package before promotion, including the Dockerfile, CI logs, pipeline variables, and release notes.",
+      "options": [
+        {
+          "id": "a",
+          "text": "A secret appears in Docker build arguments or build logs."
+        },
+        {
+          "id": "b",
+          "text": "A connection string is committed into repository configuration."
+        },
+        {
+          "id": "c",
+          "text": "A pipeline variable with a long-lived client secret is shared across unrelated environments."
+        },
+        {
+          "id": "d",
+          "text": "The app has a managed identity object ID recorded in the release notes."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "Build logs, repositories, and shared long-lived secrets are risk signals. Recording a managed identity object ID is normal evidence, not a secret by itself."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "A teammate says, `Managed identity sounds like magic. I would rather use one service principal secret because I can see it.` What is the best teaching response?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Managed identity lets Azure issue tokens to the running workload, so the app can prove itself without storing a reusable secret."
+        },
+        {
+          "id": "b",
+          "text": "Managed identity removes the need for RBAC because Azure trusts every app it hosts."
+        },
+        {
+          "id": "c",
+          "text": "Managed identity stores the same client secret in the app setting but hides it from the portal."
+        },
+        {
+          "id": "d",
+          "text": "Managed identity only works for humans signing in to the portal."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Managed identity is not magic and it does not remove permission checks. It changes how the workload gets a token so the app does not need to carry a reusable secret."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A security scan finds `AZURE_CLIENT_SECRET` in a production app setting. The app runs on Azure and only calls Key Vault and Blob Storage. What should the migration plan focus on first?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Assign a managed identity to the app, grant narrow access to Key Vault and Blob Storage, then remove the client secret after testing."
+        },
+        {
+          "id": "b",
+          "text": "Move the client secret into another app setting with a less obvious name."
+        },
+        {
+          "id": "c",
+          "text": "Give the secret a longer expiration date to avoid rotation incidents."
+        },
+        {
+          "id": "d",
+          "text": "Put the secret in a resource tag so it is outside the runtime configuration."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The app is an Azure workload calling Azure services, which is a strong fit for managed identity. The migration should test identity, RBAC, and runtime behavior before removing the old secret."
+    }
+  ]
+}

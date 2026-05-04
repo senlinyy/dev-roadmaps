@@ -1,0 +1,142 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A failure review for Runtime Settings, Secrets, and Configuration Changes says the first attempted fix did not work. The team changed a nearby resource, but the evidence still points at runtime configuration changes. What should the next move be?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Evaluate a different Azure service family if the current service produced the last two incidents."
+        },
+        {
+          "id": "b",
+          "text": "Move straight to application-code debugging because the symptom is visible to users at the API boundary."
+        },
+        {
+          "id": "c",
+          "text": "Return to the evidence, confirm the exact failing boundary, and choose the smallest fix that addresses that boundary."
+        },
+        {
+          "id": "d",
+          "text": "Apply a broader version of the same fix if the first attempt may have been too narrow."
+        }
+      ],
+      "correct": [
+        "c"
+      ],
+      "explanation": "When a fix fails, the next move is not automatically a bigger fix. The team should return to the evidence and the boundary named by the article, then make the smallest defensible change."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "The team has two possible fixes for a Runtime Settings, Secrets, and Configuration Changes issue. Fix A is narrow and directly tied to the evidence. Fix B is broader and might cover several unknowns but changes app settings, Container Apps secrets, Key Vault references, managed identity, and config rollback. Which choice is safer for a beginner team?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Choose the fix that makes staging and production match more closely, even if the evidence points to a production-only condition."
+        },
+        {
+          "id": "b",
+          "text": "Choose the narrow evidence-backed fix first, unless the broader change has a clearly documented reason and rollback plan."
+        },
+        {
+          "id": "c",
+          "text": "Choose the broader fix because changing more resources reduces the chance of missing a hidden dependency."
+        },
+        {
+          "id": "d",
+          "text": "Choose the fix that the current on-call can apply fastest, then document any tradeoff after service is stable."
+        }
+      ],
+      "correct": [
+        "b"
+      ],
+      "explanation": "Narrow, evidence-backed fixes are easier to verify and reverse. Broader changes are sometimes needed, but they deserve explicit reasoning because they increase blast radius."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "Which post-fix checks belong after a change related to Runtime Settings, Secrets, and Configuration Changes? The review happens during a production change window, so the answer must be based on current Azure evidence rather than a familiar product name or a broad safety guess.",
+      "options": [
+        {
+          "id": "a",
+          "text": "Re-test the user path or workload behavior that originally failed."
+        },
+        {
+          "id": "b",
+          "text": "Inspect fresh evidence from artifact digest, revision or slot, runtime settings, identity, traffic split, health checks, and rollback target."
+        },
+        {
+          "id": "c",
+          "text": "Update the release, incident, or recovery record with the changed resource and reason."
+        },
+        {
+          "id": "d",
+          "text": "Assume success if the portal shows the new setting, because saved configuration is the same as healthy behavior."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "Saving a setting is not the same as proving the system works. The team should retest behavior, inspect fresh evidence, and update the operating record."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "A rollback plan for Runtime Settings, Secrets, and Configuration Changes says only, `undo the change if it fails`. The change affects app settings, Container Apps secrets, Key Vault references, managed identity, and config rollback. What is missing?",
+      "options": [
+        {
+          "id": "a",
+          "text": "A clearer release title and owner note, because operators may already know the technical rollback steps."
+        },
+        {
+          "id": "b",
+          "text": "A dashboard link and alert name, because monitoring can show whether rollback is needed."
+        },
+        {
+          "id": "c",
+          "text": "A note that the resource is managed by Azure, because managed services reduce some recovery steps."
+        },
+        {
+          "id": "d",
+          "text": "The rollback target, the exact resources or settings to restore, the evidence that proves rollback worked, and the owner who can make the call."
+        }
+      ],
+      "correct": [
+        "d"
+      ],
+      "explanation": "Rollback needs concrete targets and proof. Managed services reduce some operations work, but they do not decide which application setting, route, secret, data target, or cost choice should be restored."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "The team wants one final habit from Runtime Settings, Secrets, and Configuration Changes to carry into future Azure work. Which habit is most useful? The review happens during a production change window, so the answer must be based on current Azure evidence rather than a familiar product name or a broad safety guess.",
+      "options": [
+        {
+          "id": "a",
+          "text": "Prefer a broader setting temporarily if it reduces repeated approvals, then revisit it during the next review."
+        },
+        {
+          "id": "b",
+          "text": "Keep the evidence in the incident chat and wait until the monthly review to turn it into a runbook."
+        },
+        {
+          "id": "c",
+          "text": "Write down the job, the Azure resources involved, the evidence to inspect, the safe fix direction, and the rollback or review path."
+        },
+        {
+          "id": "d",
+          "text": "Remember the product name and the portal blade where the team fixed it last time."
+        }
+      ],
+      "correct": [
+        "c"
+      ],
+      "explanation": "The reusable habit is a small operating record. Product names matter, but future operators need job, resources, evidence, fix direction, and rollback or review context."
+    }
+  ]
+}

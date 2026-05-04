@@ -1,0 +1,142 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "The team wants to delete all temporary resources from a load test next week without touching production. They do not need a new billing boundary. Which Azure container is the best fit for that cleanup shape?",
+      "options": [
+        {
+          "id": "a",
+          "text": "A separate resource group for the load test resources, with clear tags and an owner."
+        },
+        {
+          "id": "b",
+          "text": "A separate subscription, because the load test has a different budget owner even if the access model stays simple."
+        },
+        {
+          "id": "c",
+          "text": "A separate availability zone, because zones group resources by lifecycle."
+        },
+        {
+          "id": "d",
+          "text": "A separate public DNS record, because DNS records delete all resources behind them."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Resource groups are useful lifecycle containers. If the goal is cleanup without a separate billing or policy boundary, a dedicated resource group is often enough."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A production API, production database, and production Key Vault are all part of the same release lifecycle. A teammate proposes placing each in a different resource group because they are different service types. What is the better first question?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Do these resources change, review, and retire together, or do they need separate owners and lifecycles?"
+        },
+        {
+          "id": "b",
+          "text": "Which resources are most sensitive, because sensitive resources may need separate groups even when releases happen together."
+        },
+        {
+          "id": "c",
+          "text": "Which service was created first, because first-created resources own the resource group."
+        },
+        {
+          "id": "d",
+          "text": "Which resource is cheapest, because cost decides whether resources can share a group."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Resource group design should follow lifecycle and ownership, not service category alone. Different service types can belong together when they are operated together."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "A new teammate keeps using `subscription` and `resource group` as if they mean the same thing. The team is reviewing production boundaries, cleanup behavior, and billing ownership before creating the next environment. Which statements separate subscriptions from resource groups correctly?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Subscriptions are commonly used for billing, quota, policy, and broad access boundaries."
+        },
+        {
+          "id": "b",
+          "text": "Resource groups are commonly used to keep related resources together for lifecycle, ownership, and deployment organization."
+        },
+        {
+          "id": "c",
+          "text": "Deleting a resource group can delete the resources inside it, so the lifecycle choice matters."
+        },
+        {
+          "id": "d",
+          "text": "A resource group can contain resources from any subscription if their names match."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "Subscriptions and resource groups are different scopes. Resource groups live inside a subscription, and deleting a group can remove its resources. Name similarity does not let a resource group span subscriptions."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "An audit shows this shape:\n\n- Subscription: `sub-devpolaris-prod`\n- Resource group: `rg-orders-api`\n- Resource group: `rg-orders-database`\n- Resource group: `rg-orders-temp-migration-2026`\n\nThe migration group is no longer used. What should the team verify before deleting it?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Whether every resource in that resource group is truly migration-only, using resource IDs, tags, dependencies, and owners."
+        },
+        {
+          "id": "b",
+          "text": "Whether the group name contains `temp`, because the name alone is proof that deletion is safe."
+        },
+        {
+          "id": "c",
+          "text": "Whether the subscription has another resource group, because Azure requires one group to remain after deletion."
+        },
+        {
+          "id": "d",
+          "text": "Whether any resources in other regions depend on resources in the migration group."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Resource group deletion can be powerful and risky. The team should verify actual contents and dependencies, not trust the name alone."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A team creates `rg-devpolaris-orders-prod` in `sub-devpolaris-dev` by accident. The name says prod, but the subscription says dev. Which evidence should automation trust for scope?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The full resource ID and subscription context, then tags and owner review as supporting evidence."
+        },
+        {
+          "id": "b",
+          "text": "The resource group name and tags first, because they describe the environment humans intended."
+        },
+        {
+          "id": "c",
+          "text": "The region and resource type first, because those usually stay stable across environments."
+        },
+        {
+          "id": "d",
+          "text": "The service icon in the portal, because icons show environment boundaries."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "A full resource ID shows the subscription and resource group path. Names and tags help humans, but they do not override scope."
+    }
+  ]
+}

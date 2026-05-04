@@ -1,0 +1,142 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A new engineer joins the DevPolaris tenant and can open the Azure portal. They cannot view the production subscription. What should the team explain? The portal confirms their user account, but the production subscription tile never appears in the resource list.",
+      "options": [
+        {
+          "id": "a",
+          "text": "Tenant sign-in authenticates the person, but subscription visibility depends on role assignments or directory relationships."
+        },
+        {
+          "id": "b",
+          "text": "Portal access means the engineer should automatically see every subscription in the tenant."
+        },
+        {
+          "id": "c",
+          "text": "The engineer needs a managed identity because users cannot view Azure subscriptions."
+        },
+        {
+          "id": "d",
+          "text": "The production subscription must be in another region because regions hide subscriptions."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Authentication and authorization are separate. A user can belong to a tenant without having access to a subscription. Managed identity and region do not explain this human access issue."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A partner user has been invited through B2B collaboration. They can sign in, but a role assignment to `Reader` fails because the wrong tenant is selected in the assignment screen. What is the best next step?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Verify the guest user object in the DevPolaris tenant and assign the role to that object at the intended scope."
+        },
+        {
+          "id": "b",
+          "text": "Ask the partner to create a personal Microsoft account, because guest users cannot receive Azure roles."
+        },
+        {
+          "id": "c",
+          "text": "Grant access to a similarly named local user until the guest object appears."
+        },
+        {
+          "id": "d",
+          "text": "Move the target resource into the partner tenant, because Azure roles can only be assigned inside the caller's home tenant."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Guest access still needs the correct tenant object and scope. Assigning a role to a similar user or moving resources is unsafe and unnecessary."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "Which statements are safe to teach a beginner about Azure sign-in and access? A junior engineer is writing onboarding notes after confusing tenant membership, subscription access, and group membership during their first week.",
+      "options": [
+        {
+          "id": "a",
+          "text": "A successful sign-in proves the identity, not the allowed actions."
+        },
+        {
+          "id": "b",
+          "text": "Azure RBAC grants actions at scopes such as subscription, resource group, or resource."
+        },
+        {
+          "id": "c",
+          "text": "Groups can simplify people access, but group membership still needs review."
+        },
+        {
+          "id": "d",
+          "text": "Once someone can sign in to the tenant, all production resource access is implied."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "Sign-in, RBAC scope, and group membership are separate ideas that work together. Tenant access alone does not imply production resource access."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "An engineer can restart the staging app but cannot restart the production app. Both apps have similar names. What evidence should be checked first? The engineer is in the same tenant for both apps, and the staging restart worked from the same browser session.",
+      "options": [
+        {
+          "id": "a",
+          "text": "Role assignments and group membership at the production resource or resource group scope."
+        },
+        {
+          "id": "b",
+          "text": "The app names, because similar names should inherit the same access."
+        },
+        {
+          "id": "c",
+          "text": "The engineer's browser cookies, because staging access should cache production access."
+        },
+        {
+          "id": "d",
+          "text": "The App Service plan size, because larger plans block restarts by default."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Similar resource names do not create shared access. The team should check the actual production scope and the user's direct or group-based role assignments."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A service principal can deploy to staging but receives `Forbidden` in production. The client ID is the same in both pipelines. What does this suggest? The staging and production pipelines use different subscriptions and resource groups, but the secret variable for the client ID has the same value.",
+      "options": [
+        {
+          "id": "a",
+          "text": "The same caller may have different role assignments at staging and production scopes."
+        },
+        {
+          "id": "b",
+          "text": "The client ID changed during deployment, because Azure cannot use one identity in two environments."
+        },
+        {
+          "id": "c",
+          "text": "Production resources cannot be deployed by service principals."
+        },
+        {
+          "id": "d",
+          "text": "The staging subscription owns the production subscription because the same identity appears in both."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "A caller can be allowed in one scope and denied in another. The same client ID is useful evidence, but the role assignments and scopes still decide access."
+    }
+  ]
+}

@@ -1,6 +1,7 @@
 ---
 title: "Lambda and Event-Driven Compute"
 description: "Practice choosing Lambda for bounded event work, reading invocation evidence, and deciding when ECS is simpler for devpolaris-orders-api."
+articleId: article-cloud-providers-aws-compute-application-hosting-lambda-event-driven-compute
 articleSlug: lambda-and-event-driven-compute
 difficulty: medium
 order: 18

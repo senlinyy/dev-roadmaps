@@ -1,0 +1,142 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A checkout request reaches the API and the API logs `ManagedIdentityCredential authentication unavailable`. No request reaches Azure SQL. What is the best first security layer to inspect?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The runtime identity configuration on the app, because the app cannot prove who it is before calling downstream services."
+        },
+        {
+          "id": "b",
+          "text": "The SQL table indexes, because slow queries can produce identity errors before the database is reached."
+        },
+        {
+          "id": "c",
+          "text": "The public DNS record, because DNS must authenticate the app to Azure services."
+        },
+        {
+          "id": "d",
+          "text": "The user's browser token, because browser sign-in usually becomes the backend identity."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The error is about the workload identity available to the app runtime. SQL indexes and DNS are later concerns. A user's browser identity is usually not the same thing as the backend's managed identity."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "The app has the right managed identity, but Azure SQL rejects connections with a login failure. Key Vault reads are working. Which conclusion is most defensible?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The identity exists and can read some resources, but SQL access still needs its own configured permission or database principal."
+        },
+        {
+          "id": "b",
+          "text": "Key Vault access automatically proves SQL access, so the SQL error must be a false alarm."
+        },
+        {
+          "id": "c",
+          "text": "The app should switch to a stored password because managed identities cannot be used for data services."
+        },
+        {
+          "id": "d",
+          "text": "The resource group has the wrong owner tag, so SQL cannot trust the app identity."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Identity is not permission everywhere. A managed identity can have Key Vault access while still lacking SQL access. Tags and stored passwords are not the right conclusion from this evidence."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "The API logs show `403` from Blob Storage when exporting invoices. The same managed identity reads Key Vault successfully. The storage account has a private endpoint, and the app can reach that private IP. What should the team inspect next?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The storage data-plane role or container-level permission for the app identity."
+        },
+        {
+          "id": "b",
+          "text": "The VNet route table only, because a private IP proves authorization has already succeeded."
+        },
+        {
+          "id": "c",
+          "text": "The Key Vault access policy, because any working secret read should allow storage writes."
+        },
+        {
+          "id": "d",
+          "text": "The public DNS zone, because private endpoints are controlled by public DNS records."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Reachability and Key Vault access are useful evidence, but Blob Storage write permission is separate. A private endpoint can make the network path work while authorization still denies the data action."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "A secured request path for `devpolaris-orders-api` includes the public HTTPS entry, API runtime, Key Vault, Azure SQL, Blob Storage, and telemetry. Which checks may be separate even when they happen during one request?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Network reachability to a private endpoint."
+        },
+        {
+          "id": "b",
+          "text": "RBAC or service-specific authorization for the caller identity."
+        },
+        {
+          "id": "c",
+          "text": "Secret value availability and version state in Key Vault."
+        },
+        {
+          "id": "d",
+          "text": "Whether the resource names are easy for users to pronounce."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "A request can pass one check and fail another. Network path, authorization, and secret state are separate evidence streams. Human-friendly names help operations but do not decide request success."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A user can load the checkout page, but payment submission fails after the backend calls the payment provider. The backend logs show `secret version disabled` for `payment-api-key`. What is the best next action?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Inspect the Key Vault secret version state and rotation history before changing app code or network rules."
+        },
+        {
+          "id": "b",
+          "text": "Increase API replicas, because disabled secret versions usually mean the app does not have enough runtime capacity."
+        },
+        {
+          "id": "c",
+          "text": "Move the database to another region, because disabled secrets indicate data placement drift."
+        },
+        {
+          "id": "d",
+          "text": "Grant broader RBAC at subscription scope, because a disabled version is the same as missing permission."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The evidence points to secret lifecycle, not compute capacity, region placement, or broad RBAC. A disabled secret version can break a request even when identity and network checks are otherwise correct."
+    }
+  ]
+}

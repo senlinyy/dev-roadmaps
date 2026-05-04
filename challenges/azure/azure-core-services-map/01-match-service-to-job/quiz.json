@@ -1,0 +1,142 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "An incident starts with this symptom: users reach `https://orders.devpolaris.example`, but half of requests return 502 before the request reaches application logs. Which service area should the team inspect first?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The public entry and backend health path, such as Front Door, Application Gateway, Load Balancer, or the target backend list."
+        },
+        {
+          "id": "b",
+          "text": "Database connection settings, because backend dependency failures can sometimes appear as gateway errors."
+        },
+        {
+          "id": "c",
+          "text": "Application export storage, because failed file downloads are also user-facing errors."
+        },
+        {
+          "id": "d",
+          "text": "Quota and scale settings, because exhausted capacity can sometimes affect whether backends stay healthy."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "A 502 before app logs points to traffic entry, routing, or backend health. The database can cause downstream errors, but the evidence says the request may not be reaching the app."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "The team wants to run a containerized Node.js API without managing VM patching as the first learning path. They need revisions, logs, environment settings, and simple scale rules. Which Azure service family is the closest fit?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Azure Container Apps or a similar managed container hosting service."
+        },
+        {
+          "id": "b",
+          "text": "Azure DNS, because DNS runs containers when records point at them."
+        },
+        {
+          "id": "c",
+          "text": "Azure Blob Storage, because containers and storage containers are the same runtime concept."
+        },
+        {
+          "id": "d",
+          "text": "Azure Cost Management, because budgets can start and stop application processes."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The job is managed application runtime for a container. DNS, Blob Storage, and Cost Management are real services, but they do not run the backend process."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "Checkout needs to store orders, line items, payment state, and customer references with consistency rules. Which data service family should be on the first map?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Azure SQL Database or another relational database service, because the data needs relationships, constraints, and transactions."
+        },
+        {
+          "id": "b",
+          "text": "Blob Storage, if the team treats each order as an immutable receipt file and keeps query needs somewhere else."
+        },
+        {
+          "id": "c",
+          "text": "Azure Cosmos DB, if the team can model the access patterns as key-based reads and writes instead of relational joins."
+        },
+        {
+          "id": "d",
+          "text": "Service Bus, if checkout writes are accepted asynchronously and another worker owns the durable order record."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Relational order data usually needs consistency, relationships, and transactions. Blob Storage is useful for file-like data, and Monitor is for operational signals, not the primary order system of record."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "A service map review finds three blank rows after an incident: private secret access, runtime evidence, and container image origin. The team wants to fill the rows with Azure services that match the job, not just familiar product names. Which pairings are reasonable first choices?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Private secrets: Key Vault."
+        },
+        {
+          "id": "b",
+          "text": "Runtime evidence: Azure Monitor, Log Analytics, or Application Insights."
+        },
+        {
+          "id": "c",
+          "text": "Container images: Azure Container Registry."
+        },
+        {
+          "id": "d",
+          "text": "Public HTTPS entry: Azure SQL Database."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "Key Vault, Monitor or Application Insights, and Container Registry match the named jobs. Azure SQL is a data service, not the public HTTPS entry point."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "The app fails only when reading `PAYMENT_API_KEY`. The logs show `Forbidden` from Key Vault, and the managed identity name in production is `mi-orders-prod`. Which map row should the team inspect first?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Identity and secrets: whether `mi-orders-prod` has the right Key Vault access."
+        },
+        {
+          "id": "b",
+          "text": "Public DNS: whether the customer hostname points at the right endpoint."
+        },
+        {
+          "id": "c",
+          "text": "Blob lifecycle: whether exported files expire too early."
+        },
+        {
+          "id": "d",
+          "text": "Region price: whether the service is running in the cheapest region."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The evidence names Key Vault and a managed identity. This is an identity and secret-access problem before it is a DNS, storage, or cost problem."
+    }
+  ]
+}

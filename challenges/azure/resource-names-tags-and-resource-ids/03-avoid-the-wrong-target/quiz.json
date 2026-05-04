@@ -1,0 +1,142 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A script uses this filter: `name contains orders-api`. It finds both staging and production Container Apps. The intended change is staging only. What should the script use before making the change?",
+      "options": [
+        {
+          "id": "a",
+          "text": "A safer target such as the exact resource ID, expected subscription, resource group, type, and `env=staging` tag check."
+        },
+        {
+          "id": "b",
+          "text": "The first result returned by Azure, if the script sorts by resource group name and staging usually appears first."
+        },
+        {
+          "id": "c",
+          "text": "The app name plus region, because the same app rarely has two active environments in one region."
+        },
+        {
+          "id": "d",
+          "text": "The public hostname from the ticket, because the hostname is the clue responders trust during incidents."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Partial name matching is risky when environments share names. Exact scope, type, resource ID, and tags make automation safer."
+    },
+    {
+      "id": "q2",
+      "type": "multiple",
+      "scenario": "A release script will restart one Azure resource during a production incident. Several resources share the word `orders`, and the same app exists in dev, staging, and prod. Which guardrails help prevent automation from changing the wrong Azure resource?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Require the expected subscription and resource group before applying changes."
+        },
+        {
+          "id": "b",
+          "text": "Compare the full resource ID and resource type against the intended target."
+        },
+        {
+          "id": "c",
+          "text": "Use tags such as `app`, `env`, and `owner` as additional confirmation."
+        },
+        {
+          "id": "d",
+          "text": "Allow the script to continue when two resources match, but print both matches in the log for audit."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "Good automation fails closed when the target is ambiguous. Subscription, resource group, type, ID, and tags all reduce the chance of touching the wrong resource."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "A storage account is moved from `rg-devpolaris-orders-temp` to `rg-devpolaris-orders-prod`. The move was approved, but the team has scripts, dashboards, alert rules, and RBAC assignments that may reference the old scope. What should be reviewed after the move?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Any automation, RBAC, policy, alerts, or documentation that referenced the old resource ID or old resource group."
+        },
+        {
+          "id": "b",
+          "text": "Only the display name and tags, because a resource keeps its human-facing identity after a move."
+        },
+        {
+          "id": "c",
+          "text": "Only public endpoint records, because moving resource groups mainly affects how users reach the service."
+        },
+        {
+          "id": "d",
+          "text": "Only tenant-level settings, because moving between resource groups mostly changes identity ownership."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Moving a resource can change its resource ID path and surrounding scope. Automation, RBAC, policy, alerts, and docs may need review."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "A policy exemption request names `stdevpolarisordersprod`, but does not include subscription, resource group, or provider type. What should the reviewer ask for?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The full resource ID and the reason the specific resource needs the exemption."
+        },
+        {
+          "id": "b",
+          "text": "A portal search link and the resource display name, because reviewers can click through before approving."
+        },
+        {
+          "id": "c",
+          "text": "A shorter name, because shorter names are safer for policy."
+        },
+        {
+          "id": "d",
+          "text": "A tag such as `policy-exemption-requested=true`, because it helps reviewers find the resource but does not define scope."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Policy and RBAC work through scopes and resource identities. A bare name is not enough to approve a scoped exception safely."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A runbook says, `Rotate secrets for Key Vault orders-prod.` There are two Key Vaults with similar names in different subscriptions. What should be fixed in the runbook?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Replace the vague name with the exact Key Vault resource ID, subscription, resource group, environment, and owner confirmation."
+        },
+        {
+          "id": "b",
+          "text": "Keep the vague name but add more prose, because operators can search manually during an incident."
+        },
+        {
+          "id": "c",
+          "text": "Use the vault with the production-looking tag if the resource group names are too similar during the incident."
+        },
+        {
+          "id": "d",
+          "text": "Use the vault that the current app revision references, then update the runbook after the rotation."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Incident runbooks should not rely on guessing. Exact IDs and scope details prevent a stressful manual search from becoming a production mistake."
+    }
+  ]
+}

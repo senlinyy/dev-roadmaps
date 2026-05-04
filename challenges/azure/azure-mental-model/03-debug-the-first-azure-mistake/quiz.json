@@ -1,0 +1,142 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A pipeline says the deploy succeeded, but the portal page Maya is viewing does not show the new resource. The deployment log says `/subscriptions/sub-dev-001/resourceGroups/rg-devpolaris-orders-dev`, while the portal header says `sub-prod-001`. What should she conclude first?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The resource may exist in a different subscription or resource group than the one she is viewing, so she should verify the deployment scope before redeploying."
+        },
+        {
+          "id": "b",
+          "text": "The deployment may have targeted the intended subscription, but the portal search index has not refreshed yet, so wait before checking scope."
+        },
+        {
+          "id": "c",
+          "text": "The app image failed to start, so the missing portal resource is a runtime health issue."
+        },
+        {
+          "id": "d",
+          "text": "The resource group name is enough evidence, so the subscription mismatch can be ignored."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The evidence shows a scope mismatch. Before creating duplicates or touching production, verify tenant, subscription, resource group, and resource ID. Runtime health is a later question after the resource is found."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "`devpolaris-orders-api` starts, but every checkout fails with `403 Forbidden` when reading Key Vault. The same secret name works in staging. What should the team check first?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Which managed identity the production app is using and whether that identity has the required Key Vault access."
+        },
+        {
+          "id": "b",
+          "text": "Whether the Node.js package manager cached an old dependency during build."
+        },
+        {
+          "id": "c",
+          "text": "Whether the public DNS record has a shorter TTL than the staging record."
+        },
+        {
+          "id": "d",
+          "text": "Whether the storage account has zone redundancy enabled."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "A Key Vault 403 is identity and permission evidence. Build cache, DNS TTL, and storage redundancy can cause real problems, but they do not explain a secret-read authorization failure."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "A background export feature works during a smoke test, but exported files disappear after the Container Apps revision restarts. The code wrote files to `/tmp/exports` inside the container. Which mistake is most likely?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The app stored durable business output in runtime-local storage instead of a storage service such as Blob Storage."
+        },
+        {
+          "id": "b",
+          "text": "The app used too many tags, so Azure deleted untagged files during restart."
+        },
+        {
+          "id": "c",
+          "text": "The region was too close to users, so restart behavior changed."
+        },
+        {
+          "id": "d",
+          "text": "The export worker may be writing to a mounted path whose backing storage was never configured in production."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Container-local files are tied to the running copy and can disappear when the copy is replaced. Durable exports need a storage service. Tags, region distance, and billing ownership do not make local runtime files durable."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "A teammate says, `Azure SQL is managed, so we do not need to plan anything else.` The production checklist still has open items for access, backups, restore testing, and migrations. Which responsibilities still belong to the team?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Choosing the right database, region, firewall or private network path, and access model."
+        },
+        {
+          "id": "b",
+          "text": "Planning backup retention, restore testing, and what the app should do during an outage."
+        },
+        {
+          "id": "c",
+          "text": "Writing application queries and migrations that keep order data correct."
+        },
+        {
+          "id": "d",
+          "text": "Replacing failed Microsoft datacenter hardware by hand."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "Managed services reduce infrastructure work, but they do not remove application, configuration, access, backup, and recovery responsibilities. Replacing physical hardware is the provider side of the line."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "The API can resolve the Azure SQL hostname, but connections time out only from production. The app identity is correct and the database exists. Which foundation-level area should the team inspect next?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The network path and database access rules, such as private endpoint, firewall rules, subnet routing, or allowed Azure services settings."
+        },
+        {
+          "id": "b",
+          "text": "The article title in the roadmap, because timeouts usually mean documentation metadata is stale."
+        },
+        {
+          "id": "c",
+          "text": "The public endpoint path, because the frontend and backend may still be routed through different network paths."
+        },
+        {
+          "id": "d",
+          "text": "The release artifact, because staging and production may run different image tags even when the code appears similar."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "A timeout after name resolution often points to network reachability or firewall rules. Identity is a separate check and has already been cleared in the scenario. The other options ignore the evidence."
+    }
+  ]
+}

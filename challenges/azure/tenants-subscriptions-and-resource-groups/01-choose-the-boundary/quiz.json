@@ -1,0 +1,142 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A contractor signs in with `alex@partner.example`. They need temporary read access to DevPolaris staging logs, but they should not see production billing or user data. Which boundary should the team reason about first?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The tenant and external identity relationship first, then the exact subscription, resource group, and role scope for the temporary access."
+        },
+        {
+          "id": "b",
+          "text": "The region first, because region choice decides who can sign in to Azure."
+        },
+        {
+          "id": "c",
+          "text": "The resource name first, because the name can confirm the staging app before access is granted."
+        },
+        {
+          "id": "d",
+          "text": "The deployment environment first, because staging access can often be copied from the staging app setup."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Sign-in starts with identity and tenant context. After that, access should be scoped to the smallest useful subscription, resource group, or resource. Names, regions, and slots do not grant identity by themselves."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "The finance team asks why `devpolaris-orders-api` production spend is mixed with experimentation costs. The resources are in one subscription with tags, but no budget or policy boundary separates prod from experiments. What is the most useful boundary to discuss?",
+      "options": [
+        {
+          "id": "a",
+          "text": "A subscription boundary, because subscriptions are commonly used for billing, policy, quota, and environment separation."
+        },
+        {
+          "id": "b",
+          "text": "A stricter resource group layout inside the same subscription, because tags and groups may be enough if finance agrees."
+        },
+        {
+          "id": "c",
+          "text": "A regional split, because region-level cost reports may already separate most production and experiment spend."
+        },
+        {
+          "id": "d",
+          "text": "A DNS zone boundary, because public names decide who pays for resources."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Resource groups help with lifecycle and organization, and tags help reporting. Subscriptions are the stronger boundary for billing ownership, policy, quota, and environment separation."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "Before deploying a production database, Maya runs a preflight check because her CLI was used earlier for a sandbox task. The deployment record names a production subscription and resource group. Which facts should she confirm from Azure context or the deployment record?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The active tenant and subscription."
+        },
+        {
+          "id": "b",
+          "text": "The target resource group and whether it is meant for production."
+        },
+        {
+          "id": "c",
+          "text": "The policy and RBAC scope that will apply to the deployment."
+        },
+        {
+          "id": "d",
+          "text": "The portal breadcrumb and selected directory label, if they match the environment named in the ticket."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "Tenant, subscription, resource group, policy, and RBAC scope are real deployment boundaries. Portal appearance is not reliable evidence of scope."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "The team has `rg-devpolaris-orders-prod` and `rg-devpolaris-orders-dev` in the same subscription. A new compliance rule says production must have stricter policy, separate budget alerts, and limited contributor access. Which change is most likely worth considering?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Move production into its own subscription or place subscriptions under a management group with stricter policy, then keep resource groups for lifecycle organization."
+        },
+        {
+          "id": "b",
+          "text": "Rename the production resource group, because stricter policy is inherited from names that contain `prod`."
+        },
+        {
+          "id": "c",
+          "text": "Put production in a different availability zone, because zones are permission boundaries."
+        },
+        {
+          "id": "d",
+          "text": "Move secrets into a separate resource group first, because secret access is usually the strongest compliance concern."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "When policy, budget, and access boundaries need to differ strongly, a subscription or management group boundary may be appropriate. Resource group names help humans, but names do not enforce policy."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A deployment fails because the pipeline service principal exists in the DevPolaris tenant, but the target subscription belongs to a different tenant selected in the CLI. What is the safest first action?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Stop and correct the tenant and subscription context before changing roles or creating resources."
+        },
+        {
+          "id": "b",
+          "text": "Grant a broad temporary role so the pipeline can finish, then narrow the role after confirming which tenant was intended."
+        },
+        {
+          "id": "c",
+          "text": "Change the resource group name to include the tenant name, because Azure will route the request by name."
+        },
+        {
+          "id": "d",
+          "text": "Switch regions, because tenant mismatch is usually caused by regional service availability."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "A tenant or subscription mismatch is a context problem. Broad Owner access would increase risk, and names or regions do not route identity into the correct tenant."
+    }
+  ]
+}

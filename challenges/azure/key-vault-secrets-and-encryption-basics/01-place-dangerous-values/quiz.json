@@ -1,0 +1,142 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A deployment review lists these values:\n\n- `PAYMENT_API_KEY`\n- `ORDERS_DB_PASSWORD`\n- `FEATURE_CHECKOUT_V2=true`\n- `PUBLIC_API_BASE_URL=https://orders.devpolaris.example`\n\nWhich value most clearly belongs in Key Vault?",
+      "options": [
+        {
+          "id": "a",
+          "text": "`PAYMENT_API_KEY`, because it is a secret credential whose exposure could let another system be called as DevPolaris."
+        },
+        {
+          "id": "b",
+          "text": "`FEATURE_CHECKOUT_V2`, because every app setting is equally sensitive."
+        },
+        {
+          "id": "c",
+          "text": "`PUBLIC_API_BASE_URL`, because public URLs should be encrypted from users."
+        },
+        {
+          "id": "d",
+          "text": "The application name, because names become dangerous once deployed."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Credentials and passwords belong in secret storage. Feature flags and public URLs are configuration, though they still need change control. Not every setting is a secret."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A teammate wants to store generated invoice PDFs in Key Vault because they contain customer information. What is the better first design? The PDF files must be downloadable by customers later, retained for support, and governed by normal document retention rules.",
+      "options": [
+        {
+          "id": "a",
+          "text": "Store file-like documents in Blob Storage with appropriate access controls, and store only required secrets or keys in Key Vault."
+        },
+        {
+          "id": "b",
+          "text": "Store every private file as a Key Vault secret so the security team can approve one service."
+        },
+        {
+          "id": "c",
+          "text": "Store invoices in App Configuration because documents are configuration for the customer portal."
+        },
+        {
+          "id": "d",
+          "text": "Store invoices in Azure Monitor logs so support can search them quickly."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Key Vault is for secrets, keys, and certificates, not general document storage. Private documents need storage controls, retention, and access design, usually outside Key Vault."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "Which values are good Key Vault candidates in a backend API? The team is sorting values from a deployment review into secret storage, normal app configuration, and public metadata before the release.",
+      "options": [
+        {
+          "id": "a",
+          "text": "A third-party payment provider token."
+        },
+        {
+          "id": "b",
+          "text": "A database password when password-based access is still used."
+        },
+        {
+          "id": "c",
+          "text": "A certificate private key used for TLS or signing."
+        },
+        {
+          "id": "d",
+          "text": "A public feature flag that only turns a UI banner on or off."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "Tokens, passwords, and private keys are dangerous values. A public feature flag may be important configuration, but it is not automatically a secret."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "A developer adds a secret value to an app setting directly because `Key Vault is one extra hop`. What risk should the reviewer name? The setting appears in the deployment diff, the rollback record, and a copied troubleshooting bundle from staging.",
+      "options": [
+        {
+          "id": "a",
+          "text": "The secret may spread through app configuration views, deployment logs, exports, and backups with weaker secret-specific controls."
+        },
+        {
+          "id": "b",
+          "text": "The app will run slower because app settings are stored farther from the compute service than Key Vault."
+        },
+        {
+          "id": "c",
+          "text": "Azure will refuse to start any app that has secret-looking app settings."
+        },
+        {
+          "id": "d",
+          "text": "The secret will be public on the custom domain because app settings are served as HTTP headers."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Secret stores add access control, audit, rotation, and handling boundaries. Plain app settings can leak through operational workflows even when the app still starts."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A review finds a Key Vault named `kv-orders-prod` in a shared resource group with weak tags and no clear owner. Why is that still a problem if the vault stores secrets correctly?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Secret storage is only part of safety. Ownership, access review, tags, and lifecycle still need to be clear."
+        },
+        {
+          "id": "b",
+          "text": "Tags are the encryption key for every Key Vault secret, so missing tags make values unreadable."
+        },
+        {
+          "id": "c",
+          "text": "A shared resource group means all apps can read all secrets inside the vault."
+        },
+        {
+          "id": "d",
+          "text": "The vault name should contain every secret name so operators know what is inside."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Using Key Vault is not the whole operating model. The team still needs ownership, access review, tagging, rotation, and lifecycle practices."
+    }
+  ]
+}

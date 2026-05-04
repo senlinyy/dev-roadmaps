@@ -22,15 +22,19 @@ id: article-cloud-providers-azure-deployment-runtime-operations-runtime-settings
 
 ## Config Can Break A Good Build
 
-The image did not change, the tests still pass, and the app still starts on a developer machine. Production still breaks.
-
-That often means configuration changed.
-
-Configuration means the values the app receives from its runtime rather than from source code. Database names, storage account names, feature flags, API endpoints, telemetry settings, and secret references all count as configuration.
-
-Secrets are sensitive configuration values, such as passwords, connection strings, API keys, or private tokens. Runtime settings are the values Azure gives the app when it starts.
-
-This distinction matters because a release can fail even when the artifact is good.
+The image did not change, the tests still pass, and the
+app still starts on a developer machine. Production
+still breaks. That often means configuration changed.
+Configuration means the values the app receives from
+its runtime rather than from source code. Database
+names, storage account names, feature flags, API
+endpoints, telemetry settings, and secret references
+all count as configuration. Secrets are sensitive
+configuration values, such as passwords, connection
+strings, API keys, or private tokens. Runtime settings
+are the values Azure gives the app when it starts. This
+distinction matters because a release can fail even
+when the artifact is good.
 
 `devpolaris-orders-api` may need these values:
 
@@ -43,13 +47,20 @@ APPLICATIONINSIGHTS_CONNECTION_STRING=<from environment>
 PAYMENT_PROVIDER_BASE_URL=https://payments.example.internal
 ```
 
-The code can be correct and still fail if `ORDERS_DB_NAME` is missing. It can fail if the managed identity cannot read a Key Vault secret. It can fail if staging and production settings swap by accident.
-
-This article teaches runtime configuration as part of deployment safety, not as a separate admin chore.
+The code can be correct and still fail if
+`ORDERS_DB_NAME` is missing. It can fail if the managed
+identity cannot read a Key Vault secret. It can fail if
+staging and production settings swap by accident. This
+article teaches runtime configuration as part of
+deployment safety, not as a separate admin chore.
 
 ## If You Know AWS Runtime Config
 
-If you know AWS, the familiar ideas are Parameter Store, Secrets Manager, IAM roles, ECS task environment variables, Lambda environment variables, and CloudWatch configuration evidence. Azure has similar patterns with different names.
+If you know AWS, the familiar ideas are Parameter
+Store, Secrets Manager, IAM roles, ECS task environment
+variables, Lambda environment variables, and CloudWatch
+configuration evidence. Azure has similar patterns with
+different names.
 
 | AWS idea you may know | Azure idea to compare first | Shared release question |
 |---|---|---|
@@ -63,19 +74,22 @@ The useful habit is:
 
 > Separate artifact changes from runtime value changes.
 
-If you change both at once, debugging becomes harder. When a release fails, you do not know whether the image is bad, the config is wrong, or the identity permission changed.
-
-Sometimes changing both is necessary. When it is, write that down in the release record.
+If you change both at once, debugging becomes harder.
+When a release fails, you do not know whether the image
+is bad, the config is wrong, or the identity permission
+changed. Sometimes changing both is necessary. When it
+is, write that down in the release record.
 
 ## Settings Are Runtime Promises
 
-Every required setting is a promise from the runtime to the app.
-
-The app says, "I will look for `ORDERS_DB_NAME`." The runtime says, "I will provide `ORDERS_DB_NAME` before the app starts."
-
-If that promise is broken, the app should fail clearly. That is better than starting half-broken.
-
-For `devpolaris-orders-api`, the startup check might validate required settings:
+Every required setting is a promise from the runtime to
+the app. The app says, "I will look for
+`ORDERS_DB_NAME`." The runtime says, "I will provide
+`ORDERS_DB_NAME` before the app starts." If that
+promise is broken, the app should fail clearly. That is
+better than starting half-broken. For
+`devpolaris-orders-api`, the startup check might
+validate required settings:
 
 ```text
 startup config check
@@ -88,11 +102,12 @@ startup config check
 result: fail fast before accepting traffic
 ```
 
-Failing fast means the app refuses to run when a required condition is missing. That can feel harsh, but it protects users.
-
-The dangerous alternative is an app that starts, receives traffic, then fails only when checkout touches the missing setting.
-
-Runtime settings also need names that humans can understand:
+Failing fast means the app refuses to run when a
+required condition is missing. That can feel harsh, but
+it protects users. The dangerous alternative is an app
+that starts, receives traffic, then fails only when
+checkout touches the missing setting. Runtime settings
+also need names that humans can understand:
 
 - `DB` is vague. `ORDERS_DB_NAME` is better.
 - `SECRET` is vague. `PAYMENT_PROVIDER_API_KEY` is better, though the value itself should not be logged.
@@ -101,11 +116,15 @@ Good names make release reviews easier.
 
 ## App Service App Settings Become Environment Variables
 
-In Azure App Service, app settings are passed to the application as environment variables. That means Node.js code can read them through `process.env`.
-
-The exact setup path can be portal, CLI, infrastructure as code, or deployment tooling. The important release idea is that App Service app settings are part of the runtime contract.
-
-If the team deploys `devpolaris-orders-api` to App Service, it should review app settings as part of release safety.
+In Azure App Service, app settings are passed to the
+application as environment variables. That means
+Node.js code can read them through `process.env`. The
+exact setup path can be portal, CLI, infrastructure as
+code, or deployment tooling. The important release idea
+is that App Service app settings are part of the
+runtime contract. If the team deploys
+`devpolaris-orders-api` to App Service, it should
+review app settings as part of release safety.
 
 For example:
 
@@ -118,25 +137,42 @@ App Service app settings
   FEATURE_RECEIPT_RETRY=true
 ```
 
-Some values are safe to store as plain app settings. Some are secrets and should use Key Vault or another secret-management path.
-
-The difference is not always technical. It is also about audit, rotation, and access. A feature flag may be a normal setting. A database password is a secret. A managed identity client ID may be configuration, but the permission behind it is still security-sensitive.
-
-If deployment slots are used, some settings should be slot-specific. Production should keep production database settings. Staging should keep staging database settings. Do not let a slot swap move environment-specific values into the wrong slot.
+Some values are safe to store as plain app settings.
+Some are secrets and should use Key Vault or another
+secret-management path. The difference is not always
+technical. It is also about audit, rotation, and
+access. A feature flag may be a normal setting. A
+database password is a secret. A managed identity
+client ID may be configuration, but the permission
+behind it is still security-sensitive. If deployment
+slots are used, some settings should be slot-specific.
+Production should keep production database settings.
+Staging should keep staging database settings. Do not
+let a slot swap move environment-specific values into
+the wrong slot.
 
 ## Container Apps Uses Environment Variables And Secrets
 
-Azure Container Apps also gives containers environment variables, and the app reads them like normal environment variables.
+Azure Container Apps also gives containers environment
+variables, and the app reads them like normal
+environment variables. Container Apps also has secrets
+at the application level. Those secrets can be
+referenced by revisions. One important Container Apps
+detail is that not every change creates a new revision.
+Changing a container image is revision-scoped and
+creates a new revision. Changing secret values is
+application-scoped and does not automatically create a
+new revision. Existing revisions may need a restart or
+a new revision to pick up updated secret values. This
+matters during release and rollback.
 
-Container Apps also has secrets at the application level. Those secrets can be referenced by revisions.
-
-One important Container Apps detail is that not every change creates a new revision. Changing a container image is revision-scoped and creates a new revision. Changing secret values is application-scoped and does not automatically create a new revision.
-
-Existing revisions may need a restart or a new revision to pick up updated secret values. This matters during release and rollback.
-
-Imagine the team rotates `PAYMENT_PROVIDER_API_KEY`. The image does not change, but the secret value changes. The app may need a restart or new revision before the running container sees the new value, depending on how the secret is referenced and deployed.
-
-Here is a release note that makes the distinction clear:
+Imagine the team rotates `PAYMENT_PROVIDER_API_KEY`.
+The image does not change, but the secret value
+changes. The app may need a restart or new revision
+before the running container sees the new value,
+depending on how the secret is referenced and deployed.
+Here is a release note that makes the distinction
+clear:
 
 ```text
 service: devpolaris-orders-api
@@ -149,21 +185,31 @@ verification: fake payment authorization succeeds
 rollback: restore previous secret version and restart revision
 ```
 
-That is a runtime operation, not a code deployment. Treat it with the same care.
+That is a runtime operation, not a code deployment.
+Treat it with the same care.
 
 ## Key Vault References Keep Secret Values Out Of App Code
 
-Azure Key Vault is the Azure service for storing secrets, keys, and certificates. A Key Vault reference lets an app setting or Container Apps secret point to a Key Vault secret instead of embedding the secret value directly.
+Azure Key Vault is the Azure service for storing
+secrets, keys, and certificates. A Key Vault reference
+lets an app setting or Container Apps secret point to a
+Key Vault secret instead of embedding the secret value
+directly. The app can read the setting like a normal
+runtime value, while the secret value is managed
+outside the app code. That separation helps with
+rotation, keeps secret values out of source control,
+gives security teams a clearer audit point, and lets
+access be controlled through Azure identity and Key
+Vault permissions. For App Service, a Key Vault
+reference may appear as the value of an app setting.
+For Container Apps, a secret can reference a Key Vault
+secret when managed identity and permission are
+configured.
 
-The app can read the setting like a normal runtime value, while the secret value is managed outside the app code.
-
-That separation helps with rotation, keeps secret values out of source control, gives security teams a clearer audit point, and lets access be controlled through Azure identity and Key Vault permissions.
-
-For App Service, a Key Vault reference may appear as the value of an app setting. For Container Apps, a secret can reference a Key Vault secret when managed identity and permission are configured.
-
-The beginner lesson is not the exact reference syntax. The lesson is that the app setting name remains stable, while the secret value can be managed in Key Vault.
-
-For `devpolaris-orders-api`:
+The beginner lesson is not the exact reference syntax.
+The lesson is that the app setting name remains stable,
+while the secret value can be managed in Key Vault. For
+`devpolaris-orders-api`:
 
 ```text
 setting name: PAYMENT_PROVIDER_API_KEY
@@ -172,15 +218,22 @@ app code reads: process.env.PAYMENT_PROVIDER_API_KEY
 release risk: managed identity cannot read secret, or secret version changed unexpectedly
 ```
 
-This is why secret references are both deployment and identity topics. The setting can exist, the secret can exist, and the app can still fail if its managed identity lacks permission to read the secret.
+This is why secret references are both deployment and
+identity topics. The setting can exist, the secret can
+exist, and the app can still fail if its managed
+identity lacks permission to read the secret.
 
 ## Managed Identity Must Be Part Of The Release Check
 
-Managed identity lets an Azure resource get an Azure identity without storing a credential in the app. For deployment and runtime operations, managed identity often decides whether the app can read Key Vault, access Blob Storage, or call another Azure service.
-
-That means identity is part of release safety.
-
-If `devpolaris-orders-api` runs in Container Apps and uses managed identity to read Key Vault, the release needs to check:
+Managed identity lets an Azure resource get an Azure
+identity without storing a credential in the app. For
+deployment and runtime operations, managed identity
+often decides whether the app can read Key Vault,
+access Blob Storage, or call another Azure service.
+That means identity is part of release safety. If
+`devpolaris-orders-api` runs in Container Apps and uses
+managed identity to read Key Vault, the release needs
+to check:
 
 - Is the identity enabled on this app?
 - Does Key Vault allow this identity to read the secret?
@@ -199,9 +252,11 @@ error="Forbidden"
 identity="devpolaris-orders-api-prod"
 ```
 
-The app setting may be correct, and the Key Vault secret may be correct. The missing piece is permission.
-
-That is why runtime config review includes identity review. For beginners, this is one of the most important cloud lessons:
+The app setting may be correct, and the Key Vault
+secret may be correct. The missing piece is permission.
+That is why runtime config review includes identity
+review. For beginners, this is one of the most
+important cloud lessons:
 
 > Secret names and secret access are different things.
 
@@ -209,11 +264,18 @@ The app can know the name and still be denied.
 
 ## Config Changes Need Their Own Rollback Plan
 
-Config changes should have rollback targets. That sounds obvious after the first outage, but it is easy to forget before then.
-
-If a feature flag breaks checkout, rollback may mean turning the flag off. If a Key Vault secret rotation breaks payment calls, rollback may mean restoring the previous secret version. If a storage account name changes incorrectly, rollback may mean restoring the previous app setting. If a managed identity permission was removed, rollback may mean restoring the role assignment.
-
-These are not all the same operation, so the release record should name the rollback action.
+Config changes should have rollback targets. That
+sounds obvious after the first outage, but it is easy
+to forget before then. If a feature flag breaks
+checkout, rollback may mean turning the flag off. If a
+Key Vault secret rotation breaks payment calls,
+rollback may mean restoring the previous secret
+version. If a storage account name changes incorrectly,
+rollback may mean restoring the previous app setting.
+If a managed identity permission was removed, rollback
+may mean restoring the role assignment. These are not
+all the same operation, so the release record should
+name the rollback action.
 
 For example:
 
@@ -233,11 +295,15 @@ verification: fake payment authorization succeeds
 rollback: restore previous secret version and force app to refresh or restart
 ```
 
-The words "if needed" should be used carefully. Some runtime systems need restart or revision change before a setting takes effect. The team should know which one applies.
+The words "if needed" should be used carefully. Some
+runtime systems need restart or revision change before
+a setting takes effect. The team should know which one
+applies.
 
 ## Failure Modes And First Checks
 
-Runtime config failures are easier to debug when the team names the symptom first.
+Runtime config failures are easier to debug when the
+team names the symptom first.
 
 | Symptom | First check |
 |---|---|
@@ -263,13 +329,15 @@ The common thread is simple:
 
 > Config failures are runtime failures.
 
-Debug them as runtime failures, not as mysterious code bugs.
+Debug them as runtime failures, not as mysterious code
+bugs.
 
 ## A Practical Runtime Config Review
 
-Before a release, ask what configuration changed. If the answer is "nothing," confirm it. If the answer is "something," name it.
-
-For `devpolaris-orders-api`, use this review:
+Before a release, ask what configuration changed. If
+the answer is "nothing," confirm it. If the answer is
+"something," name it. For `devpolaris-orders-api`, use
+this review:
 
 ```text
 service: devpolaris-orders-api
@@ -305,9 +373,11 @@ rollback:
   restart app after setting change
 ```
 
-This habit prevents a lot of "but the code did not change" confusion.
-
-Azure runtime settings are part of production. Treat them like code in the release conversation, even when they live outside the repository.
+This habit prevents a lot of "but the code did not
+change" confusion. Azure runtime settings are part of
+production. Treat them like code in the release
+conversation, even when they live outside the
+repository.
 
 ---
 

@@ -1,0 +1,142 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "The first service map for `devpolaris-orders-api` must be useful in a production review, but the team is still early. The reviewer asks for a map that helps someone debug traffic, runtime, data, secrets, artifacts, and signals without turning into a full Azure catalog. Which map is the best first version?",
+      "options": [
+        {
+          "id": "a",
+          "text": "A small map that names traffic entry, compute, database, secrets, image registry, and telemetry, with owner and environment tags."
+        },
+        {
+          "id": "b",
+          "text": "A map that includes required services and several likely future services in one diagram, even if the future services are not on today's request path."
+        },
+        {
+          "id": "c",
+          "text": "A map focused on compute and database first, with secrets and telemetry left as follow-up notes after launch."
+        },
+        {
+          "id": "d",
+          "text": "A list of Azure product names grouped by portal category, with the job of each service explained in a separate document."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "A useful first map is small but operational. It covers the request path, runtime, data, secrets, images, and signals without becoming a product catalog."
+    },
+    {
+      "id": "q2",
+      "type": "multiple",
+      "scenario": "A proposed first production map is being reviewed after the team agrees not to over-design. The map should include services that are actually on the request path or deployment path for `devpolaris-orders-api`. Which rows should stay?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Public entry: Front Door, Application Gateway, or another HTTP entry service used by the app."
+        },
+        {
+          "id": "b",
+          "text": "Compute: Container Apps, App Service, or another runtime for the API."
+        },
+        {
+          "id": "c",
+          "text": "Private data: Azure SQL Database for order records and Blob Storage for export files if the app uses both."
+        },
+        {
+          "id": "d",
+          "text": "Kubernetes cluster: include it now because the team might use Kubernetes later, even though this API is currently planned for a managed container service."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "The first three rows match real jobs in the app. Adding advanced services just to make the map look complete makes the map harder to use."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "The map says `API can read secrets`, but it does not name the identity doing the read. During a staging test, secret reads work from one app but fail from another app using the same Key Vault. What is the main gap?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The map is missing the caller identity and permission path, such as the managed identity and Key Vault access scope."
+        },
+        {
+          "id": "b",
+          "text": "The map is missing the public DNS TTL, which decides who can read secrets."
+        },
+        {
+          "id": "c",
+          "text": "The map is missing the database collation, which grants Key Vault access."
+        },
+        {
+          "id": "d",
+          "text": "The map is missing the image tag length, which proves secret permissions."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Secret access needs a caller identity and permission scope. A map that says the app can read secrets without naming the identity leaves a real debugging gap."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "The map lists `Azure Monitor`, but after a failed checkout nobody can answer which logs belong to that one request. The team has app logs, platform logs, and request telemetry, but no shared request identifier. What should be added or checked?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Request correlation, structured app logs, and the Log Analytics or Application Insights path where those signals are stored."
+        },
+        {
+          "id": "b",
+          "text": "Platform logs from the hosting service only, because application logs can be added after the next incident."
+        },
+        {
+          "id": "c",
+          "text": "Database audit logs only, because every checkout request eventually touches the database."
+        },
+        {
+          "id": "d",
+          "text": "A manual incident note template, because people can paste request IDs there during debugging."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Signals are useful only when the team can follow a request. Correlation IDs and the right log or trace destination make Monitor and Application Insights operationally useful."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A deployment review asks, `Where did this container image come from, and which running revision uses it?` Which map row answers the first half of that question?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Container image storage, such as Azure Container Registry, plus the image repository and tag or digest."
+        },
+        {
+          "id": "b",
+          "text": "Public DNS, because hostnames store image history."
+        },
+        {
+          "id": "c",
+          "text": "Container Apps revision history, because it shows what ran but not always the stable source of the image."
+        },
+        {
+          "id": "d",
+          "text": "Build pipeline logs, because they may show a push event but are not the long-lived image inventory."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Image origin belongs on the deployment and artifact part of the map. Runtime revision tells where the image is running, but the registry and image reference tell where it came from."
+    }
+  ]
+}

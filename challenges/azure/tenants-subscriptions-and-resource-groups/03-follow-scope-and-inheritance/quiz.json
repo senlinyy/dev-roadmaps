@@ -1,0 +1,142 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A developer has `Reader` at the subscription scope and `Contributor` on `rg-devpolaris-orders-dev`. They cannot update resources in `rg-devpolaris-orders-prod`. What explains this?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The broader subscription Reader role does not grant write access, and the Contributor role is scoped only to the dev resource group."
+        },
+        {
+          "id": "b",
+          "text": "Contributor on the dev resource group may be enough if the prod group inherits the same subscription Reader role."
+        },
+        {
+          "id": "c",
+          "text": "Reader at subscription scope blocks all lower-level role assignments from working."
+        },
+        {
+          "id": "d",
+          "text": "The developer may need to use the portal because some production role assignments are not honored by CLI tools."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Azure RBAC is scoped. A role assignment on one resource group does not write to another. A broader Reader role gives read access, not production write access."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A policy is assigned at the subscription scope requiring the tag `cost-center`. A deployment to a new resource group fails because the tag is missing. Why did a resource group deployment hit a subscription policy?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Policy can inherit from broader scopes, so a subscription-level rule can apply to resource groups and resources inside it."
+        },
+        {
+          "id": "b",
+          "text": "Resource groups ignore policy, so the failure must be from the app code."
+        },
+        {
+          "id": "c",
+          "text": "Tags may be checked by Cost Management later, but this specific failure should be handled in the cost workflow instead of deployment."
+        },
+        {
+          "id": "d",
+          "text": "The region may have a local tagging rule, so the team should inspect regional settings before policy scope."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Scope inheritance is the key concept. A subscription policy can apply to child resource groups and resources. This is not an app-code failure."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "Maya is designing access for a release pipeline that deploys only `devpolaris-orders-api` into `rg-devpolaris-orders-prod`. Which choices keep the blast radius smaller?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Assign only the roles the pipeline needs instead of broad Owner access."
+        },
+        {
+          "id": "b",
+          "text": "Scope the assignment to the resource group or specific resources when that is enough."
+        },
+        {
+          "id": "c",
+          "text": "Use a dedicated service principal or managed identity for the pipeline instead of a personal user login."
+        },
+        {
+          "id": "d",
+          "text": "Assign subscription Owner because it is easier to debug and can be cleaned up later."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "Least privilege is practical here: choose a dedicated identity, narrow role, and narrow scope. Subscription Owner may make the first deploy easier, but it creates unnecessary blast radius."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "The production team can create resources, but every attempt to create a public IP is denied. The error mentions a policy assignment at `/providers/Microsoft.Management/managementGroups/devpolaris-prod`. What does this tell you?",
+      "options": [
+        {
+          "id": "a",
+          "text": "A management group policy is being inherited by the subscription, so the team should inspect policy before changing resource-level settings."
+        },
+        {
+          "id": "b",
+          "text": "The public IP SKU might be unavailable in the chosen region, so service availability should be checked before policy."
+        },
+        {
+          "id": "c",
+          "text": "The resource group may be missing the tag that allows public IP creation under the team's naming convention."
+        },
+        {
+          "id": "d",
+          "text": "A narrower resource-level role assignment may give the deployer enough permission to bypass the inherited deny."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The scope in the error points above the subscription. Management group policy can control child subscriptions. RBAC changes at a single resource do not bypass that policy."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A teammate wants to assign `Key Vault Secrets Officer` at the whole production subscription so one API can read one secret. The API has its own managed identity, and the secret lives in a known production vault. What is the better first design?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Use a dedicated app identity and grant the smallest useful secret access at the Key Vault or secret scope supported by the team's model."
+        },
+        {
+          "id": "b",
+          "text": "Assign the role at subscription scope because secret names are hard to predict during runtime."
+        },
+        {
+          "id": "c",
+          "text": "Give the on-call group the same role temporarily so incidents are easier while the API identity is tested."
+        },
+        {
+          "id": "d",
+          "text": "Store the secret in the resource group tags so RBAC is no longer needed."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The access need is narrow: one app reading one secret or one vault. A broad subscription assignment is tempting because it is simple, but it grants much more than the app needs."
+    }
+  ]
+}

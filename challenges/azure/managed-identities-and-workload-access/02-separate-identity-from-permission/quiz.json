@@ -1,0 +1,142 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "`app-orders-prod` has a system-assigned managed identity. Key Vault still returns `Forbidden`. What does this prove? The app starts successfully, and the managed identity object ID appears in the resource overview, but the secret read still fails.",
+      "options": [
+        {
+          "id": "a",
+          "text": "The app has a caller identity, but that identity still needs the right Key Vault permission or access model."
+        },
+        {
+          "id": "b",
+          "text": "Managed identity failed to exist, because Key Vault access is automatic once identity is enabled."
+        },
+        {
+          "id": "c",
+          "text": "The app should switch to a user-assigned identity because system-assigned identities cannot read secrets."
+        },
+        {
+          "id": "d",
+          "text": "Key Vault cannot be used by Azure-hosted apps without storing a client secret."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Identity answers who the app is. Authorization answers what that identity can do and where. Enabling identity alone does not grant Key Vault access."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "The app can read Key Vault but cannot write to Blob Storage. Both calls use the same managed identity. What is the best interpretation? The logs show a successful `GET secret` call followed by a failed `Put Blob` call from the same running revision.",
+      "options": [
+        {
+          "id": "a",
+          "text": "The identity has one permission path working, but storage write access is separate and must be checked at the storage scope."
+        },
+        {
+          "id": "b",
+          "text": "The identity is broken because a working identity should have access to every Azure service."
+        },
+        {
+          "id": "c",
+          "text": "The storage account should copy Key Vault role assignments automatically after the first successful secret read."
+        },
+        {
+          "id": "d",
+          "text": "The app needs a second identity for every Azure service, because one identity cannot have several roles."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "One identity can have different permissions at different scopes. A successful Key Vault read does not imply Blob write permission."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "A user-assigned identity `mi-orders-runtime-prod` is attached to both the API and a background worker. The worker needs Blob write access, but the API only needs Blob read access. What should the team consider?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Whether sharing one identity gives the API more storage power than it needs, and whether separate identities would reduce blast radius."
+        },
+        {
+          "id": "b",
+          "text": "Whether the API can ignore RBAC because the worker already has the write role."
+        },
+        {
+          "id": "c",
+          "text": "Whether a system-assigned identity would automatically split read and write actions for each app."
+        },
+        {
+          "id": "d",
+          "text": "Whether Blob Storage can identify callers by container image tag instead of identity."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "A shared identity means shared permissions. If two workloads need different power, separate identities can make least privilege clearer. Identity type alone does not automatically split permission behavior."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "Which records help prove a managed identity setup is ready for release? The release reviewer wants proof that the production app itself, not a developer laptop or pipeline precheck, has the right access.",
+      "options": [
+        {
+          "id": "a",
+          "text": "The app or workload that has the identity attached."
+        },
+        {
+          "id": "b",
+          "text": "The identity object ID or client ID used by the runtime."
+        },
+        {
+          "id": "c",
+          "text": "The role assignments or access policy at each target resource."
+        },
+        {
+          "id": "d",
+          "text": "The developer's local Azure CLI account that tested the feature."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "A release review needs workload, identity, and target permissions. A developer's local account is not proof that the runtime identity works."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A teammate wants to grant `Contributor` at resource-group scope to a managed identity because the app needs to read one secret and write one blob container. What is the safer design review comment?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Grant the specific secret-read and blob-write permissions needed at the smallest useful scopes instead of general Contributor."
+        },
+        {
+          "id": "b",
+          "text": "Contributor is safer than data roles because it avoids thinking about each target resource."
+        },
+        {
+          "id": "c",
+          "text": "The app needs Owner instead, because Contributor does not include every possible emergency action."
+        },
+        {
+          "id": "d",
+          "text": "The app should use a human account because managed identity RBAC is too narrow for production."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The app has two specific jobs. The permissions should match those jobs. Broad management roles are easier to request but create unnecessary power."
+    }
+  ]
+}
