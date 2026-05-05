@@ -1,0 +1,64 @@
+{
+  "cwd": "/home/dev",
+  "env": {
+    "USER": "dev",
+    "HOME": "/home/dev"
+  },
+  "fs": {
+    "/home/dev": {
+      "type": "dir"
+    }
+  },
+  "commandModules": [
+    "aws"
+  ],
+  "cloud": {
+    "aws": {
+      "accountId": "123456789012",
+      "region": "us-east-1",
+      "userArn": "arn:aws:iam::123456789012:user/devpolaris-learner",
+      "applicationScalingTargets": [
+        {
+          "serviceNamespace": "ecs",
+          "resourceId": "service/devpolaris-orders-prod/devpolaris-orders-api",
+          "scalableDimension": "ecs:service:DesiredCount",
+          "minCapacity": 2,
+          "maxCapacity": 6,
+          "roleArn": "arn:aws:iam::123456789012:role/aws-service-role/ecs.application-autoscaling.amazonaws.com/AWSServiceRoleForApplicationAutoScaling_ECSService"
+        }
+      ],
+      "sqsQueues": [
+        {
+          "queueUrl": "https://sqs.us-east-1.amazonaws.com/123456789012/devpolaris-orders-export-jobs",
+          "queueArn": "arn:aws:sqs:us-east-1:123456789012:devpolaris-orders-export-jobs",
+          "attributes": {
+            "ApproximateNumberOfMessages": "128",
+            "ApproximateNumberOfMessagesNotVisible": "12",
+            "VisibilityTimeout": "60",
+            "MessageRetentionPeriod": "345600"
+          },
+          "tags": {
+            "service": "devpolaris-orders",
+            "worker": "exports"
+          }
+        }
+      ]
+    }
+  },
+  "grader": {
+    "strategy": "contains",
+    "source": "all-stdout",
+    "expected": [
+      "service/devpolaris-orders-prod/devpolaris-orders-api",
+      "\"MinCapacity\": 2",
+      "\"MaxCapacity\": 6",
+      "devpolaris-orders-export-jobs",
+      "\"ApproximateNumberOfMessages\": \"128\""
+    ],
+    "requireCommands": [
+      "aws"
+    ],
+    "minCommandCount": 2,
+    "loose": true
+  }
+}

@@ -1,0 +1,92 @@
+{
+  "cwd": "/home/dev",
+  "env": {
+    "USER": "dev",
+    "HOME": "/home/dev"
+  },
+  "fs": {
+    "/home/dev": {
+      "type": "dir"
+    }
+  },
+  "commandModules": [
+    "aws"
+  ],
+  "cloud": {
+    "aws": {
+      "accountId": "123456789012",
+      "region": "us-east-1",
+      "userArn": "arn:aws:iam::123456789012:user/devpolaris-learner",
+      "s3Buckets": [],
+      "routeTables": [
+        {
+          "routeTableId": "rtb-private-orders",
+          "vpcId": "vpc-orders-prod",
+          "associations": [
+            {
+              "subnetId": "subnet-private-a"
+            }
+          ],
+          "routes": [
+            {
+              "destinationCidrBlock": "10.40.0.0/16",
+              "gatewayId": "local"
+            },
+            {
+              "destinationCidrBlock": "0.0.0.0/0",
+              "natGatewayId": "nat-orders-a"
+            }
+          ]
+        }
+      ],
+      "natGateways": [
+        {
+          "natGatewayId": "nat-orders-a",
+          "vpcId": "vpc-orders-prod",
+          "subnetId": "subnet-public-a",
+          "state": "available"
+        }
+      ],
+      "vpcEndpoints": [
+        {
+          "vpcEndpointId": "vpce-secretsmanager",
+          "vpcId": "vpc-orders-prod",
+          "serviceName": "com.amazonaws.us-east-1.secretsmanager",
+          "state": "available",
+          "subnetIds": [
+            "subnet-private-a",
+            "subnet-private-b"
+          ]
+        },
+        {
+          "vpcEndpointId": "vpce-logs",
+          "vpcId": "vpc-orders-prod",
+          "serviceName": "com.amazonaws.us-east-1.logs",
+          "state": "available",
+          "subnetIds": [
+            "subnet-private-a",
+            "subnet-private-b"
+          ]
+        }
+      ]
+    }
+  },
+  "grader": {
+    "strategy": "contains",
+    "source": "all-stdout",
+    "expected": [
+      "rtb-private-orders",
+      "0.0.0.0/0",
+      "nat-orders-a",
+      "available",
+      "vpce-secretsmanager",
+      "com.amazonaws.us-east-1.secretsmanager",
+      "vpce-logs"
+    ],
+    "requireCommands": [
+      "aws"
+    ],
+    "minCommandCount": 3,
+    "loose": true
+  }
+}

@@ -1,0 +1,65 @@
+{
+  "cwd": "/home/dev",
+  "env": {
+    "USER": "dev",
+    "HOME": "/home/dev"
+  },
+  "fs": {
+    "/home/dev": {
+      "type": "dir"
+    }
+  },
+  "commandModules": [
+    "aws"
+  ],
+  "cloud": {
+    "aws": {
+      "accountId": "123456789012",
+      "region": "us-east-1",
+      "userArn": "arn:aws:iam::123456789012:user/devpolaris-learner",
+      "costResults": [
+        {
+          "start": "2026-05-01",
+          "end": "2026-06-01",
+          "granularity": "MONTHLY",
+          "total": {
+            "amount": "1842.55",
+            "unit": "USD"
+          },
+          "groups": [
+            {
+              "keys": [
+                "service$devpolaris-orders"
+              ],
+              "amount": "1268.40",
+              "unit": "USD"
+            },
+            {
+              "keys": [
+                "service$shared-platform"
+              ],
+              "amount": "574.15",
+              "unit": "USD"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "grader": {
+    "strategy": "contains",
+    "source": "all-stdout",
+    "expected": [
+      "\"Start\": \"2026-05-01\"",
+      "\"End\": \"2026-06-01\"",
+      "service$devpolaris-orders",
+      "\"Amount\": \"1268.40\"",
+      "\"Amount\": \"1842.55\""
+    ],
+    "requireCommands": [
+      "aws"
+    ],
+    "minCommandCount": 1,
+    "loose": true
+  }
+}

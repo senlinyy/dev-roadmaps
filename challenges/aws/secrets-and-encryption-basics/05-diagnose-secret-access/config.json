@@ -1,0 +1,90 @@
+{
+  "cwd": "/home/dev",
+  "env": {
+    "USER": "dev",
+    "HOME": "/home/dev"
+  },
+  "fs": {
+    "/home/dev": {
+      "type": "dir"
+    }
+  },
+  "commandModules": [
+    "aws"
+  ],
+  "cloud": {
+    "aws": {
+      "accountId": "123456789012",
+      "region": "us-east-1",
+      "userArn": "arn:aws:iam::123456789012:user/devpolaris-learner",
+      "s3Buckets": [],
+      "iamRoles": [
+        {
+          "roleName": "devpolaris-orders-api-prod-task-role",
+          "arn": "arn:aws:iam::123456789012:role/devpolaris-orders-api-prod-task-role",
+          "trustPrincipals": [
+            "ecs-tasks.amazonaws.com"
+          ],
+          "attachedPolicies": [
+            {
+              "policyName": "devpolaris-orders-api-export-only",
+              "policyArn": "arn:aws:iam::123456789012:policy/devpolaris-orders-api-export-only",
+              "statements": [
+                {
+                  "effect": "Allow",
+                  "actions": [
+                    "s3:PutObject"
+                  ],
+                  "resources": [
+                    "arn:aws:s3:::devpolaris-orders-exports-prod/orders-api/*"
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "secrets": [
+        {
+          "name": "/devpolaris/orders-api/prod/database-url",
+          "arn": "arn:aws:secretsmanager:us-east-1:123456789012:secret:/devpolaris/orders-api/prod/database-url-a1b2c3",
+          "region": "us-east-1",
+          "kmsKeyId": "alias/devpolaris-orders-prod",
+          "tags": {
+            "service": "devpolaris-orders-api",
+            "env": "prod"
+          },
+          "secretString": "postgres://orders-prod-redacted"
+        }
+      ],
+      "cloudTrailEvents": [
+        {
+          "eventName": "GetSecretValue",
+          "eventTime": "2026-05-04T11:42:18Z",
+          "username": "devpolaris-orders-api-prod-task-role",
+          "resources": [
+            "arn:aws:secretsmanager:us-east-1:123456789012:secret:/devpolaris/orders-api/prod/database-url-a1b2c3"
+          ],
+          "sourceIPAddress": "10.0.42.17",
+          "errorCode": "AccessDenied"
+        }
+      ]
+    }
+  },
+  "grader": {
+    "strategy": "contains",
+    "source": "all-stdout",
+    "expected": [
+      "/devpolaris/orders-api/prod/database-url",
+      "secretsmanager:GetSecretValue",
+      "implicitDeny",
+      "GetSecretValue",
+      "AccessDenied"
+    ],
+    "requireCommands": [
+      "aws"
+    ],
+    "minCommandCount": 3,
+    "loose": true
+  }
+}

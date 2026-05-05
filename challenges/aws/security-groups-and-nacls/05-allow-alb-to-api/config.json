@@ -1,0 +1,62 @@
+{
+  "cwd": "/home/dev",
+  "env": {
+    "USER": "dev",
+    "HOME": "/home/dev"
+  },
+  "fs": {
+    "/home/dev": {
+      "type": "dir"
+    }
+  },
+  "commandModules": [
+    "aws"
+  ],
+  "cloud": {
+    "aws": {
+      "accountId": "123456789012",
+      "region": "us-east-1",
+      "userArn": "arn:aws:iam::123456789012:user/devpolaris-learner",
+      "s3Buckets": [],
+      "securityGroups": [
+        {
+          "groupId": "sg-orders-alb",
+          "groupName": "devpolaris-orders-alb",
+          "vpcId": "vpc-orders-prod",
+          "inboundRules": [
+            {
+              "ipProtocol": "tcp",
+              "fromPort": 443,
+              "toPort": 443,
+              "cidrIp": "0.0.0.0/0"
+            }
+          ]
+        },
+        {
+          "groupId": "sg-orders-api",
+          "groupName": "devpolaris-orders-api",
+          "vpcId": "vpc-orders-prod",
+          "inboundRules": []
+        }
+      ]
+    }
+  },
+  "grader": {
+    "strategy": "contains",
+    "source": "all-stdout",
+    "expected": [
+      "Return",
+      "sg-orders-api",
+      "sg-orders-alb",
+      "3000"
+    ],
+    "requireCommands": [
+      "aws"
+    ],
+    "forbidCommands": [
+      "echo"
+    ],
+    "minCommandCount": 3,
+    "loose": true
+  }
+}

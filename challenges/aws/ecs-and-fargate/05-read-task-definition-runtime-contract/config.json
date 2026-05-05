@@ -1,0 +1,112 @@
+{
+  "cwd": "/home/dev",
+  "env": {
+    "USER": "dev",
+    "HOME": "/home/dev"
+  },
+  "fs": {
+    "/home/dev": {
+      "type": "dir"
+    }
+  },
+  "commandModules": [
+    "aws"
+  ],
+  "cloud": {
+    "aws": {
+      "accountId": "123456789012",
+      "region": "us-east-1",
+      "userArn": "arn:aws:iam::123456789012:user/devpolaris-learner",
+      "iamRoles": [
+        {
+          "roleName": "devpolaris-orders-api-prod-task-role",
+          "arn": "arn:aws:iam::123456789012:role/devpolaris-orders-api-prod-task-role",
+          "trustPrincipals": [
+            "ecs-tasks.amazonaws.com"
+          ]
+        },
+        {
+          "roleName": "devpolaris-orders-api-prod-execution-role",
+          "arn": "arn:aws:iam::123456789012:role/devpolaris-orders-api-prod-execution-role",
+          "trustPrincipals": [
+            "ecs-tasks.amazonaws.com"
+          ]
+        }
+      ],
+      "ecsTaskDefinitions": [
+        {
+          "taskDefinitionArn": "arn:aws:ecs:us-east-1:123456789012:task-definition/devpolaris-orders-api:42",
+          "family": "devpolaris-orders-api",
+          "revision": 42,
+          "taskRoleArn": "arn:aws:iam::123456789012:role/devpolaris-orders-api-prod-task-role",
+          "executionRoleArn": "arn:aws:iam::123456789012:role/devpolaris-orders-api-prod-execution-role",
+          "networkMode": "awsvpc",
+          "requiresCompatibilities": [
+            "FARGATE"
+          ],
+          "cpu": "512",
+          "memory": "1024",
+          "containerDefinitions": [
+            {
+              "name": "orders-api",
+              "image": "123456789012.dkr.ecr.us-east-1.amazonaws.com/devpolaris-orders-api:2026-05-04.3",
+              "essential": true,
+              "portMappings": [
+                {
+                  "containerPort": 3000,
+                  "hostPort": 3000,
+                  "protocol": "tcp"
+                }
+              ],
+              "environment": [
+                {
+                  "name": "PORT",
+                  "value": "3000"
+                },
+                {
+                  "name": "NODE_ENV",
+                  "value": "production"
+                }
+              ],
+              "secrets": [
+                {
+                  "name": "DATABASE_URL",
+                  "valueFrom": "arn:aws:secretsmanager:us-east-1:123456789012:secret:/devpolaris/orders-api/prod/database-url-a1b2c3"
+                }
+              ],
+              "logConfiguration": {
+                "logDriver": "awslogs",
+                "options": {
+                  "awslogs-group": "/ecs/devpolaris-orders-api",
+                  "awslogs-region": "us-east-1",
+                  "awslogs-stream-prefix": "orders-api"
+                }
+              }
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "grader": {
+    "strategy": "contains",
+    "source": "all-stdout",
+    "expected": [
+      "devpolaris-orders-api:42",
+      "2026-05-04.3",
+      "\"containerPort\": 3000",
+      "\"name\": \"PORT\"",
+      "\"value\": \"3000\"",
+      "DATABASE_URL",
+      "devpolaris-orders-api-prod-task-role",
+      "devpolaris-orders-api-prod-execution-role",
+      "/ecs/devpolaris-orders-api",
+      "ecs-tasks.amazonaws.com"
+    ],
+    "requireCommands": [
+      "aws"
+    ],
+    "minCommandCount": 3,
+    "loose": true
+  }
+}

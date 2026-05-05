@@ -1,0 +1,57 @@
+{
+  "cwd": "/home/dev",
+  "env": {
+    "USER": "dev",
+    "HOME": "/home/dev"
+  },
+  "fs": {
+    "/home/dev": {
+      "type": "dir"
+    }
+  },
+  "commandModules": [
+    "aws"
+  ],
+  "cloud": {
+    "aws": {
+      "accountId": "123456789012",
+      "region": "us-east-1",
+      "userArn": "arn:aws:iam::123456789012:user/devpolaris-learner",
+      "s3Buckets": [
+        {
+          "name": "devpolaris-orders-exports-prod",
+          "region": "us-east-1",
+          "versioningStatus": "Enabled"
+        }
+      ],
+      "rdsDbSnapshots": [
+        {
+          "dbSnapshotIdentifier": "devpolaris-orders-prod-2026-05-04-0800",
+          "dbInstanceIdentifier": "devpolaris-orders-prod",
+          "dbSnapshotArn": "arn:aws:rds:us-east-1:123456789012:snapshot:devpolaris-orders-prod-2026-05-04-0800",
+          "status": "available",
+          "snapshotCreateTime": "2026-05-04T08:00:00Z",
+          "engine": "postgres",
+          "allocatedStorage": 100,
+          "encrypted": true,
+          "snapshotType": "automated"
+        }
+      ]
+    }
+  },
+  "grader": {
+    "strategy": "contains",
+    "source": "all-stdout",
+    "expected": [
+      "devpolaris-orders-prod-2026-05-04-0800",
+      "\"Status\": \"available\"",
+      "\"Encrypted\": true",
+      "\"Status\": \"Enabled\""
+    ],
+    "requireCommands": [
+      "aws"
+    ],
+    "minCommandCount": 2,
+    "loose": true
+  }
+}

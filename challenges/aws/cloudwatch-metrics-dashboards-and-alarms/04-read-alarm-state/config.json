@@ -1,0 +1,60 @@
+{
+  "cwd": "/home/dev",
+  "env": {
+    "USER": "dev",
+    "HOME": "/home/dev"
+  },
+  "fs": {
+    "/home/dev": {
+      "type": "dir"
+    }
+  },
+  "commandModules": [
+    "aws"
+  ],
+  "cloud": {
+    "aws": {
+      "accountId": "123456789012",
+      "region": "us-east-1",
+      "userArn": "arn:aws:iam::123456789012:user/devpolaris-learner",
+      "cloudWatchAlarms": [
+        {
+          "alarmName": "devpolaris-orders-api-5xx-high",
+          "alarmArn": "arn:aws:cloudwatch:us-east-1:123456789012:alarm:devpolaris-orders-api-5xx-high",
+          "stateValue": "ALARM",
+          "stateReason": "HTTPCode_Target_5XX_Count breached threshold for 2 datapoints",
+          "namespace": "AWS/ApplicationELB",
+          "metricName": "HTTPCode_Target_5XX_Count",
+          "dimensions": {
+            "TargetGroup": "targetgroup/devpolaris-orders-api-tg/6d0ecf831eec9f09",
+            "LoadBalancer": "app/devpolaris-orders-alb/50dc6c495c0c9188"
+          },
+          "statistic": "Sum",
+          "period": 60,
+          "evaluationPeriods": 2,
+          "threshold": 10,
+          "comparisonOperator": "GreaterThanThreshold",
+          "alarmActions": [
+            "arn:aws:sns:us-east-1:123456789012:orders-on-call"
+          ]
+        }
+      ]
+    }
+  },
+  "grader": {
+    "strategy": "contains",
+    "source": "all-stdout",
+    "expected": [
+      "devpolaris-orders-api-5xx-high",
+      "\"StateValue\": \"ALARM\"",
+      "HTTPCode_Target_5XX_Count",
+      "\"Threshold\": 10",
+      "orders-on-call"
+    ],
+    "requireCommands": [
+      "aws"
+    ],
+    "minCommandCount": 1,
+    "loose": true
+  }
+}

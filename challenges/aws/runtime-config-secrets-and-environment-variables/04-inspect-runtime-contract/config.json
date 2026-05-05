@@ -1,0 +1,88 @@
+{
+  "cwd": "/home/dev",
+  "env": {
+    "USER": "dev",
+    "HOME": "/home/dev"
+  },
+  "fs": {
+    "/home/dev": {
+      "type": "dir"
+    }
+  },
+  "commandModules": [
+    "aws"
+  ],
+  "cloud": {
+    "aws": {
+      "accountId": "123456789012",
+      "region": "us-east-1",
+      "userArn": "arn:aws:iam::123456789012:user/devpolaris-learner",
+      "ecsTaskDefinitions": [
+        {
+          "taskDefinitionArn": "arn:aws:ecs:us-east-1:123456789012:task-definition/devpolaris-orders-api:42",
+          "family": "devpolaris-orders-api",
+          "revision": 42,
+          "taskRoleArn": "arn:aws:iam::123456789012:role/devpolaris-orders-api-prod-task-role",
+          "executionRoleArn": "arn:aws:iam::123456789012:role/devpolaris-orders-api-prod-execution-role",
+          "networkMode": "awsvpc",
+          "requiresCompatibilities": [
+            "FARGATE"
+          ],
+          "cpu": "512",
+          "memory": "1024",
+          "containerDefinitions": [
+            {
+              "name": "orders-api",
+              "image": "123456789012.dkr.ecr.us-east-1.amazonaws.com/devpolaris-orders-api@sha256:cafe42d6a9d17df90b5e3c6b7f1a8d2e6efb1234567890abcdef111122223333",
+              "environment": [
+                {
+                  "name": "NODE_ENV",
+                  "value": "production"
+                },
+                {
+                  "name": "ORDERS_BUCKET",
+                  "value": "devpolaris-orders-exports-prod"
+                }
+              ],
+              "secrets": [
+                {
+                  "name": "DATABASE_URL",
+                  "valueFrom": "arn:aws:secretsmanager:us-east-1:123456789012:secret:/devpolaris/orders-api/prod/database-url-a1b2c3"
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "secrets": [
+        {
+          "name": "/devpolaris/orders-api/prod/database-url",
+          "arn": "arn:aws:secretsmanager:us-east-1:123456789012:secret:/devpolaris/orders-api/prod/database-url-a1b2c3",
+          "region": "us-east-1",
+          "kmsKeyId": "arn:aws:kms:us-east-1:123456789012:key/orders-prod-kms",
+          "tags": {
+            "service": "devpolaris-orders-api",
+            "env": "prod"
+          }
+        }
+      ]
+    }
+  },
+  "grader": {
+    "strategy": "contains",
+    "source": "all-stdout",
+    "expected": [
+      "\"name\": \"NODE_ENV\"",
+      "\"name\": \"DATABASE_URL\"",
+      "/devpolaris/orders-api/prod/database-url",
+      "orders-prod-kms",
+      "\"Key\": \"service\"",
+      "\"Value\": \"devpolaris-orders-api\""
+    ],
+    "requireCommands": [
+      "aws"
+    ],
+    "minCommandCount": 2,
+    "loose": true
+  }
+}

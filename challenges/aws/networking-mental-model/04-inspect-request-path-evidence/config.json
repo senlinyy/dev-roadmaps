@@ -1,0 +1,107 @@
+{
+  "cwd": "/home/dev",
+  "env": {
+    "USER": "dev",
+    "HOME": "/home/dev"
+  },
+  "fs": {
+    "/home/dev": {
+      "type": "dir"
+    }
+  },
+  "commandModules": [
+    "aws"
+  ],
+  "cloud": {
+    "aws": {
+      "accountId": "123456789012",
+      "region": "us-east-1",
+      "userArn": "arn:aws:iam::123456789012:user/devpolaris-learner",
+      "s3Buckets": [],
+      "subnets": [
+        {
+          "subnetId": "subnet-public-a",
+          "vpcId": "vpc-orders-prod",
+          "cidrBlock": "10.40.0.0/24",
+          "availabilityZone": "us-east-1a",
+          "mapPublicIpOnLaunch": true,
+          "tags": {
+            "tier": "public"
+          }
+        },
+        {
+          "subnetId": "subnet-private-a",
+          "vpcId": "vpc-orders-prod",
+          "cidrBlock": "10.40.10.0/24",
+          "availabilityZone": "us-east-1a",
+          "mapPublicIpOnLaunch": false,
+          "tags": {
+            "tier": "private-app"
+          }
+        }
+      ],
+      "securityGroups": [
+        {
+          "groupId": "sg-orders-alb",
+          "groupName": "devpolaris-orders-alb",
+          "vpcId": "vpc-orders-prod",
+          "inboundRules": [
+            {
+              "ipProtocol": "tcp",
+              "fromPort": 443,
+              "toPort": 443,
+              "cidrIp": "0.0.0.0/0"
+            }
+          ]
+        },
+        {
+          "groupId": "sg-orders-api",
+          "groupName": "devpolaris-orders-api",
+          "vpcId": "vpc-orders-prod",
+          "inboundRules": [
+            {
+              "ipProtocol": "tcp",
+              "fromPort": 3000,
+              "toPort": 3000,
+              "sourceSecurityGroupId": "sg-orders-alb"
+            }
+          ]
+        }
+      ],
+      "loadBalancers": [
+        {
+          "loadBalancerArn": "arn:aws:elasticloadbalancing:us-east-1:123456789012:loadbalancer/app/devpolaris-orders-alb/50dc6c495c0c9188",
+          "loadBalancerName": "devpolaris-orders-alb",
+          "dnsName": "dualstack.devpolaris-orders-alb-123.us-east-1.elb.amazonaws.com",
+          "scheme": "internet-facing",
+          "type": "application",
+          "vpcId": "vpc-orders-prod",
+          "securityGroups": [
+            "sg-orders-alb"
+          ],
+          "subnets": [
+            "subnet-public-a"
+          ]
+        }
+      ]
+    }
+  },
+  "grader": {
+    "strategy": "contains",
+    "source": "all-stdout",
+    "expected": [
+      "devpolaris-orders-alb",
+      "internet-facing",
+      "subnet-public-a",
+      "subnet-private-a",
+      "sg-orders-alb",
+      "sg-orders-api",
+      "3000"
+    ],
+    "requireCommands": [
+      "aws"
+    ],
+    "minCommandCount": 3,
+    "loose": true
+  }
+}

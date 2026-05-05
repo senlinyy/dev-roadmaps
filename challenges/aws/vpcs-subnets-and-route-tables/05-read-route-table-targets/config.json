@@ -1,0 +1,100 @@
+{
+  "cwd": "/home/dev",
+  "env": {
+    "USER": "dev",
+    "HOME": "/home/dev"
+  },
+  "fs": {
+    "/home/dev": {
+      "type": "dir"
+    }
+  },
+  "commandModules": [
+    "aws"
+  ],
+  "cloud": {
+    "aws": {
+      "accountId": "123456789012",
+      "region": "us-east-1",
+      "userArn": "arn:aws:iam::123456789012:user/devpolaris-learner",
+      "s3Buckets": [],
+      "routeTables": [
+        {
+          "routeTableId": "rtb-public-orders",
+          "vpcId": "vpc-orders-prod",
+          "associations": [
+            {
+              "subnetId": "subnet-public-a"
+            }
+          ],
+          "routes": [
+            {
+              "destinationCidrBlock": "10.40.0.0/16",
+              "gatewayId": "local"
+            },
+            {
+              "destinationCidrBlock": "0.0.0.0/0",
+              "gatewayId": "igw-orders-prod"
+            }
+          ]
+        },
+        {
+          "routeTableId": "rtb-private-orders",
+          "vpcId": "vpc-orders-prod",
+          "associations": [
+            {
+              "subnetId": "subnet-private-a"
+            }
+          ],
+          "routes": [
+            {
+              "destinationCidrBlock": "10.40.0.0/16",
+              "gatewayId": "local"
+            },
+            {
+              "destinationCidrBlock": "0.0.0.0/0",
+              "natGatewayId": "nat-orders-a"
+            }
+          ]
+        }
+      ],
+      "internetGateways": [
+        {
+          "internetGatewayId": "igw-orders-prod",
+          "attachments": [
+            {
+              "vpcId": "vpc-orders-prod",
+              "state": "available"
+            }
+          ]
+        }
+      ],
+      "natGateways": [
+        {
+          "natGatewayId": "nat-orders-a",
+          "vpcId": "vpc-orders-prod",
+          "subnetId": "subnet-public-a",
+          "state": "available"
+        }
+      ]
+    }
+  },
+  "grader": {
+    "strategy": "contains",
+    "source": "all-stdout",
+    "expected": [
+      "rtb-public-orders",
+      "rtb-private-orders",
+      "10.40.0.0/16",
+      "0.0.0.0/0",
+      "igw-orders-prod",
+      "nat-orders-a",
+      "available"
+    ],
+    "requireCommands": [
+      "aws"
+    ],
+    "minCommandCount": 3,
+    "loose": true
+  }
+}

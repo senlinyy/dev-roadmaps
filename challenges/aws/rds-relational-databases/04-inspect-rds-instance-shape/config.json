@@ -1,0 +1,64 @@
+{
+  "cwd": "/home/dev",
+  "env": {
+    "USER": "dev",
+    "HOME": "/home/dev"
+  },
+  "fs": {
+    "/home/dev": {
+      "type": "dir"
+    }
+  },
+  "commandModules": [
+    "aws"
+  ],
+  "cloud": {
+    "aws": {
+      "accountId": "123456789012",
+      "region": "us-east-1",
+      "userArn": "arn:aws:iam::123456789012:user/devpolaris-learner",
+      "rdsDbInstances": [
+        {
+          "dbInstanceIdentifier": "devpolaris-orders-prod",
+          "dbInstanceArn": "arn:aws:rds:us-east-1:123456789012:db:devpolaris-orders-prod",
+          "engine": "postgres",
+          "engineVersion": "15.5",
+          "dbInstanceStatus": "available",
+          "endpointAddress": "devpolaris-orders-prod.abcdefghijkl.us-east-1.rds.amazonaws.com",
+          "endpointPort": 5432,
+          "availabilityZone": "us-east-1a",
+          "multiAz": true,
+          "publiclyAccessible": false,
+          "storageEncrypted": true,
+          "backupRetentionPeriod": 7,
+          "dbSubnetGroupName": "orders-private-db-subnets",
+          "vpcSecurityGroups": [
+            "sg-orders-db"
+          ],
+          "tags": {
+            "app": "devpolaris-orders",
+            "env": "prod",
+            "owner": "orders-team"
+          }
+        }
+      ]
+    }
+  },
+  "grader": {
+    "strategy": "contains",
+    "source": "all-stdout",
+    "expected": [
+      "\"DBInstanceIdentifier\": \"devpolaris-orders-prod\"",
+      "devpolaris-orders-prod.abcdefghijkl.us-east-1.rds.amazonaws.com",
+      "\"MultiAZ\": true",
+      "\"PubliclyAccessible\": false",
+      "\"StorageEncrypted\": true",
+      "\"BackupRetentionPeriod\": 7"
+    ],
+    "requireCommands": [
+      "aws"
+    ],
+    "minCommandCount": 1,
+    "loose": true
+  }
+}

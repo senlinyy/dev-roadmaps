@@ -1,0 +1,91 @@
+{
+  "cwd": "/home/dev",
+  "env": {
+    "USER": "dev",
+    "HOME": "/home/dev"
+  },
+  "fs": {
+    "/home/dev": {
+      "type": "dir"
+    }
+  },
+  "commandModules": [
+    "aws"
+  ],
+  "cloud": {
+    "aws": {
+      "accountId": "123456789012",
+      "region": "us-east-1",
+      "userArn": "arn:aws:iam::123456789012:user/devpolaris-learner",
+      "dynamoDbTables": [
+        {
+          "tableName": "devpolaris-checkout-state",
+          "tableArn": "arn:aws:dynamodb:us-east-1:123456789012:table/devpolaris-checkout-state",
+          "tableStatus": "ACTIVE",
+          "keySchema": [
+            {
+              "attributeName": "checkoutId",
+              "keyType": "HASH"
+            },
+            {
+              "attributeName": "step",
+              "keyType": "RANGE"
+            }
+          ],
+          "attributeDefinitions": [
+            {
+              "attributeName": "checkoutId",
+              "attributeType": "S"
+            },
+            {
+              "attributeName": "step",
+              "attributeType": "S"
+            },
+            {
+              "attributeName": "status",
+              "attributeType": "S"
+            }
+          ],
+          "billingMode": "PAY_PER_REQUEST",
+          "itemCount": 12843,
+          "tableSizeBytes": 7340032,
+          "globalSecondaryIndexes": [
+            {
+              "indexName": "status-index",
+              "keySchema": [
+                {
+                  "attributeName": "status",
+                  "keyType": "HASH"
+                }
+              ],
+              "projectionType": "ALL",
+              "indexStatus": "ACTIVE"
+            }
+          ],
+          "tags": {
+            "app": "devpolaris-orders",
+            "env": "prod"
+          }
+        }
+      ]
+    }
+  },
+  "grader": {
+    "strategy": "contains",
+    "source": "all-stdout",
+    "expected": [
+      "\"TableName\": \"devpolaris-checkout-state\"",
+      "\"AttributeName\": \"checkoutId\"",
+      "\"KeyType\": \"HASH\"",
+      "\"AttributeName\": \"step\"",
+      "\"KeyType\": \"RANGE\"",
+      "\"BillingMode\": \"PAY_PER_REQUEST\"",
+      "\"IndexName\": \"status-index\""
+    ],
+    "requireCommands": [
+      "aws"
+    ],
+    "minCommandCount": 1,
+    "loose": true
+  }
+}

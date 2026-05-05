@@ -1,0 +1,72 @@
+{
+  "cwd": "/home/dev",
+  "env": {
+    "USER": "dev",
+    "HOME": "/home/dev"
+  },
+  "fs": {
+    "/home/dev": {
+      "type": "dir"
+    }
+  },
+  "commandModules": [
+    "aws"
+  ],
+  "cloud": {
+    "aws": {
+      "accountId": "123456789012",
+      "region": "us-east-1",
+      "userArn": "arn:aws:iam::123456789012:user/devpolaris-learner",
+      "s3Buckets": [],
+      "iamRoles": [
+        {
+          "roleName": "devpolaris-orders-api-prod-task-role",
+          "arn": "arn:aws:iam::123456789012:role/devpolaris-orders-api-prod-task-role",
+          "trustPrincipals": [
+            "ecs-tasks.amazonaws.com"
+          ],
+          "attachedPolicies": [
+            {
+              "policyName": "devpolaris-orders-api-prod-runtime",
+              "policyArn": "arn:aws:iam::123456789012:policy/devpolaris-orders-api-prod-runtime",
+              "statements": [
+                {
+                  "effect": "Allow",
+                  "actions": [
+                    "secretsmanager:GetSecretValue"
+                  ],
+                  "resources": [
+                    "arn:aws:secretsmanager:us-east-1:123456789012:secret:/devpolaris/orders-api/prod/database-url-a1b2c3"
+                  ]
+                },
+                {
+                  "effect": "Allow",
+                  "actions": [
+                    "s3:PutObject"
+                  ],
+                  "resources": [
+                    "arn:aws:s3:::devpolaris-orders-exports-prod/orders-api/*"
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "grader": {
+    "strategy": "contains",
+    "source": "all-stdout",
+    "expected": [
+      "devpolaris-orders-api-prod-task-role",
+      "ecs-tasks.amazonaws.com",
+      "devpolaris-orders-api-prod-runtime"
+    ],
+    "requireCommands": [
+      "aws"
+    ],
+    "minCommandCount": 2,
+    "loose": true
+  }
+}

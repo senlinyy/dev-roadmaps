@@ -1,0 +1,69 @@
+{
+  "cwd": "/home/dev",
+  "env": {
+    "USER": "dev",
+    "HOME": "/home/dev"
+  },
+  "fs": {
+    "/home/dev": {
+      "type": "dir"
+    }
+  },
+  "commandModules": [
+    "aws"
+  ],
+  "cloud": {
+    "aws": {
+      "accountId": "123456789012",
+      "region": "us-east-1",
+      "userArn": "arn:aws:iam::123456789012:user/devpolaris-learner",
+      "s3Buckets": [],
+      "hostedZones": [
+        {
+          "id": "ZDEVPOORDERS",
+          "name": "devpolaris.com.",
+          "records": [
+            {
+              "name": "orders.devpolaris.com.",
+              "type": "A",
+              "aliasDNSName": "dualstack.devpolaris-orders-alb-123.us-east-1.elb.amazonaws.com"
+            }
+          ]
+        }
+      ],
+      "loadBalancers": [
+        {
+          "loadBalancerArn": "arn:aws:elasticloadbalancing:us-east-1:123456789012:loadbalancer/app/devpolaris-orders-alb/50dc6c495c0c9188",
+          "loadBalancerName": "devpolaris-orders-alb",
+          "dnsName": "dualstack.devpolaris-orders-alb-123.us-east-1.elb.amazonaws.com",
+          "scheme": "internet-facing",
+          "type": "application",
+          "vpcId": "vpc-orders-prod",
+          "securityGroups": [
+            "sg-orders-alb"
+          ],
+          "subnets": [
+            "subnet-public-a",
+            "subnet-public-b"
+          ]
+        }
+      ]
+    }
+  },
+  "grader": {
+    "strategy": "contains",
+    "source": "all-stdout",
+    "expected": [
+      "devpolaris.com.",
+      "orders.devpolaris.com.",
+      "dualstack.devpolaris-orders-alb-123.us-east-1.elb.amazonaws.com",
+      "devpolaris-orders-alb",
+      "internet-facing"
+    ],
+    "requireCommands": [
+      "aws"
+    ],
+    "minCommandCount": 3,
+    "loose": true
+  }
+}

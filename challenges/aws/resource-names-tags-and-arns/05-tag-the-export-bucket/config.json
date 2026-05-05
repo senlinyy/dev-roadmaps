@@ -1,0 +1,58 @@
+{
+  "cwd": "/home/dev",
+  "env": {
+    "USER": "dev",
+    "HOME": "/home/dev"
+  },
+  "fs": {
+    "/home/dev": {
+      "type": "dir"
+    }
+  },
+  "commandModules": [
+    "aws"
+  ],
+  "cloud": {
+    "aws": {
+      "accountId": "123456789012",
+      "region": "us-east-1",
+      "userArn": "arn:aws:iam::123456789012:user/devpolaris-learner",
+      "s3Buckets": [
+        {
+          "name": "devpolaris-orders-exports-prod",
+          "region": "us-east-1"
+        }
+      ]
+    }
+  },
+  "grader": {
+    "strategy": "contains",
+    "source": "all-stdout",
+    "expected": [
+      "TagSet",
+      "devpolaris-orders-api",
+      "prod",
+      "orders"
+    ],
+    "expectedCloud": {
+      "aws": {
+        "s3Buckets": [
+          {
+            "name": "devpolaris-orders-exports-prod",
+            "region": "us-east-1",
+            "tags": {
+              "service": "devpolaris-orders-api",
+              "env": "prod",
+              "owner": "orders"
+            }
+          }
+        ]
+      }
+    },
+    "requireCommands": [
+      "aws"
+    ],
+    "minCommandCount": 2,
+    "loose": true
+  }
+}

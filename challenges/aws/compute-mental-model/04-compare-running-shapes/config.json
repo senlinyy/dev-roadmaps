@@ -1,0 +1,100 @@
+{
+  "cwd": "/home/dev",
+  "env": {
+    "USER": "dev",
+    "HOME": "/home/dev"
+  },
+  "fs": {
+    "/home/dev": {
+      "type": "dir"
+    }
+  },
+  "commandModules": [
+    "aws"
+  ],
+  "cloud": {
+    "aws": {
+      "accountId": "123456789012",
+      "region": "us-east-1",
+      "userArn": "arn:aws:iam::123456789012:user/devpolaris-learner",
+      "ec2Instances": [
+        {
+          "instanceId": "i-orders-api-01",
+          "imageId": "ami-0orders20260504",
+          "instanceType": "t3.small",
+          "state": "running",
+          "subnetId": "subnet-private-a",
+          "vpcId": "vpc-orders-prod",
+          "availabilityZone": "us-east-1a",
+          "privateIpAddress": "10.40.10.24",
+          "securityGroups": [
+            "sg-orders-api"
+          ],
+          "iamInstanceProfileArn": "arn:aws:iam::123456789012:instance-profile/devpolaris-orders-api-ec2",
+          "tags": {
+            "service": "devpolaris-orders-api",
+            "env": "prod"
+          }
+        }
+      ],
+      "ecsClusters": [
+        {
+          "clusterArn": "arn:aws:ecs:us-east-1:123456789012:cluster/devpolaris-orders-prod",
+          "clusterName": "devpolaris-orders-prod"
+        }
+      ],
+      "ecsServices": [
+        {
+          "serviceArn": "arn:aws:ecs:us-east-1:123456789012:service/devpolaris-orders-prod/devpolaris-orders-api",
+          "serviceName": "devpolaris-orders-api",
+          "clusterArn": "arn:aws:ecs:us-east-1:123456789012:cluster/devpolaris-orders-prod",
+          "taskDefinition": "arn:aws:ecs:us-east-1:123456789012:task-definition/devpolaris-orders-api:42",
+          "desiredCount": 2,
+          "runningCount": 2,
+          "pendingCount": 0,
+          "launchType": "FARGATE",
+          "subnets": [
+            "subnet-private-a",
+            "subnet-private-b"
+          ],
+          "securityGroups": [
+            "sg-orders-api"
+          ]
+        }
+      ],
+      "lambdaFunctions": [
+        {
+          "functionName": "devpolaris-receipt-email",
+          "functionArn": "arn:aws:lambda:us-east-1:123456789012:function:devpolaris-receipt-email",
+          "runtime": "nodejs20.x",
+          "role": "arn:aws:iam::123456789012:role/devpolaris-receipt-email-role",
+          "handler": "index.handler",
+          "memorySize": 256,
+          "timeout": 30,
+          "state": "Active",
+          "logGroupName": "/aws/lambda/devpolaris-receipt-email"
+        }
+      ]
+    }
+  },
+  "grader": {
+    "strategy": "contains",
+    "source": "all-stdout",
+    "expected": [
+      "i-orders-api-01",
+      "t3.small",
+      "\"Name\": \"running\"",
+      "devpolaris-orders-api",
+      "\"desiredCount\": 2",
+      "\"runningCount\": 2",
+      "devpolaris-receipt-email",
+      "nodejs20.x",
+      "Active"
+    ],
+    "requireCommands": [
+      "aws"
+    ],
+    "minCommandCount": 3,
+    "loose": true
+  }
+}

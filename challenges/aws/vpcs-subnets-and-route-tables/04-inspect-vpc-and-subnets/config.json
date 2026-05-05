@@ -1,0 +1,82 @@
+{
+  "cwd": "/home/dev",
+  "env": {
+    "USER": "dev",
+    "HOME": "/home/dev"
+  },
+  "fs": {
+    "/home/dev": {
+      "type": "dir"
+    }
+  },
+  "commandModules": [
+    "aws"
+  ],
+  "cloud": {
+    "aws": {
+      "accountId": "123456789012",
+      "region": "us-east-1",
+      "userArn": "arn:aws:iam::123456789012:user/devpolaris-learner",
+      "s3Buckets": [],
+      "vpcs": [
+        {
+          "vpcId": "vpc-orders-prod",
+          "cidrBlock": "10.40.0.0/16",
+          "tags": {
+            "service": "devpolaris-orders-api"
+          }
+        }
+      ],
+      "subnets": [
+        {
+          "subnetId": "subnet-public-a",
+          "vpcId": "vpc-orders-prod",
+          "cidrBlock": "10.40.0.0/24",
+          "availabilityZone": "us-east-1a",
+          "mapPublicIpOnLaunch": true,
+          "tags": {
+            "tier": "public"
+          }
+        },
+        {
+          "subnetId": "subnet-private-a",
+          "vpcId": "vpc-orders-prod",
+          "cidrBlock": "10.40.10.0/24",
+          "availabilityZone": "us-east-1a",
+          "mapPublicIpOnLaunch": false,
+          "tags": {
+            "tier": "private-app"
+          }
+        },
+        {
+          "subnetId": "subnet-private-b",
+          "vpcId": "vpc-orders-prod",
+          "cidrBlock": "10.40.11.0/24",
+          "availabilityZone": "us-east-1b",
+          "mapPublicIpOnLaunch": false,
+          "tags": {
+            "tier": "private-app"
+          }
+        }
+      ]
+    }
+  },
+  "grader": {
+    "strategy": "contains",
+    "source": "all-stdout",
+    "expected": [
+      "vpc-orders-prod",
+      "10.40.0.0/16",
+      "subnet-public-a",
+      "us-east-1a",
+      "subnet-private-b",
+      "us-east-1b",
+      "MapPublicIpOnLaunch"
+    ],
+    "requireCommands": [
+      "aws"
+    ],
+    "minCommandCount": 2,
+    "loose": true
+  }
+}

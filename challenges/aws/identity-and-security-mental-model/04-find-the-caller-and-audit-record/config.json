@@ -1,0 +1,51 @@
+{
+  "cwd": "/home/dev",
+  "env": {
+    "USER": "dev",
+    "HOME": "/home/dev"
+  },
+  "fs": {
+    "/home/dev": {
+      "type": "dir"
+    }
+  },
+  "commandModules": [
+    "aws"
+  ],
+  "cloud": {
+    "aws": {
+      "accountId": "123456789012",
+      "region": "us-east-1",
+      "userArn": "arn:aws:sts::123456789012:assumed-role/devpolaris-orders-api-prod-task-role/ecs-task-17",
+      "s3Buckets": [],
+      "cloudTrailEvents": [
+        {
+          "eventName": "GetSecretValue",
+          "eventTime": "2026-05-04T11:42:18Z",
+          "username": "devpolaris-orders-api-prod-task-role",
+          "resources": [
+            "arn:aws:secretsmanager:us-east-1:123456789012:secret:/devpolaris/orders-api/prod/database-url-a1b2c3"
+          ],
+          "sourceIPAddress": "10.0.42.17",
+          "errorCode": "AccessDenied"
+        }
+      ]
+    }
+  },
+  "grader": {
+    "strategy": "contains",
+    "source": "all-stdout",
+    "expected": [
+      "123456789012",
+      "assumed-role/devpolaris-orders-api-prod-task-role",
+      "GetSecretValue",
+      "AccessDenied",
+      "/devpolaris/orders-api/prod/database-url"
+    ],
+    "requireCommands": [
+      "aws"
+    ],
+    "minCommandCount": 2,
+    "loose": true
+  }
+}

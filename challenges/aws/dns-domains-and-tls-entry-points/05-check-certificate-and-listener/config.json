@@ -1,0 +1,65 @@
+{
+  "cwd": "/home/dev",
+  "env": {
+    "USER": "dev",
+    "HOME": "/home/dev"
+  },
+  "fs": {
+    "/home/dev": {
+      "type": "dir"
+    }
+  },
+  "commandModules": [
+    "aws"
+  ],
+  "cloud": {
+    "aws": {
+      "accountId": "123456789012",
+      "region": "us-east-1",
+      "userArn": "arn:aws:iam::123456789012:user/devpolaris-learner",
+      "s3Buckets": [],
+      "certificates": [
+        {
+          "certificateArn": "arn:aws:acm:us-east-1:123456789012:certificate/orders-cert",
+          "domainName": "orders.devpolaris.com",
+          "subjectAlternativeNames": [
+            "orders.devpolaris.com"
+          ],
+          "status": "ISSUED",
+          "inUseBy": [
+            "arn:aws:elasticloadbalancing:us-east-1:123456789012:listener/app/devpolaris-orders-alb/50dc6c495c0c9188/9f49d4c9"
+          ]
+        }
+      ],
+      "listeners": [
+        {
+          "listenerArn": "arn:aws:elasticloadbalancing:us-east-1:123456789012:listener/app/devpolaris-orders-alb/50dc6c495c0c9188/9f49d4c9",
+          "loadBalancerArn": "arn:aws:elasticloadbalancing:us-east-1:123456789012:loadbalancer/app/devpolaris-orders-alb/50dc6c495c0c9188",
+          "protocol": "HTTPS",
+          "port": 443,
+          "certificates": [
+            "arn:aws:acm:us-east-1:123456789012:certificate/orders-cert"
+          ],
+          "defaultTargetGroupArn": "arn:aws:elasticloadbalancing:us-east-1:123456789012:targetgroup/devpolaris-orders-api-tg/6d0ecf831eec9f09"
+        }
+      ]
+    }
+  },
+  "grader": {
+    "strategy": "contains",
+    "source": "all-stdout",
+    "expected": [
+      "orders.devpolaris.com",
+      "ISSUED",
+      "HTTPS",
+      "443",
+      "arn:aws:acm:us-east-1:123456789012:certificate/orders-cert",
+      "devpolaris-orders-api-tg"
+    ],
+    "requireCommands": [
+      "aws"
+    ],
+    "minCommandCount": 2,
+    "loose": true
+  }
+}

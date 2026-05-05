@@ -1,0 +1,101 @@
+{
+  "cwd": "/home/dev",
+  "env": {
+    "USER": "dev",
+    "HOME": "/home/dev"
+  },
+  "fs": {
+    "/home/dev": {
+      "type": "dir"
+    }
+  },
+  "commandModules": [
+    "aws"
+  ],
+  "cloud": {
+    "aws": {
+      "accountId": "123456789012",
+      "region": "us-east-1",
+      "userArn": "arn:aws:iam::123456789012:user/devpolaris-learner",
+      "ecsClusters": [
+        {
+          "clusterArn": "arn:aws:ecs:us-east-1:123456789012:cluster/devpolaris-orders-prod",
+          "clusterName": "devpolaris-orders-prod"
+        }
+      ],
+      "ecsTasks": [
+        {
+          "taskArn": "arn:aws:ecs:us-east-1:123456789012:task/devpolaris-orders-prod/task-broken-health",
+          "clusterArn": "arn:aws:ecs:us-east-1:123456789012:cluster/devpolaris-orders-prod",
+          "taskDefinitionArn": "arn:aws:ecs:us-east-1:123456789012:task-definition/devpolaris-orders-api:43",
+          "lastStatus": "RUNNING",
+          "desiredStatus": "RUNNING",
+          "healthStatus": "UNKNOWN",
+          "launchType": "FARGATE",
+          "availabilityZone": "us-east-1b",
+          "containers": [
+            {
+              "name": "orders-api",
+              "lastStatus": "RUNNING",
+              "networkBindings": [
+                {
+                  "containerPort": 3000,
+                  "hostPort": 3000,
+                  "protocol": "tcp"
+                }
+              ]
+            }
+          ],
+          "attachments": [
+            {
+              "type": "ElasticNetworkInterface",
+              "status": "ATTACHED",
+              "details": {
+                "subnetId": "subnet-private-b",
+                "privateIPv4Address": "10.40.11.31"
+              }
+            }
+          ]
+        }
+      ],
+      "targetGroups": [
+        {
+          "targetGroupArn": "arn:aws:elasticloadbalancing:us-east-1:123456789012:targetgroup/devpolaris-orders-api-tg/6d0ecf831eec9f09",
+          "targetGroupName": "devpolaris-orders-api-tg",
+          "protocol": "HTTP",
+          "port": 3000,
+          "vpcId": "vpc-orders-prod",
+          "healthCheckPath": "/health",
+          "targetType": "ip",
+          "targets": [
+            {
+              "id": "10.40.11.31",
+              "port": 3000,
+              "healthState": "unhealthy",
+              "reason": "Target.ResponseCodeMismatch",
+              "description": "Health checks failed with HTTP 500"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "grader": {
+    "strategy": "contains",
+    "source": "all-stdout",
+    "expected": [
+      "task-broken-health",
+      "RUNNING",
+      "orders-api",
+      "10.40.11.31",
+      "\"State\": \"unhealthy\"",
+      "Target.ResponseCodeMismatch",
+      "HTTP 500"
+    ],
+    "requireCommands": [
+      "aws"
+    ],
+    "minCommandCount": 2,
+    "loose": true
+  }
+}

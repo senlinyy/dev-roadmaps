@@ -1,0 +1,73 @@
+{
+  "cwd": "/home/dev",
+  "env": {
+    "USER": "dev",
+    "HOME": "/home/dev"
+  },
+  "fs": {
+    "/home/dev": {
+      "type": "dir"
+    }
+  },
+  "commandModules": [
+    "aws"
+  ],
+  "cloud": {
+    "aws": {
+      "accountId": "123456789012",
+      "region": "us-east-1",
+      "userArn": "arn:aws:iam::123456789012:user/devpolaris-learner",
+      "lambdaFunctions": [
+        {
+          "functionName": "devpolaris-receipt-email",
+          "functionArn": "arn:aws:lambda:us-east-1:123456789012:function:devpolaris-receipt-email",
+          "runtime": "nodejs20.x",
+          "role": "arn:aws:iam::123456789012:role/devpolaris-receipt-email-role",
+          "handler": "index.handler",
+          "memorySize": 256,
+          "timeout": 30,
+          "state": "Active",
+          "lastUpdateStatus": "Successful",
+          "environment": {
+            "QUEUE_PURPOSE": "receipt-email",
+            "NODE_ENV": "production"
+          },
+          "tracingMode": "Active",
+          "logGroupName": "/aws/lambda/devpolaris-receipt-email"
+        }
+      ],
+      "lambdaEventSourceMappings": [
+        {
+          "uuid": "esm-receipt-email-001",
+          "functionName": "devpolaris-receipt-email",
+          "functionArn": "arn:aws:lambda:us-east-1:123456789012:function:devpolaris-receipt-email",
+          "eventSourceArn": "arn:aws:sqs:us-east-1:123456789012:devpolaris-receipt-email-queue",
+          "state": "Enabled",
+          "batchSize": 10,
+          "lastProcessingResult": "OK"
+        }
+      ]
+    }
+  },
+  "grader": {
+    "strategy": "contains",
+    "source": "all-stdout",
+    "expected": [
+      "devpolaris-receipt-email",
+      "nodejs20.x",
+      "index.handler",
+      "\"Timeout\": 30",
+      "\"MemorySize\": 256",
+      "devpolaris-receipt-email-role",
+      "/aws/lambda/devpolaris-receipt-email",
+      "devpolaris-receipt-email-queue",
+      "\"State\": \"Enabled\"",
+      "\"BatchSize\": 10"
+    ],
+    "requireCommands": [
+      "aws"
+    ],
+    "minCommandCount": 2,
+    "loose": true
+  }
+}

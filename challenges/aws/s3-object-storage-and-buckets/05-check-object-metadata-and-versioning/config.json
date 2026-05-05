@@ -1,0 +1,59 @@
+{
+  "cwd": "/home/dev",
+  "env": {
+    "USER": "dev",
+    "HOME": "/home/dev"
+  },
+  "fs": {
+    "/home/dev": {
+      "type": "dir"
+    }
+  },
+  "commandModules": [
+    "aws"
+  ],
+  "cloud": {
+    "aws": {
+      "accountId": "123456789012",
+      "region": "us-east-1",
+      "userArn": "arn:aws:iam::123456789012:user/devpolaris-learner",
+      "s3Buckets": [
+        {
+          "name": "devpolaris-orders-exports-prod",
+          "region": "us-east-1",
+          "versioningStatus": "Enabled",
+          "objects": [
+            {
+              "key": "orders-api/daily/2026/05/orders-2026-05-04.csv",
+              "size": 18432,
+              "lastModified": "2026-05-04T08:15:00Z",
+              "etag": "\"a76d13b7f6f54b2b8c0c2f9b6e0f6d21\"",
+              "storageClass": "STANDARD",
+              "contentType": "text/csv",
+              "serverSideEncryption": "aws:kms",
+              "metadata": {
+                "export-job": "orders-daily",
+                "source": "devpolaris-orders-api"
+              },
+              "versionId": "3HL4kqtJlcpXroDTDmJ+rmSpXd3dIbrH"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "grader": {
+    "strategy": "contains",
+    "source": "all-stdout",
+    "expected": [
+      "\"ContentLength\": 18432",
+      "\"ServerSideEncryption\": \"aws:kms\"",
+      "\"Status\": \"Enabled\""
+    ],
+    "requireCommands": [
+      "aws"
+    ],
+    "minCommandCount": 2,
+    "loose": true
+  }
+}

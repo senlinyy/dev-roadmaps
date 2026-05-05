@@ -1,0 +1,97 @@
+{
+  "cwd": "/home/dev",
+  "env": {
+    "USER": "dev",
+    "HOME": "/home/dev"
+  },
+  "fs": {
+    "/home/dev": {
+      "type": "dir"
+    }
+  },
+  "commandModules": [
+    "aws"
+  ],
+  "cloud": {
+    "aws": {
+      "accountId": "123456789012",
+      "region": "us-east-1",
+      "userArn": "arn:aws:iam::123456789012:user/devpolaris-learner",
+      "ecrImages": [
+        {
+          "repositoryName": "devpolaris-orders-api",
+          "imageDigest": "sha256:cafe42d6a9d17df90b5e3c6b7f1a8d2e6efb1234567890abcdef111122223333",
+          "imageTags": [
+            "2026-05-04.3",
+            "prod-candidate"
+          ],
+          "imagePushedAt": "2026-05-04T08:02:00Z",
+          "imageSizeInBytes": 98432210,
+          "scanStatus": "COMPLETE"
+        }
+      ],
+      "ecsClusters": [
+        {
+          "clusterArn": "arn:aws:ecs:us-east-1:123456789012:cluster/devpolaris-orders-prod",
+          "clusterName": "devpolaris-orders-prod",
+          "status": "ACTIVE"
+        }
+      ],
+      "ecsServices": [
+        {
+          "serviceArn": "arn:aws:ecs:us-east-1:123456789012:service/devpolaris-orders-prod/devpolaris-orders-api",
+          "serviceName": "devpolaris-orders-api",
+          "clusterArn": "arn:aws:ecs:us-east-1:123456789012:cluster/devpolaris-orders-prod",
+          "taskDefinition": "arn:aws:ecs:us-east-1:123456789012:task-definition/devpolaris-orders-api:42",
+          "desiredCount": 3,
+          "runningCount": 3,
+          "pendingCount": 0,
+          "launchType": "FARGATE"
+        }
+      ],
+      "ecsTaskDefinitions": [
+        {
+          "taskDefinitionArn": "arn:aws:ecs:us-east-1:123456789012:task-definition/devpolaris-orders-api:42",
+          "family": "devpolaris-orders-api",
+          "revision": 42,
+          "taskRoleArn": "arn:aws:iam::123456789012:role/devpolaris-orders-api-prod-task-role",
+          "executionRoleArn": "arn:aws:iam::123456789012:role/devpolaris-orders-api-prod-execution-role",
+          "networkMode": "awsvpc",
+          "requiresCompatibilities": [
+            "FARGATE"
+          ],
+          "cpu": "512",
+          "memory": "1024",
+          "containerDefinitions": [
+            {
+              "name": "orders-api",
+              "image": "123456789012.dkr.ecr.us-east-1.amazonaws.com/devpolaris-orders-api@sha256:cafe42d6a9d17df90b5e3c6b7f1a8d2e6efb1234567890abcdef111122223333",
+              "portMappings": [
+                {
+                  "containerPort": 3000,
+                  "protocol": "tcp"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "grader": {
+    "strategy": "contains",
+    "source": "all-stdout",
+    "expected": [
+      "2026-05-04.3",
+      "sha256:cafe42d6a9d17df90b5e3c6b7f1a8d2e6efb1234567890abcdef111122223333",
+      "\"revision\": 42",
+      "\"serviceName\": \"devpolaris-orders-api\"",
+      "\"runningCount\": 3"
+    ],
+    "requireCommands": [
+      "aws"
+    ],
+    "minCommandCount": 3,
+    "loose": true
+  }
+}

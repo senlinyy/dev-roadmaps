@@ -1,0 +1,85 @@
+{
+  "cwd": "/home/dev",
+  "env": {
+    "USER": "dev",
+    "HOME": "/home/dev"
+  },
+  "fs": {
+    "/home/dev": {
+      "type": "dir"
+    }
+  },
+  "commandModules": [
+    "aws"
+  ],
+  "cloud": {
+    "aws": {
+      "accountId": "123456789012",
+      "region": "us-east-1",
+      "userArn": "arn:aws:iam::123456789012:user/devpolaris-learner",
+      "s3Buckets": [],
+      "securityGroups": [
+        {
+          "groupId": "sg-orders-alb",
+          "groupName": "devpolaris-orders-alb",
+          "description": "Public ALB entry",
+          "vpcId": "vpc-orders-prod",
+          "inboundRules": [
+            {
+              "ipProtocol": "tcp",
+              "fromPort": 443,
+              "toPort": 443,
+              "cidrIp": "0.0.0.0/0"
+            }
+          ]
+        },
+        {
+          "groupId": "sg-orders-api",
+          "groupName": "devpolaris-orders-api",
+          "description": "Private API tasks",
+          "vpcId": "vpc-orders-prod",
+          "inboundRules": [
+            {
+              "ipProtocol": "tcp",
+              "fromPort": 3000,
+              "toPort": 3000,
+              "sourceSecurityGroupId": "sg-orders-alb"
+            }
+          ]
+        },
+        {
+          "groupId": "sg-orders-db",
+          "groupName": "devpolaris-orders-db",
+          "description": "Private database",
+          "vpcId": "vpc-orders-prod",
+          "inboundRules": [
+            {
+              "ipProtocol": "tcp",
+              "fromPort": 5432,
+              "toPort": 5432,
+              "sourceSecurityGroupId": "sg-orders-api"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "grader": {
+    "strategy": "contains",
+    "source": "all-stdout",
+    "expected": [
+      "sg-orders-alb",
+      "0.0.0.0/0",
+      "443",
+      "sg-orders-api",
+      "3000",
+      "sg-orders-db",
+      "5432"
+    ],
+    "requireCommands": [
+      "aws"
+    ],
+    "minCommandCount": 1,
+    "loose": true
+  }
+}

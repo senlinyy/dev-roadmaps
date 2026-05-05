@@ -1,0 +1,64 @@
+{
+  "cwd": "/home/dev",
+  "env": {
+    "USER": "dev",
+    "HOME": "/home/dev"
+  },
+  "fs": {
+    "/home/dev": {
+      "type": "dir"
+    }
+  },
+  "commandModules": [
+    "aws"
+  ],
+  "cloud": {
+    "aws": {
+      "accountId": "123456789012",
+      "region": "us-east-1",
+      "userArn": "arn:aws:iam::123456789012:user/devpolaris-learner",
+      "s3Buckets": [],
+      "iamRoles": [
+        {
+          "roleName": "devpolaris-github-deploy-role",
+          "arn": "arn:aws:iam::123456789012:role/devpolaris-github-deploy-role",
+          "trustPrincipals": [
+            "arn:aws:iam::123456789012:user/devpolaris-learner"
+          ],
+          "attachedPolicies": [
+            {
+              "policyName": "devpolaris-github-deploy",
+              "policyArn": "arn:aws:iam::123456789012:policy/devpolaris-github-deploy",
+              "statements": [
+                {
+                  "effect": "Allow",
+                  "actions": [
+                    "ecs:UpdateService"
+                  ],
+                  "resources": [
+                    "arn:aws:ecs:us-east-1:123456789012:service/devpolaris-orders-prod/*"
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "grader": {
+    "strategy": "contains",
+    "source": "all-stdout",
+    "expected": [
+      "arn:aws:iam::123456789012:user/devpolaris-learner",
+      "AssumedRoleUser",
+      "arn:aws:sts::123456789012:assumed-role/devpolaris-github-deploy-role/github-actions-deploy",
+      "Expiration"
+    ],
+    "requireCommands": [
+      "aws"
+    ],
+    "minCommandCount": 2,
+    "loose": true
+  }
+}

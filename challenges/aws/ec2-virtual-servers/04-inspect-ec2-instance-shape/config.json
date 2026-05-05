@@ -1,0 +1,62 @@
+{
+  "cwd": "/home/dev",
+  "env": {
+    "USER": "dev",
+    "HOME": "/home/dev"
+  },
+  "fs": {
+    "/home/dev": {
+      "type": "dir"
+    }
+  },
+  "commandModules": [
+    "aws"
+  ],
+  "cloud": {
+    "aws": {
+      "accountId": "123456789012",
+      "region": "us-east-1",
+      "userArn": "arn:aws:iam::123456789012:user/devpolaris-learner",
+      "ec2Instances": [
+        {
+          "instanceId": "i-orders-api-01",
+          "imageId": "ami-0orders20260504",
+          "instanceType": "t3.small",
+          "state": "running",
+          "subnetId": "subnet-private-a",
+          "vpcId": "vpc-orders-prod",
+          "availabilityZone": "us-east-1a",
+          "privateIpAddress": "10.40.10.24",
+          "securityGroups": [
+            "sg-orders-api"
+          ],
+          "iamInstanceProfileArn": "arn:aws:iam::123456789012:instance-profile/devpolaris-orders-api-ec2",
+          "systemStatus": "ok",
+          "instanceStatus": "ok",
+          "tags": {
+            "service": "devpolaris-orders-api",
+            "env": "prod"
+          }
+        }
+      ]
+    }
+  },
+  "grader": {
+    "strategy": "contains",
+    "source": "all-stdout",
+    "expected": [
+      "i-orders-api-01",
+      "subnet-private-a",
+      "t3.small",
+      "10.40.10.24",
+      "sg-orders-api",
+      "\"SystemStatus\": { \"Status\": \"ok\"",
+      "\"InstanceStatus\": { \"Status\": \"ok\""
+    ],
+    "requireCommands": [
+      "aws"
+    ],
+    "minCommandCount": 2,
+    "loose": true
+  }
+}

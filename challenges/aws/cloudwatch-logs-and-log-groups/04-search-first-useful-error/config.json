@@ -1,0 +1,61 @@
+{
+  "cwd": "/home/dev",
+  "env": {
+    "USER": "dev",
+    "HOME": "/home/dev"
+  },
+  "fs": {
+    "/home/dev": {
+      "type": "dir"
+    }
+  },
+  "commandModules": [
+    "aws"
+  ],
+  "cloud": {
+    "aws": {
+      "accountId": "123456789012",
+      "region": "us-east-1",
+      "userArn": "arn:aws:iam::123456789012:user/devpolaris-learner",
+      "logGroups": [
+        {
+          "logGroupName": "/aws/ecs/devpolaris-orders-api",
+          "retentionInDays": 14,
+          "storedBytes": 918273,
+          "events": [
+            {
+              "timestamp": 1777872600000,
+              "logStreamName": "orders-api/2026/05/04/task-1",
+              "message": "{\"level\":\"INFO\",\"correlationId\":\"req-7b91\",\"path\":\"/checkout\",\"message\":\"checkout request started\"}"
+            },
+            {
+              "timestamp": 1777872603000,
+              "logStreamName": "orders-api/2026/05/04/task-1",
+              "message": "{\"level\":\"ERROR\",\"correlationId\":\"req-7b91\",\"checkoutId\":\"chk_8842\",\"error\":\"payment_authorization_failed\",\"message\":\"Payment provider returned declined\"}"
+            },
+            {
+              "timestamp": 1777872700000,
+              "logStreamName": "orders-api/2026/05/04/task-2",
+              "message": "{\"level\":\"ERROR\",\"correlationId\":\"req-8aa2\",\"error\":\"inventory_timeout\",\"message\":\"Inventory service timed out\"}"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "grader": {
+    "strategy": "contains",
+    "source": "all-stdout",
+    "expected": [
+      "/aws/ecs/devpolaris-orders-api",
+      "req-7b91",
+      "payment_authorization_failed",
+      "checkoutId"
+    ],
+    "requireCommands": [
+      "aws"
+    ],
+    "minCommandCount": 2,
+    "loose": true
+  }
+}
