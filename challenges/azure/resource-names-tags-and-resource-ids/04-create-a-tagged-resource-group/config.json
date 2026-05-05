@@ -1,0 +1,47 @@
+{
+  "cwd": "/home/dev",
+  "env": {
+    "USER": "dev",
+    "HOME": "/home/dev"
+  },
+  "fs": {
+    "/home/dev": {
+      "type": "dir"
+    }
+  },
+  "commandModules": [
+    "azure"
+  ],
+  "cloud": {
+    "azure": {
+      "tenantId": "tenant-devpolaris",
+      "subscriptionId": "sub-devpolaris-training",
+      "currentSubscription": "sub-devpolaris-training",
+      "defaultLocation": "eastus",
+      "resourceGroups": []
+    }
+  },
+  "grader": {
+    "strategy": "cloud-state",
+    "expectedCloud": {
+      "azure": {
+        "resourceGroups": [
+          {
+            "name": "rg-devpolaris-orders-staging",
+            "location": "eastus",
+            "tags": {
+              "team": "orders",
+              "env": "staging",
+              "service": "orders-api"
+            }
+          }
+        ]
+      }
+    },
+    "requireCommands": [
+      "az"
+    ],
+    "minCommandCount": 1,
+    "loose": true
+  }
+}

@@ -1,0 +1,144 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "Current state:\n\n```text\nrevision 57: one healthy target still serving traffic\nrevision 58: primary deployment, one unhealthy target, one stopped task\nIAM simulation: execution role has implicitDeny for payments-token\ncustomer impact: checkout 5xx rate above alarm threshold\nprevious release record: devpolaris-orders-api:57 was healthy before 09:12 UTC\n```\n\nWhat is the best immediate action?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Stop the rollout pressure, restore traffic to revision 57, then fix the execution-role permission before retrying revision 58."
+        },
+        {
+          "id": "b",
+          "text": "Keep increasing desiredCount on revision 58 until one task starts successfully."
+        },
+        {
+          "id": "c",
+          "text": "Delete the secret so ECS stops trying to read it."
+        },
+        {
+          "id": "d",
+          "text": "Ignore the alarm because one target is still healthy."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The new revision has a known runtime permission failure and customer impact is active. Returning to the known-good task definition protects users while the team fixes the permission path."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A teammate suggests editing the execution role policy in production and waiting for ECS to retry tasks, without changing traffic or rollback target. What is the strongest concern?",
+      "options": [
+        {
+          "id": "a",
+          "text": "It leaves users exposed to a partially healthy deployment while the team is still changing runtime access."
+        },
+        {
+          "id": "b",
+          "text": "IAM policies cannot be changed after a task definition is registered."
+        },
+        {
+          "id": "c",
+          "text": "ECS services cannot launch tasks after an IAM policy changes."
+        },
+        {
+          "id": "d",
+          "text": "ALB health checks read IAM policies directly, so the target group will fail forever."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Fix forward may be valid in a low-impact situation, but this incident already has customer-facing failures and a known-good rollback target. Traffic safety should come first."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "Which evidence would make a rollback to revision 57 a safer choice than patching forward in place?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Revision 57 is the last known-good task definition in the release record."
+        },
+        {
+          "id": "b",
+          "text": "Revision 57 still has healthy ALB targets."
+        },
+        {
+          "id": "c",
+          "text": "Revision 58 has a confirmed permission failure before all tasks can become healthy."
+        },
+        {
+          "id": "d",
+          "text": "Revision 58 has a newer image tag, so it should always stay primary."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "A rollback target should be known-good, reachable, and safer than the current failing path. A newer image tag is not enough reason to keep serving a broken revision."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "After rollback, the team plans the next attempt. Which change should be reviewed before promoting revision 58 again?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Grant the execution role the narrow secret read permission for the payments token and rerun deployment health checks."
+        },
+        {
+          "id": "b",
+          "text": "Grant the task role administrator access so all future secrets work."
+        },
+        {
+          "id": "c",
+          "text": "Move the token value into the container image so ECS no longer reads Secrets Manager."
+        },
+        {
+          "id": "d",
+          "text": "Disable the target group health check because it delayed the rollout."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The narrow fix is to allow the execution role to read the specific secret that the task definition injects, then prove startup and health again. Broad permissions and embedded secrets create larger production risk."
+    },
+    {
+      "id": "q5",
+      "type": "multiple",
+      "scenario": "The handoff after recovery should help the next engineer understand what happened. Which items should be included?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Failed revision, rollback revision, and the time traffic returned to healthy targets."
+        },
+        {
+          "id": "b",
+          "text": "The specific secret ARN and role ARN involved in the permission failure."
+        },
+        {
+          "id": "c",
+          "text": "The alarm and log evidence used to verify recovery."
+        },
+        {
+          "id": "d",
+          "text": "The secret value copied from Secrets Manager."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "A useful handoff names versions, AWS resources, evidence, and the verified recovery state. It should not include secret values."
+    }
+  ]
+}

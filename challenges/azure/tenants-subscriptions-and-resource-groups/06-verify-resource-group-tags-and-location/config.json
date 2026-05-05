@@ -1,0 +1,51 @@
+{
+  "cwd": "/home/dev",
+  "env": {
+    "USER": "dev",
+    "HOME": "/home/dev"
+  },
+  "fs": {
+    "/home/dev": {
+      "type": "dir"
+    }
+  },
+  "commandModules": [
+    "azure"
+  ],
+  "cloud": {
+    "azure": {
+      "tenantId": "tenant-devpolaris",
+      "subscriptionId": "sub-devpolaris-training",
+      "currentSubscription": "sub-devpolaris-training",
+      "defaultLocation": "eastus",
+      "resourceGroups": [
+        {
+          "name": "rg-devpolaris-orders-prod",
+          "location": "eastus",
+          "tags": {
+            "team": "orders",
+            "env": "prod",
+            "service": "orders-api"
+          }
+        }
+      ]
+    }
+  },
+  "grader": {
+    "strategy": "contains",
+    "source": "all-stdout",
+    "expected": [
+      "/subscriptions/sub-devpolaris-training/resourceGroups/rg-devpolaris-orders-prod",
+      "rg-devpolaris-orders-prod",
+      "eastus",
+      "orders",
+      "prod",
+      "orders-api"
+    ],
+    "requireCommands": [
+      "az"
+    ],
+    "minCommandCount": 1,
+    "loose": true
+  }
+}

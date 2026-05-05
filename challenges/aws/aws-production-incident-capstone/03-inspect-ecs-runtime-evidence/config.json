@@ -1,0 +1,225 @@
+{
+  "cwd": "/home/dev",
+  "env": {
+    "USER": "dev",
+    "HOME": "/home/dev"
+  },
+  "fs": {
+    "/home/dev": {
+      "type": "dir"
+    }
+  },
+  "commandModules": [
+    "aws"
+  ],
+  "cloud": {
+    "aws": {
+      "accountId": "123456789012",
+      "region": "us-east-1",
+      "userArn": "arn:aws:iam::123456789012:user/devpolaris-learner",
+      "ecsClusters": [
+        {
+          "clusterArn": "arn:aws:ecs:us-east-1:123456789012:cluster/devpolaris-orders-prod",
+          "clusterName": "devpolaris-orders-prod",
+          "status": "ACTIVE"
+        }
+      ],
+      "ecsServices": [
+        {
+          "serviceArn": "arn:aws:ecs:us-east-1:123456789012:service/devpolaris-orders-prod/devpolaris-orders-api",
+          "serviceName": "devpolaris-orders-api",
+          "clusterArn": "arn:aws:ecs:us-east-1:123456789012:cluster/devpolaris-orders-prod",
+          "taskDefinition": "arn:aws:ecs:us-east-1:123456789012:task-definition/devpolaris-orders-api:58",
+          "desiredCount": 3,
+          "runningCount": 2,
+          "pendingCount": 0,
+          "launchType": "FARGATE",
+          "targetGroupArn": "arn:aws:elasticloadbalancing:us-east-1:123456789012:targetgroup/devpolaris-orders-api-tg/6d0ecf831eec9f09",
+          "containerName": "orders-api",
+          "containerPort": 3000,
+          "deployments": [
+            {
+              "id": "ecs-svc/primary-58",
+              "status": "PRIMARY",
+              "taskDefinition": "arn:aws:ecs:us-east-1:123456789012:task-definition/devpolaris-orders-api:58",
+              "desiredCount": 2,
+              "pendingCount": 0,
+              "runningCount": 1
+            },
+            {
+              "id": "ecs-svc/active-57",
+              "status": "ACTIVE",
+              "taskDefinition": "arn:aws:ecs:us-east-1:123456789012:task-definition/devpolaris-orders-api:57",
+              "desiredCount": 1,
+              "pendingCount": 0,
+              "runningCount": 1
+            }
+          ],
+          "events": [
+            {
+              "id": "event-1",
+              "createdAt": "2026-05-05T09:17:00Z",
+              "message": "service devpolaris-orders-api was unable to start a task because ResourceInitializationError: unable to retrieve secret from Secrets Manager."
+            },
+            {
+              "id": "event-2",
+              "createdAt": "2026-05-05T09:14:00Z",
+              "message": "service devpolaris-orders-api registered 1 target in target-group devpolaris-orders-api-tg."
+            }
+          ]
+        }
+      ],
+      "ecsTaskDefinitions": [
+        {
+          "taskDefinitionArn": "arn:aws:ecs:us-east-1:123456789012:task-definition/devpolaris-orders-api:57",
+          "family": "devpolaris-orders-api",
+          "revision": 57,
+          "taskRoleArn": "arn:aws:iam::123456789012:role/devpolaris-orders-api-prod-task-role",
+          "executionRoleArn": "arn:aws:iam::123456789012:role/devpolaris-orders-api-prod-execution-role",
+          "networkMode": "awsvpc",
+          "requiresCompatibilities": [
+            "FARGATE"
+          ],
+          "cpu": "512",
+          "memory": "1024",
+          "containerDefinitions": [
+            {
+              "name": "orders-api",
+              "image": "123456789012.dkr.ecr.us-east-1.amazonaws.com/devpolaris-orders-api@sha256:57aa57aa57aa57aa57aa57aa57aa57aa57aa57aa57aa57aa57aa57aa57aa57aa",
+              "portMappings": [
+                {
+                  "containerPort": 3000,
+                  "protocol": "tcp"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "taskDefinitionArn": "arn:aws:ecs:us-east-1:123456789012:task-definition/devpolaris-orders-api:58",
+          "family": "devpolaris-orders-api",
+          "revision": 58,
+          "taskRoleArn": "arn:aws:iam::123456789012:role/devpolaris-orders-api-prod-task-role",
+          "executionRoleArn": "arn:aws:iam::123456789012:role/devpolaris-orders-api-prod-execution-role",
+          "networkMode": "awsvpc",
+          "requiresCompatibilities": [
+            "FARGATE"
+          ],
+          "cpu": "512",
+          "memory": "1024",
+          "containerDefinitions": [
+            {
+              "name": "orders-api",
+              "image": "123456789012.dkr.ecr.us-east-1.amazonaws.com/devpolaris-orders-api@sha256:58bb58bb58bb58bb58bb58bb58bb58bb58bb58bb58bb58bb58bb58bb58bb58bb",
+              "portMappings": [
+                {
+                  "containerPort": 3000,
+                  "protocol": "tcp"
+                }
+              ],
+              "environment": [
+                {
+                  "name": "NODE_ENV",
+                  "value": "production"
+                }
+              ],
+              "secrets": [
+                {
+                  "name": "DATABASE_URL",
+                  "valueFrom": "arn:aws:secretsmanager:us-east-1:123456789012:secret:devpolaris/orders/prod/database-url-a1b2c3"
+                },
+                {
+                  "name": "PAYMENTS_API_TOKEN",
+                  "valueFrom": "arn:aws:secretsmanager:us-east-1:123456789012:secret:devpolaris/orders/prod/payments-token-a1b2c3"
+                }
+              ],
+              "logConfiguration": {
+                "logDriver": "awslogs",
+                "options": {
+                  "awslogs-group": "/ecs/devpolaris-orders-api",
+                  "awslogs-region": "us-east-1",
+                  "awslogs-stream-prefix": "orders-api"
+                }
+              }
+            }
+          ]
+        }
+      ],
+      "ecsTasks": [
+        {
+          "taskArn": "arn:aws:ecs:us-east-1:123456789012:task/devpolaris-orders-prod/task-rev58-unhealthy",
+          "clusterArn": "arn:aws:ecs:us-east-1:123456789012:cluster/devpolaris-orders-prod",
+          "taskDefinitionArn": "arn:aws:ecs:us-east-1:123456789012:task-definition/devpolaris-orders-api:58",
+          "lastStatus": "RUNNING",
+          "desiredStatus": "RUNNING",
+          "healthStatus": "UNHEALTHY",
+          "launchType": "FARGATE",
+          "availabilityZone": "us-east-1b",
+          "startedAt": "2026-05-05T09:13:22Z",
+          "containers": [
+            {
+              "name": "orders-api",
+              "lastStatus": "RUNNING",
+              "healthStatus": "UNHEALTHY",
+              "networkBindings": [
+                {
+                  "containerPort": 3000,
+                  "protocol": "tcp"
+                }
+              ],
+              "reason": "Health check returned HTTP 500"
+            }
+          ],
+          "attachments": [
+            {
+              "type": "ElasticNetworkInterface",
+              "status": "ATTACHED",
+              "details": {
+                "privateIPv4Address": "10.40.13.22"
+              }
+            }
+          ]
+        },
+        {
+          "taskArn": "arn:aws:ecs:us-east-1:123456789012:task/devpolaris-orders-prod/task-rev58-stopped",
+          "clusterArn": "arn:aws:ecs:us-east-1:123456789012:cluster/devpolaris-orders-prod",
+          "taskDefinitionArn": "arn:aws:ecs:us-east-1:123456789012:task-definition/devpolaris-orders-api:58",
+          "lastStatus": "STOPPED",
+          "desiredStatus": "STOPPED",
+          "healthStatus": "UNKNOWN",
+          "launchType": "FARGATE",
+          "availabilityZone": "us-east-1a",
+          "startedAt": "2026-05-05T09:15:41Z",
+          "stoppedReason": "ResourceInitializationError: unable to retrieve secret arn:aws:secretsmanager:us-east-1:123456789012:secret:devpolaris/orders/prod/payments-token-a1b2c3",
+          "containers": [
+            {
+              "name": "orders-api",
+              "lastStatus": "STOPPED",
+              "healthStatus": "UNKNOWN",
+              "reason": "ResourceInitializationError"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "grader": {
+    "strategy": "contains",
+    "source": "all-stdout",
+    "expected": [
+      "\"serviceName\": \"devpolaris-orders-api\"",
+      "\"runningCount\": 2",
+      "\"status\": \"PRIMARY\"",
+      "\"status\": \"ACTIVE\"",
+      "ResourceInitializationError",
+      "\"revision\": 58",
+      "\"name\": \"PAYMENTS_API_TOKEN\"",
+      "arn:aws:secretsmanager:us-east-1:123456789012:secret:devpolaris/orders/prod/payments-token-a1b2c3"
+    ],
+    "requireCommands": [
+      "aws"
+    ],
+    "minCommandCount": 4,
+    "loose": true
+  }
+}

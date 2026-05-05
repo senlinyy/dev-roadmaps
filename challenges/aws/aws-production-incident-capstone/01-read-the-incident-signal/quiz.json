@@ -1,0 +1,149 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "The release record says `devpolaris-orders-api:2026-05-05.2` was promoted at 09:12 UTC.\n\nCurrent evidence:\n\n```text\nALB 5xx alarm: ALARM for 8 minutes\nECS service: desiredCount=3 runningCount=2 pendingCount=0\ntarget health: 1 healthy target, 1 unhealthy Target.ResponseCodeMismatch\nECS event: stopped task ResourceInitializationError: unable to retrieve secret\nCloudWatch app logs: no startup log from the stopped task\n```\n\nWhat is the best first investigation thread?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Connect ALB target health, ECS task state, task definition secret references, and role permission before rebuilding the image."
+        },
+        {
+          "id": "b",
+          "text": "Rebuild the image immediately because every 5xx alarm means the container registry is corrupt."
+        },
+        {
+          "id": "c",
+          "text": "Change the DNS record first because target health is evaluated by Route 53."
+        },
+        {
+          "id": "d",
+          "text": "Scale the service to zero because runningCount 2 proves the old version is also broken."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The evidence crosses several runtime checks. The image may exist, while the service can still fail because health checks, task startup, or secret access are wrong. The first pass should connect AWS evidence instead of guessing from one alarm."
+    },
+    {
+      "id": "q2",
+      "type": "multiple",
+      "scenario": "You need to prove that the problem is happening after the artifact exists. Which evidence supports that conclusion?\n\n```text\nECR image tag: 2026-05-05.2 exists\nECR image digest: sha256:8f1b...\nECS task definition: devpolaris-orders-api:58 uses that digest\nECS service deployment: PRIMARY taskDefinition devpolaris-orders-api:58\nALB target health: one target from the new deployment is unhealthy\n```",
+      "options": [
+        {
+          "id": "a",
+          "text": "The image tag and digest are present in ECR."
+        },
+        {
+          "id": "b",
+          "text": "The ECS task definition points at the same image digest."
+        },
+        {
+          "id": "c",
+          "text": "The service has a deployment using that task definition."
+        },
+        {
+          "id": "d",
+          "text": "The public DNS name exists, so the image must be correct."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "ECR, task definition, and ECS deployment evidence show that AWS can see and reference the artifact. DNS only tells you about the public name path. It does not prove the image content or runtime recipe is healthy."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "The ALB target group reports:\n\n```text\n10.40.12.18:3000 healthy\n10.40.13.22:3000 unhealthy Target.ResponseCodeMismatch\nhealth check path /health\n```\n\nThe ECS task details show the unhealthy target belongs to task definition `devpolaris-orders-api:58`. What should the team check next?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The new task definition, container logs, and app readiness behavior for revision 58."
+        },
+        {
+          "id": "b",
+          "text": "The Route 53 hosted zone name, because target health cannot identify task-level issues."
+        },
+        {
+          "id": "c",
+          "text": "The S3 export bucket lifecycle rules, because health checks read archived files."
+        },
+        {
+          "id": "d",
+          "text": "The older healthy task only, because a mixed target group means the new revision is irrelevant."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Target.ResponseCodeMismatch means the target answered with a status the health check did not accept. Since the unhealthy target maps to the new task definition, inspect the new runtime recipe and logs."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "A partial deployment has this state:\n\n```text\nPRIMARY deployment: devpolaris-orders-api:58 desired=2 running=1\nACTIVE deployment: devpolaris-orders-api:57 desired=1 running=1\nALB healthy targets: one from revision 57 only\nnew task stopped: ResourceInitializationError\n```\n\nWhat is the main operational risk?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Continuing the rollout can reduce working capacity and push more traffic toward a revision that has not proven startup and health."
+        },
+        {
+          "id": "b",
+          "text": "The old revision must be deleted before the new revision can become healthy."
+        },
+        {
+          "id": "c",
+          "text": "The ALB will automatically fix secret access if enough targets are registered."
+        },
+        {
+          "id": "d",
+          "text": "The service is fully healthy because ECS has a PRIMARY deployment."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "A PRIMARY deployment is not proof that users should depend on it. The service has partial capacity and new task failures. The team should protect the healthy path while they identify the runtime failure."
+    },
+    {
+      "id": "q5",
+      "type": "multiple",
+      "scenario": "Before running CLI checks, the incident lead writes down the identifiers needed for the evidence pass.\n\nWhich identifiers belong in that list?",
+      "options": [
+        {
+          "id": "a",
+          "text": "ECS cluster `devpolaris-orders-prod` and service `devpolaris-orders-api`."
+        },
+        {
+          "id": "b",
+          "text": "Target group `devpolaris-orders-api-tg` and its ARN."
+        },
+        {
+          "id": "c",
+          "text": "Task definitions `devpolaris-orders-api:57` and `devpolaris-orders-api:58`."
+        },
+        {
+          "id": "d",
+          "text": "Execution role ARN and the secret ARN used by revision 58."
+        },
+        {
+          "id": "e",
+          "text": "The root account password, so the operator can bypass IAM."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c",
+        "d"
+      ],
+      "explanation": "The useful identifiers point to the service, traffic path, runtime recipe, and permission path. The root account password should not be part of incident handling."
+    }
+  ]
+}

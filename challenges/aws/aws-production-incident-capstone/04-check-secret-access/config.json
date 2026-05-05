@@ -1,0 +1,114 @@
+{
+  "cwd": "/home/dev",
+  "env": {
+    "USER": "dev",
+    "HOME": "/home/dev"
+  },
+  "fs": {
+    "/home/dev": {
+      "type": "dir"
+    }
+  },
+  "commandModules": [
+    "aws"
+  ],
+  "cloud": {
+    "aws": {
+      "accountId": "123456789012",
+      "region": "us-east-1",
+      "userArn": "arn:aws:iam::123456789012:user/devpolaris-learner",
+      "secrets": [
+        {
+          "name": "devpolaris/orders/prod/payments-token",
+          "arn": "arn:aws:secretsmanager:us-east-1:123456789012:secret:devpolaris/orders/prod/payments-token-a1b2c3",
+          "region": "us-east-1",
+          "kmsKeyId": "arn:aws:kms:us-east-1:123456789012:key/orders-prod-secrets",
+          "tags": {
+            "service": "devpolaris-orders-api",
+            "env": "prod"
+          },
+          "secretString": "redacted"
+        }
+      ],
+      "iamRoles": [
+        {
+          "roleName": "devpolaris-orders-api-prod-execution-role",
+          "arn": "arn:aws:iam::123456789012:role/devpolaris-orders-api-prod-execution-role",
+          "trustPrincipals": [
+            "ecs-tasks.amazonaws.com"
+          ],
+          "attachedPolicies": [
+            {
+              "policyName": "DevPolarisOrdersExecutionBase",
+              "policyArn": "arn:aws:iam::123456789012:policy/DevPolarisOrdersExecutionBase",
+              "statements": [
+                {
+                  "effect": "Allow",
+                  "actions": [
+                    "ecr:GetAuthorizationToken",
+                    "ecr:BatchGetImage",
+                    "logs:CreateLogStream",
+                    "logs:PutLogEvents"
+                  ],
+                  "resources": [
+                    "*"
+                  ]
+                },
+                {
+                  "effect": "Allow",
+                  "actions": [
+                    "secretsmanager:GetSecretValue"
+                  ],
+                  "resources": [
+                    "arn:aws:secretsmanager:us-east-1:123456789012:secret:devpolaris/orders/prod/database-url-a1b2c3"
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "roleName": "devpolaris-orders-api-prod-task-role",
+          "arn": "arn:aws:iam::123456789012:role/devpolaris-orders-api-prod-task-role",
+          "trustPrincipals": [
+            "ecs-tasks.amazonaws.com"
+          ],
+          "attachedPolicies": [
+            {
+              "policyName": "DevPolarisOrdersAppRuntime",
+              "policyArn": "arn:aws:iam::123456789012:policy/DevPolarisOrdersAppRuntime",
+              "statements": [
+                {
+                  "effect": "Allow",
+                  "actions": [
+                    "s3:PutObject"
+                  ],
+                  "resources": [
+                    "arn:aws:s3:::devpolaris-orders-exports-prod/*"
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "grader": {
+    "strategy": "contains",
+    "source": "all-stdout",
+    "expected": [
+      "\"Name\": \"devpolaris/orders/prod/payments-token\"",
+      "orders-prod-secrets",
+      "\"RoleName\": \"devpolaris-orders-api-prod-execution-role\"",
+      "DevPolarisOrdersExecutionBase",
+      "\"EvalActionName\": \"secretsmanager:GetSecretValue\"",
+      "\"EvalDecision\": \"implicitDeny\""
+    ],
+    "requireCommands": [
+      "aws"
+    ],
+    "minCommandCount": 4,
+    "loose": true
+  }
+}

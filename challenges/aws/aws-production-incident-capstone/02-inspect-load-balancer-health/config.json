@@ -1,0 +1,96 @@
+{
+  "cwd": "/home/dev",
+  "env": {
+    "USER": "dev",
+    "HOME": "/home/dev"
+  },
+  "fs": {
+    "/home/dev": {
+      "type": "dir"
+    }
+  },
+  "commandModules": [
+    "aws"
+  ],
+  "cloud": {
+    "aws": {
+      "accountId": "123456789012",
+      "region": "us-east-1",
+      "userArn": "arn:aws:iam::123456789012:user/devpolaris-learner",
+      "loadBalancers": [
+        {
+          "loadBalancerArn": "arn:aws:elasticloadbalancing:us-east-1:123456789012:loadbalancer/app/devpolaris-orders-alb/50dc6c495c0c9188",
+          "loadBalancerName": "devpolaris-orders-alb",
+          "dnsName": "dualstack.devpolaris-orders-alb-123.us-east-1.elb.amazonaws.com",
+          "scheme": "internet-facing",
+          "type": "application",
+          "vpcId": "vpc-orders-prod",
+          "securityGroups": [
+            "sg-orders-alb"
+          ],
+          "subnets": [
+            "subnet-public-a",
+            "subnet-public-b"
+          ],
+          "state": "active"
+        }
+      ],
+      "listeners": [
+        {
+          "listenerArn": "arn:aws:elasticloadbalancing:us-east-1:123456789012:listener/app/devpolaris-orders-alb/50dc6c495c0c9188/9f49d4c9",
+          "loadBalancerArn": "arn:aws:elasticloadbalancing:us-east-1:123456789012:loadbalancer/app/devpolaris-orders-alb/50dc6c495c0c9188",
+          "protocol": "HTTPS",
+          "port": 443,
+          "certificates": [
+            "arn:aws:acm:us-east-1:123456789012:certificate/devpolaris-orders"
+          ],
+          "defaultTargetGroupArn": "arn:aws:elasticloadbalancing:us-east-1:123456789012:targetgroup/devpolaris-orders-api-tg/6d0ecf831eec9f09"
+        }
+      ],
+      "targetGroups": [
+        {
+          "targetGroupArn": "arn:aws:elasticloadbalancing:us-east-1:123456789012:targetgroup/devpolaris-orders-api-tg/6d0ecf831eec9f09",
+          "targetGroupName": "devpolaris-orders-api-tg",
+          "protocol": "HTTP",
+          "port": 3000,
+          "vpcId": "vpc-orders-prod",
+          "healthCheckPath": "/health",
+          "targetType": "ip",
+          "targets": [
+            {
+              "id": "10.40.12.18",
+              "port": 3000,
+              "healthState": "healthy",
+              "description": "Health checks passed"
+            },
+            {
+              "id": "10.40.13.22",
+              "port": 3000,
+              "healthState": "unhealthy",
+              "reason": "Target.ResponseCodeMismatch",
+              "description": "Health checks failed with HTTP 500"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "grader": {
+    "strategy": "contains",
+    "source": "all-stdout",
+    "expected": [
+      "devpolaris-orders-alb",
+      "HTTPS",
+      "devpolaris-orders-api-tg",
+      "/health",
+      "10.40.13.22",
+      "unhealthy",
+      "Target.ResponseCodeMismatch"
+    ],
+    "requireCommands": [
+      "aws"
+    ],
+    "minCommandCount": 4,
+    "loose": true
+  }
+}
