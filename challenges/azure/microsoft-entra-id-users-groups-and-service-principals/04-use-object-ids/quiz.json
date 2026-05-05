@@ -1,0 +1,142 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "An access request says `grant Reader to Alex Chen`. The tenant has two users named Alex Chen: one is a platform engineer and one is a contractor account created for a short project. What should the reviewer ask for before approving?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The object ID or another stable identity record that identifies the exact user."
+        },
+        {
+          "id": "b",
+          "text": "The display name again, because Entra ID prevents duplicate display names."
+        },
+        {
+          "id": "c",
+          "text": "The user's preferred region, because region decides which user object receives access."
+        },
+        {
+          "id": "d",
+          "text": "The resource group name only, because scope removes the need to identify the principal."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Display names are human-friendly, but object IDs identify the actual principal. A reviewer needs the exact principal before granting access."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A pipeline identity and a human user both have names that include `orders-deploy`. One is a service principal and one is a user account. Why does the object ID matter?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The object ID proves which principal receives the assignment, even if names look similar."
+        },
+        {
+          "id": "b",
+          "text": "The object ID tells Azure which region the resource should run in."
+        },
+        {
+          "id": "c",
+          "text": "The object ID replaces the need for role and scope."
+        },
+        {
+          "id": "d",
+          "text": "The object ID is only useful for billing reports, not access decisions."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Principal identity and permission are separate facts. The object ID helps identify the caller; role and scope still decide what it can do."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "A reviewer is checking an access request for production. Which details make the request safer to approve or reject accurately?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Principal type, such as user, group, or service principal."
+        },
+        {
+          "id": "b",
+          "text": "Object ID for the principal."
+        },
+        {
+          "id": "c",
+          "text": "Requested role and scope."
+        },
+        {
+          "id": "d",
+          "text": "A screenshot of the portal search box with a display name typed in."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "The useful review facts identify who or what receives access and exactly what access is being requested. A search screenshot is weak evidence."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "A group named `Orders Admins` already exists. A new group named `Orders-Admins` is created by mistake. A role assignment is added to the wrong group. What made this failure likely?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The process trusted similar display names instead of checking the target group object ID."
+        },
+        {
+          "id": "b",
+          "text": "Azure RBAC cannot assign roles to groups."
+        },
+        {
+          "id": "c",
+          "text": "Groups should always be avoided because only users can be reviewed."
+        },
+        {
+          "id": "d",
+          "text": "The subscription was in the wrong region."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Groups are useful for people access, but similar names are easy to confuse. The stable object ID prevents the wrong group from being selected."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A deployment pipeline uses a service principal. The team rotates the client secret but keeps the same service principal object. What stays stable for access review?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The service principal object ID and its role assignments."
+        },
+        {
+          "id": "b",
+          "text": "The old secret value, because role assignments are attached to secrets."
+        },
+        {
+          "id": "c",
+          "text": "The developer account that created the app registration."
+        },
+        {
+          "id": "d",
+          "text": "The public DNS name for the service."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Credentials can rotate while the service principal identity remains the same. Access review should track the principal, not a particular secret value."
+    }
+  ]
+}

@@ -1,0 +1,104 @@
+{
+  "cwd": "/home/dev",
+  "env": {
+    "USER": "dev",
+    "HOME": "/home/dev"
+  },
+  "fs": {
+    "/home/dev": {
+      "type": "dir"
+    }
+  },
+  "commandModules": [
+    "azure"
+  ],
+  "cloud": {
+    "azure": {
+      "tenantId": "tenant-devpolaris",
+      "subscriptionId": "sub-devpolaris-training",
+      "currentSubscription": "sub-devpolaris-training",
+      "defaultLocation": "eastus",
+      "resourceGroups": [
+        {
+          "name": "rg-devpolaris-orders-prod",
+          "location": "eastus",
+          "tags": {
+            "service": "orders-api",
+            "env": "prod"
+          }
+        }
+      ],
+      "managedIdentities": [
+        {
+          "name": "mi-orders-api-prod",
+          "resourceGroup": "rg-devpolaris-orders-prod",
+          "location": "eastus",
+          "clientId": "client-mi-orders-api-prod",
+          "principalId": "principal-mi-orders-api-prod"
+        }
+      ],
+      "containerApps": [
+        {
+          "name": "ca-orders-api-prod",
+          "resourceGroup": "rg-devpolaris-orders-prod",
+          "location": "eastus",
+          "identity": {
+            "type": "UserAssigned",
+            "userAssignedIdentities": {
+              "/subscriptions/sub-devpolaris-training/resourceGroups/rg-devpolaris-orders-prod/providers/Microsoft.ManagedIdentity/userAssignedIdentities/mi-orders-api-prod": {
+                "clientId": "client-mi-orders-api-prod",
+                "principalId": "principal-mi-orders-api-prod"
+              }
+            }
+          }
+        }
+      ],
+      "roleAssignments": [
+        {
+          "principalId": "principal-mi-orders-api-prod",
+          "principalName": "mi-orders-api-prod",
+          "principalType": "ServicePrincipal",
+          "roleDefinitionName": "Key Vault Secrets User",
+          "scope": "/subscriptions/sub-devpolaris-training/resourceGroups/rg-devpolaris-orders-prod/providers/Microsoft.KeyVault/vaults/kv-devpolaris-prod"
+        }
+      ],
+      "keyVaults": [
+        {
+          "name": "kv-devpolaris-prod",
+          "resourceGroup": "rg-devpolaris-orders-prod",
+          "location": "eastus",
+          "secrets": [
+            {
+              "name": "orders-sql-connection",
+              "vaultName": "kv-devpolaris-prod",
+              "enabled": true,
+              "contentType": "connection-string",
+              "tags": {
+                "service": "orders-api",
+                "env": "prod"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "grader": {
+    "strategy": "contains",
+    "source": "all-stdout",
+    "expected": [
+      "ca-orders-api-prod",
+      "mi-orders-api-prod",
+      "principal-mi-orders-api-prod",
+      "Key Vault Secrets User",
+      "kv-devpolaris-prod",
+      "orders-sql-connection",
+      "connection-string"
+    ],
+    "requireCommands": [
+      "az"
+    ],
+    "minCommandCount": 3,
+    "loose": true
+  }
+}

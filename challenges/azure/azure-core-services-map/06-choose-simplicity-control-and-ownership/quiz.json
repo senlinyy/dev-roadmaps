@@ -1,0 +1,142 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "`devpolaris-orders-api` is one containerized HTTP API with a database, secrets, logs, and a small on-call team. Someone proposes AKS immediately because it offers more control. What is the best first response?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Choose a simpler managed runtime first if it meets the job, then move to AKS later only when the team needs Kubernetes-level control."
+        },
+        {
+          "id": "b",
+          "text": "Choose AKS now because more control always reduces operational work."
+        },
+        {
+          "id": "c",
+          "text": "Choose Virtual Machines because they are the only way to run production containers safely."
+        },
+        {
+          "id": "d",
+          "text": "Skip runtime choice and start from Cost Management because cost determines the compute architecture."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The article frames control as a tradeoff. More control can be useful, but it also adds platform operations. A first map should keep the operating surface understandable."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "The team chooses Azure SQL Database instead of running its own database on a VM. Which ownership statement is most accurate?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Azure manages much of the database platform, but the team still owns schema design, queries, indexes, access, backup decisions, and connection behavior."
+        },
+        {
+          "id": "b",
+          "text": "Azure owns all database decisions, so the team only needs to store the connection string."
+        },
+        {
+          "id": "c",
+          "text": "The team owns the VM operating system because Azure SQL Database still exposes a server host to patch."
+        },
+        {
+          "id": "d",
+          "text": "The team can ignore database cost because managed services are always right-sized."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Managed does not mean ownerless. Azure reduces platform work, while the team still owns data design, access, performance choices, and recovery decisions."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "A service map review finds one storage account per small feature, three vaults with unclear owners, and separate log workspaces nobody can explain. Which changes would make the map easier to operate?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Group resources by a clear ownership and lifecycle boundary."
+        },
+        {
+          "id": "b",
+          "text": "Use tags that identify team, environment, service, and owner."
+        },
+        {
+          "id": "c",
+          "text": "Keep shared resources separate only when their ownership or lifecycle is genuinely different."
+        },
+        {
+          "id": "d",
+          "text": "Create more resource groups until every resource name is unique enough to debug alone."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "Clear boundaries, useful tags, and honest shared-resource decisions reduce service sprawl. More groups without ownership rules only moves the confusion around."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "Finance reports that the orders API cost doubled. The service is still healthy. Which service-map habit gives the team the best first evidence?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Review cost by subscription, resource group, service family, and tags before changing runtime or deleting resources."
+        },
+        {
+          "id": "b",
+          "text": "Restart the API because healthy services usually cost more when the process is stuck."
+        },
+        {
+          "id": "c",
+          "text": "Delete the largest resource group first and restore anything that turns out to be needed."
+        },
+        {
+          "id": "d",
+          "text": "Move public DNS to another provider because DNS is the first row of the traffic map."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Cost is part of the operating map. The first move is evidence by boundary and service family, not a blind runtime change."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A production map has every possible Azure service the team might use someday. It includes services not deployed, services not on the request path, and owners marked as `TBD`. What is the main risk?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The map becomes harder to use during incidents because it mixes current evidence with future guesses and unclear ownership."
+        },
+        {
+          "id": "b",
+          "text": "The map becomes safer because a larger diagram always gives on-call engineers more paths to investigate."
+        },
+        {
+          "id": "c",
+          "text": "Azure will create the missing services automatically if the map names them."
+        },
+        {
+          "id": "d",
+          "text": "The main risk is cosmetic because diagrams do not affect production operations."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "A service map should describe the system people operate today. Future ideas can live elsewhere until they become part of the real runtime, deployment, or support path."
+    }
+  ]
+}

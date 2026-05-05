@@ -1,0 +1,76 @@
+{
+  "cwd": "/home/dev",
+  "env": {
+    "USER": "dev",
+    "HOME": "/home/dev"
+  },
+  "fs": {
+    "/home/dev": {
+      "type": "dir"
+    }
+  },
+  "commandModules": [
+    "azure"
+  ],
+  "cloud": {
+    "azure": {
+      "tenantId": "tenant-devpolaris",
+      "subscriptionId": "sub-devpolaris-training",
+      "currentSubscription": "sub-devpolaris-training",
+      "defaultLocation": "eastus",
+      "resourceGroups": [
+        {
+          "name": "rg-devpolaris-orders-prod",
+          "location": "eastus"
+        }
+      ],
+      "managedIdentities": [
+        {
+          "name": "mi-orders-api-prod",
+          "resourceGroup": "rg-devpolaris-orders-prod",
+          "location": "eastus",
+          "clientId": "client-mi-orders-api-prod",
+          "principalId": "principal-mi-orders-api-prod",
+          "tags": {
+            "service": "orders-api",
+            "env": "prod"
+          }
+        }
+      ],
+      "containerApps": [
+        {
+          "name": "ca-orders-api-prod",
+          "resourceGroup": "rg-devpolaris-orders-prod",
+          "location": "eastus",
+          "identity": {
+            "type": "UserAssigned",
+            "userAssignedIdentities": {
+              "/subscriptions/sub-devpolaris-training/resourceGroups/rg-devpolaris-orders-prod/providers/Microsoft.ManagedIdentity/userAssignedIdentities/mi-orders-api-prod": {
+                "clientId": "client-mi-orders-api-prod",
+                "principalId": "principal-mi-orders-api-prod"
+              }
+            }
+          }
+        }
+      ],
+      "roleAssignments": [],
+      "keyVaults": []
+    }
+  },
+  "grader": {
+    "strategy": "contains",
+    "source": "all-stdout",
+    "expected": [
+      "ca-orders-api-prod",
+      "mi-orders-api-prod",
+      "client-mi-orders-api-prod",
+      "principal-mi-orders-api-prod",
+      "UserAssigned"
+    ],
+    "requireCommands": [
+      "az"
+    ],
+    "minCommandCount": 2,
+    "loose": true
+  }
+}

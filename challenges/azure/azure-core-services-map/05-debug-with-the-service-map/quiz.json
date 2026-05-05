@@ -101,7 +101,7 @@
         },
         {
           "id": "d",
-          "text": "The deployment package changed, so inspect the image and release record before assuming a package upgrade is the right fix."
+          "text": "The Node.js version changed last week, so rewrite the checkout route before checking current traffic, identity, or storage evidence."
         }
       ],
       "correct": [

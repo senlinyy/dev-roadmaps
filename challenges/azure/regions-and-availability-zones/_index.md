@@ -1,9 +1,9 @@
 ---
 title: "Regions and Availability Zones"
-description: "Practice choosing Azure placement by user location, data needs, service availability, zone failure boundaries, and recovery tradeoffs."
+description: "Practice choosing Azure placement, creating regional evidence, verifying the chosen location, and reasoning about zone failure boundaries."
 articleId: article-cloud-providers-azure-foundations-regions-and-availability-zones
 articleSlug: regions-and-availability-zones
 difficulty: medium
 order: 3
-tags: ["azure", "regions", "availability-zones", "placement", "resilience"]
+tags: ["azure", "regions", "availability-zones", "placement", "resilience", "az-cli"]
 ---

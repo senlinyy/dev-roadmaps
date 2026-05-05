@@ -1,0 +1,142 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A developer asks for Owner on the production subscription because they need to restart one app. Which response best matches the review habit?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Ask what action is needed, which resource scope is needed, and whether a narrower role can satisfy the task."
+        },
+        {
+          "id": "b",
+          "text": "Approve Owner because production incidents should avoid access questions."
+        },
+        {
+          "id": "c",
+          "text": "Deny all access because users should never touch production."
+        },
+        {
+          "id": "d",
+          "text": "Move the app to a new tenant so the request no longer mentions production."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Access review should match the task to the smallest useful role and scope. It should not jump straight to broad production ownership."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A background worker needs to read from Key Vault at runtime. The request asks to grant access to a human developer account so the worker can keep running. What is the safer direction?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Use a non-human workload identity for the worker and grant that identity the needed access."
+        },
+        {
+          "id": "b",
+          "text": "Use the developer account because it already passed sign-in checks."
+        },
+        {
+          "id": "c",
+          "text": "Use a shared password in app settings so no Entra ID object is needed."
+        },
+        {
+          "id": "d",
+          "text": "Grant access to every engineer in the group because one of them may debug it later."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Runtime software should have its own identity. Human accounts are for people actions, not long-lived app access."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "A good access request is ready for review. Which facts should it include?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Principal type and object ID."
+        },
+        {
+          "id": "b",
+          "text": "Requested role."
+        },
+        {
+          "id": "c",
+          "text": "Requested scope."
+        },
+        {
+          "id": "d",
+          "text": "A promise that the requester will remove access later, without an owner or review date."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "A reviewer needs the principal, role, and scope. Temporary access should also have an owner and review habit, not just a vague promise."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "A user can sign in to Azure Portal but cannot list resources in `rg-devpolaris-orders-prod`. What does this show?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Authentication succeeded, but authorization for that resource scope is still missing or too narrow."
+        },
+        {
+          "id": "b",
+          "text": "The user's password is wrong because listing resources is part of sign-in."
+        },
+        {
+          "id": "c",
+          "text": "The resource group does not exist because signed-in users can always list every group."
+        },
+        {
+          "id": "d",
+          "text": "The tenant region is incompatible with the user's location."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Sign-in proves identity authentication. Azure RBAC still decides whether that identity can act at a scope."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A service principal was created for a temporary migration. The migration finished two weeks ago, but the service principal still has production write access. What should the review habit catch?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The non-human identity still has access after its job ended and should be reviewed or removed."
+        },
+        {
+          "id": "b",
+          "text": "The service principal should be converted into a user so it appears in people reviews."
+        },
+        {
+          "id": "c",
+          "text": "The production resources should be moved to a new subscription so the old access stops being visible."
+        },
+        {
+          "id": "d",
+          "text": "The access is safe because non-human identities cannot make production changes."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Service principals are powerful principals. Temporary workload access needs the same review discipline as people access."
+    }
+  ]
+}

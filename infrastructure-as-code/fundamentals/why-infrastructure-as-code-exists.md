@@ -58,11 +58,15 @@ IaC changes the note into a reviewed set of files. The files become the recipe, 
 
 ```mermaid
 flowchart TD
-    A["Manual console change"] --> B["Real infrastructure changes immediately"]
-    B --> C["Team discovers result after the fact"]
-    D["IaC file change"] --> E["Pull request review"]
-    E --> F["Plan or dry run"]
-    F --> G["Tool changes real infrastructure"]
+    A["Infrastructure<br/>needs a change"]
+    A --> B{"Where does<br/>the change start?"}
+    B -->|"Console"| C["Manual edit"]
+    C --> D["Real system<br/>changes first"]
+    D --> E["Team reviews<br/>afterward"]
+    B -->|"Repository"| F["File edit"]
+    F --> G["Pull request<br/>review"]
+    G --> H["Plan or<br/>dry run"]
+    H --> I["Approved<br/>apply"]
 ```
 
 The diagram is intentionally simple. The key difference is timing. In the manual flow, the real system changes before the team can review the full shape. In the IaC flow, the proposed shape is written down first, then reviewed, then applied.
@@ -183,12 +187,10 @@ Those differences make sense. Development is cheap and replaceable. Staging is c
 
 ```mermaid
 flowchart TD
-    A["Shared infrastructure code"] --> B["dev inputs"]
-    A --> C["staging inputs"]
-    A --> D["prod inputs"]
-    B --> E["Small, cheap environment"]
-    C --> F["Production-like test environment"]
-    D --> G["Protected customer environment"]
+    A["Shared<br/>infrastructure code"]
+    A --> B["dev inputs<br/>Small, cheap env"]
+    A --> C["staging inputs<br/>Production-like test"]
+    A --> D["prod inputs<br/>Protected customer env"]
 ```
 
 This pattern is one reason IaC is important for learners. You are not just learning another syntax. You are learning how teams keep development, staging, and production similar enough to trust, while still giving each environment the size and protections it needs.

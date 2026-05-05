@@ -1,0 +1,142 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "Before release, `devpolaris-orders-api` can start, but nobody has confirmed which identity reads Key Vault in production. What should the checklist require before the deploy is accepted?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Name the runtime identity, confirm the Key Vault role assignment and scope, and keep the evidence with the release record."
+        },
+        {
+          "id": "b",
+          "text": "Accept the release because successful startup proves all future secret reads will work."
+        },
+        {
+          "id": "c",
+          "text": "Use the developer's account for the first production release, then replace it after traffic grows."
+        },
+        {
+          "id": "d",
+          "text": "Move the secret value into app settings so Key Vault access can be checked later."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The checklist should turn identity and permission into inspectable facts before production depends on them."
+    },
+    {
+      "id": "q2",
+      "type": "multiple",
+      "scenario": "The team reviews an access path for the orders API. Which facts belong in the operating checklist?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The caller identity used by the running app."
+        },
+        {
+          "id": "b",
+          "text": "The role assigned to that caller."
+        },
+        {
+          "id": "c",
+          "text": "The scope where the role applies."
+        },
+        {
+          "id": "d",
+          "text": "The laptop username of the developer who first tested the app locally."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "Caller, role, and scope are operating facts. A local developer username does not prove the production workload can access a resource."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "A security review finds that the app can read Key Vault, but the role is assigned at the whole subscription. The app only needs one production vault. What should the team do next?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Narrow the role assignment to the specific vault if that still supports the app's needs."
+        },
+        {
+          "id": "b",
+          "text": "Keep subscription-wide access because it reduces future ticket work."
+        },
+        {
+          "id": "c",
+          "text": "Remove the app identity and use a shared pipeline credential."
+        },
+        {
+          "id": "d",
+          "text": "Add a second subscription-wide assignment so the access is easier to notice."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Least privilege is about enough access for the job, at the smallest useful scope."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "The app logs show `403` from Key Vault. A teammate wants to rebuild the container image first because the release just changed. Which first check fits the checklist?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Check runtime identity, role assignment, and vault scope before rebuilding the image."
+        },
+        {
+          "id": "b",
+          "text": "Rebuild the image because Key Vault access is always controlled by container layers."
+        },
+        {
+          "id": "c",
+          "text": "Move the database to another resource group because Key Vault failures mean data placement is wrong."
+        },
+        {
+          "id": "d",
+          "text": "Turn off logs because access errors can expose sensitive details."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "A Key Vault `403` points first to identity and permission evidence. The image might still matter, but it is not the first fact named by the error."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "The app can read Key Vault from staging but not production. Staging and production use different managed identities and different vaults. What does this prove?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Staging success does not prove production access. The production caller, role, scope, and vault still need their own evidence."
+        },
+        {
+          "id": "b",
+          "text": "The application code is correct, so production Key Vault access should be ignored."
+        },
+        {
+          "id": "c",
+          "text": "The production vault should copy staging permissions exactly, even if the scopes differ."
+        },
+        {
+          "id": "d",
+          "text": "The tenant is broken because two environments cannot safely use separate identities."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Each environment has its own access path. The checklist should prove the production path directly."
+    }
+  ]
+}

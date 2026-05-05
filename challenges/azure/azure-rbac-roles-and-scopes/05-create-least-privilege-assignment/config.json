@@ -1,0 +1,56 @@
+{
+  "cwd": "/home/dev",
+  "env": {
+    "USER": "dev",
+    "HOME": "/home/dev"
+  },
+  "fs": {
+    "/home/dev": {
+      "type": "dir"
+    }
+  },
+  "commandModules": [
+    "azure"
+  ],
+  "cloud": {
+    "azure": {
+      "tenantId": "tenant-devpolaris",
+      "subscriptionId": "sub-devpolaris-training",
+      "currentSubscription": "sub-devpolaris-training",
+      "defaultLocation": "eastus",
+      "resourceGroups": [
+        {
+          "name": "rg-devpolaris-orders-prod",
+          "location": "eastus"
+        }
+      ],
+      "managedIdentities": [
+        {
+          "name": "mi-orders-api-prod",
+          "resourceGroup": "rg-devpolaris-orders-prod",
+          "location": "eastus",
+          "clientId": "client-mi-orders-api-prod",
+          "principalId": "principal-mi-orders-api-prod"
+        }
+      ],
+      "roleAssignments": [],
+      "containerApps": [],
+      "keyVaults": []
+    }
+  },
+  "grader": {
+    "strategy": "contains",
+    "source": "all-stdout",
+    "expected": [
+      "mi-orders-api-prod",
+      "principal-mi-orders-api-prod",
+      "Storage Blob Data Contributor",
+      "/subscriptions/sub-devpolaris-training/resourceGroups/rg-devpolaris-orders-prod/providers/Microsoft.Storage/storageAccounts/stdevpolarisexports"
+    ],
+    "requireCommands": [
+      "az"
+    ],
+    "minCommandCount": 1,
+    "loose": true
+  }
+}

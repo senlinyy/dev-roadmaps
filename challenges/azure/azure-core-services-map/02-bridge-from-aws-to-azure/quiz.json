@@ -1,0 +1,142 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A teammate learned AWS first and says, `We need the Azure version of ECS Fargate for this small container backend.` The app is `devpolaris-orders-api`, a Node.js API that needs managed container hosting, revisions, logs, and scale rules. What is the best way to use the AWS comparison?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Use the job match first: managed container runtime. Azure Container Apps is a reasonable first Azure service to compare."
+        },
+        {
+          "id": "b",
+          "text": "Search for a service with the same acronym as ECS, because cloud services are usually named by exact equivalents."
+        },
+        {
+          "id": "c",
+          "text": "Choose Azure Virtual Machines because EC2 is the most familiar AWS compute baseline."
+        },
+        {
+          "id": "d",
+          "text": "Choose Azure DNS because traffic must have a hostname before the backend can run."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The useful comparison is by job. ECS with Fargate and Azure Container Apps both help with managed container hosting, but the learner still needs to check Azure's own runtime behavior."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "The AWS service map says Route 53 handles public DNS and ALB often handles regional HTTP load balancing. In the Azure map, the team sees Azure DNS, Front Door, and Application Gateway. What should the team avoid?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Treating Front Door or Application Gateway as an exact ALB clone before checking whether the job is global edge, regional HTTP entry, TLS, WAF, or backend routing."
+        },
+        {
+          "id": "b",
+          "text": "Using Azure DNS for public records when the hostname belongs to the service."
+        },
+        {
+          "id": "c",
+          "text": "Asking whether the entry service can see healthy backends."
+        },
+        {
+          "id": "d",
+          "text": "Separating DNS questions from HTTP routing questions during debugging."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "AWS knowledge is useful, but exact service-to-service translation can mislead. The article asks learners to compare by the traffic job first."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "A service map bridge table is being reviewed for engineers who know AWS but are new to Azure. Which comparisons are reasonable starting points when the team remembers that behavior still differs?",
+      "options": [
+        {
+          "id": "a",
+          "text": "RDS for relational order records maps roughly to Azure SQL Database."
+        },
+        {
+          "id": "b",
+          "text": "S3 for object files maps roughly to Blob Storage."
+        },
+        {
+          "id": "c",
+          "text": "IAM role for a workload maps roughly to Managed Identity plus Azure RBAC."
+        },
+        {
+          "id": "d",
+          "text": "CloudWatch maps to one exact Azure product with no need to understand Log Analytics or Application Insights."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "Relational data, object files, and workload identity are useful job-based bridges. Observability is broader: Azure Monitor, Log Analytics, and Application Insights split parts of the signal story."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "An engineer says, `In AWS I used ECR, so the Azure service map should include the place where container images are stored.` Which Azure row belongs in the map?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Azure Container Registry, because the job is storing and referencing release images."
+        },
+        {
+          "id": "b",
+          "text": "Azure Container Apps, because it runs the image and therefore stores the image source."
+        },
+        {
+          "id": "c",
+          "text": "Azure SQL Database, because release images are production records."
+        },
+        {
+          "id": "d",
+          "text": "Azure Cost Management, because it shows which image is currently deployed."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Running an image and storing an image are different jobs. Container Apps runs the backend, while Container Registry stores the image artifact."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A new teammate asks for `the Azure version of AWS` in one sentence. Which answer best fits the article's teaching style?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Start with the same system jobs you learned in AWS, then learn Azure's names and behavior for each job."
+        },
+        {
+          "id": "b",
+          "text": "Memorize a direct replacement table and treat it as complete for production decisions."
+        },
+        {
+          "id": "c",
+          "text": "Ignore AWS knowledge completely because it will always produce the wrong Azure design."
+        },
+        {
+          "id": "d",
+          "text": "Choose the Azure service with the closest billing label, then map runtime behavior later."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Prior AWS knowledge is useful when it is used as a job map. It becomes risky when the team treats the comparison as an exact dictionary."
+    }
+  ]
+}

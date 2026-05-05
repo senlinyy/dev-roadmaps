@@ -1,0 +1,142 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A request asks for `Contributor` on the production subscription so `devpolaris-orders-api` can write monthly exports to one storage account. What should the reviewer prefer?",
+      "options": [
+        {
+          "id": "a",
+          "text": "A storage data role scoped to the specific storage account, if that satisfies the export write path."
+        },
+        {
+          "id": "b",
+          "text": "Contributor on the subscription because it is easier to reuse later."
+        },
+        {
+          "id": "c",
+          "text": "Owner on the resource group because exports are production data."
+        },
+        {
+          "id": "d",
+          "text": "No RBAC assignment because managed identities automatically get storage access."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Least privilege starts with the action and target resource. Broad roles should not be used when a narrower data-plane role and scope fit the job."
+    },
+    {
+      "id": "q2",
+      "type": "multiple",
+      "scenario": "Before creating a role assignment, which facts should be clear?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Which principal will receive access."
+        },
+        {
+          "id": "b",
+          "text": "Which role is needed."
+        },
+        {
+          "id": "c",
+          "text": "Which scope should contain the access."
+        },
+        {
+          "id": "d",
+          "text": "Which portal color theme the reviewer uses."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "The three RBAC facts are principal, role, and scope. Everything else is secondary to those facts."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "A role assignment gives `Reader` at the resource group scope, but the app still cannot read a Key Vault secret. What is the likely issue?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Reader lets the identity view management metadata, but it does not grant secret read access."
+        },
+        {
+          "id": "b",
+          "text": "Reader is too narrow because it only works at subscription scope."
+        },
+        {
+          "id": "c",
+          "text": "The app needs DNS access before it can use RBAC."
+        },
+        {
+          "id": "d",
+          "text": "The role assignment must be attached to a secret value instead of a principal."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Role names matter. Management-plane reader access is not the same as permission to read secret values."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "The team assigns Key Vault access at the vault scope. Later, the app needs to write Blob Storage exports. What is the right review habit?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Create a separate assignment for the storage action at the storage scope instead of expanding the Key Vault assignment."
+        },
+        {
+          "id": "b",
+          "text": "Change the Key Vault role to Contributor so it can cover more resources."
+        },
+        {
+          "id": "c",
+          "text": "Grant subscription Owner to avoid repeated reviews."
+        },
+        {
+          "id": "d",
+          "text": "Move Blob Storage into the vault because the app already has vault access."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Different jobs can require different roles and scopes. Keep assignments tied to the specific action and resource family."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A failed deploy shows `AuthorizationFailed` for `Microsoft.App/containerApps/write` at `rg-devpolaris-orders-prod`. Which access path should be checked first?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The deployment caller's role assignment at the resource group or container app scope."
+        },
+        {
+          "id": "b",
+          "text": "The runtime app identity's Key Vault secret role."
+        },
+        {
+          "id": "c",
+          "text": "The storage blob data role used by monthly exports."
+        },
+        {
+          "id": "d",
+          "text": "The public DNS record for the API."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The error names a management action on Container Apps. That belongs to the deployment caller, not the runtime identity reading secrets."
+    }
+  ]
+}

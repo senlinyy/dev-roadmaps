@@ -1,0 +1,142 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "During an incident review, the team collects this placement evidence for `devpolaris-orders-api`:\n\n- API revision replicas: 3\n- Replica placement: zone 2, zone 2, zone 2\n- Azure SQL Database: zone-redundant\n- Key Vault: regional service\n- Public entry: healthy\n\nWhat is the clearest conclusion?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The app tier is still concentrated in one local failure boundary, so a zone 2 issue can affect every running API copy."
+        },
+        {
+          "id": "b",
+          "text": "The service is zone tolerant because it has three API replicas and a zone-redundant database."
+        },
+        {
+          "id": "c",
+          "text": "The public entry being healthy proves users can still checkout even if the API placement is weak."
+        },
+        {
+          "id": "d",
+          "text": "Key Vault being regional means the API replica placement no longer matters."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Replica count and placement are different facts. Three copies help only if they are placed across useful failure boundaries. A resilient database does not fix an app tier that all landed in one zone."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "The team increases the API from 3 replicas to 6 replicas after a zone issue. A later report shows all 6 replicas were still placed in zone 2. What problem remains?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The team improved capacity, but it did not improve zone spread for this failure mode."
+        },
+        {
+          "id": "b",
+          "text": "The team solved the zone issue because six replicas are enough for any single-zone outage."
+        },
+        {
+          "id": "c",
+          "text": "The database should be moved to zone 2 so it matches the API placement."
+        },
+        {
+          "id": "d",
+          "text": "The region choice is wrong because any same-zone placement means the region cannot support production workloads."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "More replicas can help load, but the zone failure question is about where those replicas are placed. The team needs placement evidence, not only a bigger replica count."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "The on-call engineer wants to know whether the next version is safer than the previous one. Which evidence would help answer the zone-placement question?",
+      "options": [
+        {
+          "id": "a",
+          "text": "How many API copies are running and whether those copies are spread across supported zones."
+        },
+        {
+          "id": "b",
+          "text": "Whether critical managed services on the request path use zone-redundant or regional behavior."
+        },
+        {
+          "id": "c",
+          "text": "Whether the public entry can remove unhealthy backends from rotation."
+        },
+        {
+          "id": "d",
+          "text": "Whether the resource group name includes the word `prod`."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "The useful evidence covers running app copies, service availability shape, and traffic behavior during unhealthy backends. A name helps inventory, but it does not prove zone spread."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "A teammate says, `The database is zone-redundant, so the whole checkout path is zone-redundant.` The API copies all run in one zone, and the API must read secrets before it can start. What is the best correction?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Each part of the checkout path needs its own placement and availability review, including compute, secrets, data, and traffic."
+        },
+        {
+          "id": "b",
+          "text": "The database is the only stateful part, so the rest of the path can be treated as automatically resilient."
+        },
+        {
+          "id": "c",
+          "text": "The API copies should be moved into the same zone as the database primary to reduce latency."
+        },
+        {
+          "id": "d",
+          "text": "Secrets do not matter for zone planning because they are only read during deployment."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "A request succeeds only if the whole path works. Database resilience is important, but compute placement, secret access, and traffic health checks can still decide whether users can checkout."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "The team finds that the current production setup is single-region and all API copies landed in one zone. They are not ready for multi-region yet. What is the most practical next improvement?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Improve zone-aware placement inside the chosen region, verify the evidence after rollout, and keep backup and restore tests separate."
+        },
+        {
+          "id": "b",
+          "text": "Create empty resources in another region and call the service multi-region."
+        },
+        {
+          "id": "c",
+          "text": "Ignore zone placement because a single-region design cannot be improved until multi-region is complete."
+        },
+        {
+          "id": "d",
+          "text": "Move only DNS to a global name and leave compute placement unknown."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Single-region does not have to mean single-zone. A practical improvement is to spread critical capacity inside the region, verify it, and keep data recovery habits in place."
+    }
+  ]
+}
