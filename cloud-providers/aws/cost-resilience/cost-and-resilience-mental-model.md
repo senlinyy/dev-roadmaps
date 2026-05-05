@@ -21,9 +21,7 @@ id: article-cloud-providers-aws-cost-resilience-cost-resilience-mental-model
 
 ## Cost And Resilience Belong Together
 
-After a service is deployed and observable, the next production question is not only "is it running?"
-
-The next question is "can we afford the way it is running, and can it survive the failures we honestly expect?"
+After a service is deployed and observable, the next production question is "can we afford the way it is running, and can it survive the failures we honestly expect?"
 
 Cost is the money and operational effort spent to keep a system available.
 In AWS, cost usually follows resources: tasks, database capacity, storage, logs, backups, network traffic, and the time engineers spend understanding all of it.
@@ -80,7 +78,7 @@ The service shape is intentionally ordinary:
 
 The team has two normal pressures.
 First, the service must not fall over during a busy ordering window.
-Second, the monthly AWS bill must not grow silently because every resource was sized for a scary day that rarely happens.
+Second, the monthly AWS bill must not grow silently because every resource was sized for a rare peak day.
 
 That tension is healthy.
 You do not want a team that treats cost as someone else's problem.
@@ -109,8 +107,7 @@ signals:
   restore drill has not been tested since the last schema change
 ```
 
-This note is not trying to be perfect.
-It gives the team a starting point.
+This note gives the team a starting point.
 There are running resources, stored evidence, stored recovery points, and a few unanswered questions.
 
 Cost and resilience reviews start from that kind of real state, not from a generic list of best practices.
@@ -163,10 +160,9 @@ Here is the mental model in one table:
 | Growth cost | Cost that rises with traffic or time | More orders, objects, logs, and backups | What will this look like next month? |
 | Recovery cost | Cost paid to restore or diagnose later | Backups and retained logs | Can we recover within the promise? |
 
-This table is not a pricing calculator.
-It is a thinking tool.
+This table is a thinking tool.
 Before you ask whether something is expensive, ask which cost shape you are looking at.
-That one step makes the conversation calmer.
+That one step makes the tradeoff easier to discuss.
 
 ## Resilience Means Serving Or Recovering
 
@@ -211,8 +207,7 @@ That preparation may include better backups, more automation, more retained evid
 Those choices are not free.
 They may still be the right choices.
 
-For a beginner, the goal is not to invent perfect numbers.
-The goal is to ask the right plain-English questions:
+For a beginner, start by asking the right plain-English questions before trying to invent perfect numbers:
 
 | Question | What It Really Asks |
 |----------|---------------------|
@@ -291,7 +286,7 @@ Both sides need attention.
 The most realistic failure in this module is not a dramatic outage.
 It is a slow drift into "just in case" settings.
 
-The team has one scary traffic spike.
+The team has one large traffic spike.
 Someone increases the ECS desired count from `2` to `4`.
 Another person increases RDS capacity because checkout felt slow.
 During debugging, the app logs full request details at `debug` level.
@@ -487,7 +482,7 @@ With the reason, it becomes engineering judgment.
 
 ## A Practical Review Habit
 
-The practical habit is simple: whenever you change a production AWS resource, write one cost sentence and one resilience sentence.
+Whenever you change a production AWS resource, write one cost sentence and one resilience sentence.
 
 For example:
 

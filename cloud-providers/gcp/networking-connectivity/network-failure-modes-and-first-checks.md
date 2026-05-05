@@ -25,8 +25,8 @@ id: article-cloud-providers-gcp-networking-connectivity-network-failure-modes-fi
 
 ## The First Job Is To Shrink The Problem
 
-"The network is broken" is not a useful diagnosis. It is too large. It could mean DNS points
-to the wrong place. It could mean a certificate does not match the hostname. It could mean a
+The phrase "the network is broken" is too large to guide a fix. It could mean DNS points to
+the wrong place. It could mean a certificate does not match the hostname. It could mean a
 load balancer has no healthy backend. It could mean Cloud Run ingress blocks the path. It
 could mean Cloud Run egress is missing.
 
@@ -150,18 +150,17 @@ app status:
   Cloud Run revision healthy
 ```
 
-The fix is not a new revision. The fix is to attach or provision a certificate that matches
-the requested hostname. The order matters. Name first. Certificate second. Backend after
-that.
+Attach or provision a certificate that matches the requested hostname. A new revision will
+not fix a hostname and certificate mismatch. The order matters. Name first. Certificate
+second. Backend after that.
 
 ## When Cloud Run Is Reachable Through The Wrong Path
 
 Sometimes the service works, but through a path the team did not intend. For example, the
 team wants all public traffic through an external Application Load Balancer. But someone can
 still call the Cloud Run service directly through its service URL. That may bypass central
-routing, logging, policies, or custom domain controls. The symptom is not an outage.
-
-It is an exposure gap. The first checks are: What is the intended public entry? What are the
+routing, logging, policies, or custom domain controls. The symptom is an exposure gap, not
+an outage. The first checks are: What is the intended public entry? What are the
 Cloud Run ingress settings? Can the service URL still be reached from the public internet?
 Is IAM invocation required? Do logs show direct requests that did not pass through the load
 balancer? The fix direction is to align Cloud Run ingress with the intended entry design.
@@ -207,11 +206,10 @@ Google-managed service. A failure to read Secret Manager may look like:
 PermissionDenied: Permission 'secretmanager.versions.access' denied
 ```
 
-That is not a route problem. It means the request reached the service layer and the
-principal did not have the required permission. Check the runtime service account. Check the
-target secret. Check the IAM role and scope. For a private VM calling Google APIs without an
-external IP, Private Google Access may matter. For Cloud Run calling Google APIs, the path
-and identity details differ.
+The request reached the service layer, and the principal did not have the required
+permission. Check the runtime service account. Check the target secret. Check the IAM role
+and scope. For a private VM calling Google APIs without an external IP, Private Google
+Access may matter. For Cloud Run calling Google APIs, the path and identity details differ.
 
 The important habit is to read the error. Timeout. Connection refused. Permission denied.
 Name not found. Each points to a different layer.
@@ -311,11 +309,11 @@ Use this first-check order:
 6. What evidence proves the fix?
 ```
 
-That list is not glamorous. It is useful. It turns "network is broken" into one of a few
-smaller problems. For `devpolaris-orders-api`, the most common first checks are: DNS and
-certificate for user-facing failures. Cloud Run ingress for unexpected public reachability.
-Cloud Run egress and private service access for database timeouts. Runtime service account
-IAM for Secret Manager and Cloud Storage permission errors.
+That list turns "network is broken" into one of a few smaller problems. For
+`devpolaris-orders-api`, the most common first checks are: DNS and certificate for
+user-facing failures. Cloud Run ingress for unexpected public reachability. Cloud Run egress
+and private service access for database timeouts. Runtime service account IAM for Secret
+Manager and Cloud Storage permission errors.
 
 Backend readiness for load balancer or service health failures. When the first check is
 clear, the fix is usually smaller. Smaller fixes are easier to review. They also teach the

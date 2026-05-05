@@ -31,7 +31,7 @@ That sounds obvious, but the word "usable" matters. A backup that exists only in
 
 The team must know which time to restore to. The restored resource must have the right network, IAM, tags, secrets, and app configuration around it. Retention means how long you keep data or backups before they can expire.
 
-It is not just a storage setting. It is a business decision written into AWS resources. If finance needs to correct monthly reports, daily order exports must survive long enough for that work.
+Retention is a business decision written into AWS resources. If finance needs to correct monthly reports, daily order exports must survive long enough for that work.
 
 If privacy rules say old temporary data should go away, the cleanup process must actually remove it. Versioning means keeping older versions of a changed object. In Amazon S3, versioning can preserve earlier versions when the same object key is overwritten or deleted.
 
@@ -150,7 +150,7 @@ objectCount=1842
 status=started
 ```
 
-The log gives you the diagnosis path. The configured prefix does not match the expected prefix. That means the job may delete current finance exports, not only release scratch files.
+The log gives you the diagnosis path. The configured prefix does not match the expected prefix. That means the job may delete current finance exports as well as release scratch files.
 
 S3 Versioning helps with this class of mistake. When versioning is enabled on a bucket, S3 can keep multiple versions of the same object key. If the app overwrites `exports/daily/2026/05/02/devpolaris-orders-export-2026-05-02.csv`, the older version can still exist as a noncurrent version.
 
@@ -185,7 +185,7 @@ $ aws s3api list-object-versions \
 
 Look at two fields. `IsLatest: true` on the delete marker explains why a normal read looks like the file is gone. The older version has a `VersionId`, which gives the team something specific to restore or copy.
 
-Versioning is not the same as keeping data forever. Each stored version is still stored data. If an export is overwritten every day, old versions collect.
+Versioning keeps earlier versions available, but each stored version is still stored data. If an export is overwritten every day, old versions collect.
 
 That is where lifecycle rules enter the story. A lifecycle rule can expire objects or old versions after the retention period your team chooses. For the orders bucket, the rule should be split by prefix.
 
@@ -430,7 +430,7 @@ For DevPolaris, these questions should come before any cleanup job runs in produ
 | What recovery exists if the scope is wrong? | S3 versions, RDS restore point, DynamoDB PITR, EBS snapshot, or EFS backup |
 | Who owns the business decision? | Backend, finance, support, privacy, or platform owner |
 
-Those questions are not ceremony. They catch boring mistakes. Boring mistakes delete data.
+Those questions catch ordinary mistakes, and ordinary mistakes delete data.
 
 Here is a cleanup plan that is too vague:
 
@@ -464,7 +464,7 @@ The plan uses concrete names. It also makes the cleanup manifest part of the evi
 
 That list is useful when someone asks, "what exactly disappeared?" For database cleanup, the review should be even more careful. Deleting old idempotency records from DynamoDB may be normal.
 
-Deleting unpaid orders from RDS because they look old is a business decision, not only a storage decision. The safer release pattern is to separate the read phase from the delete phase. First, produce evidence.
+Deleting unpaid orders from RDS because they look old is a business decision as well as a storage decision. The safer release pattern is to separate the read phase from the delete phase. First, produce evidence.
 
 Then review the evidence. Then delete only the reviewed set. For example:
 
@@ -483,7 +483,7 @@ sampleKeys:
 decision: approved for cleanup job 2026-05-02.1
 ```
 
-This is not fancy. It is just enough friction to make the delete decision visible. Visibility is a safety feature.
+This small approval record adds enough friction to make the delete decision visible. Visibility is a safety feature.
 
 ## Failure Modes and Diagnosis
 
@@ -533,7 +533,7 @@ If privacy or cost requires shorter retention, the business process must change 
 | DynamoDB retries create duplicate work | Idempotency item state, TTL values, PITR target | Restore for inspection and repair missing safety records |
 | Worker upload failed and local file was removed | Worker logs, EBS snapshot, EFS backup, S3 head check | Restore or regenerate, then require durable upload proof before cleanup |
 
-This table is not a runbook. It is a way to stay calm. When data safety fails, you do not start by clicking every restore button.
+This table gives you an order of operations when data safety fails. You do not start by clicking every restore button.
 
 You start by naming the missing data, the last good time, the restore target, and the app path back to that target.
 

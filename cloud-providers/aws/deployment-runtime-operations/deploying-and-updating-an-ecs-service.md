@@ -41,7 +41,7 @@ The container listens on port `3000`, the public hostname is `https://orders.dev
 The path we care about is narrow and practical:
 the image is pushed to ECR, a new task definition revision points at that image, the ECS service is updated, new Fargate tasks start, the target group checks them, old tasks stop, and the team verifies logs and metrics.
 If the release is bad, rollback means pointing the service back to the previous known-good revision.
-It is not magic.
+The feature works because the service records and evaluates metrics over time.
 It is a deliberate choice of what the service should run next.
 
 ```mermaid
@@ -237,8 +237,7 @@ target health:
   revision 41: 2 healthy, 0 unhealthy
 ```
 
-This is not a failure.
-It says one new task is running or starting, one may still be pending, and the old revision is still serving traffic.
+This state says one new task is running or starting, one may still be pending, and the old revision is still serving traffic.
 The release is in the "prove the new target" stage.
 
 The mistake to avoid here is declaring success too early.
@@ -304,9 +303,7 @@ Did the new container start the expected release, bind the expected port, load p
 2026-05-02T10:12:32.004Z INFO health=ready path=/health
 ```
 
-This log is not just comfort text.
-It proves the process inside the container is the release you expected.
-It also gives you a timestamp to compare with target health and metrics.
+This log proves the process inside the container is the release you expected and gives you a timestamp to compare with target health and metrics.
 
 ## Health Checks Decide When Traffic Moves
 
@@ -376,7 +373,7 @@ This record says the service reached the desired runtime state.
 After target health, check runtime evidence.
 For a small service, the first checks can be plain:
 startup logs exist for the new release, error rate did not jump, latency is close to normal, and the order path has at least one successful synthetic or smoke request.
-You do not need a wall of dashboards to learn the habit.
+You only need the few signals that prove the deployment state.
 You need to know what good looks like and compare the release against it.
 
 For `devpolaris-orders-api`, the first few minutes after deployment might be summarized like this:
@@ -418,8 +415,7 @@ The service events point you to the load balancer layer:
 2026-05-02T10:26:16Z service devpolaris-orders-api has started 1 tasks: task 8b3c90ed.
 ```
 
-This is not an ECR image pull problem.
-The task got far enough to start and register.
+The task got far enough to start and register, so the image pull step already succeeded.
 The next evidence should come from target health and app logs.
 
 The target health reason makes the traffic failure concrete:
@@ -535,8 +531,7 @@ Keep the service update habit small and repeatable:
 | Check CloudWatch Logs | Proves the app started the expected release |
 | Keep post-deploy evidence | Lets another engineer understand the release later |
 
-Do not turn this into ceremony.
-The point is calm operation.
+Keep the checklist small and operational.
 A release should leave behind enough evidence that you can answer, "What changed, what is running, what is healthy, and how do we go back?"
 
 For `devpolaris-orders-api`, the deploy path is now concrete.

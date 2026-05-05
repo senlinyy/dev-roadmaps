@@ -31,13 +31,13 @@ the code?
 
 GCP compute means the services that execute application code. A compute service might run a
 container, boot a virtual machine, invoke a small function, or operate a Kubernetes cluster.
-Those choices are not just different names for the same thing. Each one changes what Google
-Cloud manages for you and what your team still owns.
+Those choices make different ownership trades. Each one changes what Google Cloud manages
+for you and what your team still owns.
 
-That responsibility split is the useful beginner model. You are not only choosing a runtime.
-You are choosing where startup failures appear, where logs are collected, how traffic reaches
-the app, how scaling happens, and how much operating system work your team must keep doing.
-The compute choice becomes very real the first time production says, "the API is down."
+That responsibility split is the useful beginner model. The runtime choice decides where
+startup failures appear, where logs are collected, how traffic reaches the app, how scaling
+happens, and how much operating system work your team must keep doing. The compute choice
+becomes very real the first time production says, "the API is down."
 
 For `devpolaris-orders-api`, the first production version does not need a complicated
 platform. It needs to receive HTTPS requests, read a few secrets, connect to a database,
@@ -171,7 +171,7 @@ port and a clear health path. It does not need a custom operating system. It doe
 to keep local disk state. It can handle more traffic by running more instances of the same
 container. It can read secrets and call other GCP services through a service account.
 
-Cloud Run is not magic. The container still must follow the runtime contract. The app must
+Cloud Run still depends on the container following the runtime contract. The app must
 listen on the expected port. Startup must finish before Cloud Run gives up. Logs should go
 to standard output or standard error so Cloud Logging can capture them. If the app assumes a
 local file path that does not exist, the platform cannot guess the missing design.
@@ -191,8 +191,8 @@ existing server is more important than adopting a managed runtime on day one.
 The cost of that control is responsibility. If the Node process dies, something on the VM
 must restart it. If a security update is needed, the team must patch or rebuild the image.
 If disk fills, the VM feels it. If logs are not shipped, the evidence stays on the machine
-or disappears during replacement. Compute Engine is not wrong. It is a tradeoff with more
-server ownership.
+or disappears during replacement. Compute Engine gives more server-shaped control, and the
+tradeoff is more server ownership.
 
 For a beginner cloud path, use VMs when you can explain why the app needs a VM-shaped
 runtime. Do not choose VMs only because they feel familiar. Familiar can be helpful during a
@@ -203,8 +203,8 @@ to remove.
 
 Cloud Run functions are for small pieces of code that run because something happened. A
 message arrives. A file lands in a bucket. A scheduled task fires. An HTTP request calls a
-single-purpose function. The point is not to host a full application with many routes. The
-point is to handle one event path cleanly.
+single-purpose function. Use that shape for one event path with a narrow job rather than a
+full application with many routes.
 
 For the orders system, a function might create a thumbnail after a product image upload,
 clean expired checkout sessions on a schedule, or react when an order-export message lands
@@ -299,15 +299,14 @@ result: retrying after timeout
 first check: handler timeout, duplicate-safe processing, topic permissions
 ```
 
-Each runtime gives you a different first place to look. That is why the compute choice is an
-operations decision, not only a deployment choice.
+Each runtime gives you a different first place to look, so the compute choice affects
+operations as much as deployment.
 
 ## A Practical First Choice
 
 For this roadmap, the practical first choice for a new GCP backend API is Cloud Run unless
-the requirements clearly point elsewhere. That recommendation is not because Cloud Run is
-the newest or most interesting service. It is because Cloud Run keeps the beginner focused
-on the application contract: container, port, request path, service account, logs, health,
+the requirements clearly point elsewhere. Cloud Run keeps the beginner focused on the
+application contract: container, port, request path, service account, logs, health,
 revisions, and traffic.
 
 Choose Compute Engine when the server matters. Choose Cloud Run functions when the work is a
@@ -340,8 +339,8 @@ on port `8080`. Customer traffic reaches it through HTTPS. The service runs as t
 `orders-api-prod` service account, reads its secrets from Secret Manager, connects to Cloud
 SQL, writes logs to Cloud Logging, and uses revisions for deploy evidence.
 
-That paragraph is not decoration. It is the runtime contract. Later, when the app fails, the
-team can inspect each sentence instead of guessing which cloud product to blame.
+Treat that paragraph as the runtime contract. Later, when the app fails, the team can inspect
+each sentence instead of guessing which cloud product to blame.
 
 ---
 

@@ -34,8 +34,7 @@ which account, which Region, which resource, and who is allowed to touch it?
 Azure asks the same kind of operating questions, but the labels change.
 Instead of an AWS account being the main workspace, Azure gives you a tenant for identity, a subscription for resources and billing, and resource groups for related resources.
 
-That means Azure is not a totally new puzzle.
-It is the same cloud problem with a different set of boundary words.
+These questions transfer to Azure with a different set of boundary words.
 Your app still needs somewhere to run.
 Users still need a network path.
 Data still needs a durable home.
@@ -47,10 +46,11 @@ It gives teams rented infrastructure and managed services through a shared contr
 You ask Azure to create things for you: an app environment, a database, a storage account, a private network, a log workspace, or a secret store.
 Each created thing is a resource, which means Azure can track it, secure it, bill for it, update it, and delete it.
 
-Azure exists because teams do not want every application team to buy servers, install operating systems, wire networks, create identity systems, and build their own monitoring stack from scratch.
-The trade is simple.
-You give up some low-level control.
-You gain a place where common infrastructure can be requested, managed, audited, and repeated.
+Azure exists because teams do not want every application team to buy
+servers, install operating systems, wire networks, create identity
+systems, and build their own monitoring stack from scratch. The tradeoff
+is direct: you give up some low-level control and gain a place where
+common infrastructure can be requested, managed, audited, and repeated.
 
 In the larger system, Azure sits between your application and the physical data centers.
 You still write the application.
@@ -64,13 +64,13 @@ We will use Azure Container Apps as the likely runtime because it is easy to pic
 We will not go deep into Container Apps here.
 The goal is to learn the map before we learn the individual streets.
 
-> Azure feels calmer when you ask, "which tenant, which subscription, which resource group, which region, which resource, and which identity?"
+> In Azure, start by identifying the tenant, subscription, resource group, region, resource, and identity.
 
 ## The AWS Translation
 
-AWS comparisons are useful as a bridge, but they are not perfect replacements.
-The goal is not to memorize a one-to-one dictionary.
-The goal is to reuse any AWS mental model you already have.
+AWS comparisons are useful as a bridge, but they are not perfect
+replacements. Reuse any AWS mental model you already have, then
+translate the Azure boxes before you act.
 
 Here is the short translation table:
 
@@ -94,8 +94,8 @@ AWS has tags and service-specific groupings, but it does not have the same unive
 In Azure, resource groups become part of daily operations.
 They affect inventory, access scope, deployment targeting, cost review, and deletion safety.
 
-So the AWS callback is simple:
-keep asking the same careful questions, but translate the boxes before you act.
+The AWS callback is to keep asking the same careful questions while
+translating the boxes before you act.
 
 ## The Example: One Orders API Needs A Home
 
@@ -112,9 +112,10 @@ developer laptop
   -> local test database
 ```
 
-That is a good learning setup.
-It is not a shared production setup.
-If a user places an order, the request should not depend on one person's terminal window.
+That is a good learning setup for one person. A shared production setup
+needs Azure resources, repeatable deployment, logs, identity, network
+access, and health checks so a user order does not depend on one
+terminal window.
 
 The team wants a first Azure shape like this:
 
@@ -180,10 +181,9 @@ For a beginner, think of the tenant as the team workspace for identity.
 It answers questions like:
 who are the people, what groups are they in, what applications exist, and what identities can be used by workloads?
 
-The tenant is not where your Container App runs.
-The tenant is where Azure checks identity.
-That difference is important.
-Your app might run in the `uksouth` region, but the user who deploys it is still known through the tenant.
+The tenant handles identity checks rather than runtime placement. Your
+app might run in the `uksouth` region, but the user who deploys it is
+still known through the tenant.
 
 For `devpolaris-orders-api`, the tenant might contain groups like this:
 
@@ -243,9 +243,9 @@ $ az account show --query "{name:name,id:id,tenantId:tenantId}" --output json
 }
 ```
 
-This output is not trivia.
-It is a safety check.
-Before a deployment or cleanup command, the subscription name and ID tell you which operating boundary your command will touch.
+This output is a safety check. Before a deployment or cleanup command,
+the subscription name and ID tell you which operating boundary your
+command will touch.
 
 A realistic beginner failure looks like this:
 
@@ -256,20 +256,19 @@ Name                       ResourceGroup                Location
 ca-devpolaris-orders-api   rg-devpolaris-orders-prod    uksouth
 ```
 
-That command looks harmless.
-But if your active subscription is `devpolaris-prod` when you expected `devpolaris-staging`, the next command might change a production app.
-The command did what you asked.
-Your context was wrong.
+The command can still change the wrong environment if your active
+subscription is `devpolaris-prod` when you expected
+`devpolaris-staging`. Azure did what you asked, but your context was
+wrong.
 
-The habit is simple:
-check the subscription before changing resources.
+Check the subscription before changing resources. Make that context
+check part of deployment, cleanup, and incident commands.
 
 ## Resource Groups Keep Related Things Together
 
-A resource group is a container for related Azure resources.
-It is not a folder in the filesystem.
-It is a management container inside Azure Resource Manager.
-You use it to group things that should be created, viewed, secured, tagged, or deleted together.
+A resource group is a management container inside Azure Resource
+Manager, not a filesystem folder. You use it to group resources that
+should be created, viewed, secured, tagged, or deleted together.
 
 For `devpolaris-orders-api`, a production resource group might be named `rg-devpolaris-orders-prod`.
 Inside it, the team could keep the app, the Container Apps environment, a log workspace, and app-specific storage.
@@ -295,11 +294,11 @@ stdevpolarisordersprod          Microsoft.Storage/storageAccounts         uksout
 id-devpolaris-orders-api-prod   Microsoft.ManagedIdentity/userAssignedIdentities uksouth
 ```
 
-This inventory tells you more than names.
-It tells you which resources the team probably manages together.
-It also gives you the next diagnostic path.
-If the app cannot send logs, look for the log workspace in this group.
-If the app cannot start because its identity is missing, look for the managed identity in this group.
+This inventory shows which resources the team probably manages together
+and gives you the next diagnostic path. If the app cannot send logs,
+look for the log workspace in this group. If the app cannot start
+because its identity is missing, look for the managed identity in this
+group.
 
 Resource groups have a sharp edge:
 when you delete a resource group, Azure deletes the resources inside it.
@@ -332,16 +331,15 @@ A first production choice could be `uksouth`.
 That does not mean every future system must stay there.
 It means the team starts with a region that makes sense for latency, operations, and data rules.
 
-Azure also has availability zones in many regions.
-An availability zone is a separated group of data centers inside one region, with independent power, cooling, and networking.
-The beginner idea is simple:
-one zone can have trouble while another zone in the same region keeps working.
+Azure also has availability zones in many regions. An availability zone
+is a separated group of data centers inside one region, with independent
+power, cooling, and networking. One zone can have trouble while another
+zone in the same region keeps working.
 
 Some services use zones for you when you choose a zone-redundant option.
 Some services require you to configure multiple instances across zones.
 Some services do not support zones in a given region or pricing tier.
-That is why "we are in Azure" is not a reliability plan.
-You still need to check how each service handles zones.
+Reliability depends on how each service handles zones, not just on the fact that the workload runs in Azure.
 
 For a first `devpolaris-orders-api` plan, the team might write this:
 
@@ -356,8 +354,10 @@ The tradeoff is worth saying plainly.
 A single-region design is easier to understand and operate.
 A multi-region design can survive bigger regional problems, but it adds data replication, traffic routing, testing, cost, and failure modes of its own.
 
-For a foundation article, the important habit is not "always use the most complex shape."
-The important habit is to know where your resources live and what failure boundary that location gives you.
+For a foundation article, the important habit is to understand where
+your resources live and what failure boundary that location gives you.
+Use the more complex shape only when the system needs the protection it
+adds.
 
 ## Azure Resource Manager Is The Front Door
 
@@ -367,10 +367,10 @@ When you create, update, or delete Azure resources through the portal, Azure CLI
 That means Azure has a common front door for resource changes.
 ARM checks who you are, checks whether you are allowed to do the action, understands the resource type, and sends the request to the right Azure service.
 
-This is why the portal and CLI can show the same resources.
-They are different doorways into the same management system.
-The portal is not magic.
-It is a user interface that causes management requests.
+The portal and CLI can show the same resources because they are
+different doorways into the same management system. The portal is a user
+interface that sends management requests, and the CLI sends similar
+requests from your terminal.
 
 A beginner deployment path might look like this:
 
@@ -400,11 +400,10 @@ with object id '7f0d...' does not have authorization to perform action
 '/subscriptions/11111111-2222-3333-4444-555555555555/resourceGroups/rg-devpolaris-orders-prod/providers/Microsoft.App/containerApps/ca-devpolaris-orders-api'
 ```
 
-Do not read that as a wall of noise.
-Read it as a sentence.
-Maya tried to write a Container Apps resource.
-The scope was the `ca-devpolaris-orders-api` resource inside the production resource group.
-Azure blocked the request because the identity did not have the required permission.
+Read the error as a management request that Azure refused. Maya tried to
+write a Container Apps resource at the `ca-devpolaris-orders-api` scope
+inside the production resource group, and Azure blocked the request
+because the identity did not have the required permission.
 
 That error already tells you where to inspect:
 the subscription, the resource group, the resource type, the exact resource, and the role assignment for Maya or her group.
@@ -471,9 +470,8 @@ For `devpolaris-orders-api`, you might keep app runtime and app logs together, t
 | `rg-devpolaris-orders-prod` | Container App, environment, app identity, app logs | Deletes runtime pieces |
 | `rg-devpolaris-orders-data-prod` | Production database and backups | Deletes customer order data |
 
-That split is not always required.
-It is a tradeoff.
-You add separation when the protection is worth the extra management.
+That split is a tradeoff. Add separation when the protection is worth
+the extra management.
 
 ## Identity Decides Who And What Can Act
 
@@ -530,8 +528,9 @@ status=403
 message="The principal does not have permission to perform this action."
 ```
 
-The fix is not to paste an admin key into the app.
-The fix is to grant the managed identity the smallest useful role on the target resource, then redeploy or restart only if the app needs to refresh its connection.
+For an identity permission failure, grant the managed identity the
+smallest useful role on the target resource, then redeploy or restart
+only if the app needs to refresh its connection.
 
 That is how identity turns a hidden secret problem into an explicit access rule.
 
@@ -603,10 +602,12 @@ The fix direction is to inspect the active account before the change and include
 Human commands should start with `az account show`.
 Pipelines should avoid relying on whatever context happened to exist before the job.
 
-Wrong resource group is similar.
-You create `ca-devpolaris-orders-api` in `rg-devpolaris-orders-test` but the dashboard and alerts point at `rg-devpolaris-orders-prod`.
-The resource exists, but it is not where the team expects it.
-The fix is to use consistent names and make deployment scripts pass the resource group explicitly.
+Wrong resource group problems have the same shape. You create
+`ca-devpolaris-orders-api` in `rg-devpolaris-orders-test`, but the
+dashboard and alerts point at `rg-devpolaris-orders-prod`. The resource
+exists in Azure, but not where the team expects it, so deployment
+scripts should pass the resource group explicitly and names should stay
+consistent.
 
 Wrong region makes resources appear missing.
 A storage account or app environment exists in `westeurope`, but the engineer searches in `uksouth`.
@@ -633,8 +634,9 @@ Here is a compact failure table you can keep beside the map:
 | Missing identity permission | App gets `403` from another service | Principal, role, and scope | Assign least-privilege role |
 | Deleted resource group | Many resources vanish together | Activity log and resource group delete event | Restore from backup where possible, add deletion guardrails |
 
-The point is not to memorize every Azure error.
-The point is to learn which box to inspect first.
+Use Azure errors to decide which box to inspect first. Over time, the
+specific messages become less intimidating because they usually mention
+identity, scope, region, resource group, network, or service state.
 
 ## The Mental Checklist Before You Deploy
 
@@ -686,8 +688,7 @@ Workload identity: id-devpolaris-orders-api-prod
 First diagnostic path: app revision status, app logs, identity role assignments
 ```
 
-That small record is not a full architecture.
-It is enough to stop the team from treating Azure like a product catalog.
+That small record gives the team enough structure to stop treating Azure like a product catalog.
 It gives every later service a place in the map.
 
 When the next article introduces a specific Azure service, keep asking the same questions.

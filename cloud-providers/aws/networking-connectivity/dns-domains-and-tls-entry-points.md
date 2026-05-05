@@ -202,7 +202,7 @@ It can point to selected AWS resources, including Elastic Load Balancing load ba
 For an Application Load Balancer, you usually create an `A` alias record, and sometimes an `AAAA` alias record if your ALB supports IPv6.
 The record still behaves like an address answer to clients.
 
-The beginner-friendly reason to prefer an alias for this setup is simple:
+Prefer an alias for this setup because:
 you want `orders.devpolaris.com` to follow the load balancer, not store a fixed IP address.
 ALB node IP addresses can change as AWS scales and maintains the load balancer.
 The ALB DNS name is stable enough to target.
@@ -357,7 +357,7 @@ content-type: application/json
 content-length: 17
 ```
 
-The useful evidence is not just `200`.
+The useful evidence includes more than `200`.
 The `https://` URL proves the TLS path worked.
 `HTTP/2` is common on ALB HTTPS listeners.
 The response reaching `/health` proves the listener forwarded to a healthy target group.

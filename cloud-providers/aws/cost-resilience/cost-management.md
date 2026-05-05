@@ -25,8 +25,7 @@ aliases:
 
 ## Visibility Before Tuning
 
-A cloud bill is not only an invoice.
-It is a delayed report of how your architecture behaved.
+A cloud bill is a delayed report of how your architecture behaved.
 Every running task, database instance, log event, object, queue message, and function invocation leaves a cost trail.
 Cost visibility means you can read that trail by service, environment, team, and workload instead of staring at one large account total.
 
@@ -38,7 +37,7 @@ The useful target is the smallest shape that still protects latency, recovery, o
 
 Right-sizing depends on visibility because you need to know what you are tuning.
 If the bill only says "AWS," you cannot tell whether the money went to API tasks, database capacity, logs, S3 exports, or background workers.
-If the bill says `Service=devpolaris-orders-api`, `Environment=prod`, and `Team=platform`, the conversation becomes much calmer.
+If the bill says `Service=devpolaris-orders-api`, `Environment=prod`, and `Team=platform`, the team can discuss the specific owner and workload.
 Now the team can ask: "Which layer changed, and is that layer sized for the work it is doing?"
 
 This topic fits after deployment, runtime operations, observability, and data service choices.
@@ -77,7 +76,7 @@ flowchart TD
     Workers --> S3
 ```
 
-Read the diagram as a cost map, not only as a request map.
+Read the diagram as both a cost map and a request map.
 ECS tasks cost while they run.
 RDS costs according to the database shape you keep available.
 S3 costs grow with stored objects and access patterns.
@@ -259,10 +258,9 @@ Owner:
 ```
 
 These are example numbers, not AWS prices.
-The point is the structure.
-The budget has a workload, an environment, thresholds, and an owner.
+The useful part is the structure: the budget has a workload, an environment, thresholds, and an owner.
 
-A budget alert should start an investigation, not a panic.
+A budget alert should start an investigation.
 It does not know whether the extra spend is good or bad.
 It only knows that actual or forecasted movement crossed the line you chose.
 
@@ -445,7 +443,7 @@ For the orders service, receipt PDFs may need longer retention because users and
 Temporary export files may not need the same life.
 Monthly admin exports may need a clear retention rule agreed with the business.
 
-A lifecycle note can stay simple:
+A lifecycle note can stay short:
 
 ```text
 S3 lifecycle intent
@@ -497,8 +495,7 @@ In this example, `null` means the worker log group has no explicit retention set
 That may be intentional, but it deserves a decision.
 A worker that retries noisy errors all night can create log volume much faster than a quiet API.
 
-The right-size move is not only retention.
-It may be changing the application log behavior.
+Right-sizing may require changing the application log behavior as well as retention.
 Keep enough detail to diagnose a failed order.
 Avoid logging the same large payload on every retry.
 
@@ -588,7 +585,7 @@ Allowing high concurrency can process events quickly.
 It can also increase pressure on RDS, S3, email providers, or partner APIs.
 Reserved concurrency or event source scaling controls can be useful when the safe answer is "run fewer things at once."
 
-The beginner rule is simple:
+Use this rule:
 autoscaling saves money only when the metric matches useful work.
 If the metric follows a failure loop, autoscaling can make the failure more expensive.
 
@@ -760,8 +757,7 @@ Before increasing workers:
   check queue age, error rate, retry pattern, DLQ, and downstream pressure
 ```
 
-This note is not bureaucracy.
-It is a memory aid for moments when the graph is moving and people want a fast answer.
+This note is a memory aid for moments when the graph is moving and people want a fast answer.
 
 Cost Explorer helps you see where spend moved.
 Budgets help you notice drift before the month ends.

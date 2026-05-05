@@ -53,10 +53,9 @@ order records to Azure SQL Database, uploads receipt
 files to Blob Storage, and emits telemetry to
 Application Insights.
 
-The goal is not to memorize every deployment feature in
-Azure. The goal is to understand the release as a set
-of promises that must stay true while production
-changes.
+Think of the release as a set of promises that must stay true while
+production changes. Azure deployment features matter because they help
+preserve those promises.
 
 ## If You Know AWS Deployments
 
@@ -72,8 +71,8 @@ operating questions are similar.
 | Parameter Store or Secrets Manager | App settings, Container Apps secrets, and Key Vault | Does the runtime have the values and permissions it needs? |
 | CloudWatch alarms and logs | Azure Monitor and Application Insights | What evidence proves the release is healthy? |
 
-The useful habit is not name translation. The useful
-habit is asking what changed:
+Name translation matters less than the concrete change. Start by asking
+what changed:
 
 - Did the artifact change?
 - Did the config change?
@@ -149,9 +148,8 @@ health endpoint: GET /health
 primary risk: receipt upload path
 ```
 
-This record is not paperwork for its own sake. It
-answers the first questions people ask when a release
-goes bad:
+This record answers the first questions people ask when a release goes
+bad:
 
 - What version is running?
 - What changed?
@@ -248,11 +246,9 @@ proved it can run.
 
 ## Health Is Evidence Not Hope
 
-Health is not a feeling. It is evidence. For a backend
-API, the first health evidence is usually a health
-endpoint. A health endpoint is an HTTP path that
-returns success only when the app is ready to serve.
-For `devpolaris-orders-api`, that might be:
+Health needs evidence. For a backend API, the first evidence is usually
+a health endpoint, which is an HTTP path that returns success only when
+the app is ready to serve. For `devpolaris-orders-api`, that might be:
 
 ```text
 GET /health
@@ -335,7 +331,8 @@ first.
 | Traffic split works for some users but not others | Revision traffic weights, labels, app assumptions, and whether both revisions can read the same config and schema |
 | Rollback fails to fix the problem | Secret rotation, database migration, identity change, or an Azure resource issue outside the artifact |
 
-The practical lesson is simple:
+The practical release lesson is to inspect the type of failure before
+blaming the image:
 
 > Do not assume every release failure is a bad image.
 
@@ -385,12 +382,10 @@ rollback target: revision devpolaris-orders-api--b71a22c
 release owner: orders-api on-call
 ```
 
-This record is not a ceremony. It is a debugging
-shortcut. When something goes wrong, the team starts
-from facts instead of memory. That is what Azure
-deployment and runtime operations are really about:
-make change visible, move traffic carefully, and keep
-enough evidence to decide what to do next.
+This record is a debugging shortcut. When something goes wrong, the team
+starts from facts instead of memory. Azure deployment and runtime
+operations are about making change visible, moving traffic carefully,
+and keeping enough evidence to decide what to do next.
 
 ---
 

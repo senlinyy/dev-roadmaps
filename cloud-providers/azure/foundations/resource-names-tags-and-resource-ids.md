@@ -34,7 +34,7 @@ One has no owner tag.
 The ticket says "restart the production orders API."
 Nobody wants to click the wrong button.
 
-This article is about the labels Azure gives you so that situation stays calm.
+This article is about the labels Azure gives you so that situation stays traceable.
 A resource name is the human-friendly name you see in the portal and type into commands.
 A tag is a key-value label, such as `env=prod` or `owner=platform`, that helps teams search, filter costs, and understand ownership.
 A resource ID is the exact Azure Resource Manager path for one resource.
@@ -134,11 +134,11 @@ For `devpolaris-orders-api`, the production Container App might look like this:
 | Tag | `env=prod` | Helps teams search, group, and report |
 | Resource ID | `/subscriptions/11111111-2222-3333-4444-555555555555/resourceGroups/rg-devpolaris-orders-prod/providers/Microsoft.App/containerApps/ca-devpolaris-orders-api-prod` | Points to one exact Azure resource |
 
-The name is readable, but it is not enough by itself.
-Another subscription can have a Container App with the same name.
-Another resource group can have a similar name.
-Some Azure services require globally unique names, while others only need uniqueness inside a resource group or parent resource.
-You have to know the service before you know how much certainty the name gives you.
+The name is readable, but short names alone do not identify one exact
+Azure resource. Another subscription can have a Container App with the
+same name, another resource group can have a similar name, and
+uniqueness rules differ by Azure service. You have to know the service
+before you know how much certainty the name gives you.
 
 Tags are useful, but they are not proof of identity.
 A teammate can forget to add `env=prod`.
@@ -151,12 +151,10 @@ It includes the subscription, resource group, resource provider namespace, resou
 That is why it feels long.
 It carries the context that a short name leaves out.
 
-The tradeoff is simple.
-Readable names help humans work faster.
-Resource IDs help machines work safely.
-Tags help teams search, cost-report, clean up, and assign ownership.
-But no one of those labels replaces the others.
-A healthy Azure environment uses all three.
+Readable names help humans work faster, resource IDs help machines work
+safely, and tags help teams search, cost-report, clean up, and assign
+ownership. No one of those labels replaces the others, so a healthy
+Azure environment uses all three.
 
 ## Where Azure Puts a Resource
 
@@ -218,9 +216,10 @@ The IDs are realistic examples, but the subscription GUID is intentionally fake.
 | Application Insights | `appi-devpolaris-orders-prod` | `service=devpolaris-orders-api`, `env=prod`, `component=observability` | `/subscriptions/11111111-2222-3333-4444-555555555555/resourceGroups/rg-devpolaris-orders-prod/providers/Microsoft.Insights/components/appi-devpolaris-orders-prod` |
 | Log Analytics workspace | `log-devpolaris-orders-prod` | `service=devpolaris-orders-api`, `env=prod`, `component=observability` | `/subscriptions/11111111-2222-3333-4444-555555555555/resourceGroups/rg-devpolaris-orders-prod/providers/Microsoft.OperationalInsights/workspaces/log-devpolaris-orders-prod` |
 
-The table is not there to make naming feel bureaucratic.
-It gives a tired engineer something concrete to compare during a change.
-If the ticket says "restart production orders API," the row for the Container App tells you the production name, tags, resource group, provider, type, and full ID.
+The table gives a tired engineer something concrete to compare during a
+change. If the ticket says "restart production orders API," the row for
+the Container App tells you the production name, tags, resource group,
+provider, type, and full ID.
 
 You can ask Azure for the same evidence from the CLI.
 The command below filters resources by the service and environment tags, then prints the name, type, resource group, and ID.
@@ -239,10 +238,8 @@ stdevpolarisordersprod         Microsoft.Storage/storageAccounts          rg-dev
 kv-devpolaris-orders-prod      Microsoft.KeyVault/vaults                 rg-devpolaris-orders-prod     /subscriptions/11111111-2222-3333-4444-555555555555/resourceGroups/rg-devpolaris-orders-prod/providers/Microsoft.KeyVault/vaults/kv-devpolaris-orders-prod
 ```
 
-The important part is not memorizing this command.
-The important part is the habit:
-filter by tags, then verify the resource group, type, and ID before changing state.
-Names get you close.
+The command matters less than the habit: filter by tags, then verify the
+resource group, type, and ID before changing state. Names get you close.
 IDs tell you whether you are truly there.
 
 ## Read a Resource ID From Left to Right
@@ -341,12 +338,9 @@ Here is a beginner-friendly naming plan for the same service:
 | Application Insights | `appi-devpolaris-orders-prod` | Monitoring component connected to the app |
 | Log Analytics workspace | `log-devpolaris-orders-prod` | Workspace for logs and queries |
 
-The prefix is not magic.
-It is just a convention that helps humans scan.
-`rg` hints at resource group.
-`ca` hints at Container App.
-`kv` hints at Key Vault.
-The useful part is that the team uses the pattern consistently enough that the exceptions stand out.
+The prefix is a convention that helps humans scan. `rg` hints at
+resource group, `ca` hints at Container App, `kv` hints at Key Vault,
+and the useful part is consistent use: exceptions stand out quickly.
 
 You still need to check the official naming rules for the service you are creating.
 Do not assume that because one resource accepts hyphens, another one does too.
@@ -423,9 +417,9 @@ $ az resource show \
 }
 ```
 
-The useful evidence is not only the tag list.
-It is the combination of `name`, `type`, `resourceGroup`, and tags.
-Together they tell you this is the production Container App for the orders API.
+The useful evidence is the combination of `name`, `type`,
+`resourceGroup`, and tags. Together they tell you this is the production
+Container App for the orders API.
 
 ## When a Script Targets the Wrong Thing
 
@@ -472,8 +466,7 @@ The name matches production, but the resource group and `env` tag say dev.
 The resource ID also contains `rg-devpolaris-orders-dev`.
 That is the proof.
 
-The fix is not "be more careful next time."
-The fix is to make the script accept or resolve the exact production resource ID before it changes state.
+A safer fix is to make the script accept or resolve the exact production resource ID before it changes state.
 For example, a safer script can require a full ID and print the key fields back to the operator:
 
 ```bash
@@ -488,9 +481,8 @@ Restarting exact resource ID...
 Revision restart requested.
 ```
 
-That extra evidence is not noise.
-It protects the team from a common cloud failure:
-a short name points to a real resource, but not the resource you meant.
+That extra evidence protects the team from a common cloud failure: a
+short name points to a real resource, but not the resource you meant.
 
 ## Why Resource IDs Matter to Automation, RBAC, and Policy
 

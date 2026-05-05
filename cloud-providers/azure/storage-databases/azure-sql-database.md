@@ -36,18 +36,10 @@ service, but your team still owns schema, queries,
 permissions, migrations, connection behavior, and
 recovery decisions.
 
-For `devpolaris-orders-api`, Azure SQL Database is the
-natural starting point for core order data. The app
-needs to answer questions like: which orders belong to
-this customer? Which payment attempts failed yesterday?
-Which orders have receipts that were generated but not
-downloaded? Which exports are still running? Those
-questions can change as the product changes. SQL gives
-the team room to ask new questions without redesigning
-every object name or key pattern. The key beginner idea
-is simple: use a relational database when the data has
-relationships, rules, transactions, and changing
-business questions.
+The key beginner idea is to use a relational database when the data has
+relationships, rules, transactions, and changing business questions. SQL
+gives the team room to ask new questions without redesigning every
+object name or key pattern.
 
 ## If You Know RDS
 
@@ -108,18 +100,14 @@ payment_attempts
   created_at
 ```
 
-This is not a full schema. It is enough to show why the
-data is not just a document or file. The order row and
-order item rows should agree. The payment attempts
-should stay attached to the order. The app should be
-able to query across those tables. If the team stored
-every order as one JSON blob in Blob Storage, simple
-downloads might work at first. Then support asks for
-failed payments by customer and time range. Finance
-asks for revenue by day. Product asks for the most
-common product bundles. The app now has to list,
-download, parse, and filter files to answer database
-questions.
+This small schema shows why the data is more than a document or file.
+The order row and order item rows should agree, payment attempts should
+stay attached to the order, and the app should be able to query across
+those tables. If the team stored every order as one JSON blob in Blob
+Storage, simple downloads might work at first. Then support asks for
+failed payments by customer and time range, finance asks for revenue by
+day, and product asks for common product bundles. The app now has to
+list, download, parse, and filter files to answer database questions.
 
 That is a sign the data shape was wrong for object
 storage.
@@ -256,21 +244,15 @@ Your migration plan should respect that.
 
 ## Backups Matter Only If Restore Is Usable
 
-Azure SQL Database includes automated backup and
-restore features. That is helpful, but the operational
-question is not "does backup exist?" The real question
-is: can the team restore the data to a usable place
-when something goes wrong? Usable means the restored
-database has a name, network path, permissions,
-secrets, and application plan around it. If a developer
-accidentally deletes paid orders, the team may need
-point-in-time restore. Point-in-time restore means
-recovering the database to an earlier moment. That
-restored database does not magically replace every
-application setting. The team must decide how to
-compare restored data, copy back affected rows, or
-switch an app safely if that is the chosen recovery
-path.
+Azure SQL Database includes automated backup and restore features. That
+is helpful, but the operational question is whether the team can restore
+the data to a usable place when something goes wrong. Usable means the
+restored database has a name, network path, permissions, secrets, and
+application plan around it. If a developer accidentally deletes paid
+orders, the team may need point-in-time restore, which recovers the
+database to an earlier moment. The restored database still needs a safe
+plan for comparing data, copying back affected rows, or switching an app
+if full replacement is the chosen recovery path.
 
 For `devpolaris-orders-api`, a backup review should
 include:
@@ -358,11 +340,9 @@ is a compact review for the orders system.
 | Migration habit | Backward-compatible schema changes during rollout |
 | Recovery habit | Test point-in-time restore and document repair path |
 
-That review is short, but it prevents a lot of pain.
-The database is not just where the app stores rows. It
-is where the business rules become durable. Treat it
-with the same care you give the application code that
-writes to it.
+That review is short, but it prevents a lot of pain. The database is
+where the business rules become durable, so treat it with the same care
+you give the application code that writes to it.
 
 ---
 

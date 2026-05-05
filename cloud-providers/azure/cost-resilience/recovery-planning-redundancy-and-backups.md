@@ -68,24 +68,22 @@ but the same questions show up.
 | CloudWatch Logs retained for incidents | Application Insights and Log Analytics retention | Do we still have evidence after a problem? |
 | Secrets Manager references | Key Vault references | Can the restored app still access secrets? |
 
-The Azure-specific detail is that each service has its
-own reliability behavior. A region may support
-availability zones, but a particular Azure service or
-tier may still have specific requirements. A storage
-account can use different redundancy options. Azure SQL
-Database has restore behaviors that create a new
-database target, not a magical rewind of the running
-app. The beginner rule is simple:
+The Azure-specific detail is that each service has its own reliability
+behavior. A region may support availability zones, but a particular
+Azure service or tier may still have specific requirements. A storage
+account can use different redundancy options, and Azure SQL Database
+restore creates a new database target rather than rewinding the running
+app in place. For beginners, the practical rule is to check the recovery
+behavior of each service, not just the region name.
 
 > Do not ask "are backups enabled?" Ask "can the app use the restored thing safely?"
 
 ## The Orders Service We Need To Bring Back
 
-Before choosing Azure settings, name the service and
-the promises it makes. For `devpolaris-orders-api`, the
-business promise is simple. Customers can place orders,
-see order status, download receipts, and retry checkout
-safely if the network or payment provider stutters. The
+Before choosing Azure settings, name the service and the promises it
+makes. For `devpolaris-orders-api`, the business promise is concrete:
+customers can place orders, see order status, download receipts, and
+retry checkout safely if the network or payment provider stutters. The
 application shape looks like this:
 
 ```mermaid
@@ -136,11 +134,9 @@ logs: Application Insights workspace devpolaris-orders-prod
 release evidence: image tag, revision name, deploy time
 ```
 
-This card is not paperwork for its own sake. It keeps
-the team from saying "restore orders" and meaning five
-different things. During an incident, vague words waste
-time. Concrete resource names give the next engineer a
-place to look.
+The card keeps the team from saying "restore orders" and meaning five
+different things. During an incident, vague words waste time, while
+concrete resource names give the next engineer a place to look.
 
 ## RTO And RPO In Plain English
 
@@ -158,17 +154,14 @@ minutes, the team is saying, "after recovery, we should
 not lose more than a few minutes of accepted order
 writes."
 
-These are objectives, not magic guarantees. Writing
-`RTO: 1 hour` in a document does not make recovery
-finish in one hour. The backup settings, restore
-process, validation checks, app config, traffic switch,
-and human practice must make that target realistic.
-Here is a simple example. At 10:20 UTC, the team
-discovers that a bad release started writing incorrect
-receipt status values at 10:12 UTC. The service is
-still online, but it is writing dangerous data. The
-team stops the bad release and now has separate
-questions:
+These objectives become useful only when the system and team can meet
+them. Writing `RTO: 1 hour` in a document does not make recovery finish
+in one hour. The backup settings, restore process, validation checks,
+app config, traffic switch, and human practice must make that target
+realistic. Here is a simple example. At 10:20 UTC, the team discovers
+that a bad release started writing incorrect receipt status values at
+10:12 UTC. The service is still online, but it is writing dangerous
+data. The team stops the bad release and now has separate questions:
 
 | Question | Plain Meaning | Example Answer |
 |---|---|---|

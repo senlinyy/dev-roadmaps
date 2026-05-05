@@ -107,7 +107,7 @@ If the question is "is the database being pushed too hard?", inspect RDS and app
 
 A dashboard is a shared view of metrics and sometimes text.
 It helps the team look at related signals together.
-It is not magic.
+The feature works because the service records and evaluates metrics over time.
 It is a carefully arranged set of questions.
 
 For `devpolaris-orders-api`, a useful first dashboard might have these sections:
@@ -338,7 +338,7 @@ Then, if the failure matters often enough, turn it into a metric and possibly an
 
 ## Dashboards Turn Numbers Into Context
 
-A dashboard is not a trophy wall of charts.
+A dashboard should show the signals an operator needs to make the next decision.
 It should help a teammate make the next decision faster.
 
 For `devpolaris-orders-api`, a dashboard should start from customer impact:
@@ -413,7 +413,7 @@ The dashboard and logs help that person walk through it.
 ## Failure Modes And Tradeoffs
 
 Metrics can mislead when you read them without context.
-A single spike may look scary but be harmless.
+A single spike may be harmless if it does not last or affect users.
 An average may hide a small group of very slow requests.
 A missing metric may mean the service is down, or it may mean the resource name changed.
 An alarm may be quiet because the threshold is wrong, not because the service is healthy.

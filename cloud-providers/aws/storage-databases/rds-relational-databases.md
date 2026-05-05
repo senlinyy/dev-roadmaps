@@ -44,7 +44,7 @@ Then it connects to the RDS endpoint through security groups inside the VPC (Vir
 
 ## Why Orders Fit a Relational Database
 
-Relational data is data where the relationships matter as much as the values. An order is not just one JSON blob with a status field. It is a small set of facts that must stay connected.
+Relational data is data where the relationships matter as much as the values. An order is a small set of facts that must stay connected, not one JSON blob with a status field.
 
 The order header says who bought something and when. The line items say what was bought. The payment record says whether money was authorized, captured, failed, or refunded.
 
@@ -96,7 +96,7 @@ order by o.created_at desc;
 
 You could store an order as one document somewhere else. Sometimes that is fine. But if the team expects joins, constraints, migrations, reporting queries, and transaction boundaries, SQL gives you the right operating model.
 
-The database is not only a storage box. It is also a rule checker. That rule checker is useful only if you design the rules and keep them in sync with the app.
+The database stores data and checks rules. That rule checker is useful only if you design the rules and keep them in sync with the app.
 
 ## The RDS Shape in AWS
 
@@ -134,11 +134,11 @@ The secret tells the app how to authenticate. The security groups decide whether
 
 A DB subnet group is a set of subnets that RDS can use for database placement. For an application database, you normally place the database in private subnets. Private subnets are subnets that do not expose the database directly to the public internet.
 
-That does not make the database magically secure. It simply removes a large, unnecessary path from the design. The intended path is the app service reaching the database inside the VPC.
+That design removes a large, unnecessary path from the system. The intended path is the app service reaching the database inside the VPC.
 
 RDS also has cluster-shaped options. Amazon Aurora uses a cluster model, where a cluster endpoint can represent the writer and reader endpoints can serve read traffic. Some RDS deployment options also use a Multi-AZ DB cluster model.
 
-Multi-AZ means database resources are placed across multiple Availability Zones, which are separate data center locations inside a Region. You do not need to master every cluster option on day one. For a beginner backend, the main distinction is simple:
+Multi-AZ means database resources are placed across multiple Availability Zones, which are separate data center locations inside a Region. You do not need to master every cluster option on day one. For a beginner backend, start with this distinction:
 
 | Choice | Beginner mental model | What you decide |
 |--------|------------------------|-----------------|
@@ -215,7 +215,7 @@ container starts
   -> runs readiness check
 ```
 
-A good readiness check does not just prove the Node.js process is alive. It proves the service can do the boring dependency work it needs for checkout. For example, `GET /health/ready` can run a tiny query such as `select 1`.
+A good readiness check proves the service can do the dependency work it needs for checkout, beyond keeping the Node.js process alive. For example, `GET /health/ready` can run a tiny query such as `select 1`.
 
 That does not prove every checkout query is perfect. It proves the app can reach the database with the current secret, endpoint, network path, and user.
 
@@ -223,7 +223,7 @@ That does not prove every checkout query is perfect. It proves the app can reach
 
 RDS makes the database server easier to operate. It does not make schema changes safe by itself. A schema is the structure of the database: tables, columns, indexes, constraints, and relationships.
 
-A migration is a planned change to that schema. For `devpolaris-orders-api`, a migration might add a `payment_attempts` table or add an index for the order history page. The risk is not that SQL is scary.
+A migration is a planned change to that schema. For `devpolaris-orders-api`, a migration might add a `payment_attempts` table or add an index for the order history page. The risk is not SQL itself.
 
 The risk is that the app and database must agree on shape. If the new app code expects a `payments.failure_code` column before the migration has run, the request fails. If the migration removes a column while old tasks are still running, the old tasks fail.
 
@@ -242,7 +242,7 @@ orders-> limit 3;
  202604201100 | create_orders              | 2026-04-20 11:01:22+00
 ```
 
-This is not glamorous, but it is exactly the kind of evidence you want during a deploy. If the app logs say a column is missing, the migration table tells you whether the database received the change. A safe beginner pattern is expand, deploy, contract.
+This migration table is exactly the kind of evidence you want during a deploy. If the app logs say a column is missing, the migration table tells you whether the database received the change. A safe beginner pattern is expand, deploy, contract.
 
 Expand means adding a new table or column in a way old code can ignore. Deploy means releasing application code that starts using the new shape. Contract means removing the old shape later, after old tasks are gone.
 
@@ -415,7 +415,7 @@ RDS does not remove those decisions. It makes the infrastructure base steadier s
 | Connections | App pool size matches task scaling plans |
 | Queries | Slow or frequent queries are measured before scaling reads |
 
-That checklist is not fancy. It is the difference between "RDS exists" and "our checkout service can depend on RDS safely." When you learn RDS this way, the AWS console stops feeling like a wall of options.
+That checklist is the difference between "RDS exists" and "our checkout service can depend on RDS safely." When you learn RDS this way, the AWS console becomes easier to navigate.
 
 Each setting connects back to one question: Can the app store and recover important relational state without guessing? For checkout and orders, that is the whole job.
 

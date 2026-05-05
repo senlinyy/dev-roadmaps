@@ -96,15 +96,13 @@ checkout_failed_requests
 11:15  41
 ```
 
-That is not detailed. It tells you the shape changed.
-The metric helps you notice the incident and measure
-its size. The logs help you understand specific causes.
-Azure platform metrics are useful because many
-resources emit them automatically. App Service,
-Container Apps, Azure SQL Database, storage accounts,
-and other resources can expose resource-specific
-metrics. Application Insights can add application-level
-metrics such as request duration and failure rate.
+The metric is less detailed than the log, but it shows that the shape
+changed. Metrics help you notice the incident and measure its size. Logs
+help you understand specific causes. Azure platform metrics are useful
+because many resources emit them automatically. App Service, Container
+Apps, Azure SQL Database, storage accounts, and other resources can
+expose resource-specific metrics. Application Insights can add
+application-level metrics such as request duration and failure rate.
 
 The important habit is to pair metrics with the next
 question. If request failures rise, which route is
@@ -133,26 +131,21 @@ unexpectedly? Those promises become signals.
 | Storage failure count | Shows receipt or export write problems |
 | Restart count or replica health | Shows runtime instability |
 
-This is enough for a first operating view. It is not
-every metric Azure exposes. It is the small set that
-helps a team answer: is the app serving customers right
-now? When this set is stable, add more signals only
-when they answer a real question.
+This small set is enough for a first operating view because it answers
+whether the app is serving customers right now. When these signals are
+stable, add more metrics only when they answer a real operating
+question.
 
 ## Dashboards Are Shared Operating Views
 
-A dashboard is a shared view of signals. It is not the
-source of truth by itself. It is a way to help humans
-see the same shape quickly. Azure gives several
-visualization options, including dashboards, workbooks,
-and Grafana integrations. For beginner Azure work, the
-exact visualization tool matters less than the design
-habit. A good dashboard answers a job. For example: the
-release dashboard answers "did the new deployment hurt
-checkout?" the on-call dashboard answers "is the orders
-API healthy right now?" the storage dashboard answers
-"are receipt and export files being written
-successfully?"
+A dashboard is a shared view of signals that helps humans see the same
+shape quickly. Azure gives several visualization options, including
+dashboards, workbooks, and Grafana integrations. For beginner Azure
+work, the exact visualization tool matters less than the design habit: a
+dashboard should answer one job. For example, the release dashboard
+answers "did the new deployment hurt checkout?" the on-call dashboard
+answers "is the orders API healthy right now?" and the storage dashboard
+answers "are receipt and export files being written successfully?"
 
 Do not make one giant dashboard for every possible
 question. A giant dashboard becomes wallpaper. People
@@ -176,10 +169,8 @@ Bottom row:
   link to Log Analytics query
 ```
 
-This is not a required layout. It is a reminder that
-dashboards should help with decisions. If a chart never
-changes what anyone does, it probably does not belong
-on the first screen.
+Use this layout as a decision-oriented example. If a chart never changes
+what anyone does, it probably does not belong on the first screen.
 
 ## Alerts Turn Signals Into Attention
 
@@ -213,10 +204,9 @@ First check: Application Insights failures for POST /checkout, then dependency f
 Action group: orders-api-oncall
 ```
 
-The "first check" line is not an Azure field in every
-setup. It is a good habit for the alert description or
-runbook link. The person receiving the alert should
-know where to start.
+The "first check" line belongs in the alert description or runbook link
+when your setup supports it. The person receiving the alert should know
+where to start.
 
 ## Action Groups Decide Who Hears About It
 
@@ -256,15 +246,12 @@ short spikes that recover. The same condition is
 covered by several rules. Warnings page people at night
 even though they can wait. An alert has no owner.
 
-The fix is not to delete all alerts. The fix is to make
-each alert earn attention. Ask: does this alert
-indicate customer impact or real risk? Does someone
-know what to do? Does the alert include a first check
-or runbook link? Should this be a dashboard instead?
-Should the threshold use a longer evaluation window?
-Should the alert be lower severity? Good alerting is
-kind to humans. It protects sleep and attention so that
-urgent alerts are taken seriously.
+Make each alert earn attention. Ask whether it indicates customer impact
+or real risk, whether someone knows what to do, whether it includes a
+first check or runbook link, whether it belongs on a dashboard instead,
+whether the evaluation window is too short, and whether the severity is
+right. Good alerting protects sleep and attention so urgent alerts are
+taken seriously.
 
 ## Failure Modes And First Checks
 
@@ -297,8 +284,9 @@ a first-check table.
 | Dashboard hides user pain | Percentiles, failed request rate, dependency metrics |
 | Metric chart looks different from logs | Time range, aggregation, and metric delay |
 
-Metrics and alerts are not magic. They are operating
-design. They need review like code does.
+Metrics and alerts are operating design, so review them the way you
+review code. They need owners, thresholds, descriptions, routing, and
+noise control.
 
 ## A Practical Metrics And Alerts Review
 

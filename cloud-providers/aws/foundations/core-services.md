@@ -25,7 +25,7 @@ aliases:
 
 ## The Job-Based Map
 
-When you first look at AWS, the service list can feel like a wall of names before you know what problem you are solving.
+When you first look at AWS, the service list is hard to use until you know what problem you are solving.
 That is a normal beginner feeling.
 The trick is not to memorize every service.
 The trick is to ask what job a service is doing in the system.
@@ -125,12 +125,9 @@ Three supporting responsibilities sit around that path:
 | Release package | ECR image and ECS task definition | They tell ECS what to run when the service starts or deploys. |
 | Guardrails | Budgets and backups | They help the team notice spend and recover data when operations go wrong. |
 
-This is not the only good design.
-You could run the backend on EC2.
-You could use Lambda for smaller event-driven jobs.
-You could choose DynamoDB instead of RDS if the data access pattern fits a key-value style.
-The map is not a final answer.
-It is a way to make better first questions.
+Many good designs could support the same service.
+You could run the backend on EC2, use Lambda for smaller event-driven jobs, or choose DynamoDB instead of RDS if the data access pattern fits a key-value style.
+The map is a way to ask better first questions before you choose.
 
 For this article, keep one test in your head:
 
@@ -138,9 +135,7 @@ For this article, keep one test in your head:
 If checkout returns an error, which box should I inspect first?
 ```
 
-That question keeps the map practical.
-Architecture is not just drawing boxes.
-It is deciding where evidence will appear when something breaks.
+That question keeps the map practical because architecture decides where evidence will appear when something breaks.
 
 ## Traffic: Names, Networks, And Entry Points
 
@@ -181,7 +176,7 @@ The dotted side check combines route tables and security groups so the map does 
 Route tables decide where packets can go, and security groups act like resource-level firewall rules.
 
 The public/private subnet idea is worth slowing down for.
-A public subnet is not public because every resource inside it is magically open.
+A public subnet is public because its route table can send traffic to an internet gateway.
 It is public because its route table has a route to an internet gateway.
 A private subnet does not have that direct inbound path from the internet.
 
@@ -371,7 +366,7 @@ It should not be able to read unrelated payroll exports.
 It should receive the minimum useful permission for the job.
 That is the practical meaning of least privilege.
 
-Beginner IAM errors look scary because the messages are dense.
+IAM errors are hard to read at first because the messages are dense.
 Read them like a sentence.
 They usually tell you who tried, what action failed, and which resource was involved.
 
@@ -411,8 +406,7 @@ For `devpolaris-orders-api`, a useful first signal set might be:
 | CPU and memory | Are tasks close to their limits? | ECS or Container Insights metrics |
 | Database connections | Is the app exhausting DB connections? | RDS metrics |
 
-The point is not to create dozens of alarms on day one.
-The point is to choose signals that match the architecture map.
+Choose signals that match the architecture map instead of creating dozens of alarms on day one.
 If traffic enters through a load balancer, watch the load balancer.
 If code runs in ECS tasks, watch task health and logs.
 If orders live in RDS, watch the database signals that would block checkout.
@@ -468,8 +462,7 @@ It turns a vague outage into a sequence of smaller checks.
 
 ## Operations: Images, Secrets, Deployments, And Health
 
-Running a backend is not only "choose compute."
-You also need a way to ship new versions, pass configuration safely, and decide whether a new task should receive traffic.
+Running a backend also requires a way to ship new versions, pass configuration safely, and decide whether a new task should receive traffic.
 Those are runtime operations.
 
 For a containerized `devpolaris-orders-api`, the image usually goes into ECR (Elastic Container Registry, AWS's managed container image registry).
@@ -528,7 +521,7 @@ ECS can inject a secret into a container when the task starts.
 That is better than putting the password into Git, a Docker image, or a plain environment file on a developer laptop.
 
 There is an important operational detail:
-if the secret changes after a task starts, the already-running container does not magically receive the new value.
+if the secret changes after a task starts, the already-running container keeps the value it received at startup.
 You need to start new tasks, often by forcing a new ECS deployment.
 That is the kind of small fact that prevents long debugging sessions.
 
@@ -582,7 +575,7 @@ They tell you when the design is costing more than expected.
 Tags make this much easier because the bill can be grouped by service, environment, or owner.
 
 Resilience means the service can handle some failures without becoming unavailable or losing important data.
-For this first architecture, the main beginner idea is Multi-AZ thinking.
+For this first architecture, start with Multi-AZ thinking.
 An Availability Zone is a failure boundary inside a Region.
 If every important piece depends on one zone, one local problem can stop the service.
 
@@ -606,7 +599,7 @@ better first production shape:
 Backups are part of resilience.
 AWS Backup can centralize and automate backup policies across supported services.
 Some services also have their own backup features, such as database snapshots.
-The important beginner rule is simple:
+Use this rule:
 a backup you never test is a hope, not a recovery plan.
 
 For `devpolaris-orders-api`, the first resilience checklist might be:
@@ -709,7 +702,7 @@ likely correction:
 This second example is intentionally plain.
 Many cloud bugs are not deep AWS mysteries.
 They are name, Region, account, permission, and configuration mistakes.
-The map helps you find them calmly.
+The map helps you find the right service without guessing.
 
 When you learn the later AWS modules, keep bringing every service back to the same question:
 

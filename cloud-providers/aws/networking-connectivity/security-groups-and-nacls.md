@@ -16,7 +16,7 @@ id: article-cloud-providers-aws-networking-connectivity-security-groups-nacls
 5. [Why Security Group References Beat Broad CIDRs](#why-security-group-references-beat-broad-cidrs)
 6. [NACLs Are Subnet Guardrails That Do Not Remember](#nacls-are-subnet-guardrails-that-do-not-remember)
 7. [Failure Modes You Will Actually See](#failure-modes-you-will-actually-see)
-8. [A Calm Diagnostic Path](#a-calm-diagnostic-path)
+8. [Diagnostic Path](#diagnostic-path)
 9. [The Tradeoff: Layered Rules Without Rule Sprawl](#the-tradeoff-layered-rules-without-rule-sprawl)
 
 ## The Packet Question IAM Cannot Answer
@@ -83,7 +83,7 @@ That visual split matters.
 The ECS task role may have permission to call `secretsmanager:GetSecretValue`, but that permission does not open the database port.
 It only lets the task retrieve the database connection string.
 
-For this article, the intended security group design is simple:
+For this article, use this intended security group design:
 
 | Resource | Security Group | Inbound Rule | Why |
 |----------|----------------|--------------|-----|
@@ -272,7 +272,7 @@ Here is the same database rule written two ways:
 | TCP `5432` from `sg-orders-task` | Only resources in the app task security group can try Postgres | Clear and tied to the app tier |
 | TCP `5432` from `0.0.0.0/0` | Any IPv4 source can try if routing and public exposure allow it | Dangerous for a database |
 
-The last row is the scary one.
+The last row is the dangerous one.
 If the RDS instance is private and routes do not expose it to the internet, `0.0.0.0/0` may not instantly mean the whole internet can connect.
 But it still means the database security group is no longer doing its job.
 Any source with a network path, such as a peered VPC, VPN, misrouted public setup, or future change, gets a chance to try the database port.
@@ -388,7 +388,7 @@ port=5432
 cause=connect ETIMEDOUT 10.20.41.18:5432
 ```
 
-This is not an IAM error.
+This points to network reachability instead of IAM.
 If IAM were the problem, you would expect an AWS API error while reading the secret, such as an access denied response from Secrets Manager.
 Here the app has the hostname and port, but the TCP connection does not complete.
 The fix direction is to inspect the RDS security group inbound rules and confirm TCP `5432` from `sg-orders-task`.
@@ -428,10 +428,9 @@ better rule:
 
 This one is easy to ignore because nothing is broken.
 That is what makes it important.
-Security groups are not only for making the happy path work.
-They also make the wrong paths impossible or at least much harder.
+Security groups make the happy path work and make the wrong paths impossible or at least much harder.
 
-## A Calm Diagnostic Path
+## Diagnostic Path
 
 When traffic fails, resist the urge to edit rules randomly.
 Random edits create two problems.
@@ -490,7 +489,7 @@ Do not normalize `0.0.0.0/0` on a database because it was convenient once.
 
 ## The Tradeoff: Layered Rules Without Rule Sprawl
 
-The healthy default is simple:
+Use this healthy default:
 use security groups as the primary way to express app traffic, and use NACLs as subnet-level guardrails when the team has a clear reason.
 That gives you readable resource rules without making every subnet a fragile packet puzzle.
 
@@ -518,8 +517,7 @@ For `devpolaris-orders-api`, the clean first design is:
 | RDS security group | Allow `5432` from the task security group | Only the app tier reaches Postgres |
 | NACLs | Keep simple unless a subnet guardrail is needed | Avoid stateless return-path surprises |
 
-That design is not fancy.
-It is good because a junior engineer can read it during an incident.
+That design is good because a junior engineer can read it during an incident.
 The rule names match the architecture.
 The sources match the intended senders.
 The database rule does not depend on hope that some other network layer will stay private forever.

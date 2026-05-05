@@ -34,8 +34,7 @@ They only need a safe first AWS home for development, staging, and production.
 
 The first boundary is the workspace where cloud resources belong.
 AWS calls that an **AWS account**.
-An account is not only a login.
-It is the container for resources, access rules, and billing.
+An account is the container for resources, access rules, and billing.
 If `devpolaris-orders-api` has a staging account and a production account, those accounts are separate workspaces.
 A bad experiment in staging should not be able to delete production.
 
@@ -214,8 +213,7 @@ $ aws sts get-caller-identity
 }
 ```
 
-This output is not just trivia.
-It tells Maya that her terminal is currently acting in account `123456789012`.
+This output tells Maya that her terminal is currently acting in account `123456789012`.
 If that number belongs to `devpolaris-prod`, she should pause before creating, deleting, or changing anything.
 
 A team can make this easier by keeping a tiny account register.
@@ -275,7 +273,6 @@ The issue is that the request crossed into the wrong account.
 
 After you know the account, ask where the service should run.
 A Region is a separate geographic AWS area.
-It is not just a label in the Console.
 It decides where many resources are created, where data may live, and how far users travel over the network to reach your service.
 
 For `devpolaris-orders-api`, suppose most early users are on the eastern side of the United States.
@@ -335,9 +332,9 @@ Selected Region: us-west-2
     none
 ```
 
-For a beginner, that empty `us-west-2` view can be scary.
+That empty `us-west-2` view can look like a missing-resource problem.
 It looks like the service was deleted.
-The first diagnostic question is simple:
+The first diagnostic question is:
 "Am I in the same Region where the service was created?"
 
 You can make the CLI answer that question.
@@ -637,8 +634,7 @@ reason: both app copies are in one Availability Zone
 fix: add a subnet in a second AZ and allow placement across both subnets
 ```
 
-This is not a reason to panic for every learning project.
-It is a reason to be honest about what the design can survive.
+Use this as a reason to be honest about what the design can survive, especially when the project moves past learning mode.
 Two app copies in one AZ can survive one app process crashing.
 They may not survive that AZ having a problem.
 

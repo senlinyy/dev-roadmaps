@@ -271,8 +271,8 @@ Active deployments:
   ACTIVE   devpolaris-orders-api:17  desired=2  running=2  pending=0
 ```
 
-This is not automatically bad.
-During a rolling deployment, old and new tasks can overlap.
+That overlap is expected during a rolling deployment.
+Old and new tasks can run at the same time.
 That overlap is how ECS avoids dropping traffic while it waits for new tasks to pass health checks.
 
 The service event stream tells the story in plain pieces:
@@ -320,8 +320,7 @@ Here is the practical port contract:
 | Node.js app | `process.env.PORT || 3000` | Process must actually listen here |
 | Health check | `GET /health` | ALB readiness test |
 
-The container port is not decoration.
-For an ECS service connected to an ALB target group, ECS uses the service's load balancer mapping to register task IPs and ports.
+For an ECS service connected to an ALB target group, the container port drives how ECS registers task IPs and ports.
 If the mapping says `orders-api:3000`, then the container named `orders-api` must expose `3000`, and the process must listen on that port.
 
 A wrong port can look confusing because the task may be `RUNNING`.
@@ -492,8 +491,7 @@ The event stream often looks repetitive:
 2026-05-02T10:36:25Z service devpolaris-orders-api has started 1 tasks: task 8b3c90ed.
 ```
 
-This is not an image pull problem.
-The task lived long enough to register with the target group.
+The task lived long enough to register with the target group, so the image was pulled and started.
 The next places to inspect are target health reason, app port, `/health` behavior, security group rules, and startup time.
 
 Health check grace period can help when the app is genuinely slow to become ready.
@@ -551,7 +549,7 @@ Before shipping `devpolaris-orders-api`, walk through this checklist:
 | Health | `/health` returns quickly after the app is ready |
 | Logs | Startup, version, port, and readiness are visible without leaking secrets |
 
-The most useful mental model is simple:
+Use this mental model:
 ECR stores the package.
 The task definition describes how to run it.
 The service keeps the right number running.

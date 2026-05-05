@@ -40,10 +40,9 @@ You will also see tracing through AWS X-Ray or OpenTelemetry, but the beginner m
 
 This article follows `devpolaris-orders-api`, a Node.js checkout backend.
 The service receives checkout requests, writes order records to RDS, writes receipt and export objects to S3, uses DynamoDB for idempotency and job status, and sometimes invokes Lambda side jobs.
-The goal is not to memorize every AWS screen.
-The goal is to know which kind of signal answers which kind of question.
+The useful skill is knowing which kind of signal answers which kind of question, not memorizing every AWS screen.
 
-> Observability is not about collecting everything. It is about collecting the signals you need to answer the next calm question.
+> Observability means collecting the signals you need to answer the next operational question.
 
 Here is the first map.
 Read it from top to bottom.
@@ -202,8 +201,7 @@ error_name=ConnectionTimeout
 message="database connection timed out"
 ```
 
-The important detail is not just the error message.
-The log gives you the request, route, step, and failing dependency.
+The log gives you more than the error message: request, route, step, and failing dependency.
 That means the next place to inspect is RDS connectivity and database pressure, not S3, Lambda, or the frontend.
 
 A less useful log would say only this:
@@ -305,7 +303,7 @@ It points you toward the slow or failing step.
 Then logs explain the details inside that step.
 
 In AWS, you may see AWS X-Ray for tracing, or you may use OpenTelemetry to create and export traces.
-The tool matters, but the beginner idea is simpler:
+The beginner-friendly requirement is the same in either tool:
 give one request a way to be followed across services.
 
 The most useful bridge between logs and traces is a shared request ID or trace ID.
@@ -426,8 +424,7 @@ Traces are stored or sampled.
 Dashboards and alarms take human attention.
 Retention settings decide how long signals stay available.
 
-The beginner goal is not a perfect observability platform.
-The goal is a service that leaves enough evidence for a calm investigation.
+Start with a service that leaves enough evidence for an investigation.
 When a checkout fails, you should be able to say:
 which request failed, which component complained first, whether the problem is isolated or widespread, and what the next check should be.
 

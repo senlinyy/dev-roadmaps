@@ -32,7 +32,7 @@ It is a private network space inside one AWS account and one Region.
 Private here means the address space belongs to your cloud environment, not that every resource inside it is automatically hidden from the internet.
 You still decide which parts can face the internet and which parts should stay internal.
 
-The reason a VPC exists is simple: cloud resources need a shared network without being mixed together with every other AWS customer.
+A VPC gives cloud resources a shared network without mixing them together with every other AWS customer.
 Your ECS tasks need private IP addresses.
 Your database needs an address the app can reach.
 Your load balancer needs a public edge where users can enter.
@@ -117,7 +117,7 @@ For a beginner, the useful meaning is simpler: CIDR is a compact way to write a 
 An IP address is like a network street address.
 Your laptop might have an address on your home network such as `192.168.1.23`.
 An ECS task in AWS might have a private address such as `10.20.10.45`.
-CIDR notation writes a whole group of addresses, not just one.
+CIDR notation writes a whole group of addresses.
 
 For `devpolaris-orders-api`, a reasonable first VPC range might be:
 
@@ -152,8 +152,7 @@ Here is a simple address plan:
 | Private DB subnet A | `10.20.20.0/24` | RDS placement option in AZ A |
 | Private DB subnet B | `10.20.21.0/24` | RDS placement option in AZ B |
 
-This table is not the only valid plan.
-It is a readable first plan.
+This table is a readable first plan.
 The gaps between `1`, `10`, and `20` leave room for future subnets without renumbering everything next week.
 Cloud networking becomes easier when your numbers have a pattern.
 
@@ -175,9 +174,7 @@ A good first habit is to write the address plan before creating resources:
 | Database private range | `10.20.32.0/20` |
 | Future internal services | `10.20.48.0/20` |
 
-This is not AWS syntax.
-It is an engineering note.
-It prevents the future version of you from asking why one subnet starts at `10.20.37.0/24` and another starts at `10.20.88.0/24`.
+This engineering note prevents the future version of you from asking why one subnet starts at `10.20.37.0/24` and another starts at `10.20.88.0/24`.
 
 ## Subnets Put Resources In Availability Zones
 
@@ -383,7 +380,7 @@ Default route:
 
 This costs more than one NAT gateway, but it avoids sending all private app egress through one AZ.
 If `us-east-1a` has trouble and both private subnets depend on `nat-a`, tasks in `us-east-1b` may lose outbound internet even though their own AZ is healthy.
-That is a good example of a routing tradeoff, not just a diagram preference.
+That routing choice changes failure behavior, so it is more than a diagram preference.
 
 Here is a stricter DB route table:
 
@@ -536,7 +533,6 @@ Likely fix:
   then keep at least one healthy target in each enabled AZ.
 ```
 
-This is not a code bug.
 The service may be running perfectly in `us-east-1b`, but the load balancer was not told to use that AZ.
 The placement map and the ALB subnet list disagree.
 
@@ -611,7 +607,7 @@ Here is a compact failure map:
 
 The table is not a replacement for careful debugging.
 It is a starting point.
-AWS networking becomes less scary when every symptom maps back to a small number of checks.
+AWS networking is easier to debug when every symptom maps back to a small number of checks.
 
 ## A Diagnostic Path For A Broken Service
 
@@ -746,8 +742,6 @@ The diagnostic path is:
 6. Confirm the route targets are active, not deleted or blackholed.
 7. Confirm RDS uses private DB subnets and allows traffic from the app security group.
 
-That list is not glamorous.
-It is useful.
 Most networking incidents become smaller when you walk the path in the same direction as the request.
 
 ## The Tradeoff: Simpler Networks Or Safer Networks

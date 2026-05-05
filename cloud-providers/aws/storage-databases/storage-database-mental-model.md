@@ -70,7 +70,7 @@ Here is the same idea as a table you can keep in your head.
 | Disk for one server or task host | EBS | EC2 boot disk or worker scratch volume |
 | Mounted files shared by more than one server | EFS | Shared processing directory for worker tasks |
 
-This table is not a final architecture. It is your first sorting step. After that, you still check cost, access patterns, permissions, backups, recovery needs, and team experience. But you are no longer staring at five service names with no starting point.
+Use this table as a first sorting step before the final architecture. After that, you still check cost, access patterns, permissions, backups, recovery needs, and team experience. But you are no longer staring at five service names with no starting point.
 
 ## The Orders API Needs More Than One Kind Of Storage
 
@@ -128,7 +128,7 @@ The access pattern is predictable. The API knows the idempotency key at the mome
 
 Finally, supporting workers may need disk. A worker might download a month of order data, compress it, and upload the result. If that worker runs on EC2, the root disk or attached work disk is EBS. If several workers must see the same mounted directory, EFS enters the conversation.
 
-The point is not that every orders API must use all five services. The point is that one backend can have several data shapes. Each shape deserves its own decision.
+One backend can have several data shapes, and each shape deserves its own decision. The orders API example uses several services to make those differences visible, not because every orders API must use all five.
 
 ## Files And Objects Point Toward S3
 
@@ -163,7 +163,7 @@ created_at: 2026-05-02T10:48:12Z
 
 Notice what is not in that row. The CSV content is not there. Only the pointer is there.
 
-This is one of the cleanest S3 patterns for backend developers: store the object in S3, store the business meaning in a database. S3 is not a relational database. You should not design a feature that needs flexible SQL-like questions by scattering thousands of tiny records into object keys and hoping the key names become a query language. S3 can list objects by key prefix, but prefix listing is not the same as asking relational questions.
+One clean S3 pattern for backend developers is to store the object in S3 and store the business meaning in a database. S3 can list objects by key prefix, but prefix listing does not answer flexible SQL-like questions. A feature that needs those questions should not scatter thousands of tiny records into object keys and hope the key names become a query language.
 
 If the feature needs to update one field in one record, S3 is usually the wrong first thought. With S3, you normally replace or write objects. With a database, you update rows or items.
 
@@ -242,7 +242,7 @@ The item might look like this:
 }
 ```
 
-The write intent is simple: "create this item only if `pk` does not already exist." If another request tries to create the same key, a realistic failure can look like this:
+The write intent is: "create this item only if `pk` does not already exist." If another request tries to create the same key, a realistic failure can look like this:
 
 ```text
 2026-05-02T10:42:31.019Z WARN devpolaris-orders-api requestId=req_retry_22
@@ -418,7 +418,7 @@ idempotencyTable=devpolaris-prod-order-requests
 sharedWorkDir=/mnt/orders-shared
 ```
 
-That startup log is not decoration. During an incident, it tells the engineer which storage systems the process believes it is using.
+During an incident, that startup log tells the engineer which storage systems the process believes it is using.
 
 ## The Tradeoffs You Are Really Choosing
 

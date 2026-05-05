@@ -40,7 +40,7 @@ analysts, and backend teams use it to store large tables and ask SQL questions o
 The service is common because GCP's data tooling often centers around BigQuery for
 warehouse-style analysis.
 
-For this roadmap, the main warning is simple: BigQuery is for analysis, not the request-time
+For this roadmap, the main warning is that BigQuery is for analysis, not the request-time
 source of truth for the orders API.
 
 ```mermaid
@@ -106,9 +106,9 @@ The orders team wants to answer a product question:
 
 > Did the new checkout flow reduce failed payments for mobile users?
 
-The request-time API can answer one user's current order state. It is not the best place to
-scan every checkout event from the last month. Instead, the system can export events into
-BigQuery.
+The request-time API can answer one user's current order state. Scanning every checkout
+event from the last month belongs in the analytics path, so the system can export events
+into BigQuery.
 
 A checkout event might look like this:
 
@@ -125,14 +125,13 @@ A checkout event might look like this:
 }
 ```
 
-One event is not the insight. Many events become useful when the team groups, filters, and
-compares them. BigQuery is where those event rows can become dashboard numbers and
+One event becomes useful when it joins many other events for grouping, filtering, and
+comparison. BigQuery is where those event rows can become dashboard numbers and
 investigation queries.
 
 The source of truth still matters. If the BigQuery table says an order failed but Cloud SQL
 says it was later paid, the team needs to understand whether the event stream is late,
-missing an update event, or being interpreted incorrectly. Analytics tables are evidence,
-not magic.
+missing an update event, or being interpreted incorrectly. Analytics tables are evidence for investigation, not the source system.
 
 ## Datasets, Tables, And Columns
 
@@ -172,10 +171,9 @@ The table design should follow the questions the team actually asks.
 
 ## BigQuery Is Not The Checkout Database
 
-This point deserves its own section because it prevents a common misunderstanding. BigQuery
-is not the database that should decide whether checkout succeeds. It is not where the API
-should wait to update one order row during a user request. The orders API needs a
-request-time operational database for that work.
+This section prevents a common misunderstanding. BigQuery belongs in the analytics path. The
+orders API needs a request-time operational database to decide whether checkout succeeds and
+to update one order row during a user request.
 
 The contrast is practical:
 
@@ -251,8 +249,7 @@ app_version   payment_method   failed_payments
 2026.05.04    wallet           119
 ```
 
-The result is not the final truth by itself. It is a signal that points to the next
-investigation.
+The result is a signal that points to the next investigation.
 
 ## Data Quality Is Part Of The Pipeline
 
@@ -270,7 +267,7 @@ For checkout events, define a small contract:
 | `result` | Uses a small vocabulary such as success, failed, abandoned |
 | `event_id` | Supports duplicate detection |
 
-Data quality checks are not only for data engineers. Backend developers create many of the
+Backend developers share responsibility for data quality because they create many of the
 events. If the backend emits unclear or inconsistent fields, the warehouse becomes harder to
 trust.
 
@@ -284,9 +281,9 @@ matter. The team should learn to filter by time, select only useful columns, und
 partitioning and clustering when used, and avoid running broad exploratory queries without a
 reason.
 
-For a beginner, the first habit is simple: include time filters when the table is time-based.
-Most event analysis has a natural time window. If you are asking about last week, query last
-week instead of scanning every event since launch.
+Include time filters when the table is time-based. Most event analysis has a natural time
+window. If you are asking about last week, query last week instead of scanning every event
+since launch.
 
 Good review questions:
 

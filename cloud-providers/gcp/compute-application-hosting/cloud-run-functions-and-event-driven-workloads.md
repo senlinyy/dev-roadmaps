@@ -127,7 +127,7 @@ request arrives. An event trigger runs the function when a cloud event arrives, 
 through Eventarc or a specific service integration. A Pub/Sub event can run code after a
 message is published. A storage event can run code after an object changes.
 
-The trigger is not decoration. It shapes reliability and debugging. If no event reaches the
+The trigger shapes reliability and debugging. If no event reaches the
 trigger, the function code never starts. If the trigger receives events but the function
 times out, the problem is inside execution or work sizing. If the function succeeds but the
 output is wrong, the handler logic or downstream permissions need inspection.
@@ -176,8 +176,7 @@ output: object in devpolaris-orders-exports-prod
 safe retry: yes, output key is deterministic
 ```
 
-The line `safe retry: yes` is not extra. It is one of the most important parts of event
-work.
+The `safe retry: yes` line carries one of the most important parts of event work.
 
 ## Retries Make Idempotency Necessary
 
@@ -209,8 +208,8 @@ event retries
 function creates another random output file
 ```
 
-The fix is not "turn off retries" as a first instinct. The better fix is to design the work
-so retrying is safe, then set retry behavior intentionally.
+Design the work so retrying is safe before you reach for retry settings. After the handler
+is safe to repeat, set retry behavior intentionally.
 
 ## Identity Still Controls Access
 
@@ -239,10 +238,10 @@ function calls protected resources.
 
 ## Logs Need Event Context
 
-Function logs should include the event context needed to debug one invocation. A log line
-that says "export failed" is not enough. The team needs the function name, event ID, order
-ID, output key, and the failure layer. Avoid printing secrets or full private payloads, but
-do include safe identifiers.
+Function logs should include the event context needed to debug one invocation. A vague log
+line like "export failed" leaves the team missing the function name, event ID, order ID,
+output key, and failure layer. Avoid printing secrets or full private payloads, but do
+include safe identifiers.
 
 A useful failure log might look like this:
 
@@ -270,9 +269,8 @@ For example, "create one receipt export for one order" can be a function. "Rebui
 receipt for the last three years" is probably not a single function invocation. That larger
 job may belong in a Cloud Run job, a worker service, or a data processing path.
 
-The design question is not only "can a function do it?" Many things can be forced into a
-function. The better question is "will this be easy to retry, observe, and operate when it
-fails halfway?"
+Many things can be forced into a function. The better design question is whether the work
+will be easy to retry, observe, and operate when it fails halfway.
 
 ## When Not To Use A Function
 

@@ -56,8 +56,7 @@ You should leave this article able to look at an AWS service, a queue, a schedul
 ## The Orders Runtime Map
 
 Before changing controls, build a simple picture of the system.
-The goal is not a perfect architecture diagram.
-The goal is to know where a request stops being a user-facing request and becomes background work.
+The useful picture shows where a request stops being user-facing work and becomes background work.
 
 For `devpolaris-orders-api`, checkout starts as HTTP.
 The customer waits for this path.
@@ -107,7 +106,7 @@ In this article, we will name the artifacts so the system feels concrete:
 | Rollout | ECS service deployment | stop or roll back deployment |
 
 The important habit is separation.
-Do not treat the whole runtime as one large "the app is slow" box.
+Avoid treating the whole runtime as one large "the app is slow" box.
 Each part has its own pressure, evidence, and safe control.
 
 ## Scaling Means Capacity, Not A Cure
@@ -227,9 +226,7 @@ $ aws ecs describe-services \
 }
 ```
 
-The command is not the point.
-The point is the habit.
-Before you decide to scale, check whether ECS already has the count you asked for.
+The important habit is checking whether ECS already has the count you asked for before you decide to scale.
 If desired is `4` but running is `2`, the problem may be task startup, health checks, subnet capacity, image pull, or deployment failure.
 Increasing desired to `8` would only ask ECS to fail more times.
 
@@ -411,8 +408,7 @@ RDS write latency:
   high
 ```
 
-This is not success.
-The queue is falling because bad workers are consuming messages quickly.
+The falling queue depth is bad evidence when workers are consuming messages quickly and failing them.
 They may be failing, retrying, writing partial state, or moving messages toward the DLQ.
 More workers would make the blast radius larger.
 
@@ -434,7 +430,7 @@ Desired count changes first.
 Running count may take a short time to fall as ECS stops tasks.
 That is normal.
 
-Pausing a worker is not the same as deleting work.
+Pausing a worker stops new processing without deleting queued work.
 The SQS messages remain in the queue unless a worker received and deleted them.
 Messages already in flight become visible again after their visibility timeout if the worker does not delete them.
 
@@ -540,8 +536,7 @@ The principle is the same: reduce concurrency where work enters the risky depend
 
 ## Controls That Buy Time
 
-Operational controls are not only for growth.
-They are also for containment.
+Operational controls help with growth and containment.
 Containment means reducing damage while you diagnose the system.
 
 This is the part beginners often find surprising.
@@ -639,8 +634,7 @@ error=DatabaseTimeout step=write_export_summary elapsedMs=2800
 message="checkout response failed after order write, export summary still pending"
 ```
 
-This is not a web task shortage.
-The API is spending time waiting on database work.
+The API is spending time waiting on database work, so the shortage is not web task count.
 More API tasks create more concurrent database work.
 
 The queue tells a related story:
@@ -738,7 +732,7 @@ If you pause workers, watch queue age so delayed work does not become a separate
 The key tradeoff is speed versus confidence.
 Runtime controls are faster than code changes.
 Code changes are usually the permanent fix.
-A calm operator uses controls to reduce active harm, then uses code, tests, and configuration review to remove the cause.
+An operator uses controls to reduce active harm, then uses code, tests, and configuration review to remove the cause.
 
 For `devpolaris-orders-api`, that means:
 
@@ -752,8 +746,7 @@ For `devpolaris-orders-api`, that means:
 | new deployment fails health | stop rollout or roll back | fix image, config, or health issue |
 
 This is ordinary production work, and it is the difference between a service that merely deployed and a service that can be operated.
-The goal is not to touch every knob.
-The goal is to know which knob protects users while you gather evidence.
+The useful skill is knowing which knob protects users while you gather evidence.
 
 ---
 

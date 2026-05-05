@@ -69,14 +69,12 @@ this bridge as a first map.
 | EBS | Managed Disks | Disk attached to compute |
 | EFS | Azure Files | Managed shared file path |
 
-The most important shared habit is not the product
-mapping. It is the review style. For any cloud
-provider, ask: is this data a file, record, item, disk,
-or shared folder? Who writes it? Who reads it? Does it
-change in place? Does it need transactions? Does it
-need to expire? Does it need to survive a process,
-container, VM, or region failure? These questions
-transfer across providers. The service details do not.
+The most important shared habit is the review style. For any cloud
+provider, ask whether the data is a file, record, item, disk, or shared
+folder. Then ask who writes it, who reads it, whether it changes in
+place, whether it needs transactions, whether it needs to expire, and
+what failure boundary it must survive. These questions transfer across
+providers, even when service details differ.
 
 ## Ask What The Data Is Doing
 
@@ -108,8 +106,9 @@ story is only half a choice.
 
 ## Decision Table For Everyday Azure Data Choices
 
-Use this table as a first sorting tool. It is not a
-law. It is a way to make the conversation concrete.
+Use this table as a first sorting tool that makes the conversation
+concrete. The final choice still needs checks for access, recovery,
+cost, scale, and team experience.
 
 | Data behavior | Good Azure service to inspect first | Why it fits | Question before you commit |
 |---|---|---|---|
@@ -317,10 +316,9 @@ What we are not using: VM disk or Azure Files for receipt storage
 First recovery plan: restore missing blob if protected, or regenerate from order data if supported
 ```
 
-That record is not long. It is clear. It tells a
-reviewer why the service choice matches the feature.
-That is the standard you want for everyday Azure data
-decisions.
+That short record gives a reviewer enough context to see
+why the service choice matches the feature. That is the
+standard you want for everyday Azure data decisions.
 
 ---
 

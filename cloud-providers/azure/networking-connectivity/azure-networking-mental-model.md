@@ -53,9 +53,9 @@ This article follows one running example:
 The production version receives HTTPS requests at `orders.devpolaris.com`, runs in Azure, stores order records, writes receipt files to Blob Storage, and sends signals to monitoring.
 The team wants users to reach the public API, but it does not want the database or storage account exposed as open public targets.
 
-The goal is not to memorize every Azure networking product.
-The goal is to read a simple system and ask better questions:
-where does traffic enter, what stays private, what name resolves to what address, which route is used, and which rule allows or denies the connection?
+Read a simple system by asking better networking questions: where does
+traffic enter, what stays private, what name resolves to what address,
+which route is used, and which rule allows or denies the connection?
 
 > A network problem is often a path problem. Find the name, the destination, the route, and the rule check.
 
@@ -182,8 +182,7 @@ When checkout fails, they can follow the path instead of clicking through unrela
 
 The public internet is the shared network path that normal clients use to reach public services.
 Your customer's browser uses it when it calls `https://orders.devpolaris.com`.
-That public path is not bad.
-Public web APIs need a public entry.
+A public path is correct for public web APIs.
 The important choice is where that public entry stops.
 
 A private network is the address area you control for internal traffic.
@@ -317,12 +316,12 @@ Address prefix       Next hop type            Purpose
 0.0.0.0/0            Virtual appliance        Send internet-bound traffic to firewall
 ```
 
-This block is not a command recipe.
-It is evidence of intent.
-The `0.0.0.0/0` route means "when no more specific route matches, send the traffic here."
-That default route can affect a large amount of traffic, so treat it carefully.
-If it points to a firewall, the firewall must know how to forward the traffic.
-If it points nowhere useful, the app can lose outbound access.
+Read this block as evidence of routing intent. The `0.0.0.0/0` route
+means "when no more specific route matches, send the traffic here." That
+default route can affect a large amount of traffic, so treat it
+carefully. If it points to a firewall, the firewall must know how to
+forward the traffic. If it points nowhere useful, the app can lose
+outbound access.
 
 The most common route debugging habit is to ask:
 what destination IP did the app try to reach, and which route matched that destination?
@@ -400,11 +399,12 @@ It contains inbound and outbound security rules.
 Each rule has a direction, priority, source, destination, protocol, port range, and action.
 The action is allow or deny.
 
-The beginner mistake is thinking an NSG is the whole firewall story.
-An NSG is important, but it is not every security control.
-Application authentication, TLS, Azure RBAC, service firewalls, Web Application Firewall rules, and private endpoint approval can all matter too.
-The NSG answers a network-level question:
-is this traffic allowed through this subnet or network interface rule set?
+A common beginner mistake is treating an NSG as the whole firewall
+story. An NSG is important, but application authentication, TLS, Azure
+RBAC, service firewalls, Web Application Firewall rules, and private
+endpoint approval can all matter too. The NSG answers one network-level
+question: is this traffic allowed through this subnet or network
+interface rule set?
 
 Azure processes NSG rules by priority.
 Lower numbers are processed first.
@@ -614,8 +614,9 @@ Firewall evidence:
   no allow rule for api.payments.example:443
 ```
 
-The fix direction is not "remove the firewall" as the first move.
-The fix direction is to decide whether this app should call that external host, then add the right firewall allow rule, DNS rule, or route exception according to the platform team's pattern.
+Before removing the firewall, decide whether this app should call that
+external host. Then add the right firewall allow rule, DNS rule, or
+route exception according to the platform team's pattern.
 
 The fifth failure is mixing network access and identity access.
 The app reaches Key Vault over a private endpoint, but Key Vault returns `403`.

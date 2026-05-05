@@ -31,12 +31,11 @@ The code might be a Node backend, a container image, a small function that react
 The services look different, but the basic job is the same:
 turn application files into a running process that can do work.
 
-Compute exists because a laptop is the wrong home for shared software.
-Your laptop sleeps.
-It sits behind a home network.
-It has your personal environment variables.
-It has dependencies you installed months ago and forgot about.
-It is useful for development, but it is not a reliable place for production checkout traffic.
+Compute gives shared software a reliable place to run. A laptop is
+useful for development, but it sleeps, sits behind a personal network,
+carries old dependencies, and uses environment variables that only one
+developer understands. Production checkout traffic needs a runtime that
+the team can deploy, inspect, scale, and recover together.
 
 In the larger Azure map, compute sits between your delivery pipeline and the rest of your cloud resources.
 The pipeline builds something.
@@ -50,9 +49,9 @@ It receives order requests, validates a cart, writes an order record, and return
 The example will show one practical question:
 where should this API run in Azure first, and what responsibility changes when we choose one compute shape instead of another?
 
-The goal is not to memorize every Azure compute service.
-The goal is to learn the first mental model:
-each compute choice is a different split of responsibility between your team and Azure.
+Start with the responsibility split. Each Azure compute choice gives
+your team and Azure different jobs, and the right choice depends on
+where you want that boundary to sit for this workload.
 
 > Compute is where your code becomes a running process.
 
@@ -87,8 +86,9 @@ Then choose the service that makes the most boring parts somebody else's job.
 
 ## The Example: One Orders API Needs A Runtime
 
-The local version of `devpolaris-orders-api` is simple.
-A developer clones the repository, installs packages, and starts the server.
+In local development, `devpolaris-orders-api` is straightforward. A
+developer clones the repository, installs packages, and starts the
+server.
 
 ```bash
 $ npm ci
@@ -158,7 +158,7 @@ You are choosing how much platform help you want and how much control you need.
 
 A beginner mistake is to start with the Azure product list.
 That makes every service sound equally possible.
-A calmer way is to ask what you are bringing to Azure.
+A better way is to ask what you are bringing to Azure.
 
 Are you bringing application code and asking Azure to host it?
 That points toward App Service or Functions.
@@ -178,9 +178,8 @@ The first four compute shapes can be remembered like this:
 | Functions | Function code | Event-driven execution | Queue, timer, HTTP, and storage events | Event design, idempotency, timeout behavior |
 | Virtual Machines | Server image or OS choice | Cloud server infrastructure | Custom server needs | OS patching, process manager, security hardening |
 
-This table is not a ranking.
-It is a responsibility map.
-The best service is the one whose responsibility split matches your problem.
+Use this table as a responsibility map. The best service is the one
+whose responsibility split matches your problem.
 
 For `devpolaris-orders-api`, imagine the team already builds a Docker image in CI.
 The image starts the API with `node src/server.js`.
@@ -196,9 +195,9 @@ If the same team did not use containers and wanted a straightforward managed web
 If the orders work was "process one message whenever a queue receives it," Functions might be clearer.
 If the app required a custom binary, a special OS agent, and direct SSH access, a VM might be justified.
 
-The habit is simple:
-choose from the work backward.
-Do not choose from the service name forward.
+Choose the compute service from the workload backward. Start with what
+the app needs to do, then match the Azure service to that shape instead
+of choosing from the service name first.
 
 ## Container Apps: A Container Without A Cluster Lesson
 
@@ -252,11 +251,10 @@ You give up some low-level control over the machines underneath.
 For many beginner APIs, that is a good trade.
 You want to spend your first energy on the app contract, not on node pools and cluster upgrades.
 
-Container Apps is not magic.
-It cannot fix a broken image.
-It cannot guess a missing environment variable.
-It cannot make an app healthy if the app listens on one port while ingress sends traffic to another.
-It gives you a clearer managed place to run the container and enough evidence to debug the first failure.
+Container Apps still depends on the contract inside your container
+image. A broken image, missing environment variable, or port mismatch
+will still fail. What Container Apps gives you is a managed place to run
+the container and enough runtime evidence to debug the first failure.
 
 ## App Service: A Managed Web App Home
 
@@ -264,11 +262,11 @@ App Service is a managed platform for web applications, REST APIs, and mobile ba
 For a beginner, think of it as a web app home where Azure manages much of the server platform around your app.
 You focus on app code, deployment, settings, custom domains, TLS, logs, and scaling choices.
 
-This is why App Service does not map perfectly to one AWS service.
-It is not just "a VM."
-It is not just "a container task."
-It is not exactly Lambda.
-It is a managed web-app platform with its own hosting plan model and web-focused features.
+App Service does not map perfectly to one AWS service because it
+combines several web-hosting concerns in one Azure platform. It is a
+managed web-app platform with a hosting plan model, runtime settings,
+custom domains, TLS, logs, scaling choices, and deployment features
+focused on long-running web backends.
 
 An App Service app runs inside an App Service plan.
 The plan is the compute pool for one or more apps.
@@ -290,9 +288,10 @@ Log stream:
   az webapp log tail --name app-devpolaris-orders-api-prod --resource-group rg-devpolaris-orders-prod
 ```
 
-The important detail is not the command.
-The important detail is the platform contract:
-the app must start correctly in the App Service runtime, read configuration from app settings, listen the way the platform expects, and write useful logs to standard output or the configured logging path.
+The command matters less than the platform contract: the app must start
+correctly in the App Service runtime, read configuration from app
+settings, listen the way the platform expects, and write useful logs to
+standard output or the configured logging path.
 
 App Service is often a friendly first host for a non-containerized web API.
 You get a managed web platform before you learn container operations.
@@ -302,9 +301,8 @@ The tradeoff is web-app convenience versus shape flexibility.
 App Service is very good when your workload looks like a web app.
 If your system becomes a set of event-driven workers, background processors, and independently scaled container services, the fit may change.
 
-That is not a failure.
-It is the normal cloud pattern:
-the right compute shape depends on how the workload behaves.
+That variation is the normal cloud pattern. The right compute shape
+depends on how the workload behaves.
 
 ## Functions: Code That Starts From Events
 
@@ -393,7 +391,7 @@ You can open the box and change almost anything.
 That also means you can break almost anything.
 Managed compute services exist partly so application teams do not need to solve the same server chores for every small web API.
 
-So for a first Azure home for `devpolaris-orders-api`, a VM is usually not the calmest default.
+So for a first Azure home for `devpolaris-orders-api`, a VM is usually not the best default.
 Choose it when you can name the control you need.
 Do not choose it just because "server" feels easier to picture.
 
@@ -438,9 +436,8 @@ $ az containerapp logs show \
 2026-05-03T10:18:12Z Deployment Progress Deadline Exceeded. 0/1 replicas ready
 ```
 
-The important line is not "failed."
-The important line is `did not respond on target port 3000`.
-That points to a port mismatch or a server that never started listening.
+The useful line is `did not respond on target port 3000`. That points to
+a port mismatch or a server that never started listening.
 
 Now check the app's own console logs:
 
@@ -502,7 +499,7 @@ Third, what do you need to inspect during failure?
 For a beginner team, this question matters a lot.
 A good first host should make the important evidence easy to find:
 current version, health status, logs, configuration, scale, and network exposure.
-If the team cannot explain where those signals live, the service is too hard to operate calmly.
+If the team cannot explain where those signals live, the service is too hard to operate.
 
 Fourth, what responsibility are you trying to avoid?
 Avoiding responsibility is not laziness.
@@ -525,12 +522,11 @@ Why not VM first: No unique OS control requirement has been named.
 Main risk to watch: Image, target port, secret, and readiness configuration must match the app contract.
 ```
 
-That decision can change later.
-A simple App Service start can move to containers.
-A Container Apps API can split background work into Functions.
-A managed platform can be replaced by VMs for a specific migration.
-The useful skill is not picking one service forever.
-The useful skill is explaining why this compute shape fits this workload now.
+That decision can change later. A simple App Service start can move to
+containers, a Container Apps API can split background work into
+Functions, and a managed platform can be replaced by VMs for a specific
+migration. The durable skill is explaining why this compute shape fits
+this workload now.
 
 Keep the final mental model short:
 App Service is a managed web app home.

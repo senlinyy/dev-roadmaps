@@ -83,11 +83,11 @@ design around it:
 | Logs and metrics | CloudWatch | Azure Monitor | Cloud Logging and Cloud Monitoring |
 | Secrets | Secrets Manager | Key Vault | Secret Manager |
 
-The table is only a starting map. For example, Cloud Run is not "ECS
-with a different logo." It is a managed serverless container platform
-with its own revision, scaling, traffic, identity, and networking model.
-Cloud SQL is not "RDS exactly." It is GCP's managed relational database
-service with its own configuration and operations.
+The table is only a starting map. Use AWS ECS or Azure Container Apps as
+orientation for Cloud Run, then learn Cloud Run's own revision, scaling,
+traffic, identity, and networking model. Use RDS or Azure SQL Database
+as orientation for Cloud SQL, then learn Cloud SQL's own configuration
+and operations.
 
 Use the bridge to get oriented. Then learn the GCP behavior.
 
@@ -165,8 +165,7 @@ foundation, GKE is a later option.
 | VM-shaped workload | Compute Engine |
 | Kubernetes platform | GKE |
 
-The important question is not "which service is popular?" The important
-question is "what shape does this workload have?"
+The useful first question is "what shape does this workload have?"
 
 ## Storage And Databases Remember State
 
@@ -293,9 +292,9 @@ For the orders API, useful evidence includes:
 | Trace spans | Where did one slow request spend time? |
 | Alerts | Should a human look now? |
 
-The service names are not the main lesson. The main lesson is the signal
-type. Logs tell you what happened. Metrics tell you how much or how
-often. Traces tell you where time went. Alerts tell humans when to look.
+Focus on the signal type before memorizing service names. Logs tell you
+what happened. Metrics tell you how much or how often. Traces tell you
+where time went. Alerts tell humans when to look.
 
 Those questions will transfer from AWS CloudWatch and Azure Monitor into
 GCP. The GCP tools are different, but the operating need is the same.
@@ -329,10 +328,10 @@ GitHub Actions builds image
   -> Logging and Monitoring collect evidence
 ```
 
-That story matters because runtime operations are not only about the
-first deploy. The team also needs rollbacks, traffic shifts, config
-reviews, and post-release checks. Later articles will use Cloud Run
-revisions as the main deployment example.
+That story matters because runtime operations continue after the first
+deploy. The team also needs rollbacks, traffic shifts, config reviews,
+and post-release checks. Later articles will use Cloud Run revisions as
+the main deployment example.
 
 ## Cost And Resilience Keep The System Operable
 

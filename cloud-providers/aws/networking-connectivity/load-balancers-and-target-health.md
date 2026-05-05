@@ -61,7 +61,7 @@ The load balancer cannot rescue an app that does not listen on the expected port
 The app cannot receive public traffic unless the load balancer can reach it.
 The health check is the agreement between them: "Call this path, on this port, and treat this response as proof that I can serve traffic."
 
-> A load balancer is not magic traffic glue. It is a strict caller with a routing table and a health test.
+> A load balancer is a strict caller with a routing table and a health test.
 
 This article teaches the words you need to read that path:
 Application Load Balancer, listener, listener rule, target group, registered target, health check, and target health status.
@@ -146,8 +146,7 @@ For `devpolaris-orders-api`, the answer is intentionally small:
 | Target port | `3000` | Port the container listens on |
 | Health check | `GET /health` | Small endpoint that proves readiness |
 
-This table is not just naming fields.
-It is a debugging map.
+This table is a debugging map.
 If traffic never reaches the app, you can ask which row is wrong.
 Maybe the listener is missing.
 Maybe the host rule points at the wrong target group.
@@ -209,8 +208,7 @@ The registered target is the actual task IP and port where the app must answer.
 ## What Target Health Really Means
 
 Target health is the load balancer's opinion about one registered target.
-It is not the same as "the container process is running."
-It means the target answered the health check in a way the target group accepts.
+It means the target answered the health check in a way the target group accepts, which is different from merely having a container process running.
 
 For `devpolaris-orders-api`, the health check is a small HTTP request:
 
@@ -277,7 +275,7 @@ This output tells a small story.
 One task is already healthy.
 The second task is registered, but the ALB is still checking it.
 That is normal during a deployment.
-You do not need to panic when you see `initial` for a brand new task.
+`initial` is normal for a brand new task.
 
 The common states are easier to remember if you translate them:
 

@@ -44,11 +44,9 @@ awkward to change.
 
 This article uses `devpolaris-orders-api` as the
 running example. The app has relational data, object
-files, and some small known-key records. The small
-known-key records are where Cosmos DB becomes
-interesting. The goal is not "use Cosmos DB for
-everything." The goal is to recognize when a NoSQL item
-model is a good fit.
+files, and some small known-key records. Cosmos DB
+becomes interesting for those small known-key records,
+where a NoSQL item model can fit the access pattern.
 
 ## If You Know DynamoDB
 
@@ -93,16 +91,13 @@ an export job:
 }
 ```
 
-The document shape is easy to read. The real design
-question is not "can JSON store this?" Of course it
-can. The real questions are: how does the UI find this
-item? Does the worker update the same item? Does
-support need to search by customer, date, status, or
-failure reason? When should this item expire? What
-partition key keeps the normal reads efficient? If the
-UI always polls by `job_913`, the design is simple. If
-support needs rich reporting across thousands of jobs,
-the design may need Azure SQL Database or a separate
+The document shape is easy to read, and JSON can store it. The real
+questions are how the UI finds this item, whether the worker updates the
+same item, whether support needs to search by customer, date, status, or
+failure reason, when the item should expire, and what partition key
+keeps normal reads efficient. If the UI always polls by `job_913`, the
+design is straightforward. If support needs rich reporting across
+thousands of jobs, the design may need Azure SQL Database or a separate
 reporting path.
 
 Cosmos DB can query, but you should not treat it like a
@@ -235,27 +230,23 @@ that the data should disappear. For
 | Temporary session state | A few hours | Abandoned sessions should not grow forever |
 | Order record | Not a TTL candidate | The business must keep order history |
 
-That last row matters. Cosmos DB can store many kinds
-of items, but not every item should expire. Core
-business records need a different retention
-conversation. TTL is a cleanup tool when the data
-really is temporary. It is not a substitute for
-understanding data ownership.
+That last row matters. Cosmos DB can store many kinds of items, but not
+every item should expire. Core business records need a different
+retention conversation. TTL is a cleanup tool for data that really is
+temporary, and it should be paired with a clear ownership decision.
 
 ## Do Not Move Relational Questions Into Cosmos DB By Accident
 
-Cosmos DB is a good tool. It is not a magic escape from
-relational modeling. If `devpolaris-orders-api` needs
-to answer changing business questions about orders,
-Azure SQL Database may still be the better home. Here
-are questions that often point back toward SQL: show
-revenue by day and product. Find all failed payments
-for one customer in a date range. Join orders to line
-items and receipt files. Enforce that every line item
-belongs to a valid order. Update several related
-records together. You can build many things in Cosmos
-DB with careful design. The question is whether that
-design fits the team's real workload.
+Cosmos DB is a good tool for the right access pattern, but it does not
+remove relational modeling questions. If `devpolaris-orders-api` needs
+to answer changing business questions about orders, Azure SQL Database
+may still be the better home. Questions that often point back toward SQL
+include revenue by day and product, failed payments for one customer in
+a date range, joins between orders, line items, and receipt files,
+constraints that require every line item to belong to a valid order, and
+updates across several related records. You can build many things in
+Cosmos DB with careful design. The question is whether that design fits
+the team's real workload.
 
 A common bad pattern is storing one huge order document
 because it feels easy at first. Then different parts of
@@ -272,7 +263,7 @@ with a clear partition key, Cosmos DB is a good
 candidate.
 
 If the app needs relations, transactions, and changing
-queries, Azure SQL Database may be the calmer choice.
+queries, Azure SQL Database may be the better choice.
 
 ## Failure Modes And First Checks
 

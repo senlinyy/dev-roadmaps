@@ -55,12 +55,10 @@ points toward Managed Disks or Azure Files. This
 article teaches the beginner mental model across those
 Azure families.
 
-The running example is `devpolaris-orders-api`, a
-Node.js backend that accepts checkout requests, writes
-order data, generates receipt files, and runs
-supporting jobs. The goal is not to memorize a vendor
-chart. The goal is to look at a backend feature and
-choose a good first direction before the service
+The running example is `devpolaris-orders-api`, a Node.js backend that
+accepts checkout requests, writes order data, generates receipt files,
+and runs supporting jobs. The article teaches you to look at a backend
+feature and choose a good first data direction before the service
 details get noisy.
 
 ```mermaid
@@ -100,17 +98,14 @@ treat these as bridges, not perfect translations.
 | EBS volume | Managed Disk | The disk is an Azure resource attached to a VM |
 | EFS filesystem | Azure Files | Azure Files is a managed file share that can be mounted over SMB and, in some configurations, NFS |
 
-The useful AWS habit is not memorizing one-to-one
-names. The useful habit is asking what promise the app
-needs from storage. If the app needs durable files,
-think Blob Storage the same way you might first think
-S3. If the app needs SQL records and transactions,
-think Azure SQL Database the same way you might first
-think RDS. If the app needs predictable key-based
-items, think Cosmos DB the same way you might first
-inspect DynamoDB. Then slow down and learn the
-Azure-specific surface. A storage account is not just a
-bucket.
+The useful AWS bridge is the storage promise your app needs. If the app
+needs durable files, Blob Storage plays a role similar to the first S3
+option you might inspect. If the app needs SQL records and transactions,
+Azure SQL Database plays a role similar to the first RDS option you
+might inspect. If the app needs predictable key-based items, Cosmos DB
+plays a role similar to the first DynamoDB option you might inspect.
+Then slow down and learn the Azure-specific surface, because a storage
+account is more than a bucket.
 
 Azure SQL Database is not just "RDS with a different
 logo." Cosmos DB has its own partition and throughput
@@ -144,13 +139,11 @@ paid orders for one customer action. That may need an
 idempotency record. Idempotency means repeating the
 same request safely without doing the action twice.
 
-That record is usually small and read by a known key.
-Now imagine a legacy worker runs on an Azure VM and
-needs a local-looking disk to process a large import.
-That is not a database problem. It is storage attached
-to compute. One system can need all of these shapes.
-The clean design habit is to separate the data by
-behavior. Here is a simple map for the orders system.
+That record is usually small and read by a known key. Now imagine a
+legacy worker runs on an Azure VM and needs a local-looking disk to
+process a large import. That is storage attached to compute. One system
+can need all of these shapes. The clean design habit is to separate the
+data by behavior. Here is a simple map for the orders system.
 
 | Data in `devpolaris-orders-api` | What it behaves like | Azure service to consider first |
 |---|---|---|
@@ -160,10 +153,9 @@ behavior. Here is a simple map for the orders system.
 | VM operating system disk or worker scratch disk | Disk attached to one VM | Managed Disks |
 | Shared folder mounted by several workers | Filesystem path shared by machines | Azure Files |
 
-This table is not a final architecture. It is a sorting
-step. After sorting, you still check network access,
-identity, backup, retention, cost, and team experience.
-But the conversation is already clearer.
+Use this table as a sorting step. After sorting, still check network
+access, identity, backup, retention, cost, and team experience, but the
+conversation is already clearer.
 
 ## Files Point Toward Blob Storage
 
@@ -214,14 +206,12 @@ error=AuthorizationPermissionMismatch
 message="This request is not authorized to perform this operation using this permission."
 ```
 
-That is not a SQL schema problem. The next checks are
-the managed identity, role assignment, container
-access, storage account network rules, and whether the
-app is writing to the expected storage account. Blob
-Storage is good at durable object storage. It is not a
-good replacement for a database when the feature needs
-joins, constraints, transactions, or flexible reporting
-queries.
+That is a Blob Storage access problem, not a SQL schema problem. The
+next checks are the managed identity, role assignment, container access,
+storage account network rules, and whether the app is writing to the
+expected storage account. Blob Storage is good at durable object
+storage, but database features such as joins, constraints, transactions,
+and flexible reporting queries belong in a database.
 
 ## Business Records Point Toward Azure SQL Database
 
@@ -282,10 +272,10 @@ query=insert_order
 error="Violation of UNIQUE KEY constraint 'uq_orders_idempotency_key'"
 ```
 
-That second error is not necessarily bad news. It may
-be the database protecting the system from a duplicate
-checkout. The senior habit is to ask what the storage
-layer is telling you before changing code.
+The second error may be the database protecting the
+system from a duplicate checkout. The senior habit is to
+ask what the storage layer is telling you before changing
+code.
 
 ## Known-Key Items Point Toward Cosmos DB
 
@@ -328,13 +318,12 @@ by customer, date range, failure reason, worker
 version, and export type, a relational database may be
 more comfortable.
 
-Cosmos DB asks you to think early about partition keys.
-A partition key is the value Cosmos DB uses to place
-related items and scale access. For a beginner, the
-plain-English version is: which value will most reads
-already know, and which value spreads work evenly
-enough? That is a real design question. It is not a
-detail to leave until after the app is built.
+Cosmos DB asks you to think early about partition keys. A partition key
+is the value Cosmos DB uses to place related items and scale access. For
+a beginner, the plain-English version is: which value will most reads
+already know, and which value spreads work evenly enough? That design
+choice belongs near the start of the app, not after the data model is
+already built.
 
 ## Attached Storage Points Toward Managed Disks Or Azure Files
 
@@ -347,15 +336,13 @@ means the operating system can format and mount them
 like drives. This is the Azure shape closest to an AWS
 EBS volume.
 
-The important beginner warning is that a disk attached
-to one VM is not a shared application storage layer. If
-`devpolaris-orders-api` runs across several instances,
-writing receipts to one VM's local disk is a trap. One
-request may create the file on VM A. The next request
-may land on VM B. VM B cannot magically see VM A's
-disk. That is why durable application files usually
-belong in Blob Storage. There is another storage shape:
-a shared mounted folder.
+The important beginner warning is that a disk attached to one VM is not
+a shared application storage layer. If `devpolaris-orders-api` runs
+across several instances, writing receipts to one VM local disk is a
+trap: one request may create the file on VM A, and the next request may
+land on VM B, where that disk is unavailable. Durable application files
+usually belong in Blob Storage. There is another storage shape: a shared
+mounted folder.
 
 Azure Files provides managed file shares. Multiple
 machines can mount the same share when the workload
@@ -408,9 +395,8 @@ before choosing:
 | Does the app need a path mounted on a machine? | Whether file or disk storage is involved |
 | What failure would hurt most? | The recovery and permission design |
 
-The final question matters most. A storage service is
-not only where bytes live. It is also where recovery,
-access control, cost, and debugging habits live.
+The final question matters most because a storage service also shapes
+recovery, access control, cost, and debugging habits.
 
 ## Failure Modes That Reveal The Storage Layer
 
@@ -492,10 +478,8 @@ first design might look like this:
 | Legacy VM work disk | Managed Disk | The disk is tied to VM operations |
 | Shared import folder for legacy workers | Azure Files | File locking and mount behavior need testing |
 
-This is not a fancy architecture. It is a careful one.
-That is what good storage design usually feels like.
-You choose the service that matches the data behavior,
-then you make the failure path easy to understand.
+This is careful storage design. You choose the service that matches the
+data behavior, then make the failure path easy to understand.
 
 ---
 

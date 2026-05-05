@@ -220,8 +220,7 @@ GET /health
 {"service":"devpolaris-orders-api","revision":"orders-api--2026-05-03-0918","database":"ok"}
 ```
 
-That small response is not decoration.
-It is the signal the entry layer can use to decide whether a backend should receive real checkout traffic.
+That small response is the signal the entry layer can use to decide whether a backend should receive real checkout traffic.
 If `/health` returns `200`, the backend is saying it can serve.
 If it returns `500`, times out, or returns the wrong status, the entry layer should stop sending new requests to that backend.
 
@@ -265,7 +264,7 @@ origin=ca-orders-prod.eastus2.azurecontainerapps.io
 originStatus=201 originLatencyMs=84 health=healthy
 ```
 
-The log line tells a calm story.
+The log line gives you the request path.
 Front Door matched the route.
 It selected the orders API origin.
 The origin returned `201 Created`.
@@ -275,10 +274,9 @@ did the route match, did the origin respond, did TLS succeed, and did the app it
 
 ## Health Probes Decide Who Gets Traffic
 
-A health probe is a repeated check from the entry service to the backend.
-It is not a user request.
-It is Azure asking:
-"should this backend receive real traffic right now?"
+A health probe is a repeated check from the entry service to the
+backend. Azure uses it to decide whether a backend should receive real
+traffic right now.
 
 For HTTP apps, a probe usually calls a path such as `/health`.
 That path should be cheap, stable, and honest.
@@ -342,10 +340,10 @@ $ az network application-gateway show-backend-health \
 }
 ```
 
-The important line is not the long resource ID.
-The important line is `Received invalid status code: 404`.
-That points toward the probe path, route, or app behavior.
-If the probe was supposed to call `/health`, check that the backend receives `/health` and returns `200`.
+The useful line is `Received invalid status code: 404`. That points
+toward the probe path, route, or app behavior. If the probe was supposed
+to call `/health`, check that the backend receives `/health` and returns
+`200`.
 
 Here is the same idea in a shorter Front Door style status note:
 
@@ -359,10 +357,10 @@ Observed response: 500
 Decision: origin removed from healthy rotation
 ```
 
-The public entry might still accept client connections.
-But if every backend or origin is unhealthy, there is nowhere good to send the request.
-That is why a bad backend can make the public entry look broken.
-The door opens, but the room behind it is not ready.
+The public entry might still accept client connections, but if every
+backend or origin is unhealthy, there is nowhere safe to send the
+request. That is why a bad backend can make the public entry look broken
+even when the entry service itself is still reachable.
 
 ## TLS Termination Without Mystery
 
@@ -407,8 +405,7 @@ TLS result: certificate name mismatch
 Backend certificate names: ca-orders-staging.eastus2.azurecontainerapps.io
 ```
 
-The fix direction is not "restart Front Door."
-The fix direction is to make the origin TLS story consistent.
+For an origin TLS mismatch, make the origin TLS story consistent.
 Check the origin host name, origin host header, certificate subject names, and whether the backend app has the expected custom domain configured.
 For a managed app platform, that might mean adding the custom domain to the backend app or changing the origin host header to the backend's real hostname.
 
@@ -482,14 +479,12 @@ $ az containerapp revision list \
 ]
 ```
 
-The public entry is not the root cause.
-The active revision is.
-The first fix direction is usually to shift traffic back to the last running revision or deploy a corrected revision.
-Then inspect the app logs for the dependency failure that made startup fail.
+The active revision is the root cause in this failure. Shift traffic
+back to the last running revision or deploy a corrected revision, then
+inspect the app logs for the dependency failure that made startup fail.
 
-The diagnostic habit is simple:
-do not stop at the public symptom.
-Follow the request path until you find the first component that has bad evidence.
+For diagnostics, do not stop at the public symptom. Follow the request
+path until you find the first component with bad evidence.
 
 ## A Beginner Decision Checklist
 
@@ -520,19 +515,16 @@ TLS plan: HTTPS from client to Front Door, HTTPS from Front Door to origin
 First failure checks: route match, origin health, origin TLS, app revision status, app logs
 ```
 
-That is not the only valid design.
-It is a clear design.
-Clear is what you want as a junior engineer learning cloud networking.
-If a teammate disagrees, the conversation can stay concrete:
-"Do we need regional private backends now?"
-"Do we need global edge entry now?"
-"What is the health signal?"
-"Which certificate proves the origin?"
+Other valid designs exist, but this one is clear. If a teammate
+disagrees, the conversation can stay concrete: "Do we need regional
+private backends now?" "Do we need global edge entry now?" "What is the
+health signal?" "Which certificate proves the origin?"
 
-The tradeoff is also clear.
-Front Door gives a global HTTP entry and origin routing, but it adds an edge layer you must monitor and configure.
-Application Gateway gives regional HTTP routing inside a virtual network, but it is not the same as a global edge service.
-Azure Load Balancer handles lower-level network flows, but it cannot read HTTP paths.
+The tradeoff is clear. Front Door gives a global HTTP entry and origin
+routing, but it adds an edge layer you must monitor and configure.
+Application Gateway gives regional HTTP routing inside a virtual
+network, while Azure Load Balancer handles lower-level network flows and
+cannot read HTTP paths.
 
 Pick the smallest entry shape that matches the job and still gives you useful health evidence.
 Then write down the path.

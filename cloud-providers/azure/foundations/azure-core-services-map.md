@@ -23,11 +23,10 @@ id: article-cloud-providers-azure-foundations-azure-core-services-map
 
 ## Start With The Job
 
-When you first open Azure, the service names can feel like a long menu before you know what meal you are cooking.
-That feeling is normal.
-The useful move is not to memorize every Azure product.
-The useful move is to ask a practical question first:
-for each job in the system, which Azure service is probably responsible?
+When you first open Azure, the service names can feel like a long menu
+before you know what meal you are cooking. That feeling is normal. Start
+with a practical question: for each job in the system, which Azure
+service is probably responsible?
 
 An Azure core services map is a simple operating map for a backend service.
 It groups services by the job they do:
@@ -72,10 +71,10 @@ Azure has more services than this, but a beginner needs a useful map before a ca
 | Store images | Container Registry | Does the release image tag exist in the registry? |
 | Track spend | Cost Management | Can you see cost for this resource group? |
 
-The table is not a final architecture review.
-It is a first response map.
-When checkout fails, the map helps you follow the failing job instead of wandering through the portal.
-You move through the job that is failing and inspect the service that owns that job.
+Use the table as a first response map. When checkout fails, the map
+helps you follow the failing job instead of wandering through the
+portal. You move through the job that is failing and inspect the service
+that owns that job.
 
 ## If You Know The AWS Service Map
 
@@ -209,10 +208,10 @@ Traffic is the first job because users cannot call a service they cannot reach.
 For `devpolaris-orders-api`, the public name might be `orders.devpolaris.com`.
 That name needs to point to a public entry point, and the entry point needs a path to the app.
 
-Azure DNS owns the name.
-DNS (Domain Name System, the internet naming system) translates a friendly name into a destination that browsers and clients can use.
-For a beginner, the first DNS check is simple:
-does the record point to the edge resource you expect?
+Azure DNS owns the name. DNS (Domain Name System, the internet naming
+system) translates a friendly name into a destination that browsers and
+clients can use. For a beginner, the first DNS check asks whether the
+record points to the edge resource you expect.
 
 Front Door and Application Gateway both sit in the "public entry" family, but they are not identical.
 Azure Front Door is a global edge service that can route HTTP traffic closer to users and help with public web entry.
@@ -235,12 +234,10 @@ Here is the traffic slice for the orders API:
 | Placement | Subnet | Is the app integrated with the expected subnet? |
 | Block or allow | Network rules | Does a rule allow this source to reach this target? |
 
-The beginner failure is to treat "networking" as one blob.
-It is not one blob when you debug.
-DNS answers a naming question.
-Front Door or Application Gateway answers an entry question.
-Virtual Network answers a private path question.
-Network rules answer an allow or deny question.
+A common beginner failure is to treat "networking" as one blob during
+debugging. DNS answers a naming question, Front Door or Application
+Gateway answers an entry question, Virtual Network answers a private
+path question, and network rules answer an allow-or-deny question.
 
 Imagine the app is healthy, but users see a connection failure.
 If you start inside the container logs, you may find nothing.
@@ -313,11 +310,11 @@ Identity: mi-orders-api-prod
 Logs: appi-orders-api-prod -> log-devpolaris-prod
 ```
 
-The important part is not the exact names.
-The important part is the job clarity.
-If a revision is unhealthy, inspect Container Apps.
-If the image cannot be pulled, inspect Container Registry and identity.
-If the app starts but cannot read secrets, inspect Managed Identity and Key Vault before changing the container.
+The exact names matter less than job clarity. If a revision is
+unhealthy, inspect Container Apps. If the image cannot be pulled,
+inspect Container Registry and identity. If the app starts but cannot
+read secrets, inspect Managed Identity and Key Vault before changing the
+container.
 
 ## Data: Records, Files, And Secrets
 
@@ -355,8 +352,9 @@ If the API cannot read its database password, the database may be fine and Key V
 If the app cannot reach Blob Storage, the storage container may exist but network rules may block the app.
 
 Here is a small realistic configuration record from the orders service.
-It is not a full deployment file.
-It is the kind of inventory a team might review before the first production release.
+It is the kind of inventory a team might review before the first
+production release, focused on the resources and settings that affect
+the app path.
 
 ```yaml
 service: devpolaris-orders-api
@@ -429,10 +427,10 @@ resource=kv-devpolaris-prod
 identity=mi-orders-api-prod
 ```
 
-That log is not a reason to rebuild the image.
-It is not a reason to restart the container ten times.
-The useful first check is identity:
-is the managed identity assigned to the Container App, and does that identity have the correct Key Vault permission model for reading secrets?
+That log points first at identity. Before rebuilding the image or
+repeatedly restarting the container, check whether the managed identity
+is assigned to the Container App and whether that identity has the
+correct Key Vault permission model for reading secrets.
 
 Identity checks should be boring and specific:
 
@@ -454,11 +452,12 @@ Logs are event records.
 Metrics are numbers over time, such as request count, CPU, memory, and failure rate.
 Traces follow a request as it moves through application code and dependencies.
 
-Azure Monitor is the broad observability platform.
-Application Insights is the application performance monitoring part used for request telemetry, failures, dependencies, and traces.
-Log Analytics is the workspace where you query collected logs.
-For a beginner, the key idea is simple:
-if you do not create and connect the observability resources, the incident will have less evidence.
+Azure Monitor is the broad observability platform. Application Insights
+is the application performance monitoring part used for request
+telemetry, failures, dependencies, and traces. Log Analytics is the
+workspace where you query collected logs. For a beginner, the key idea
+is that missing observability resources leave the incident with less
+evidence.
 
 For `devpolaris-orders-api`, useful signals include:
 
@@ -492,9 +491,10 @@ Observability resources were not linked during the production deployment.
 The app may be failing, but the team cannot see the failure path yet.
 ```
 
-The fix direction is not "add more dashboards" as a vague task.
-The fix direction is concrete:
-connect Container Apps logs to the Log Analytics workspace, configure application telemetry to Application Insights, and make sure the team can query the records by app name, revision, and time range.
+The fix direction is concrete: connect Container Apps logs to the Log
+Analytics workspace, configure application telemetry to Application
+Insights, and make sure the team can query the records by app name,
+revision, and time range.
 
 Good observability reduces guessing.
 When the next incident happens, the team should be able to answer:
@@ -538,10 +538,11 @@ appi-orders-api-prod       Microsoft.Insights/components                   eastu
 log-devpolaris-prod        Microsoft.OperationalInsights/workspaces        eastus
 ```
 
-This output is useful because it shows what exists before you debate what is broken.
-If the Key Vault is not in the resource group, secret debugging changes.
-If there is no Application Insights component, request telemetry cannot magically appear.
-If there is no Container Registry, image deployment evidence is somewhere else.
+This output shows what exists before you debate what is broken. If the
+Key Vault is not in the resource group, secret debugging changes. If
+there is no Application Insights component, request telemetry cannot
+appear. If there is no Container Registry, image deployment evidence is
+somewhere else.
 
 A small release inventory can sit next to the resource inventory:
 
@@ -624,12 +625,11 @@ You can learn the app's production needs before adding cluster operations.
 
 ## Tradeoffs: Simplicity, Control, And Ownership
 
-Managed services trade some control for less operational work.
-That is not a trick.
-It is the point.
-With Container Apps, Azure handles much of the host layer.
-You spend more time on container behavior, scaling rules, identity, and dependencies.
-With Virtual Machines, you regain OS-level control, but you also regain patching, process management, disk care, and more failure modes.
+Managed services trade some control for less operational work. With
+Container Apps, Azure handles much of the host layer, and you spend more
+time on container behavior, scaling rules, identity, and dependencies.
+With Virtual Machines, you regain OS-level control, but you also regain
+patching, process management, disk care, and more failure modes.
 
 The same tradeoff appears across the map.
 Azure SQL manages much of the database platform, but you still own schema design, queries, indexes, connection behavior, backups decisions, and access.
@@ -647,10 +647,10 @@ Here is the tradeoff table for the first production map:
 | Azure SQL | Managed database platform | Still need data ownership |
 | Managed Identity | Fewer stored secrets | Need clear role design |
 
-There is also a service sprawl tradeoff.
-If every small feature gets its own storage account, vault, workspace, registry, and network without a naming or ownership pattern, the map becomes noisy.
-The problem is not that Azure has many services.
-The problem is unclear ownership.
+There is also a service sprawl tradeoff. If every small feature gets its
+own storage account, vault, workspace, registry, and network without a
+naming or ownership pattern, the map becomes noisy because ownership is
+unclear.
 
 For the orders API, a clear first ownership model is enough:
 
@@ -667,10 +667,11 @@ A service that works but surprises the team with spend is still not understood.
 For the first version, review cost by subscription, resource group, and service family.
 That is enough to catch obvious surprises such as an oversized database, unused environments, or unexpected log volume.
 
-The beginner goal is not to become an Azure catalog.
-The goal is to look at `devpolaris-orders-api` and say:
-this job belongs to compute, this one belongs to data, this one belongs to identity, this one belongs to networking, and this one belongs to observability.
-Once you can do that, the service names stop being magic and start becoming tools.
+The beginner goal is to look at `devpolaris-orders-api` and say: this
+job belongs to compute, this one belongs to data, this one belongs to
+identity, this one belongs to networking, and this one belongs to
+observability. Once you can do that, the service names stop being magic
+and start becoming tools.
 
 ---
 

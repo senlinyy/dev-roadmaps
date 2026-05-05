@@ -82,8 +82,8 @@ flowchart TD
     LB -. "records request signals" .-> LOGS
 ```
 
-Read it top to bottom. DNS is not the load balancer. The certificate is not the backend. The
-load balancer is not the application code. Each piece has a different failure mode.
+Read it top to bottom. DNS, the certificate, the load balancer, and the application backend
+are separate pieces with separate failure modes.
 
 ## DNS Gives The Name An Answer
 
@@ -161,8 +161,8 @@ understand first. They operate at Layer 7, which means they understand HTTP-leve
 Layer 7 is the application layer in the networking model.
 
 For a beginner, that means the load balancer can make decisions based on HTTP concepts like
-hostnames, paths, and health checks. The load balancer is not your app. It is the front
-desk. It receives the request, checks the rules, and sends the request to a backend that
+hostnames, paths, and health checks. The load balancer is the public entry point in front of
+the app. It receives the request, checks the rules, and sends the request to a backend that
 should handle it. For `devpolaris-orders-api`, the backend could be a Cloud Run service
 through a serverless backend configuration.
 
@@ -174,11 +174,10 @@ the load balancer can make the public path cleaner.
 
 ## Global And Regional Are Real Design Choices
 
-GCP load balancing often surprises people because global and regional are not only labels on
-a console page. They shape where the frontend exists and how traffic reaches backends. A
-global external Application Load Balancer can present a global entry for HTTP and HTTPS
-traffic. It is often useful when users are spread across regions or when the team wants a
-single global public entry.
+GCP load balancing often surprises people because global and regional choices shape where
+the frontend exists and how traffic reaches backends. A global external Application Load
+Balancer can present a global entry for HTTP and HTTPS traffic. It is often useful when
+users are spread across regions or when the team wants a single global public entry.
 
 A regional external Application Load Balancer keeps the load balancer in one region. It can
 be a better fit when the service, compliance needs, or network design is regional. Do not
@@ -191,9 +190,7 @@ currently runs in one region. Ask what the public entry must promise.
 | Global external Application Load Balancer | One global HTTP entry and broader routing options | More load balancer resources to understand |
 | Regional external Application Load Balancer | Regional control and placement | Less global entry behavior |
 
-This table is not a final architecture decision.
-
-It is a way to discuss the tradeoff before clicking through setup.
+Use this table to discuss the tradeoff before clicking through setup.
 
 ## Cloud Run Can Sit Behind A Load Balancer
 

@@ -240,7 +240,7 @@ That is better than allowing `secretsmanager:*` on every secret in the account.
 IAM has one rule that is worth learning early:
 an explicit deny wins.
 If one policy allows an action but another applicable policy explicitly denies it, the request is denied.
-That means debugging IAM is not only "find an allow."
+That means debugging IAM requires more than finding an allow.
 You also ask whether a permissions boundary, service control policy, resource policy, session policy, or explicit deny is narrowing the result.
 
 Here is the kind of app log you might see when the task role is wrong:
@@ -283,7 +283,7 @@ If the bucket uses a customer managed KMS key, the role may also need permission
 The practical question is:
 which thing owns the final say?
 For an S3 object write, the answer can include the IAM role policy, the bucket policy, the object ownership settings, and the KMS key policy.
-That does not mean you panic.
+That means you check which layer made the decision.
 It means you inspect the doors in order.
 
 Here is a short failure snapshot:
@@ -314,8 +314,7 @@ Some resources get a vote too.
 
 ## Network Reachability Is A Different Question
 
-Network reachability answers "can traffic get there?"
-It is not the same as IAM.
+Network reachability answers "can traffic get there?", while IAM answers "is this caller allowed to do this AWS action?"
 If `devpolaris-orders-api` connects to RDS PostgreSQL on port `5432`, IAM is usually not the thing moving packets.
 The app needs a route, a reachable address, a security group rule, and database credentials.
 
@@ -458,8 +457,7 @@ Audit records help you prove who changed them.
 ## Audit Records Tell You What Happened
 
 Audit records answer "what happened, when, and by whom?"
-They are not only for compliance teams.
-They are how you debug changes that happened before you arrived.
+They help operators debug changes that happened before they arrived, as well as supporting compliance needs.
 When a security group rule changes, a secret is updated, a role policy is attached, or an ECS service is deployed, the team needs a record.
 
 AWS has two names that beginners mix up: CloudTrail and CloudWatch.
@@ -508,8 +506,8 @@ You do not need to design the audit archive on day one, but you should know that
 CloudWatch logs are the app's side of the story.
 Good app logs should include the service name, environment, request ID, and the failed dependency.
 They should not include passwords, tokens, or full secret values.
-If a log line leaks a secret, the fix is not only "delete the log."
-The team should rotate the secret and review who could read the log group.
+If a log line leaks a secret, deleting the log entry is not enough.
+The team should rotate the secret and review who could read the log group because copies may already have been read or exported.
 
 Audit records do not prevent every mistake.
 They make mistakes explainable.
@@ -532,9 +530,7 @@ cause="AccessDeniedException: not authorized to perform secretsmanager:GetSecret
 secret="arn:aws:secretsmanager:us-east-1:333333333333:secret:orders-api/prod/database-AbCdEf"
 ```
 
-This is not yet a database problem.
-The app failed before it had the password.
-The diagnosis starts with the identity that called Secrets Manager.
+The app failed before it had the database password, so the diagnosis starts with the identity that called Secrets Manager.
 For an ECS task, that is the task role.
 You inspect the task definition and confirm `taskRoleArn` is `orders-api-task`.
 
@@ -641,9 +637,8 @@ Here is a practical starting posture:
 | Encryption | Use service encryption defaults where acceptable | Use customer managed KMS keys where control matters |
 | Audit | Use CloudTrail event history and app logs | Add organization trails or CloudTrail Lake for long retention |
 
-The goal is not to make security feel small.
-The goal is to make it navigable.
-When you can name each check, you can build safer systems without turning every debug session into a guessing game.
+Security becomes navigable when you can name each check and follow the evidence in order.
+That lets you build safer systems without turning every debug session into a guessing game.
 
 The next time `devpolaris-orders-api` fails, do not ask "is AWS security broken?"
 Ask a better sequence:

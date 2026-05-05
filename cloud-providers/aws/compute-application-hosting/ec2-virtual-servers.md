@@ -17,7 +17,7 @@ id: article-cloud-providers-aws-compute-application-hosting-ec2-virtual-servers
 6. [Access, SSH, SSM, And Instance Roles](#access-ssh-ssm-and-instance-roles)
 7. [Logs, Patches, And Disk Are Now Your Job](#logs-patches-and-disk-are-now-your-job)
 8. [Failure Modes You Will Actually See](#failure-modes-you-will-actually-see)
-9. [A Calm Diagnostic Path](#a-calm-diagnostic-path)
+9. [Diagnostic Path](#diagnostic-path)
 10. [The Tradeoff: Control And Responsibility](#the-tradeoff-control-and-responsibility)
 
 ## The Server You Actually Operate
@@ -47,8 +47,7 @@ Customers call `https://orders.devpolaris.com`.
 An Application Load Balancer, usually called an ALB, receives that request and forwards it to an EC2 instance.
 On the instance, systemd keeps the Node process running.
 
-The goal is not to memorize every EC2 option.
-The goal is to understand the operating shape:
+Focus on the operating shape rather than every EC2 option:
 you get a real server, and now your team owns more of the runtime.
 That includes access, startup, logs, patches, disk space, process health, network rules, and the IAM role the app uses when it calls AWS APIs.
 
@@ -60,7 +59,7 @@ If a teammate asks why the app cannot start, connect to AWS, receive traffic, or
 
 An AMI (Amazon Machine Image) is the boot image for the instance.
 It decides the starting operating system and the first filesystem layout.
-For a beginner Node backend, the AMI decision is usually simple: choose a normal Linux AMI your team knows how to patch and support.
+For a beginner Node backend, choose a normal Linux AMI your team knows how to patch and support.
 The AMI is not the app by itself.
 It is the starting machine that your app will run on.
 
@@ -68,7 +67,7 @@ The instance type decides the virtual hardware.
 For example, a small general purpose instance gives the orders API a modest amount of CPU and memory.
 If the app uses too much memory, the Linux kernel can kill the process.
 If the instance is too small for traffic, the ALB may start seeing slow health checks or timeouts.
-You can change instance type later, but the first choice should match the app's real memory and CPU needs, not only the cheapest line in the console.
+You can change instance type later, but the first choice should match the app's real memory and CPU needs instead of defaulting to the cheapest line in the console.
 
 Subnet placement decides where the instance lives in the VPC.
 A subnet is a slice of the VPC in one Availability Zone.
@@ -111,8 +110,7 @@ Here is the launch shape for `devpolaris-orders-api` in staging:
 | Root volume | EBS root volume | Holds OS, app files, package cache, and logs |
 | Instance role | `devpolaris-orders-api-ec2` | Gives the app temporary AWS credentials |
 
-This table is not just launch documentation.
-It is your future incident map.
+This table becomes your future incident map.
 When the service fails, each row becomes a place to prove or disprove.
 
 ## The Orders API On One Instance
@@ -157,7 +155,7 @@ That is not network traffic from customers.
 That is the app using its instance role to call AWS APIs.
 The role does not open port `3000`.
 The security group does not grant S3 access.
-Those are separate checks, and keeping them separate makes debugging much calmer.
+Those are separate checks, and keeping them separate makes debugging more direct.
 
 The target group is the ALB's list of backends.
 For an EC2 target group, the target can be an instance ID and a port.
@@ -283,7 +281,7 @@ RestartSec=5
 WantedBy=multi-user.target
 ```
 
-The most important lines are not fancy.
+The most important lines define the operating contract for the process.
 `User=orders` avoids running the app as root.
 `WorkingDirectory` tells systemd where the app lives.
 `Environment=PORT=3000` matches the ALB target port.
@@ -416,7 +414,7 @@ Clean old release archives if that is safe.
 Rotate or ship logs.
 Move app data to a separate EBS volume if it is real data.
 Increase the EBS volume and grow the filesystem if the service has simply outgrown the original disk.
-Do not only delete random files until the app starts, because you may erase the evidence that explains why it filled.
+Avoid deleting random files until the app starts, because you may erase the evidence that explains why it filled.
 
 ## Failure Modes You Will Actually See
 
@@ -441,8 +439,7 @@ May 02 11:04:16 ip-10-20-12-44 systemd[1]: devpolaris-orders-api.service: Main p
 May 02 11:04:16 ip-10-20-12-44 systemd[1]: devpolaris-orders-api.service: Failed with result 'exit-code'.
 ```
 
-This is not a security group problem yet.
-The service is dead locally.
+The service is dead locally, so do not start with the security group.
 Fix the release artifact, working directory, start command, or environment first.
 Then restart the service and confirm local `/health` before looking at the ALB.
 
@@ -534,7 +531,7 @@ The Session Manager error points to SSM Agent, instance profile permissions, or 
 Do not open SSH to the internet just because Session Manager is not connected.
 Fix the access path you intended to use.
 
-## A Calm Diagnostic Path
+## Diagnostic Path
 
 When the orders API fails, start from the user path and move inward.
 Do not begin by changing the instance.

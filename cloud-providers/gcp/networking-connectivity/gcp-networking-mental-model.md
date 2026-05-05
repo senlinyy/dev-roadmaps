@@ -33,12 +33,11 @@ runtime. The database should not become a public target.
 The app may need to call Google APIs. The app may need a private path to Cloud SQL. Support
 engineers need logs that show where traffic stopped. GCP networking is the set of names,
 private networks, routes, load balancers, ingress settings, egress settings, and firewall
-rules that shape those paths. The goal is not to memorize every network product.
-
-The goal is to read a small production service and ask better questions. Where does public
-traffic enter? Where does private traffic live? Which name points to which destination?
-Which route sends traffic onward? Which rule allows or blocks the connection? Which identity
-is allowed to change the network? Identity and networking are different checks.
+rules that shape those paths. Use the products to ask better questions about a small
+production service. Where does public traffic enter? Where does private traffic live? Which
+name points to which destination? Which route sends traffic onward? Which rule allows or
+blocks the connection? Which identity is allowed to change the network? Identity and
+networking are different checks.
 
 IAM can let a deployer edit a Cloud Run service. That does not prove the running service can
 reach a database. Network access can allow a packet to reach a destination. That does not
@@ -67,8 +66,8 @@ private service range: services-orders-prod
 
 The VPC network gives the private traffic area a name. The subnet places the app's private
 addresses in a region. The service range can be used for managed services that need private
-service access. Those are not interchangeable. If you debug with the wrong noun, you will
-look in the wrong place.
+service access. These nouns are not interchangeable. If you debug with the wrong noun, you
+will look in the wrong place.
 
 ## How This Compares With AWS And Azure
 
@@ -150,9 +149,8 @@ flowchart TD
     RULES -. "allow or block paths" .-> RUN
 ```
 
-The diagram is not trying to show every valid GCP design. It is showing the questions you
-must keep separate. Public name. Public entry. Runtime. Private path. Managed services.
-Traffic checks.
+The diagram focuses on the questions you must keep separate: public name, public entry,
+runtime, private path, managed services, and traffic checks.
 
 ## Public Entry And Private Dependencies
 
@@ -172,10 +170,10 @@ need a public network path. The orders team wants this shape:
 | Secret Manager secret | No direct user path | The app reads it through Google APIs with IAM |
 | Receipt bucket | Usually no direct public write path | The app writes controlled exports |
 
-The table is about exposure. It is not about IAM alone. A database can have correct
-IAM-related settings and still be reachable from places you did not intend. A Cloud Run
-service can have a public URL and still require IAM authentication. Network reachability and
-identity checks work together, but they are not the same check.
+The table is about exposure as well as IAM. A database can have correct IAM-related settings
+and still be reachable from places you did not intend. A Cloud Run service can have a public
+URL and still require IAM authentication. Network reachability and identity checks work
+together, but they are different checks.
 
 This is the first habit:
 
@@ -185,8 +183,8 @@ This is the first habit:
 
 A VPC network is a private network area inside Google Cloud. It lets resources communicate
 using private addresses, subject to routes and firewall rules. In GCP, the VPC network is
-global. That means the network is not created inside one region. The subnets inside it are
-regional. A subnet gives a region a specific IP address range.
+global. The network spans regions, while the subnets inside it are regional. A subnet gives
+a region a specific IP address range.
 
 For example:
 
@@ -251,9 +249,9 @@ That gives teams a way to write rules around groups of instances instead of indi
 addresses.
 
 Cloud Run networking has its own details, especially when using Direct VPC egress and
-network tags for outbound traffic. The beginner lesson is not every syntax rule. The
-beginner lesson is that traffic rules need a target, a direction, a source or destination, a
-protocol, and a port. Read the rule as a sentence:
+network tags for outbound traffic. For beginners, the main rule shape matters more than
+every syntax detail: target, direction, source or destination, protocol, and port. Read the
+rule as a sentence:
 
 ```text
 allow TCP 5432
@@ -267,10 +265,10 @@ If the sentence does not match the traffic, it will not help.
 
 ## Cloud Run Has A Service URL And Optional Network Paths
 
-Cloud Run is serverless, but it is not outside networking. A Cloud Run service can receive
-HTTP requests. It has ingress settings that control which network paths can reach it. It can
-send outbound traffic to the internet or to a VPC network, depending on how egress is
-configured. This matters because Cloud Run often looks simple at first.
+Cloud Run is serverless, and it still participates in networking. A Cloud Run service can
+receive HTTP requests. It has ingress settings that control which network paths can reach
+it. It can send outbound traffic to the internet or to a VPC network, depending on how
+egress is configured. This matters because Cloud Run often looks simple at first.
 
 You deploy a container. You get a URL. The service responds. That is a great first
 experience. Production still needs intentional entry and exit paths. For inbound traffic,
@@ -313,7 +311,7 @@ up. Do not memorize them as a list. Ask what kind of private path you need:
 | Cloud Run reaches VPC resources | Direct VPC egress or Serverless VPC Access |
 
 The exact service decides the exact setup. The mental model is stable: managed services may
-need a private access pattern, not just a VPC name.
+need a private access pattern in addition to a VPC name.
 
 ## Evidence For A Healthy Path
 

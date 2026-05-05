@@ -45,10 +45,9 @@ and export files. Cosmos DB may store idempotency or
 job-status items. Managed Disks may support a VM
 worker.
 
-Azure Files may hold shared templates for legacy jobs.
-Each service has different recovery tools. The question
-is not "which service has backup?" The question is "can
-we get the right data back in a usable way?"
+Azure Files may hold shared templates for legacy jobs. Each service has
+different recovery tools, so ask whether the team can get the right data
+back in a usable way.
 
 ## If You Know AWS Recovery Features
 
@@ -121,15 +120,12 @@ Recovery candidate: restore database to 2026-05-03T10:12:30Z in separate databas
 Repair plan: compare affected rows and update production with reviewed script
 ```
 
-The restored database is evidence. It is not
-automatically the new production database. Sometimes
-full replacement is the right move. Often selective
-repair is safer. That depends on the incident. The
-important habit is to document how the team chooses.
-Also remember that database restore is not only a
-storage action. The restored database needs access
-rules, identities, connection strings, and careful
-handling of customer data.
+The restored database is evidence for the recovery decision, not
+automatically the new production database. Sometimes full replacement is
+the right move, and often selective repair is safer. The incident
+decides which path is appropriate. Document how the team chooses, and
+remember that database restore also needs access rules, identities,
+connection strings, and careful handling of customer data.
 
 ## Blob Storage Needs Protection And Lifecycle Rules
 

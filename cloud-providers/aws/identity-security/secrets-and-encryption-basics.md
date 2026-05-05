@@ -50,7 +50,7 @@ This article stays at the first useful level.
 You will not become a KMS specialist here.
 You will learn where secrets live, how an ECS task receives them, why encryption and permission are separate ideas, and how to debug the first failures.
 
-> The goal is not to hide a secret from your own app. The goal is to give the secret only to the app and people that truly need it.
+> Secret handling gives the value only to the app and people that truly need it.
 
 ## The Running Example: Orders API On ECS
 
@@ -74,7 +74,7 @@ It only needs the environment variable to exist when the process starts.
 Production needs the same names, but not the same storage habit.
 The production database URL includes a real username and password.
 The Stripe webhook secret is what lets the service verify that incoming webhook events really came from Stripe.
-If either value leaks, the team has a real incident, not just an ugly config file.
+If either value leaks, the team has a real incident because an attacker may be able to reach production data or forge trusted webhook events.
 
 For production, the team wants each place to have one clear job.
 
@@ -293,8 +293,7 @@ The path makes environment and ownership visible.
 `/prod/orders/STRIPE_WEBHOOK_SECRET` and `/staging/orders/STRIPE_WEBHOOK_SECRET` are different parameters.
 That is useful because a lot of cloud mistakes are really "wrong environment" mistakes.
 
-Parameter Store is not only for secrets.
-It is also useful for non-secret config that you want to centralize.
+Parameter Store also works well for non-secret config that you want to centralize.
 For sensitive values, use the `SecureString` type.
 That tells Parameter Store to encrypt the parameter value with KMS.
 
@@ -454,7 +453,7 @@ That is least privilege in a form you can actually see.
 
 One more practical detail:
 when ECS injects a secret into an environment variable, the secret is now inside the running process environment.
-That is useful, but it is not magic protection after startup.
+That is useful, but the app must still protect the value after startup.
 Your app must still avoid logging it, returning it in debug endpoints, or exposing it through crash dumps.
 
 ## KMS-Backed Encryption In Plain English
@@ -486,8 +485,7 @@ The running app still receives plaintext because the app cannot connect to the d
 That is normal.
 The control is around who can ask for plaintext and where that plaintext goes next.
 
-AWS KMS has several key types.
-For this article, keep only two beginner ideas in your head.
+AWS KMS has several key types, but two are enough for a first production service.
 
 An AWS managed key is created and managed by AWS for a service in your account.
 It is the easy path for many first systems because you do not manage key policies or key lifecycle.
@@ -505,7 +503,7 @@ For a first `devpolaris-orders-api` deployment, using the default AWS managed ke
 If the team later needs tighter audit boundaries, cross-team key control, or specific compliance rules, a customer managed key can make sense.
 When that happens, the team must treat the KMS key policy as part of the application access path.
 
-The practical diagnostic question is simple: can the ECS task execution role read the secret, and if a customer managed KMS key is used, can it decrypt with that key?
+Use this diagnostic question: can the ECS task execution role read the secret, and if a customer managed KMS key is used, can it decrypt with that key?
 
 If the answer to either half is no, the task may fail before your Node.js code even starts.
 
@@ -583,7 +581,7 @@ $ aws ssm describe-parameters \
 ]
 ```
 
-That output proves the correct name exists.
+The output proves the correct parameter name exists in this account and Region.
 Now compare it to the task definition.
 The fix is to update the task definition reference, register a new revision, and deploy it.
 

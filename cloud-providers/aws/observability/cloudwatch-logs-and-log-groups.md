@@ -43,8 +43,7 @@ It gives logs a place to land, a way to search, and a retention setting so the t
 For `devpolaris-orders-api`, CloudWatch Logs helps answer questions like:
 did the app start, did the request reach the service, which request ID failed, what did RDS return, did the S3 receipt upload work, and did the Lambda email job run?
 
-The goal is not to log every thought the program has.
-The goal is to leave enough useful evidence for the next person who has to debug production.
+Log enough useful evidence for the next person who has to debug production, without recording every thought the program has.
 
 ```mermaid
 flowchart TD
@@ -107,8 +106,7 @@ first search terms:
   ConnectionTimeout
 ```
 
-This is not fancy.
-It is useful because the first few minutes of debugging should not be spent remembering where logs live.
+This simple search set is useful because the first few minutes of debugging should not be spent remembering where logs live.
 
 ## Structured Logs From The Orders API
 
@@ -268,8 +266,7 @@ Lambda also writes platform-style lines around invocations.
 Those can show duration, memory-related information, and invocation request identifiers.
 They are useful, but app logs should still carry the business context.
 
-For beginners, the habit is simple:
-every asynchronous side job should log the ID that connects it back to the original work.
+Every asynchronous side job should log the ID that connects it back to the original work.
 For orders, that usually means `request_id`, `order_id`, or both.
 
 ## Searching For The First Useful Error
@@ -428,7 +425,7 @@ That standard is small, but it changes production debugging.
 Instead of "checkout failed somewhere," the team sees:
 `request req_01J8K2M6TK7S1E9R0Y6Q failed at rds.insert_order with ConnectionTimeout`.
 
-That sentence is enough to start calmly.
+That sentence gives you enough context to start the investigation.
 You know the request.
 You know the step.
 You know the dependency.

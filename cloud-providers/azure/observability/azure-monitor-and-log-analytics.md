@@ -137,9 +137,8 @@ account side too. If diagnostic settings for the
 storage account were never configured, the resource log
 may not be available in Log Analytics.
 
-The fix is not during the incident only. The fix is to
-decide ahead of time which resource logs matter for
-operating the app.
+Useful resource logs need a decision before the incident. Decide ahead
+of time which resource logs matter for operating the app.
 
 ## The Orders API Needs App Logs And Resource Logs
 
@@ -198,15 +197,12 @@ Find failed checkout requests.
 Group by error message or dependency.
 ```
 
-That sentence matters more than syntax at first. The
-query is just the tool for asking it. When a team lacks
-consistent fields, queries become harder. If one log
-uses `requestId`, another uses `req_id`, and a third
-hides the ID inside a message string, humans suffer.
-Good logging structure makes Log Analytics more useful.
-The workspace cannot magically create clean fields from
-messy logs unless you design ingestion and parsing
-around that.
+That sentence matters more than syntax at first. The query is just the
+tool for asking it. When a team lacks consistent fields, queries become
+harder. If one log uses `requestId`, another uses `req_id`, and a third
+hides the ID inside a message string, humans suffer. Good logging
+structure makes Log Analytics more useful, and messy logs need ingestion
+and parsing design before the workspace can query them cleanly.
 
 ## KQL Is How You Ask Better Questions
 
@@ -225,13 +221,11 @@ requests
 | summarize failures=countif(success == false), total=count() by bin(timestamp, 5m)
 ```
 
-Read it like English. Start from request records. Look
-at the last 30 minutes. Keep the orders API. Keep
-checkout requests. Count failures and total requests in
-five-minute groups. The point is not the exact table
-name for every setup. The point is that KQL lets you
-turn many records into an answer. A second query might
-look for exceptions:
+Read it like English. Start from request records. Look at the last 30
+minutes. Keep the orders API. Keep checkout requests. Count failures and
+total requests in five-minute groups. KQL lets you turn many records
+into an answer, even though exact table names vary by setup. A second
+query might look for exceptions:
 
 ```text
 exceptions
@@ -328,12 +322,10 @@ a compact review.
 | Access | Monitoring readers can inspect needed logs |
 | Cost | Keep useful production evidence, avoid noisy debug logs |
 
-The goal is not a perfect logging platform. The goal is
-a practical evidence path. When checkout fails, a
-junior engineer should be able to ask: what happened,
-where did it happen, and which Azure resource saw it?
-Log Analytics is one of the main places that answer can
-live.
+Aim for a practical evidence path. When checkout fails, a junior
+engineer should be able to ask what happened, where it happened, and
+which Azure resource saw it. Log Analytics is one of the main places
+that answer can live.
 
 ---
 

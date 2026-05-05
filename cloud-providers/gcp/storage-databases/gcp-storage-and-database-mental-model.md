@@ -25,8 +25,8 @@ id: article-cloud-providers-gcp-storage-databases-gcp-storage-database-mental-mo
 
 Most storage confusion starts when service names arrive before the data problem. Cloud
 Storage. Cloud SQL. Firestore. BigQuery. Persistent Disk. Filestore. Those names matter, but
-they should not be the first thing a beginner tries to memorize. The better first question
-is: what does the app need to remember, and how will it ask for that data later?
+memorizing them first makes the choice harder. The better first question is: what does the
+app need to remember, and how will it ask for that data later?
 
 Some data is a file. A receipt PDF is a file. A CSV export is a file. A product image is a
 file. You usually write it as a whole object, read it as a whole object, replace it, or
@@ -48,8 +48,8 @@ tables they can transform. That shape points toward BigQuery, not the request-ti
 database.
 
 This article uses one system, `devpolaris-orders-api`, to keep the service list grounded.
-The goal is not to pick one database for everything. The goal is to sort data by behavior
-before the GCP details get loud.
+Sort data by behavior before the GCP details get loud, instead of trying to pick one
+database for everything.
 
 ```mermaid
 flowchart TD
@@ -90,10 +90,11 @@ Blob Storage. If the app needs SQL transactions, think Cloud SQL the same way yo
 first think RDS or Azure SQL Database. If the team needs warehouse-style analysis, BigQuery
 should enter the conversation early.
 
-Then slow down and learn the GCP surface. A Cloud Storage bucket is not literally an S3
-bucket with a new logo. Firestore is not DynamoDB with different button colors. BigQuery is
-not where the checkout request should wait for an order row to be written. The comparison
-gets you oriented. The GCP details keep you from making confident mistakes.
+Then slow down and learn the GCP surface. Cloud Storage has bucket names, object paths, IAM,
+signed URLs, and lifecycle rules that behave in GCP-specific ways. Firestore has its own
+collection, document, query, index, transaction, and security model. BigQuery belongs in the
+analytics path, not in the checkout request waiting for one order row to be written. The
+comparison gets you oriented. The GCP details keep you from making confident mistakes.
 
 ## The Orders API Has Several Data Shapes
 
@@ -105,10 +106,9 @@ needs to create an order record, record line items, update payment state, and sh
 history later. That data has relationships. A relational database is the natural first
 direction because the app wants consistent business records.
 
-Now imagine the same order creates a receipt PDF. The PDF is not a relational record. It is
-a file. The database should know who owns it and where it lives, but the bytes belong in
-object storage. The same is true for monthly CSV exports, product image uploads, and support
-attachments.
+Now imagine the same order creates a receipt PDF. The PDF behaves like a file, while the
+database should know who owns it and where it lives. The bytes belong in object storage. The
+same is true for monthly CSV exports, product image uploads, and support attachments.
 
 Now imagine the frontend stores a checkout draft or user interface preference. The app may
 read and write a document-like record by user ID or cart ID. That might fit Firestore if the
@@ -118,8 +118,8 @@ Finally, imagine the product team asks:
 
 > How many checkout attempts failed by country, payment method, and app version last week?
 
-That is not a request-time API lookup. That is an analytics question. BigQuery is built for
-that kind of table scanning, aggregation, and reporting.
+That question scans many facts across time, so BigQuery is built for that kind of table
+scanning, aggregation, and reporting.
 
 Here is a first sorting table:
 
@@ -131,9 +131,8 @@ Here is a first sorting table:
 | Checkout events and reporting tables | Analytical data | BigQuery |
 | VM boot disks or scratch directories | Storage attached to compute | Persistent Disk or Filestore |
 
-This table is not the architecture. It is the first review conversation. After this, the
-team still checks access, network path, backup, retention, restore, cost, and how the app
-will fail.
+Use this table for the first review conversation. After this, the team still checks access,
+network path, backup, retention, restore, cost, and how the app will fail.
 
 ## Files Point Toward Cloud Storage
 
@@ -177,8 +176,8 @@ constraints, transactions, and SQL queries.
 
 An order is a good example. The order has a customer. The order has line items. The payment
 state should agree with the order state. Support may need to query paid orders for one
-customer. Finance may need orders grouped by month. Those are not just files with names.
-They are business records with relationships.
+customer. Finance may need orders grouped by month. These are business records with
+relationships, not files with names.
 
 A small relational shape might look like this:
 
@@ -201,16 +200,15 @@ order_items
   unit_price_cents
 ```
 
-The point is not to design the whole schema here. The point is to see why SQL belongs in the
-conversation. The app wants rules and questions across related records. Cloud SQL can be a
-good first GCP home for that shape.
+This small schema sketch shows why SQL belongs in the conversation. The app wants rules and
+questions across related records. Cloud SQL can be a good first GCP home for that shape.
 
 ## Document Data Points Toward Firestore
 
 Firestore is a document database. It stores data in documents organized into collections.
 That model can feel friendly to JavaScript developers because a document looks like a JSON
-object with fields. But Firestore is not just "JSON files in the cloud." It has its own
-query, index, transaction, security, and scaling model.
+object with fields. Firestore also has its own query, index, transaction, security, and
+scaling model.
 
 Firestore can fit data where the app naturally thinks in documents. A user preference
 record, a checkout draft, a lightweight status document, or a mobile app document can be a
@@ -238,8 +236,8 @@ relational questions into document paths.
 
 BigQuery is a common GCP choice for analytics and data engineering. It is where teams put
 large tables of events, exports, logs, and business facts so they can ask analytical
-questions with SQL. BigQuery is not usually the request-time database for the orders API.
-It is where the team studies what happened across many orders.
+questions with SQL. The orders API should use an operational store for request-time work
+and BigQuery for studying what happened across many orders.
 
 The split is practical. Cloud SQL might answer, "what is the current state of order
 `ord_9281`?" BigQuery might answer, "what percentage of checkout attempts failed by country
@@ -368,8 +366,7 @@ access. Firestore gives document-shaped development, but your access pattern and
 matter. BigQuery gives analytical SQL over large tables, but it is not the place to block a
 checkout request waiting for a tiny operational lookup.
 
-The mature choice is rarely "one database for everything." It is usually a small set of data
-services with clear jobs:
+The mature choice is usually a small set of data services with clear jobs:
 
 | Job | First GCP Service |
 |---|---|

@@ -58,7 +58,9 @@ The operating questions stay familiar:
 | What proves the app is healthy? | Traffic should avoid broken copies |
 | What signal controls scaling? | More copies help only when the bottleneck can handle them |
 
-The goal of this article is simple:
+This article connects runtime inputs to production behavior:
+configuration, secrets, health checks, and scaling all decide whether a
+deployed app can actually serve users.
 
 > A runtime is ready when the app has the right inputs, can prove who it is, emits useful evidence, passes honest health checks, and scales for the right reason.
 
@@ -143,9 +145,9 @@ logs workspace: law-devpolaris-prod
 scale signal: HTTP concurrency
 ```
 
-This is not busywork.
-It gives the team a shared map for debugging.
-When a customer reports a failed checkout, you know which revision, identity, vault, health path, and log workspace to inspect first.
+This map gives the team a shared debugging path. When a customer reports
+a failed checkout, you know which revision, identity, vault, health
+path, and log workspace to inspect first.
 
 ## App Settings Are Runtime Inputs
 
@@ -332,11 +334,12 @@ Different Azure hosting choices use health checks differently:
 | Functions | Health is often about trigger status, host health, and dependency checks rather than one always-on HTTP server |
 | Virtual Machines | The load balancer or gateway probes the VM or app endpoint |
 
-If you know Kubernetes probes, Container Apps may feel familiar because Container Apps is built on Kubernetes-style ideas, though you do not manage the cluster directly.
-If you do not know Kubernetes, keep it simple:
-startup means "did the app start?"
-readiness means "should traffic come here now?"
-liveness means "is this process stuck badly enough to restart?"
+If you know Kubernetes probes, Container Apps may feel familiar because
+Container Apps is built on Kubernetes-style ideas, though you do not
+manage the cluster directly. Without Kubernetes background, use the
+plain-English meanings: startup asks whether the app started, readiness
+asks whether traffic should come here now, and liveness asks whether the
+process is stuck badly enough to restart.
 
 When a health check fails, do not start by changing the probe interval.
 First ask what the app is telling you.
@@ -348,8 +351,9 @@ Does it return `200` too early, before the database is ready?
 ## Scaling Follows A Signal
 
 Scaling means changing how many app copies are available to do work.
-It is not magic performance.
-More copies help only when the bottleneck can be shared.
+More copies help only when the bottleneck can be shared across those
+copies, so scaling should be paired with checks for database pressure,
+external dependencies, queue depth, CPU, memory, and request latency.
 
 For a public HTTP API, a common scale signal is request load.
 For a background worker, a common scale signal is queue length.
@@ -429,11 +433,10 @@ Here is a realistic missing-secret startup failure:
 2026-05-03T10:04:18.448Z ERROR startup refusing to listen because database config is missing
 ```
 
-The fix is not to weaken the health check.
-The fix is to restore the runtime input.
-Check the app setting or Key Vault reference.
-Check whether the managed identity can read the secret.
-Then restart or redeploy so the app starts with the corrected value.
+A failing health check often points at a missing runtime input. Restore
+the app setting or Key Vault reference, confirm the managed identity can
+read the secret, then restart or redeploy so the app starts with the
+corrected value.
 
 Here is a permission failure:
 

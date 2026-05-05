@@ -46,11 +46,10 @@ Bounded means you can answer four questions:
 what starts the work, what input does the function receive, what output does it produce, and what counts as done?
 If you cannot answer those questions, a long-running service may be easier to reason about.
 
-This article follows supporting jobs around `devpolaris-orders-api`.
-The API writes orders.
-After that, Azure Functions can send receipts, generate exports, clean old files, and react to blob events.
-The goal is not to turn every piece of backend code into a function.
-The goal is to learn when event-driven compute is the clean shape.
+This article follows supporting jobs around `devpolaris-orders-api`. The
+API writes orders. After that, Azure Functions can send receipts,
+generate exports, clean old files, and react to blob events. The article
+focuses on recognizing when event-driven compute is the clean shape.
 
 Here is the simplest mental model:
 
@@ -312,9 +311,9 @@ Here is a trigger choice table:
 | Timer | Work happens on a schedule | Delete expired export files nightly | Silent missed runs or timezone confusion |
 | Blob event | A file change starts work | Validate a new export file | Large file memory use or repeated failures |
 
-The common pattern is simple.
-If the work is a reaction, find the event.
-If the event is not clear, the function is probably not clear either.
+For event-driven work, start by naming the event that should trigger the
+code. If the event is unclear, the function boundary is probably unclear
+too.
 
 ## Settings That Shape One Function App
 
@@ -381,8 +380,9 @@ Monitoring:
   Application Insights: appi-devpolaris-orders-prod
 ```
 
-This record is not fancy.
-It gives reviewers enough context to ask the right questions before the functions become production dependencies.
+The record gives reviewers enough context to ask the right questions
+before the functions become production dependencies. It names the
+trigger, the work, the retry behavior, and the failure surface.
 
 ## Evidence, Logs, And Application Insights
 
@@ -425,10 +425,10 @@ For failures, use logs that make the next step obvious:
 2026-05-03T09:34:22.880Z receiptSender failed orderId=ord_1043 queueMessageId=8f11 dequeueCount=3 error="customerEmail is required"
 ```
 
-That line points to a contract problem.
-The producer probably wrote a message missing a required field, or the consumer expects a field name the producer no longer sends.
-The fix is not only to retry.
-The fix is to repair the event contract and decide what to do with the bad message.
+That line points to a contract problem. The producer probably wrote a
+message missing a required field, or the consumer expects a field name
+the producer no longer sends. Repair the event contract and decide what
+to do with the bad message before relying on retries.
 
 The first dashboard for these functions should stay small:
 
@@ -493,11 +493,11 @@ Now check the function logs:
 2026-05-03T09:34:22.018Z receiptSender failed orderId=ord_1043 queueMessageId=8f11 dequeueCount=5 error="customerEmail is required"
 ```
 
-The log says this is not a network outage.
-The function received the message and rejected it every time.
-The fix direction is to repair the producer, not to increase function scale.
+The log shows that the function received the message and rejected it
+every time. The fix direction is to repair the producer or validation
+contract, not to increase function scale.
 
-The calm diagnostic path is:
+The diagnostic path is:
 
 | Step | Question | Evidence |
 |------|----------|----------|
@@ -554,9 +554,11 @@ The phrase "eventually consistent" means the system becomes correct after backgr
 Checkout can return success before the receipt is sent.
 That can be good engineering, but only if the team accepts and monitors the delay.
 
-For `devpolaris-orders-api`, Azure Functions is a good fit for:
-receipt sending, export cleanup, export validation, small webhook helpers, and scheduled reconciliation.
-It is not automatically a good fit for the whole checkout API, a long-running settlement agent, or a job whose work cannot be split and may run for a long time.
+For `devpolaris-orders-api`, Azure Functions fits receipt sending,
+export cleanup, export validation, small webhook helpers, and scheduled
+reconciliation. The whole checkout API, a long-running settlement agent,
+or work that cannot be split may need a runtime with a different
+ownership and execution model.
 
 When the job starts sounding like a server, let it be a server.
 When the job starts sounding like a reaction, Azure Functions may be the cleaner shape.

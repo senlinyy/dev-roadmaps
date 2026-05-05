@@ -42,10 +42,9 @@ job and no more. This is the center of safe GCP automation.
 
 ## What A Service Account Is
 
-A service account is an identity for software. It is not a person. It does not sit in a
-chair. It does not need a mailbox. It is a named principal that applications, virtual
-machines, jobs, functions, and pipelines can use when they call Google Cloud APIs. Service
-accounts have email-like names. For example:
+A service account is an identity for software. It is a named principal that applications,
+virtual machines, jobs, functions, and pipelines can use when they call Google Cloud APIs.
+Service accounts have email-like names. For example:
 
 ```text
 orders-api-prod@devpolaris-orders-prod.iam.gserviceaccount.com
@@ -97,7 +96,7 @@ orders-api-prod@devpolaris-orders-prod.iam.gserviceaccount.com
 Cloud Run runs the container. The Node.js code handles checkout requests. When the code
 calls Secret Manager, Cloud SQL, Cloud Storage, or another GCP service, the request is made
 as the runtime service account. That picture matters more than the code language. The Node
-process is not magically trusted because it is running on Cloud Run.
+process is not automatically trusted because it is running on Cloud Run.
 
 It has the permissions attached to the service account Cloud Run uses for that revision.
 Here is the simple flow:
@@ -118,10 +117,10 @@ flowchart TD
     IDENTITY --> STORAGE
 ```
 
-The service account is not an extra decoration. It is the identity GCP checks when the app
-reaches for cloud resources. If the service account lacks secret access, the app fails even
-if the developer who deployed it has secret access. If the service account has too much
-storage access, a bug in the app may touch data it should never touch.
+The service account is the identity GCP checks when the app reaches for cloud resources. If
+the service account lacks secret access, the app fails even if the developer who deployed it
+has secret access. If the service account has too much storage access, a bug in the app may
+touch data it should never touch.
 
 Runtime identity is part of application design.
 
@@ -159,11 +158,11 @@ Cloud Run is not always enough. If the deployer configures the Cloud Run service
 service account, GCP must also decide whether the deployer may use that service account.
 This is often described as "act as" access.
 
-The deployer is not becoming the runtime service account forever. It is being allowed to
-attach that service account to the service it is deploying. That extra check prevents a
-dangerous shortcut. Without it, a user who can deploy could choose a very privileged service
-account and make their code run with that access. For `devpolaris-orders-api`, the deployer
-may need permission to deploy Cloud Run and permission to act as:
+Act-as access lets the deployer attach that service account to the service it is deploying.
+That extra check prevents a dangerous shortcut. Without it, a user who can deploy could
+choose a very privileged service account and make their code run with that access. For
+`devpolaris-orders-api`, the deployer may need permission to deploy Cloud Run and permission
+to act as:
 
 ```text
 orders-api-prod@devpolaris-orders-prod.iam.gserviceaccount.com
@@ -258,10 +257,10 @@ For `devpolaris-orders-api`, that might include:
 | Emit logs | Logging service path | Usually handled by the runtime environment |
 | Read container image | Artifact Registry path | Needed by the runtime or deployment path depending on setup |
 
-The table is not a copy-paste permission plan. It is a thinking plan. Start from the app's
-dependency list. Then map each dependency to a resource. Then choose the smallest role and
-scope that supports the dependency. Avoid granting permissions because "the app may need it
-later." Later is when you add access with a new reason.
+Use this table as a thinking plan rather than a copy-paste permission plan. Start from the
+app's dependency list. Then map each dependency to a resource. Then choose the smallest role
+and scope that supports the dependency. Avoid granting permissions because "the app may need
+it later." Later is when you add access with a new reason.
 
 Production IAM should describe current needs. The deployer identity gets a different map. It
 needs to update Cloud Run. It may need to push or select a container image. It may need to
@@ -310,10 +309,10 @@ Use these questions:
 | Where are those roles attached? | Scope controls blast radius |
 | Does audit logging show expected use? | Evidence helps confirm the identity is still needed |
 
-The checklist should not feel like paperwork. It is how you keep production understandable.
-When a new engineer joins on-call, they should be able to answer what `orders-api-prod` does
-by reading the service account name, its IAM bindings, and recent audit logs. If that takes
-an hour, the identity model is too muddy.
+The checklist keeps production understandable. When a new engineer joins on-call, they
+should be able to answer what `orders-api-prod` does by reading the service account name,
+its IAM bindings, and recent audit logs. If that takes an hour, the identity model is too
+muddy.
 
 ## The Operating Habit
 

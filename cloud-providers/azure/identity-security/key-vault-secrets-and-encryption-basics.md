@@ -43,9 +43,11 @@ A **secret** is a sensitive value you retrieve, such as a password or connection
 A **key** is cryptographic key material that Key Vault can use for operations such as wrapping, unwrapping, signing, verifying, encrypting, or decrypting.
 A **certificate** is an X.509 certificate object, usually for TLS, with lifecycle information and often a related key and secret behind it.
 
-Key Vault exists because application teams need a shared place for sensitive values that is separate from code and ordinary configuration.
-The point is not only storage.
-The point is controlled access, audit history, versions, recovery after accidental deletion, and a cleaner way for applications to get secrets without carrying their own long-lived password.
+Key Vault exists because application teams need a shared place for
+sensitive values that is separate from code and ordinary configuration.
+It provides controlled access, audit history, versions, recovery after
+accidental deletion, and a cleaner way for applications to get secrets
+without carrying their own long-lived password.
 
 This article follows one running example:
 `devpolaris-orders-api` is a Node backend running in Azure.
@@ -61,9 +63,12 @@ That may sound like several moving parts, but the day-to-day question stays smal
 
 ## If You Know AWS Secrets Manager, Parameter Store, And KMS
 
-If you have learned a little AWS before, you may already know three separate ideas:
-AWS Secrets Manager for sensitive values with rotation workflows, Systems Manager Parameter Store for named configuration parameters, and AWS KMS for cryptographic keys.
-Azure Key Vault overlaps with all three, but it is not a perfect one-to-one replacement for any single one.
+If you have learned a little AWS before, you may already know three
+separate ideas: AWS Secrets Manager for sensitive values with rotation
+workflows, Systems Manager Parameter Store for named configuration
+parameters, and AWS KMS for cryptographic keys. Azure Key Vault overlaps
+with all three, but its secrets, keys, and certificates have their own
+Azure permission and lifecycle model.
 
 The beginner-friendly way to compare them is by job:
 
@@ -161,11 +166,12 @@ The app uses it to check a signature from the payment provider.
 If the value leaks, someone may be able to fake webhook calls.
 That means the value should be stored in Key Vault, rotated when needed, and kept out of logs.
 
-A key is different.
-A Key Vault key is usually used through cryptographic operations.
-For example, an Azure service may ask Key Vault to wrap or unwrap a data encryption key.
-The service is proving that it is allowed to use the key.
-It is not asking Key Vault to print the raw private key into an environment variable.
+A key is different. A Key Vault key is usually used through
+cryptographic operations. For example, an Azure service may ask Key
+Vault to wrap or unwrap a data encryption key. The service proves that
+it is allowed to use the key, and Key Vault performs the operation
+without handing the raw private key to the app as an environment
+variable.
 
 That distinction helps with customer-managed keys.
 When the orders team says `orders-data-key`, they should not picture a long base64 string copied into Node.
@@ -465,10 +471,11 @@ Customer-managed keys give you more responsibility.
 If you disable the key, remove the service identity's access, purge the key, or delete the vault without a recovery path, the dependent service may lose access to encrypted data.
 That is why purge protection and careful role assignment matter more when keys protect service data.
 
-The beginner tradeoff is simple:
-Microsoft-managed keys reduce operational work.
-Customer-managed keys give your team more control over key access and lifecycle.
-More control also means more ways to break your own service if the key is deleted, disabled, or inaccessible.
+The tradeoff is operational control. Microsoft-managed keys reduce
+operational work. Customer-managed keys give your team more control over
+key access and lifecycle, and that extra control also creates more ways
+to break your own service if the key is deleted, disabled, or
+inaccessible.
 
 ## Evidence You Can Trust During A Review
 
@@ -551,9 +558,10 @@ $ az keyvault secret show \
 SecretNotFound: A secret with name 'orders-db-connection-string' was not found in this key vault.
 ```
 
-The fix direction is not to create a production secret in the staging vault just to make the command pass.
-First confirm `KEY_VAULT_URI`, subscription, resource group, and vault resource ID.
-Then point the app or pipeline at the correct environment.
+If a staging app points at the wrong vault, confirm `KEY_VAULT_URI`,
+subscription, resource group, and vault resource ID. Then point the app
+or pipeline at the correct environment instead of creating a production
+secret in the staging vault just to make the command pass.
 
 The third failure is an identity that lacks `get` permission for secrets.
 The app can start, but the first secret read fails:
@@ -641,11 +649,11 @@ A database credential rotation can break active connections.
 A webhook secret rotation can make valid provider calls fail if the app checks the wrong value.
 A certificate rotation can leave a public endpoint serving an expired certificate if the platform did not pick up the new version.
 
-Before you delete, ask:
-is this object used by a running app or by encryption at rest?
-If it is a secret, deletion can break startup or external integrations.
-If it is a key used for customer-managed encryption, deletion or purge can be much more serious.
-Soft-delete helps with recovery, but it is not a reason to be casual.
+Before you delete, ask whether the object is used by a running app or by
+encryption at rest. Secret deletion can break startup or external
+integrations. Key deletion or purge can be much more serious when the
+key protects customer-managed encryption. Soft-delete helps with
+recovery, but deletion still deserves careful review.
 
 Before you close the ticket, collect evidence that does not leak values:
 vault URI, resource ID, managed identity principal ID, role assignment scope, object ID, current version, and any platform setting that points to the object.

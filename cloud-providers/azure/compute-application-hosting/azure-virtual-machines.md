@@ -59,9 +59,9 @@ a payment partner requires a legacy Linux agent that watches a local spool direc
 The agent is not available as a managed extension in the team's preferred app platform.
 For the first production move, a Linux VM is the clearer choice.
 
-The goal is not to make VMs look better than managed services.
-The goal is to know when a VM is the honest answer and to understand what that answer gives back to your team:
-operating-system control, legacy agent support, special networking, and direct server ownership.
+This article teaches when a VM is the honest answer and what that answer
+gives back to your team: operating-system control, legacy agent support,
+special networking, and direct server ownership.
 
 > A VM is a good choice when the server details are part of the product, not just packaging around it.
 
@@ -93,10 +93,11 @@ An EC2 instance lives in an AWS account and Region.
 An Azure VM lives under a subscription and resource group.
 When you operate production, always prove you are looking at the right subscription and resource group before restarting or resizing a VM.
 
-The second Azure-specific habit is noticing the network interface.
-Traffic does not magically enter the VM because the VM exists.
-The VM's network interface sits in a subnet, and network security groups decide what inbound and outbound traffic is allowed.
-If `devpolaris-orders-api` is listening correctly but no request reaches it, the VM process may be fine while the NSG path is wrong.
+The second Azure-specific habit is noticing the network interface. The
+VM network interface sits in a subnet, and network security groups
+decide what inbound and outbound traffic is allowed. If
+`devpolaris-orders-api` is listening correctly but no request reaches
+it, the VM process may be fine while the NSG path is wrong.
 
 The third Azure-specific habit is managed identity.
 On EC2, you learn not to paste AWS access keys into `.env`.
@@ -162,15 +163,9 @@ The first inventory for this setup might look like this:
 | Managed identity | `id-orders-api-prod` | What Azure permissions the app can request |
 | OS disk | Managed disk | The boot disk that holds OS, packages, app files, and logs |
 
-This table is not only planning paperwork.
-It is the first diagnostic map.
-When the API fails, each row becomes a place to prove state.
-Is the VM running?
-Is the right image installed?
-Is the service listening?
-Is the disk full?
-Is the NSG allowing only the intended source?
-Is the managed identity assigned and granted the right role?
+Use this table as the first diagnostic map. When the API fails, each row
+becomes a place to prove state: the VM power state, image, service,
+disk, NSG, managed identity, and role assignment.
 
 Here is the kind of status evidence you want before debugging the app itself:
 
@@ -243,10 +238,12 @@ Explicit is useful when the team needs control, but explicit also means the team
 
 ## First Boot, cloud-init, And systemd
 
-A new Linux VM is only a machine.
-It is not an application server until something prepares it.
-On Azure Linux VMs, first-boot setup often uses cloud-init.
-Azure passes custom data during provisioning, and cloud-init can use that data to install packages, write files, create users, and run setup commands.
+A new Linux VM starts as only a machine. It becomes an application
+server after something prepares the operating system, packages, users,
+files, and service process. On Azure Linux VMs, first-boot setup often
+uses cloud-init, where Azure passes custom data during provisioning and
+cloud-init uses it to install packages, write files, create users, and
+run setup commands.
 
 This is similar to EC2 user data, but keep the Azure wording straight.
 The feature is custom data.
@@ -429,8 +426,8 @@ Filesystem      Size  Used Avail Use% Mounted on
 ```
 
 At `99%`, the next deployment, package update, or export file may fail.
-The fix direction is not "restart the app harder."
-You need to remove safe temporary files, rotate logs, move large spool data to a separate disk or storage service, and resize or redesign storage if the workload honestly needs more room.
+Start with storage evidence instead of restarting the service repeatedly.
+Remove safe temporary files, rotate logs, move large spool data to a separate disk or storage service, and resize or redesign storage if the workload honestly needs more room.
 
 Monitoring should watch both Azure-level and guest-level signals.
 Azure can tell you VM power state, CPU, disk, network, and boot diagnostics.
@@ -541,7 +538,7 @@ $ sudo ss -ltnp | grep ':3000'
 LISTEN 0      511          0.0.0.0:3000       0.0.0.0:*    users:(("node",pid=2551,fd=22))
 ```
 
-The calm diagnostic path is:
+The diagnostic path is:
 
 | Step | Question | Evidence |
 |------|----------|----------|
@@ -602,9 +599,9 @@ Do not let it become permanent only because nobody wrote the next plan.
 
 ## A VM Readiness Checklist
 
-Before you call a VM-hosted service production-ready, check the server like an operator, not only like a deployer.
-The question is not "did Azure create the VM?"
-The question is "can this service run, fail, explain itself, and be repaired?"
+Before you call a VM-hosted service production-ready, check the server
+like an operator, not only like a deployer. Ask whether the service can
+run, fail, explain itself, and be repaired.
 
 Use this first checklist for `devpolaris-orders-api`:
 
@@ -622,9 +619,9 @@ Use this first checklist for `devpolaris-orders-api`:
 | Patch path exists | OS and agent updates have an owner and maintenance plan |
 | Recovery is practiced | The team can rebuild or replace the VM from known artifacts |
 
-This checklist is not ceremony.
-It is kindness to your future self.
-When a VM is the honest choice, make it an operated server from day one.
+The checklist is useful because a VM is an operated server from day one.
+It gives future you a clear record of patching, access, identity, disks,
+backups, logs, and traffic controls.
 
 ---
 

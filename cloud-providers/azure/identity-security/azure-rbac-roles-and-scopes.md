@@ -53,11 +53,12 @@ A principal is the identity getting access, such as a user, group, service princ
 A role is a reusable set of permissions, such as Reader, Contributor, or Owner.
 A scope is the place where those permissions apply, such as one resource group or one resource.
 
-This article follows one running example:
-the `devpolaris-orders-api` production environment lives in a resource group called `rg-devpolaris-orders-prod`.
-The team needs to let humans inspect production, let a pipeline deploy the app, and let the running app read only the resources it needs.
-The goal is not to memorize every Azure role.
-The goal is to make safe access decisions without guessing.
+This article follows one running example: the `devpolaris-orders-api`
+production environment lives in a resource group called
+`rg-devpolaris-orders-prod`. The team needs to let humans inspect
+production, let a pipeline deploy the app, and let the running app read
+only the resources it needs. The focus is safe access decisions without
+guessing.
 
 > Azure access becomes easier when you read every permission as identity plus role plus scope.
 
@@ -72,10 +73,12 @@ Azure RBAC access is usually expressed as a role assignment.
 The role assignment binds one principal to one role definition at one scope.
 That sentence is the Azure version of "who gets which permissions on which resources?"
 
-The comparison is useful, but it is not a perfect dictionary.
-AWS IAM policies are JSON documents that often name actions and resources directly.
-Azure built-in roles are role definitions managed by Azure, and you assign those role definitions at Azure scopes.
-Azure scopes are part of the Azure resource hierarchy, and lower scopes inherit role assignments from higher scopes.
+The comparison is useful as a bridge, but Azure organizes the pieces
+differently. AWS IAM policies are JSON documents that often name actions
+and resources directly. Azure built-in roles are role definitions
+managed by Azure, and you assign those role definitions at Azure scopes.
+Azure scopes are part of the Azure resource hierarchy, and lower scopes
+inherit role assignments from higher scopes.
 
 Here is the bridge in practical terms:
 
@@ -102,11 +105,9 @@ principal, role definition, scope, and inheritance.
 
 ## Role Assignments In One Picture
 
-A role assignment is the actual permission binding.
-It is not just the name of a role.
-It is not just the identity.
-It is the record that says:
-this identity gets this role at this scope.
+A role assignment is the actual permission binding: this identity gets
+this role at this scope. You need all three parts to understand what
+access really exists.
 
 First, keep the role assignment itself small in your head.
 The plain-English labels come first.
@@ -232,9 +233,9 @@ $ az role assignment create \
 }
 ```
 
-The important part is not the command length.
-The important part is the shape:
-the identity is the managed identity object ID, the role is `AcrPull`, and the scope is the registry resource.
+The command length matters less than the shape: the identity is the
+managed identity object ID, the role is `AcrPull`, and the scope is the
+registry resource.
 
 ## Scopes Decide How Far Access Travels
 
@@ -331,11 +332,12 @@ She can restart the Container App and update settings.
 When she tries to grant `mi-orders-api-prod` access to Key Vault, Azure denies the role assignment.
 That is expected because she does not have a role that includes `Microsoft.Authorization/roleAssignments/write`.
 
-The fix is not to make every deployer Owner.
-The fix is to have a narrow access-management path.
-For example, a platform group with Role Based Access Control Administrator or User Access Administrator can approve and create role assignments at the needed scope.
-Some teams also use temporary elevation for production access, but the habit is the same:
-access changes should be more carefully controlled than normal resource updates.
+Use a narrow access-management path for role assignment changes. For
+example, a platform group with Role Based Access Control Administrator
+or User Access Administrator can approve and create role assignments at
+the needed scope. Some teams also use temporary elevation for production
+access, but the habit is the same: access changes should be more
+carefully controlled than normal resource updates.
 
 ## Least Privilege For The Orders API
 
@@ -384,10 +386,10 @@ Role         Scope
 Contributor  /subscriptions/11111111-2222-3333-4444-555555555555
 ```
 
-This output is a warning.
-It does not mention the orders resource group at all.
-It says the deployer group has Contributor on the whole subscription.
-If that subscription contains more than the orders API, the assignment is broader than the work.
+This output warns that the deployer group has Contributor on the whole
+subscription, and it does not mention the orders resource group at all.
+If that subscription contains more than the orders API, the assignment
+is broader than the work.
 
 A safer evidence shape looks like this:
 
@@ -500,10 +502,11 @@ Role         Scope
 Contributor  /subscriptions/11111111-2222-3333-4444-555555555555
 ```
 
-The fix direction is not to remove access blindly.
-First ask what job required that subscription assignment.
-If the person only needs orders access, replace the broad subscription assignment with a narrower resource group or resource assignment.
-If the person has a platform role, make sure it is owned, reviewed, and expected.
+Before removing broad access, ask what job required that subscription
+assignment. If the person only needs orders access, replace the broad
+subscription assignment with a narrower resource group or resource
+assignment. If the person has a platform role, make sure it is owned,
+reviewed, and expected.
 
 The third failure is Contributor trying to assign roles.
 Contributor can manage many resources, but it cannot assign Azure RBAC roles.
@@ -591,9 +594,9 @@ Reviewer: orders service owner
 Review date: 2026-06-01
 ```
 
-This is not paperwork for its own sake.
-It keeps access understandable when the team grows.
-It also makes cleanup safer because you can tell which assignments are still serving a real job.
+The review record keeps access understandable when the team grows. It
+also makes cleanup safer because you can tell which assignments are
+still serving a real job.
 
 Use this quick checklist before assigning access:
 
@@ -606,9 +609,10 @@ Use this quick checklist before assigning access:
 | Could inheritance make this wider than intended? | Checked parent scopes and documented the decision |
 | Who can remove it later? | A clear owner or review group |
 
-The best RBAC model is not the one with the most custom roles or the longest process.
-It is the one a careful teammate can read during a release or incident and understand quickly.
-For `devpolaris-orders-api`, that means no mystery Owners, no subscription-level Contributor for app-only work, and no stale principals hiding in the access list.
+A good RBAC model is readable during a release or incident. For
+`devpolaris-orders-api`, that means no mystery Owners, no
+subscription-level Contributor for app-only work, and no stale
+principals hiding in the access list.
 
 When you remember only one thing, remember the shape:
 identity, role, scope.

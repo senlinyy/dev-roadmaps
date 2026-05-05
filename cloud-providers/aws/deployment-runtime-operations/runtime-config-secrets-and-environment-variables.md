@@ -37,15 +37,13 @@ It would also make secrets easier to leak into places that were never meant to s
 
 In AWS, runtime config sits between a deployable artifact and a trusted running service.
 For ECS on Fargate, the container image comes from Amazon ECR, but the task definition tells ECS what values to attach when it starts a task.
-The task definition is not just plumbing.
-It is a contract that says, "this image expects these names to exist when it wakes up."
+The task definition is the runtime contract that says, "this image expects these names to exist when it wakes up."
 
 The running example in this article is a Node.js backend named `devpolaris-orders-api`.
 It handles order creation for DevPolaris.
 It runs on Amazon ECS with Fargate.
 The app reads values from `process.env`.
-The operational question is not only "did the image build?"
-The question is "did the image receive the runtime contract it needs?"
+The operational question is "did the image receive the runtime contract it needs?", not merely "did the image build?"
 
 That contract can break a healthy image.
 A task can run an image that passed tests yesterday and still fail today because `DATABASE_URL` points at the wrong database, `PAYMENT_WEBHOOK_SECRET` is missing, or the ECS role cannot read the secret.
@@ -276,7 +274,7 @@ They are private values copied into places that remember too much.
 Secrets do not belong in Git.
 Git history is durable.
 If a real `DATABASE_URL` is committed and then removed, the old commit can still exist in clones, pull request diffs, build caches, forks, and backups.
-The fix is usually rotation, not just deleting the line.
+The fix is usually rotation because deleting the line only changes the latest version of the file.
 
 Secrets do not belong in container images.
 A Dockerfile line like this turns the image registry into an accidental secret store:
@@ -539,9 +537,7 @@ $ aws logs filter-log-events \
 ]
 ```
 
-The habit is simple:
-prove names, sources, versions, roles, and startup behavior.
-Keep the secret value out of the diagnostic trail.
+The diagnostic path is to prove names, sources, versions, roles, and startup behavior while keeping the secret value out of the trail.
 
 ## Rotate, Roll Back, And Record The Contract
 
@@ -606,8 +602,7 @@ One last practical checklist keeps the contract honest:
 | Restart tasks after secret rotation | New processes receive new values |
 | Keep previous task revision available | Fast rollback when config breaks |
 
-The point is not to make configuration scary.
-The point is to treat it with the respect it already demands.
+Treat configuration with the respect it already demands.
 For a production service, runtime config is part of the release.
 When you can read it that way, a broken deployment becomes less mysterious:
 the image, task definition, secret store, IAM role, logs, and health checks each have a job, and you know which one to inspect next.

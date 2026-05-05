@@ -104,11 +104,10 @@ flowchart TD
     Alerts --> Decision
 ```
 
-This is not meant to be slow ceremony. It is meant to
-catch failures at the cheapest point. If the health
-check fails, do not send more traffic. If the smoke
-test fails, stop before users discover it. If real
-telemetry degrades, make a release decision quickly.
+Verification should catch failures at the cheapest point. If the health
+check fails, do not send more traffic. If the smoke test fails, stop
+before users discover it. If real telemetry degrades, make a release
+decision quickly.
 
 ## Health Checks Prove The App Can Serve
 
@@ -229,9 +228,8 @@ Azure SQL dependency failures: 1 transient timeout
 decision: continue watching, do not increase traffic yet
 ```
 
-That decision is calm. The release is not perfect, but
-it is not clearly bad. The team keeps watching before
-increasing traffic.
+That decision is cautious. The release is not perfect, but it is not
+clearly bad, so the team keeps watching before increasing traffic.
 
 ## Azure Monitor Alerts Watch The Release Window
 
@@ -311,7 +309,7 @@ practice.
 | The release changed a database migration and old code cannot read the new schema | Do not assume rollback is safe. Stop traffic increase, protect data, and follow the migration recovery plan | Migration record, schema compatibility, data writes since release, and whether old and new code can coexist |
 | An alert fires, but the dashboard looks normal | Hold the rollout and inspect the alert signal before changing traffic | Alert scope, metric aggregation, time window, and whether the alert targets the new version or all traffic |
 
-The goal is to make the next action calm and
+The goal is to make the next action specific and
 explainable.
 
 ## A Practical Post-Release Checklist
@@ -361,12 +359,10 @@ production action: swap completed
 rollback target: swap back to previous production slot state
 ```
 
-The checklist is not there to slow the team down. It
-keeps the release owner from relying on memory while
-production is changing. Good release verification makes
-the decision visible: keep the rollout moving, hold
-traffic, roll back, or fix forward. That is the whole
-operating skill.
+The checklist keeps the release owner from relying on memory while
+production is changing. Good release verification makes the decision
+visible: keep the rollout moving, hold traffic, roll back, or fix
+forward. That is the operating skill.
 
 ---
 

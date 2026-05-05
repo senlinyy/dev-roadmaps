@@ -46,7 +46,7 @@ GCP. The first version may run in one region on Cloud Run and use Cloud
 SQL plus Cloud Storage. That sounds simple. The location choices still
 matter.
 
-> A region is not just where the app lives. It is part of the app's latency, failure, data, and cost story.
+> Region choice affects where the app runs, how far requests travel, what can fail together, where data lives, and what it costs.
 
 ## If You Know AWS Or Azure Regions
 
@@ -65,9 +65,9 @@ This comparison is enough to get started:
 | AWS global services | GCP global resources | Some GCP resources are global, but many app runtimes and databases are regional or zonal |
 | Azure resource group location | No exact GCP match | A GCP project is not located in one region |
 
-The last row is easy to miss. A GCP project is not "in"
-`us-central1`. The project can contain resources in many locations.
-Location belongs to resources and services, not to the project itself.
+The last row is easy to miss. A GCP project can contain resources in
+many locations. Location belongs to resources and services, not to the
+project itself.
 
 That means project names like `devpolaris-orders-prod` tell you the
 environment and app boundary. They do not tell you where every resource
@@ -91,10 +91,9 @@ Cloud Storage receipt bucket: reviewed location, likely us-central1 for first pa
 logs and metrics: collected for operating the service
 ```
 
-This record is not final architecture. It is a first operating choice.
-It keeps the app and database close. It makes logs and metrics easier to
-reason about. It gives the team one primary location to inspect during a
-first incident.
+This record captures a first operating choice. It keeps the app and
+database close. It makes logs and metrics easier to reason about. It
+gives the team one primary location to inspect during a first incident.
 
 The first map looks like this:
 
@@ -144,8 +143,8 @@ different design. That later design could involve another region,
 different storage placement, replication, or a product-level decision
 about latency and recovery.
 
-The important point is that a region choice is not only a dropdown
-field. It is a product and operations decision.
+Region choice is a product and operations decision, not a dropdown field
+to click through quickly.
 
 ## Zones Are Failure Areas Inside A Region
 
@@ -180,8 +179,8 @@ Global network resource:
   inspect how it connects to regional backends
 ```
 
-The word "zone" is not advanced. It is the answer to "what fails
-together at a smaller scale than a region?"
+Use "zone" to answer one practical question: what fails together at a
+smaller scale than a region?
 
 ## Global Regional And Zonal Resources Behave Differently
 
@@ -241,8 +240,8 @@ service. If the service is spread across regions without a clear data
 plan, a failover may be confusing or unsafe.
 
 For a beginner system, one region is often easier to operate than a
-half-designed multi-region system. That is not a weakness. It is an
-honest first step. The team should know the tradeoff:
+half-designed multi-region system. That is an honest first step as long
+as the team knows the tradeoff:
 
 | Choice | What you gain | What you give up |
 |---|---|---|
@@ -250,8 +249,8 @@ honest first step. The team should know the tradeoff:
 | Multiple zones for zonal resources | Better tolerance of a zone problem | More placement and routing decisions |
 | Multi-region design | Higher resilience and closer users when done well | More data, cost, and operational complexity |
 
-The key phrase is "when done well." Multi-region architecture is not a
-magic safety button. It is a larger design.
+The key phrase is "when done well." Multi-region architecture is a
+larger design with its own data, routing, cost, and recovery work.
 
 ## Do Not Split The App And Database By Accident
 
@@ -289,7 +288,7 @@ later, location may matter differently than the order database write
 path. You do not need the same answer for every resource. You need an
 answer you can explain.
 
-The practical rule is simple: place the app, database, storage, and
+The practical rule is to place the app, database, storage, and
 users on the same whiteboard before choosing locations. If two connected
 resources are far apart, write down why.
 
@@ -371,8 +370,8 @@ symptom: compliance review asks for data location
 first check: bucket location and data requirements
 ```
 
-The fix direction is not guessing. Inspect the resource location and
-compare it with the data policy the product actually needs.
+Inspect the resource location and compare it with the data policy the
+product actually needs.
 
 Location is one of the easiest things to choose quickly and regret
 slowly. A short review before creation is cheaper than moving stateful

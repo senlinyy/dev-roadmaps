@@ -62,7 +62,7 @@ They are not bad because environment variables are always bad.
 They are bad because they are long-lived credentials that now need storage, rotation, audit, and cleanup.
 If the same key appears in a pipeline, local `.env` file, and production container revision, nobody feels fully sure which copy is still active.
 
-With managed identity, the useful target is calmer:
+With managed identity, the useful target is more specific:
 
 ```text
 Container App: ca-devpolaris-orders-api-prod
@@ -199,8 +199,7 @@ const secretClient = new SecretClient(
 );
 ```
 
-This snippet is not the whole application.
-It only shows the important identity pattern.
+This snippet only shows the important identity pattern.
 The code passes a credential object to Azure SDK clients.
 Locally, that credential may use a developer login.
 In Azure Container Apps, it should use the attached managed identity.
@@ -289,10 +288,10 @@ storageAccount=stdevpolarisordersprod
 container=invoices
 ```
 
-The useful clue is the status and code.
-This is not a missing password.
-This is not a network timeout.
-The target service understood the request and said the identity does not have the required data permission.
+The useful clue is the status and code. The target service understood
+the request and rejected the caller because the identity lacks the
+required data permission. Start with the role assignment and scope for
+that managed identity.
 
 ## RBAC Is The Permission, Identity Is The Caller
 
@@ -380,8 +379,7 @@ Runtime roles not expected:
   Owner on sub-devpolaris-prod
 ```
 
-The "not expected" lines are not decoration.
-They help a reviewer catch a dangerous shortcut.
+The "not expected" lines give the reviewer a quick way to catch dangerous shortcuts.
 If the runtime identity has `Contributor` on the whole resource group, the app may be able to manage resources it only needed to read.
 
 ## App Identity Lifecycle

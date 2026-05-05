@@ -25,9 +25,9 @@ id: article-cloud-providers-gcp-compute-application-hosting-cloud-run-services-b
 ## A Container Is Not A Running Service Yet
 
 A container image is a package. It can contain your Node.js app, its dependencies, and the
-command that starts the process. That image is important, but it is not the same thing as a
-production service. A production service also needs a URL, a region, a service account,
-configuration values, logs, health checks, and a way to move traffic between versions.
+command that starts the process. A production service adds the runtime shape around that
+package: a URL, a region, a service account, configuration values, logs, health checks, and
+a way to move traffic between versions.
 
 Cloud Run turns a container into a managed service. You give Cloud Run something runnable,
 usually a container image from Artifact Registry or source code that becomes an image. Cloud
@@ -148,8 +148,8 @@ message: container failed to start and listen on the port provided by PORT=8080
 first check: server startup command and port binding
 ```
 
-The fix is not a broader IAM role or a new database setting. The fix is to make the
-container obey the runtime contract.
+The right fix is to make the container obey the runtime contract, not to change IAM or the
+database while the port binding is still wrong.
 
 ## Revisions Make Deployments Inspectable
 
@@ -183,10 +183,10 @@ Cloud Run lets traffic point at revisions. That means deployment and exposure ar
 but not identical. A team can create a revision and choose whether it receives all traffic,
 some traffic, or no traffic. That is useful for safe rollouts and direct testing.
 
-For a beginner, the important lesson is simple: "deployed" does not always mean "serving
-users." You must inspect traffic assignment. A revision can be healthy and still receive no
-customer requests. Another revision can keep serving users because traffic still points at
-the older version.
+For a beginner, the important lesson is that "deployed" does not always mean "serving
+users." Inspect traffic assignment. A revision can be healthy and still receive no customer
+requests. Another revision can keep serving users because traffic still points at the older
+version.
 
 Here is a practical traffic snapshot:
 
@@ -198,9 +198,9 @@ devpolaris-orders-api-00018       100%
 latest ready revision             devpolaris-orders-api-00018
 ```
 
-If the team deploys a fix and users still see the old behavior, the first check is not only
-the image build. Check whether a new revision exists and whether traffic points to it. That
-one habit saves a lot of confused debugging.
+If the team deploys a fix and users still see the old behavior, check both the image build
+and Cloud Run traffic. Confirm that a new revision exists and that traffic points to it
+before debugging the app again.
 
 ## Service Identity Decides Runtime Access
 
@@ -245,10 +245,10 @@ For `devpolaris-orders-api`, a safe review separates ordinary settings from secr
 | Secret reference | `ORDERS_DB_URL` | Can the runtime service account read this secret? |
 | Service account | `orders-api-prod` | Does this revision run as the expected identity? |
 
-The common production bug is not "the code changed." It is "the runtime input changed." The
-image can be correct while a missing setting makes the app fail. The image can be correct
-while a secret reference points at the wrong environment. Treat runtime input changes with
-the same seriousness as code changes.
+Many production bugs come from runtime input changes rather than code changes. The image can
+be correct while a missing setting makes the app fail. The image can be correct while a
+secret reference points at the wrong environment. Treat runtime input changes with the same
+seriousness as code changes.
 
 ## Logs And Health Are The First Debugging Surface
 
@@ -281,10 +281,10 @@ credentials. Good logs are careful, not silent.
 ## Scaling Changes How You Think About State
 
 Cloud Run can run multiple container instances for the same service. That changes how the
-app should think about memory, files, and background work. A value stored in one instance's
-memory is not shared with other instances. A local file written by one instance is not a
-durable product record. A background loop inside an HTTP service may run in more copies than
-you expected.
+app should think about memory, files, and background work. Each instance has its own memory,
+so a value stored in one instance is invisible to the others. Local files belong to a
+replaceable instance, not to the durable product record. A background loop inside an HTTP
+service may run in more copies than you expected.
 
 For the orders API, durable state belongs in managed data services. Order records belong in
 Cloud SQL or another chosen database. Receipt exports belong in Cloud Storage. Runtime
@@ -364,9 +364,9 @@ fill out this review:
 | First rollback target | Previous healthy revision |
 | Evidence | Startup logs, request logs, revision status, traffic split |
 
-This table is not paperwork for its own sake. It is a map for the first incident. If the
-service fails, each row becomes a place to inspect. That is the real value of Cloud Run:
-less server work, more visible service contracts, and a clearer path from code to runtime.
+This review table maps the first incident response. If the service fails, each row becomes a
+place to inspect. That is the real value of Cloud Run: less server work, more visible
+service contracts, and a clearer path from code to runtime.
 
 ---
 

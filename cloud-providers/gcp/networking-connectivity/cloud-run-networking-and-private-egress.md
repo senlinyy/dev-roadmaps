@@ -34,9 +34,8 @@ It calls databases, APIs, storage, and other services. Those two edges need diff
 settings. For `devpolaris-orders-api`, users call the API over HTTPS. The API then calls
 Cloud SQL, Secret Manager, Cloud Storage, and Cloud Logging. Some calls may use public
 Google API paths with IAM. Some calls may need private VPC egress. The main beginner mistake
-is treating "Cloud Run is serverless" as "Cloud Run is not in the network."
-
-It is still in the request path. You just configure the path at a higher level.
+is treating "Cloud Run is serverless" as "networking no longer matters." Cloud Run is still
+in the request path. You just configure the path at a higher level.
 
 ## Two Directions: Ingress And Egress
 
@@ -166,9 +165,7 @@ may look like:
 Error: connect ETIMEDOUT 10.50.4.3:5432
 ```
 
-That error is not asking for a broader IAM role.
-
-It is asking you to check the network path to `10.50.4.3`.
+That error points to the network path to `10.50.4.3`, not to a broader IAM role.
 
 ## Direct VPC Egress And Serverless VPC Access
 
@@ -176,13 +173,11 @@ Cloud Run can send traffic to a VPC network through Direct VPC egress. Direct VP
 lets the Cloud Run service use a VPC network and subnet for outbound traffic without a
 Serverless VPC Access connector. Serverless VPC Access connectors are still available for
 cases where direct egress is not the option the team uses. For a beginner module, the
-important idea is not to memorize every connector detail.
-
-The important idea is that Cloud Run needs an explicit outbound path to private VPC
-resources. With Direct VPC egress, the service revision is configured with a network,
-subnet, and egress setting. The subnet supplies private addresses for instances as they run
-and scale. That means subnet capacity can matter. If the subnet is too small, scaling can
-hit address pressure.
+important idea is that Cloud Run needs an explicit outbound path to private VPC resources.
+With Direct VPC egress, the service revision is configured with a network, subnet, and
+egress setting. The subnet supplies private addresses for instances as they run and scale.
+That means subnet capacity can matter. If the subnet is too small, scaling can hit address
+pressure.
 
 This can feel strange because Cloud Run hides servers from you. But private networking still
 needs address space. Serverless does not mean addressless.
@@ -198,12 +193,10 @@ The choice affects routing, cost, observability, and failure behavior. For
 `devpolaris-orders-api`, private ranges only might be enough if the service only needs VPC
 egress for Cloud SQL private IP and internal addresses. All traffic might be chosen if the
 team wants centralized egress control, NAT, inspection, or a consistent outbound IP pattern.
-All traffic is not automatically safer.
-
-It is more controlled, but it also requires the team to provide working routes for all
-outbound destinations. If the service calls a tax API on the public internet and all traffic
-is sent through a VPC with no internet egress path, checkout can fail. The egress mode
-should match the dependency list. Do not choose it from habit.
+All traffic can be more controlled, but it also requires the team to provide working routes
+for all outbound destinations. If the service calls a tax API on the public internet and all
+traffic is sent through a VPC with no internet egress path, checkout can fail. The egress
+mode should match the dependency list. Do not choose it from habit.
 
 ## Private Cloud SQL Is A Path, Not A Checkbox
 

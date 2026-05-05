@@ -96,7 +96,7 @@ In plain English:
 
 The key design looks strange if you expect a SQL table with columns like `id`, `user_id`, and `created_at`. The prefix in `IDEMPOTENCY#...` is intentional. It gives the item a type inside the key value. That makes logs and debugging easier, and it leaves room for multiple kinds of checkout state to live in the same table later.
 
-This is not the only valid table shape. Some teams use one table per feature. Some teams use a broader single-table design where several item types share one table. As a beginner, do not start by trying to master every single-table design pattern. Start with the key question: what does the application need to read, and what key will it have at that moment?
+Several table shapes can work. Some teams use one table per feature. Some teams use a broader single-table design where several item types share one table. As a beginner, start with the key question before trying to master every single-table design pattern: what does the application need to read, and what key will it have at that moment?
 
 ## The Running Example: Checkout State Beside RDS
 
@@ -173,7 +173,7 @@ That is the everyday DynamoDB posture: know the question, know the key, read the
 
 The most useful DynamoDB feature for checkout is not a fancy query. It is a conditional write. A conditional write says: "Only write this item if this condition is true."
 
-For idempotency, the condition is simple: only create the request record if the key does not already exist. That prevents two retrying requests from both thinking they are first. The first request creates the item. The second request tries to create the same item and gets a conditional failure.
+For idempotency, the condition says to create the request record only if the key does not already exist. That prevents two retrying requests from both thinking they are first. The first request creates the item. The second request tries to create the same item and gets a conditional failure.
 
 The item being written might be small:
 
@@ -264,7 +264,7 @@ Now the app has two useful reads:
 | What is the current job status? | `pk = JOB#{jobId}` and `sk = STATUS` |
 | What happened during this job? | `pk = JOB#{jobId}` and `sk begins_with EVENT#` |
 
-The sort key does two jobs here. It names the item type, and it gives the event items a time-based order. This is not the same as a SQL join. You are not asking DynamoDB to join jobs to events to orders. You are keeping a small item collection together because the app often reads it together.
+The sort key does two jobs here. It names the item type, and it gives the event items a time-based order. DynamoDB is not joining jobs to events to orders like SQL would. You are keeping a small item collection together because the app often reads it together.
 
 The phrase "item collection" means all items that share the same partition key in a table with a sort key. That idea is useful, but keep it modest at first. If one partition key gathers too much traffic or too much data, it can become a hot key risk.
 
@@ -329,7 +329,7 @@ That question saves money, confusion, and future migrations.
 
 DynamoDB failures are easier to debug when you translate them back into access patterns. Most beginner problems are not mysterious database behavior. They are a mismatch between the key the table has and the question the app is asking.
 
-Start with the exact operation. Was the app trying to get one item, query an item collection, write with a condition, or call through an index? Here is a calm diagnostic path for `devpolaris-orders-api`.
+Start with the exact operation. Was the app trying to get one item, query an item collection, write with a condition, or call through an index? Here is a diagnostic path for `devpolaris-orders-api`.
 
 | Symptom | Likely Cause | What To Check | Fix Direction |
 |---------|--------------|---------------|---------------|

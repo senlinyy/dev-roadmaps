@@ -39,7 +39,7 @@ The exact field name matters less than the discipline:
 the same ID should travel with the work.
 
 Tracing is the richer version of this idea.
-It not only connects events with one ID, it also records timing and parent-child relationships between steps.
+It connects events with one ID and records timing and parent-child relationships between steps.
 But a beginner should learn correlation first.
 If your logs cannot follow one request, adding a tracing tool will feel confusing.
 
@@ -132,7 +132,7 @@ The request path helps avoid a common mistake:
 debugging from the service you personally know best.
 If you are comfortable with Node.js, you may stare at app logs.
 If you are comfortable with databases, you may stare at RDS.
-The request path asks a calmer question:
+The request path asks a more specific question:
 where did this request actually go, and where did the first bad signal appear?
 
 A healthy path might look like this:
@@ -308,8 +308,7 @@ You may use OpenTelemetry to create spans in your Node.js app.
 Those spans can be exported to different backends depending on the team's setup.
 AWS also has ways to work with OpenTelemetry in AWS environments.
 
-The beginner idea is:
-instrument the work in your app, keep names clear, and carry context across boundaries.
+The first useful tracing skill is to instrument the work in your app, keep names clear, and carry context across boundaries.
 
 For `devpolaris-orders-api`, useful instrumentation points might be:
 

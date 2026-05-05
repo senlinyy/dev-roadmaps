@@ -45,7 +45,7 @@ The public URL is `https://orders.devpolaris.com`.
 The container listens on port `3000`.
 The ALB checks `GET /health` before it forwards real order traffic.
 
-The question for this article is simple:
+This article answers this question:
 
 > What must be true after the code is deployed, but before traffic should trust it?
 
@@ -246,7 +246,7 @@ The beginner lesson is to trace the whole read path:
 secret permission first, key permission when the key policy requires it.
 
 There is another important runtime truth.
-If you update a secret value in Secrets Manager or Parameter Store, an already running task does not magically get a new environment variable value.
+If you update a secret value in Secrets Manager or Parameter Store, an already running task keeps the environment variable value it received at startup.
 Environment variables are created when the process starts.
 For ECS services, you normally force a new deployment or stop and replace tasks so new tasks read the new value.
 
@@ -262,9 +262,7 @@ on resource:
 arn:aws:secretsmanager:us-east-1:111122223333:secret:prod/orders/DATABASE_URL-a1b2c3
 ```
 
-This is not a database bug.
-It is not an Express bug.
-The app has not started.
+The app has not started, so the first checks are not the database query code or Express routing.
 The next move is to inspect the task execution role, the secret ARN, the account and Region, and the KMS key if a customer managed key is involved.
 
 Use safe metadata commands first.
@@ -322,7 +320,7 @@ Good startup logs answer a few careful questions:
 which version started, which environment started, which port is listening, which config names were present, and whether startup checks passed.
 They should not print secrets.
 They should not dump the full `process.env` object.
-Dumping every environment variable feels useful during a panic, but it can leak credentials into a durable log system.
+Dumping every environment variable may feel useful during an incident, but it can leak credentials into a durable log system.
 
 This is a safe startup log:
 
@@ -345,7 +343,7 @@ This one is not safe:
 If a log like that appears, the fix has two parts.
 First, remove the logging behavior so the app reports secret presence, not secret values.
 Second, rotate the leaked values because CloudWatch Logs is now one place where those values were exposed.
-Deleting one log event is not the same as proving nobody or no tool read it.
+Deleting one log event does not prove that nobody, no alerting tool, and no log export read it first.
 
 Logs should also make health checks visible enough to debug without flooding the log group.
 A beginner service can log health transitions and failed health checks, not every successful health request forever.
@@ -440,8 +438,7 @@ fail fast on impossible startup, wait honestly for normal startup, and only retu
 
 ## The Health Endpoint Contract
 
-`/health` is not just another route.
-It is a contract between your app and the system that sends traffic to it.
+`/health` is a contract between your app and the system that sends traffic to it.
 For `devpolaris-orders-api`, the ALB calls `/health`.
 If the app returns an accepted success code in time, the target can become healthy.
 If it times out or returns the wrong status, the target stays unhealthy.
@@ -469,10 +466,9 @@ For the orders API, a practical first contract is:
 | Third-party payment API live call | Usually no | A remote vendor blip should not always remove the API from traffic |
 | Long database migration | No | Do this before readiness or as a separate release step |
 
-That table is not universal.
-It is a judgment for this service.
+That table is a judgment for this service.
 If another service can serve cached reads while the database is temporarily down, its readiness check might be different.
-The point is to tie the check to what traffic needs, not to every system the app has ever heard of.
+Tie the check to what traffic needs, not to every system the app has ever heard of.
 
 A useful health response can give humans a little detail while keeping the ALB focused on status code:
 
@@ -693,7 +689,7 @@ The service might technically work, but the deployment created a security proble
 ```
 
 The fix direction is to remove the unsafe log line, rotate the leaked secret, and redeploy.
-The lesson is simple:
+The lesson is:
 logs are production data, not private scratch space.
 
 A practical diagnostic path keeps you from changing random settings:
@@ -766,7 +762,7 @@ Before you trust a deployment of `devpolaris-orders-api`, use a checklist like t
 | Logs | Health transitions are visible |
 | Logs | Failures name the missing condition without exposing private values |
 
-This checklist gives you a calm way to read a deployment.
+This checklist gives you a repeatable way to read a deployment.
 You are not asking whether AWS says something is running.
 You are asking whether the running app has earned trust.
 

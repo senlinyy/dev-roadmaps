@@ -55,8 +55,7 @@ Supporting event jobs:
   Lambda functions
 ```
 
-That answer is not a slogan.
-It comes from the shape of the workload.
+The answer comes from the shape of the workload.
 Checkout traffic is a long-running HTTP service.
 The team already packages the API as a container image.
 The service needs predictable VPC networking to the database and the load balancer.
@@ -296,8 +295,7 @@ The team still owns whether the app starts, answers `/health`, connects to the d
 ## When EC2 Is The Honest Choice
 
 EC2 becomes attractive when the application really needs the server to be part of the design.
-That means the operating system is not just a hidden place where code runs.
-It is a thing the team must shape directly.
+The operating system becomes something the team must shape directly, not a hidden place where code runs.
 
 For `devpolaris-orders-api`, the normal checkout path does not need that.
 But imagine the team adds a special fraud-analysis worker.
@@ -426,8 +424,7 @@ When the main work is a long-running API, use Lambda beside it rather than forci
 
 ## Cost, Scaling, And Debugging Shape
 
-Cost is not only price per second.
-Cost is also the shape of waste.
+Cost includes price per second and the shape of waste.
 Every compute choice wastes money in a different way when the design does not match the workload.
 
 EC2 can waste money when instances sit underused.
@@ -593,7 +590,7 @@ For Lambda, the promise is "this event finishes successfully within its limits."
 ## Decision Records You Can Reuse
 
 A decision record is a short note that explains why a choice was made.
-It is useful because future teammates will see the tradeoff, not only the final AWS service name.
+It is useful because future teammates will see the tradeoff as well as the final AWS service name.
 The record should be small enough to read during review.
 
 Here is the main record for `devpolaris-orders-api`:

@@ -52,9 +52,8 @@ Worker VMs call the API on an internal port for background tasks.
 A database tier accepts traffic only from the API tier.
 The team wants rules that are narrow enough to protect production and readable enough that a tired engineer can debug them safely.
 
-The goal is not to memorize every possible NSG field.
-The goal is to build the habit:
-read the packet direction, read the source and destination, read the port and protocol, then read the priority.
+Build the NSG reading habit: read the packet direction, read the source
+and destination, read the port and protocol, then read the priority.
 
 > NSGs are packet filters. RBAC is permission to manage Azure resources. Keep those two checks separate.
 
@@ -263,8 +262,7 @@ But the deny rule at priority `100` is checked first.
 It matches traffic to `asg-orders-db` before the allow rule has a chance.
 The allow rule is shadowed, which means it exists but never affects matching traffic.
 
-The fix is not to add another duplicate allow.
-The fix is to put the more specific allow before the broad deny:
+Put the more specific allow before the broad deny:
 
 ```text
 Priority  Name                                      Direction  Source            Destination     Port  Action
@@ -275,9 +273,7 @@ Priority  Name                                      Direction  Source           
 65500     DenyAllInbound                            Inbound    *                 *               *     Deny
 ```
 
-The pattern is simple:
-specific allows first,
-broad denies after,
+The rule pattern is specific allows first, broad denies after, and
 default rules last.
 
 Leave gaps between priority numbers.
@@ -355,10 +351,8 @@ They keep random inbound internet traffic out.
 They let basic private communication work.
 They let machines reach package repositories, APIs, and operating system update endpoints unless you tighten outbound traffic.
 
-The production question is not "should I delete the defaults?"
-You cannot.
-The better question is:
-which custom rules should override the defaults for this subnet's job?
+You cannot delete the defaults. The production question is which custom
+rules should override the defaults for this subnet's job.
 
 For `devpolaris-orders-api`, the data subnet probably needs tighter inbound rules than the API subnet.
 The API subnet may accept HTTPS from the load balancer.
@@ -377,9 +371,9 @@ Without ASGs, NSG rules often turn into private IP lists:
 Allow 10.40.12.4,10.40.12.5 to 10.40.14.6 on TCP 5432
 ```
 
-That may work today.
-It is not pleasant to review.
-Six months later, nobody remembers whether `10.40.12.5` is an API VM, a worker VM, an old test machine, or something deleted last quarter.
+That may work today, but it becomes hard to review. Six months later,
+nobody remembers whether `10.40.12.5` is an API VM, a worker VM, an old
+test machine, or something deleted last quarter.
 
 With ASGs, the same policy can read like the application:
 

@@ -1,6 +1,6 @@
 ---
 title: "Diagnose Server Failures"
-sectionSlug: a-calm-diagnostic-path
+sectionSlug: diagnostic-path
 order: 3
 ---
 

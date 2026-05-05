@@ -113,17 +113,14 @@ needed object storage.
 
 ## Temporary VM Storage Is Not A Safe Application Store
 
-Azure VMs may have temporary local storage depending on
-the VM type. Temporary storage is for short-lived data.
-It is not a promise that important application files
-will survive VM lifecycle events. That makes it useful
-for scratch work and dangerous for business data. For
-example, an import worker may unzip a large archive
-into a temporary path. It processes the files. It
-writes the final report to Blob Storage. It writes job
-status to Azure SQL Database or Cosmos DB. Then the
-temporary files can disappear safely. That is a good
-use of temporary storage.
+Azure VMs may have temporary local storage depending on the VM type.
+Temporary storage is for short-lived data and should not hold important
+application files that must survive VM lifecycle events. It is useful
+for scratch work and dangerous for business data. For example, an import
+worker may unzip a large archive into a temporary path, process the
+files, write the final report to Blob Storage, write job status to Azure
+SQL Database or Cosmos DB, and then let the temporary files disappear
+safely.
 
 Here is the bad version: the worker writes customer
 receipts to temporary disk. The app stores only the
@@ -221,10 +218,10 @@ matching behavior.
 A simple review sentence helps during design: the disk
 belongs to the machine, the file share belongs to the
 legacy path, and the blob belongs to the application
-feature. That sentence is not perfect for every system,
-but it catches many beginner mistakes. It reminds the
-team that storage is not just about where bytes can fit.
-It is about who needs those bytes later and what shape
+feature. That wording will not fit every system, but it
+catches many beginner mistakes. It reminds the team that
+storage is about more than where bytes can fit. It is
+about who needs those bytes later and what shape
 the workload expects when it reads them.
 
 ## Failure Modes And First Checks
@@ -254,16 +251,13 @@ share=devpolaris-report-templates
 message="permission denied"
 ```
 
-First ask whether the machine can reach the share and
-whether the credentials or identity are valid. If two
-workers process the same input file, inspect the
-coordination model. The storage service may be healthy
-while the application workflow is unsafe. If a
-generated receipt disappears after a VM restart,
-inspect the design. The bug may be that the receipt was
-stored on local disk instead of Blob Storage. That is
-not a disk reliability issue. It is the wrong storage
-shape.
+First ask whether the machine can reach the share and whether the
+credentials or identity are valid. If two workers process the same input
+file, inspect the coordination model. The storage service may be healthy
+while the application workflow is unsafe. If a generated receipt
+disappears after a VM restart, inspect the design: the receipt may have
+been stored on local disk instead of Blob Storage, which is the wrong
+storage shape for durable application files.
 
 ## A Practical Attached Storage Review
 
@@ -286,11 +280,15 @@ read the storage? Here is a compact review.
 | Relational order state | Azure SQL Database | Trying to coordinate business rules through files |
 | Temporary processing files | Temporary disk or data disk | Forgetting to copy results to durable storage |
 
-This review is not glamorous. It is useful. It keeps
-storage choices tied to how the workload actually
-behaves. That is the difference between a file that is
-easy to find later and a file that only existed on
-yesterday's VM.
+This review keeps storage choices tied to how the
+workload actually behaves. A VM disk, a shared file
+mount, and a blob container can all hold bytes, but they
+make different promises about ownership, recovery, and
+who can read the data later. Writing that promise down
+helps the next engineer understand whether a file is easy
+to find later or only existed on yesterday's VM. It also
+keeps backup work focused on the storage that carries real
+product value.
 
 ---
 

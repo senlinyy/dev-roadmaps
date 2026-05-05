@@ -26,7 +26,8 @@ id: article-cloud-providers-gcp-compute-application-hosting-choosing-right-gcp-r
 
 Runtime decisions are easy to overcomplicate. A team opens the GCP product list and sees
 Cloud Run, Compute Engine, Cloud Run functions, GKE, Batch, App Engine, and more. Suddenly
-the question feels like a vocabulary exam. That is not the useful way to choose.
+the question feels like a vocabulary exam. A product list does not tell the team which
+runtime will make the next failure understandable.
 
 A good runtime choice makes the next failure easier to understand. If the orders API does
 not start, the team should know whether to inspect a Cloud Run revision, a VM process
@@ -39,8 +40,8 @@ Cloud Run services, Compute Engine VMs, Cloud Run functions, and GKE. Those four
 cover the beginner runtime shapes well enough to operate a real backend without pretending
 every GCP compute product belongs in the first pass.
 
-The goal is not to pick the most advanced tool. The goal is to pick the runtime whose
-responsibility shape matches the workload.
+Pick the runtime whose responsibility shape matches the workload, even when another option
+looks more advanced.
 
 ```mermaid
 flowchart TD
@@ -79,9 +80,9 @@ platform-shaped:
 | Server-shaped workload | It needs OS control, host agents, or legacy process setup | Compute Engine VM |
 | Platform-shaped workload | It needs Kubernetes APIs, cluster policies, or shared Kubernetes standards | GKE |
 
-This table is not a law. It is a starting point. Some request-driven services can run on VMs
-or GKE. Some event work can become a Cloud Run worker service. The table helps you explain
-why you would leave the simplest matching shape.
+Treat this table as a starting point. Some request-driven services can run on VMs or GKE,
+and some event work can become a Cloud Run worker service. The table helps you explain why
+you would leave the simplest matching shape.
 
 The dangerous pattern is choosing a runtime because the team already knows one tool, not
 because the workload asks for it. A VM can host an HTTP API, but that does not mean the team
@@ -107,9 +108,8 @@ state: Cloud SQL and Cloud Storage, not local instance disk
 first runtime: Cloud Run service
 ```
 
-The decision is not "Cloud Run is always best." The decision is "this workload matches the
-Cloud Run service shape." That wording matters because it keeps the team honest when a new
-requirement appears.
+The decision says, "this workload matches the Cloud Run service shape." That wording matters
+because it keeps the team honest when a new requirement appears.
 
 For example, if a later requirement says the API must use a host-level security agent, a VM
 or GKE node-based platform may enter the discussion. If a new workflow says "create one
@@ -251,9 +251,8 @@ Here are common mixed signals:
 | "It is on a VM, but all state is external and the app is containerized." | Cloud Run may reduce server chores |
 | "It is on Cloud Run, but it requires local disk to survive replacement." | The app state model is wrong for the runtime |
 
-Mixed signals are not shameful. They are useful. They show where the design and the runtime
-contract disagree. The fix might be changing the app, changing the runtime, or writing down
-the real reason for the exception.
+Mixed signals show where the design and the runtime contract disagree. The fix might be
+changing the app, changing the runtime, or writing down the real reason for the exception.
 
 ## Failure Scenarios That Reveal The Choice
 

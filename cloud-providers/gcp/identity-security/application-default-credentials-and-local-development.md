@@ -43,8 +43,8 @@ which credential was discovered in each environment.
 Local code often runs as a human developer. Production code usually runs as a service
 account. The same JavaScript call can be allowed locally and denied in production because
 GCP is checking different principals. This article teaches Application Default Credentials,
-usually called ADC, as a lookup pattern. ADC is not one credential. It is the way Google
-client libraries look for the credential they should use.
+usually called ADC, as the lookup pattern Google client libraries use to find the credential
+they should use.
 
 ## What Application Default Credentials Are
 
@@ -56,8 +56,8 @@ that credential may come from a local ADC file created by a developer login flow
 
 In Cloud Run, that credential usually comes from the service account attached to the running
 service. In CI/CD, it may come from workload identity federation, service account
-impersonation, or another configured identity path. That flexibility is helpful. It also
-means ADC is not a permission model by itself. ADC does not grant access. IAM grants access.
+impersonation, or another configured identity path. That flexibility is helpful, but ADC
+handles credential discovery rather than authorization. IAM grants access.
 
 ADC only decides which identity asks for access. That distinction matters. If the identity
 changes, the IAM result can change. Here is the mental model:
@@ -155,14 +155,13 @@ orders-api-prod@devpolaris-orders-prod.iam.gserviceaccount.com
 When the Node.js code asks Secret Manager for `orders-db-url`, ADC does not need Ana's local
 credential. Cloud Run provides the runtime credential path. The client library uses that
 path. IAM checks whether the service account can access the secret. This is a better
-production model. The credential is not stored in the container image. The credential is not
-copied into an environment variable.
+production model because the credential stays out of the container image and environment
+variables.
 
-The credential is not tied to a human employee. The service account is attached by the
-platform and checked by IAM. That does not mean access is automatic. The service account
-still needs roles on the correct resources. Cloud Run providing an identity solves
-authentication. IAM policy still decides authorization. Authentication means proving who is
-asking.
+The credential belongs to the service account attached by the platform, not to a human
+employee. Access still depends on roles on the correct resources. Cloud Run providing an
+identity solves authentication. IAM policy still decides authorization. Authentication means
+proving who is asking.
 
 Authorization means deciding what that actor may do. ADC helps with authentication. IAM
 handles authorization.
@@ -238,11 +237,10 @@ between machines.
 
 ## CI/CD Credentials Are A Separate Story
 
-Deployment automation is not local development. A CI/CD workflow has its own identity
-question. Who is allowed to deploy? Which repository or build system is trusted? Which
-project can it deploy into? Can it act as the runtime service account? Can it read
-production secrets? Usually the deployer should not read runtime secrets. It should deploy
-the service and attach the correct runtime identity.
+Treat deployment automation as its own identity question. Who is allowed to deploy? Which
+repository or build system is trusted? Which project can it deploy into? Can it act as the
+runtime service account? Can it read production secrets? Usually the deployer should not
+read runtime secrets. It should deploy the service and attach the correct runtime identity.
 
 The running service should read its own secrets later. That separation keeps the pipeline
 from becoming a production data reader. For external CI/CD systems, workload identity
@@ -275,8 +273,8 @@ pipeline can deploy and read production dependencies. The fix direction is to sp
 identity from runtime identity and remove long-lived keys where possible. The fifth failure
 is missing impersonation permission. Ana tries to test as a development service account.
 
-The command fails because she is not allowed to impersonate it. The fix direction is to
-grant impersonation narrowly if the workflow is approved, or use a different testing path.
+The command fails because she lacks impersonation permission. The fix direction is to grant
+impersonation narrowly if the workflow is approved, or use a different testing path.
 
 ## A Local Development Checklist
 
@@ -291,8 +289,7 @@ Use a small checklist before trusting a local GCP test.
 | Is a credential file involved? | The file is treated as a secret and has a reason |
 | Does production use the same identity? | If not, production needs its own IAM check |
 
-The checklist is not meant to slow people down. It prevents false confidence. The dangerous
-sentence is:
+The checklist prevents false confidence. The dangerous sentence is:
 
 ```text
 It worked locally, so production should have access.

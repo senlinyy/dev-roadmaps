@@ -15,7 +15,7 @@ id: article-cloud-providers-aws-storage-databases-ebs-efs-storage-attached-compu
 4. [Reading The Evidence On A Mounted EBS Volume](#reading-the-evidence-on-a-mounted-ebs-volume)
 5. [Where EFS Fits When More Than One Compute Unit Needs Files](#where-efs-fits-when-more-than-one-compute-unit-needs-files)
 6. [Storage Bugs You Will Actually See](#storage-bugs-you-will-actually-see)
-7. [A Calm Diagnostic Path](#a-calm-diagnostic-path)
+7. [Diagnostic Path](#diagnostic-path)
 8. [What Still Belongs In S3 Or RDS](#what-still-belongs-in-s3-or-rds)
 9. [The Tradeoff: Server-Like Control And Ownership](#the-tradeoff-server-like-control-and-ownership)
 
@@ -41,9 +41,9 @@ Block storage is the lowest shape in this article. It gives the operating system
 
 Filesystem storage is one level higher. It already presents a shared filesystem interface. Your app still uses paths like `/mnt/shared/reports/order-8841.csv`, but multiple compute units can see the same tree. EFS is filesystem storage. It uses NFS, short for Network File System, which is a protocol for accessing files over a network as if they were local files.
 
-Object storage is different again. S3 stores objects in buckets. An object is retrieved by a key, which is like a full object name such as `exports/2026/05/order-8841.csv`. You do not mount S3 as a normal POSIX filesystem for application state. POSIX, short for Portable Operating System Interface, is the family of Unix-like file behaviors developers expect from normal Linux paths: directories, permissions, renames, file locks, and append behavior. S3 is excellent for finished objects, but it is not the same as a mounted disk.
+Object storage is different again. S3 stores objects in buckets. An object is retrieved by a key, which is like a full object name such as `exports/2026/05/order-8841.csv`. You do not mount S3 as a normal POSIX filesystem for application state. POSIX, short for Portable Operating System Interface, is the family of Unix-like file behaviors developers expect from normal Linux paths: directories, permissions, renames, file locks, and append behavior. S3 is excellent for finished objects, while mounted disks are better for normal filesystem behavior.
 
-Database storage is a fourth shape. RDS stores relational data with SQL, transactions, indexes, constraints, and backups managed at the database layer. An order record is not just a file. It has relationships, correctness rules, and concurrent updates. That is why `devpolaris-orders-api` should store orders in RDS or another suitable database, not in JSON files on EBS.
+Database storage is a fourth shape. RDS stores relational data with SQL, transactions, indexes, constraints, and backups managed at the database layer. An order record has relationships, correctness rules, and concurrent updates. That is why `devpolaris-orders-api` should store orders in RDS or another suitable database, not in JSON files on EBS.
 
 Here is the beginner map:
 
@@ -94,7 +94,7 @@ That is the price of disk-shaped control. It feels comfortable because your app 
 
 When someone says "the EBS volume is attached", do not stop there. Attached to EC2 only means AWS made the block device available to the instance. Linux still needs to see the device, have a filesystem on it, and mount it at the path your app uses. Those are separate facts.
 
-Here is a small evidence snapshot from the `devpolaris-orders-report-worker` instance. The goal is not to teach a full mount runbook. The goal is to show what proof looks like.
+Here is a small evidence snapshot from the `devpolaris-orders-report-worker` instance. It shows what proof looks like before a full mount runbook.
 
 ```bash
 $ lsblk
@@ -143,7 +143,7 @@ $ aws ec2 describe-volumes \
 ]
 ```
 
-This AWS view and the Linux view answer different questions. AWS says the volume is attached. Linux says the filesystem is mounted. The application logs say whether the process can actually write there. You usually need all three to debug storage calmly.
+This AWS view and the Linux view answer different questions. AWS says the volume is attached. Linux says the filesystem is mounted. The application logs say whether the process can actually write there. You usually need all three to debug storage.
 
 For example, a healthy write from the worker might show this:
 
@@ -240,7 +240,7 @@ The third common failure is the wrong EFS network path. The filesystem exists. T
 mount.nfs4: Connection timed out
 ```
 
-This is not an application bug. It is usually a VPC, mount target, route, DNS, or security group problem. For EFS, always include the network path in your diagnosis.
+This failure usually points to a VPC, mount target, route, DNS, or security group problem rather than application code. For EFS, always include the network path in your diagnosis.
 
 The fourth common failure is writing durable-looking data to an ephemeral local path. Ephemeral means temporary. On EC2, some instance types can have instance store volumes, which are temporary block devices physically attached to the host. Also, many teams use `/tmp` or a container writable layer for scratch data. Those paths can be fine for cache or throwaway work, but they are a bad place for state you need after replacement or restart.
 
@@ -253,9 +253,9 @@ Here is the failure shape:
 5. Some exports are regenerated, and support has to compare S3 objects by hand.
 The fix direction is not "never use `/tmp`." The fix is to be honest about the data. Scratch files can live on temporary paths. Worker state that must survive a reboot needs EBS, EFS, S3, or a database depending on the access pattern.
 
-## A Calm Diagnostic Path
+## Diagnostic Path
 
-When storage breaks, start from the application symptom and walk downward. Do not randomly click through every AWS console page. The question is simple: which layer lost the promise the application expected?
+When storage breaks, start from the application symptom and walk downward. Do not randomly click through every AWS console page. Ask which layer lost the promise the application expected.
 
 Start with the application log. You need the path, operation, and error code.
 
@@ -310,7 +310,7 @@ $ aws ec2 describe-volumes \
 }
 ```
 
-If AWS says attached but Linux says not mounted, focus on the operating system mount configuration. If AWS says available or attached to a different instance, focus on EC2 volume attachment. For EFS, add network checks to the path. A shared filesystem mount is not just "is the storage there?" It is "can this compute unit reach the mount target?"
+If AWS says attached but Linux says not mounted, focus on the operating system mount configuration. If AWS says available or attached to a different instance, focus on EC2 volume attachment. For EFS, add network checks to the path. A shared filesystem mount asks two questions: is the storage configured, and can this compute unit reach the mount target?
 
 Check whether the mount exists:
 
@@ -332,7 +332,7 @@ Here is the diagnostic map:
 | EFS mount timeout | App or mount logs | Mount target and security groups | Allow NFS path from compute to EFS |
 | Data missing after replacement | Path history in logs | Instance lifecycle and mount config | Move durable state to EBS, EFS, S3, or database |
 
-This table is not a checklist to memorize. It is a way to stay calm. Every row starts with the thing the app observed, then asks which layer must prove the promise.
+Use this table as a diagnostic path. Every row starts with the thing the app observed, then asks which layer must prove the promise.
 
 ## What Still Belongs In S3 Or RDS
 

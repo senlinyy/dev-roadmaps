@@ -17,7 +17,7 @@ id: article-cloud-providers-gcp-identity-security-principals-iam-roles-policy-bi
 6. [Bindings: Where The Relationship Lives](#bindings-where-the-relationship-lives)
 7. [Basic, Predefined, And Custom Roles](#basic-predefined-and-custom-roles)
 8. [Inheritance: Why Scope Matters](#inheritance-why-scope-matters)
-9. [Reading A Policy Without Panic](#reading-a-policy-without-panic)
+9. [Reading A Policy](#reading-a-policy)
 10. [A Practical Access Review](#a-practical-access-review)
 11. [Conditions Add One More Question](#conditions-add-one-more-question)
 12. [Failure Modes And Fix Directions](#failure-modes-and-fix-directions)
@@ -26,18 +26,18 @@ id: article-cloud-providers-gcp-identity-security-principals-iam-roles-policy-bi
 ## Access Is A Relationship
 
 New cloud users often look for permission as if it were a switch. They ask, "Does this
-service account have access?" That question is incomplete. Access is not one switch in GCP.
-It is a relationship. The answer depends on the actor, the target, the action, and the place
-where the permission was granted. That is why two permission problems can look similar but
-require different fixes.
+service account have access?" That question is incomplete because GCP evaluates a
+relationship. The answer depends on the actor, the target, the action, and the place where
+the permission was granted. That is why two permission problems can look similar but require
+different fixes.
 
 `devpolaris-orders-api` may fail to read a secret because the runtime service account has no
 binding on that secret. The deploy pipeline may fail because it can update Cloud Run but
 cannot act as the runtime service account. A developer may fail to view logs because they
 are looking in the wrong project. All three failures feel like "permission denied."
 
-They are not the same problem. This article teaches the parts you need to separate them. The
-parts are principals, resources, roles, policy bindings, inheritance, and conditions. Those
+Those failures need different fixes. This article teaches the parts you need to separate
+them: principals, resources, roles, policy bindings, inheritance, and conditions. Those
 words are official, but the idea is friendly enough:
 
 > Someone gets a named set of actions on something.
@@ -66,8 +66,8 @@ on the whole production project
 ```
 
 The role name did not change. The scope changed. The second sentence can allow access to
-more secrets. That is why access review is not only about role names. It is about the full
-relationship. Here is the shape:
+more secrets. Access review needs the full relationship: role name, principal, resource,
+scope, and condition. Here is the shape:
 
 ```mermaid
 flowchart TD
@@ -255,7 +255,7 @@ across many projects. The role and the scope must be reviewed together. Inherita
 bad. Invisible inheritance is bad. The team should know which parent grants are
 intentionally broad.
 
-## Reading A Policy Without Panic
+## Reading A Policy
 
 IAM output can feel dense because the policy uses official names. Slow it down. Imagine this
 simplified policy snapshot:
@@ -388,7 +388,7 @@ The service should not read other production secrets.
 
 That note teaches future readers. It also makes the grant easier to remove later if the app
 no longer needs it. IAM is easier to maintain when the team writes grants as human-readable
-sentences, not just configuration changes.
+sentences with reasons.
 
 ---
 

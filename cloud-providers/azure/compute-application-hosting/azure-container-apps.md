@@ -45,11 +45,11 @@ This service exists because many application teams want to run containers withou
 You give Azure a container image and a small service contract.
 Azure creates running replicas, sends traffic to active revisions, scales replicas according to rules, restarts crashed containers, and gives you status and logs to inspect.
 
-In the larger Azure map, Container Apps sits in the compute layer.
-It is not your container registry.
-It is not your database.
-It is not your DNS zone.
-It is the place where the already-built container becomes a running app.
+In the larger Azure map, Container Apps sits in the compute layer. The
+registry stores the already-built image, databases store state, and DNS
+points users toward an entry point. Container Apps is where the image
+becomes a running app with revisions, replicas, ingress, identity,
+secrets, and logs.
 
 The running example is `devpolaris-orders-api`.
 The team has already built and pushed this image to Azure Container Registry:
@@ -62,9 +62,9 @@ The API listens on port `3000`.
 Customers should eventually reach it at `https://orders.devpolaris.com`.
 The app needs a database connection secret, a Stripe webhook secret, and a managed identity so it can read Key Vault without storing a cloud password.
 
-The first useful beginner question is not "how do I use every Container Apps feature?"
-The useful question is:
-what does Azure need to know so this container can behave like a real API?
+Start with the contract Azure needs before this container can behave
+like a real API: image, target port, ingress, secrets, identity,
+scaling, logs, and health.
 
 For `devpolaris-orders-api`, Azure needs answers like these:
 
@@ -107,11 +107,12 @@ Here is the safer translation:
 | Task role | Managed identity plus Azure RBAC | Identity proves the caller, role assignments grant access |
 | CloudWatch Logs | Azure Monitor and Log Analytics | Environment and app logs are centralized through Azure monitoring services |
 
-The biggest Azure-specific noun is the Container Apps environment.
-It is not just a folder.
-It is the boundary around one or more container apps and jobs.
-Apps in the same environment can share network behavior and the same logging destination.
-That makes the environment an early design choice, not a detail you can ignore until the end.
+The biggest Azure-specific noun is the Container Apps environment. It is
+the boundary around one or more container apps and jobs, and apps in the
+same environment can share network behavior and the same logging
+destination. That makes the environment an early design choice because
+it affects how the app connects, emits logs, and fits with nearby
+workloads.
 
 The second Azure-specific noun is the revision.
 In ECS, you may be used to registering new task definition revisions.
@@ -222,13 +223,13 @@ $ az containerapp create \
 }
 ```
 
-This is not meant to be a complete production script.
-It shows the first contract Azure needs.
-The app name tells Azure which service resource to create.
-The environment tells Azure where the service belongs.
-The image tells Azure what to run.
-The target port tells ingress where the container listens.
-The replica limits tell Azure the allowed scale range.
+The script shows the first contract Azure needs. The app name tells
+Azure which service resource to create, the environment tells Azure
+where the service belongs, the image tells Azure what to run, the target
+port tells ingress where the container listens, and the replica limits
+tell Azure the allowed scale range. A production deployment would add
+more review around identity, networking, secrets, observability, and
+rollout strategy.
 
 After deployment, inspect the app as a resource, not as a hope:
 
@@ -273,7 +274,7 @@ Immutable means it does not change after it is created.
 When you change revision-scoped settings, such as the image, container resources, environment variables, or scale rules, Container Apps creates a new revision.
 The old revision still exists as evidence and, depending on mode, may remain active or inactive.
 
-For a normal production API, single revision mode is usually the calm beginner choice.
+For a normal production API, single revision mode is usually the simpler first choice.
 In single revision mode, Container Apps activates the new revision and moves traffic after the new replicas are ready.
 If the update fails, traffic can remain on the old revision.
 That is a protective default because it avoids splitting traffic by accident.
@@ -313,9 +314,10 @@ ca-devpolaris-orders-api-prod--k7m2hls    True      100        Provisioned     R
 ca-devpolaris-orders-api-prod--q4r8nva    True      0          Provisioning    Activating    1
 ```
 
-This is not automatically a failure.
-It means Azure is trying to provision the new revision.
-The next question is whether it becomes `Provisioned` and `Running`, or whether it moves to `Degraded`, `Failed`, or `Activation failed`.
+A provisioning status means Azure is still trying to
+prepare the new revision. The next check is whether it
+becomes `Provisioned` and `Running`, or whether it moves
+to `Degraded`, `Failed`, or `Activation failed`.
 
 Revision thinking helps beginners avoid random debugging.
 You do not ask, "is the app broken?"
@@ -407,10 +409,11 @@ $ az containerapp update \
 >   --scale-rule-http-concurrency 80
 ```
 
-The exact number `80` is not magic.
-It is a starting guess that should be checked against real latency, CPU, memory, and database connection behavior.
-If each request is light and the app stays fast, one replica may handle more.
-If each request performs heavy work or waits on a database, fewer concurrent requests per replica may be healthier.
+Treat the concurrency number `80` as a starting guess that must be
+checked against real latency, CPU, memory, and database connection
+behavior. If each request is light and the app stays fast, one replica
+may handle more. If each request performs heavy work or waits on a
+database, fewer concurrent requests per replica may be healthier.
 
 You can inspect the scale settings as evidence:
 
@@ -592,8 +595,7 @@ Not full request bodies.
 Useful signals:
 startup version, port, environment name, revision name when available, health check results, request ID, status code, latency, and dependency errors.
 
-Good logs are not decoration.
-They are how a junior engineer can join an incident and make one careful observation at a time.
+Good logs let a junior engineer join an incident and make one careful observation at a time.
 
 ## Failure Modes, Fix Directions, And Tradeoff
 
@@ -682,10 +684,10 @@ content-type: text/plain
 No route matched this request
 ```
 
-The fix direction is not to rebuild the image.
-Decide whether the API should be public.
-If yes, enable external ingress and bind the custom domain correctly.
-If no, test from another app inside the same environment and keep the public DNS path away from this service.
+For an ingress visibility mismatch, decide whether the API should be
+public. If yes, enable external ingress and bind the custom domain
+correctly. If no, test from another app inside the same environment and
+keep the public DNS path away from this service.
 
 Here is the quick diagnostic map:
 
@@ -698,9 +700,10 @@ Here is the quick diagnostic map:
 | No replicas until traffic arrives | Scale settings | Minimum replicas and scale rule |
 | Key Vault secret cannot sync | Secret diagnostics, identity, RBAC | Managed identity or Key Vault permission |
 
-This table is not a replacement for thinking.
-It is a way to ask the next question in the right place.
-When you find the layer, the fix usually gets smaller.
+Use this table to ask the next question in the right layer. Once you
+know whether the evidence points at the image, revision, replica,
+ingress, identity, secret, or log path, the fix usually becomes smaller
+and safer.
 
 Container Apps is a strong default when your team already has a containerized HTTP API and wants a managed runtime before it wants a Kubernetes operations practice.
 You keep the Docker packaging habit.
@@ -737,9 +740,10 @@ For the orders API, a careful first production checklist looks like this:
 | Logs | System and console logs available, startup logs prove config without leaking values |
 | Failure evidence | Revision state, system logs, console logs, and generated FQDN test captured during release |
 
-The mature habit is not to memorize every setting.
-The mature habit is to make each layer inspectable.
-When the image, app, revision, replica, ingress, identity, secret, and log story all line up, Container Apps becomes a calm way to run a real containerized API on Azure.
+Mature teams do not try to memorize every setting. They make each layer
+inspectable. When the image, app, revision, replica, ingress, identity,
+secret, and log story all line up, Container Apps becomes a practical way to
+run a real containerized API on Azure.
 
 ---
 

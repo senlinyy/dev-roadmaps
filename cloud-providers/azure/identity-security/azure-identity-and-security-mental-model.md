@@ -27,12 +27,12 @@ Before a backend service can touch production data, Azure asks a small set of pe
 The questions are not only for humans.
 They are also for pipelines, scripts, virtual machines, container apps, and any other workload that tries to read, write, deploy, or delete something.
 
-The useful mental model is simple:
-identity answers who or what is acting.
-Azure RBAC answers what action that identity can perform and where it can perform it.
-Scope answers where a permission applies.
-Managed identity gives an Azure-hosted app its own cloud identity without storing a password in code or settings.
-Key Vault protects sensitive values such as secrets, keys, and certificates.
+Use five connected questions for Azure identity work. Identity answers
+who or what is acting. Azure RBAC answers what action that identity can
+perform and where it can perform it. Scope answers where a permission
+applies. Managed identity gives an Azure-hosted app its own cloud
+identity without storing a password in code or settings. Key Vault
+protects sensitive values such as secrets, keys, and certificates.
 
 Those pieces exist because cloud systems are shared.
 One subscription may hold many teams.
@@ -59,10 +59,9 @@ Keep this short sentence near you:
 
 ## If You Know AWS IAM
 
-If you have learned AWS before, the closest bridge is AWS IAM.
-That bridge helps, but it is not a one-to-one translation.
-AWS IAM often feels like the place where identity, roles, policies, and permissions live together.
-Azure splits the story more visibly.
+If you have learned AWS before, the closest bridge is AWS IAM. The
+bridge helps, but Azure splits identity, roles, scopes, and secret
+storage more visibly than AWS often feels at first.
 
 Microsoft Entra ID is the identity system.
 It knows users, groups, app registrations, service principals, and managed identities.
@@ -98,7 +97,7 @@ The Azure version is more exact:
 "Which managed identity is assigned to the Container App, which role does that identity have, and is the role scoped to the Key Vault or wider?"
 
 That extra precision helps once you get used to it.
-It helps you grant access narrowly and debug failures calmly.
+It helps you grant access narrowly and debug failures from the right identity.
 
 ## One Request Has Several Checks
 
@@ -210,10 +209,9 @@ Secret store:
   kv-devpolaris-orders-prod
 ```
 
-The important habit is naming the runtime identity separately from the human and pipeline identities.
-The app is not Maya.
-The app is not the CI pipeline.
-The app is its own actor with its own permissions.
+Name the runtime identity separately from the human and pipeline
+identities. The app has its own actor with its own permissions, separate
+from Maya and separate from the CI pipeline.
 
 That separation gives you cleaner incident evidence.
 If a secret was read at 10:14, you want to know whether the reader was the app, a developer, or a pipeline.
@@ -327,8 +325,7 @@ Both examples use the same identity and role.
 Only the scope changes.
 That one change decides whether the app can read one vault or many vaults.
 
-This is why "least privilege" is not only about role names.
-It is also about scope.
+Least privilege depends on both role names and scope.
 A narrow role at a broad scope can still be too much.
 A broad role at a narrow scope may be acceptable for a deploy group, but not for runtime code.
 
@@ -702,8 +699,9 @@ Narrow access takes more thought at setup time.
 Broad access is faster in the moment.
 But broad access makes incidents harder to understand, reviews harder to trust, and secret leaks more damaging.
 
-The senior habit is not "lock everything so nobody can work."
-The senior habit is "give each actor enough access for its job, then keep evidence that proves the boundary."
+The senior habit is to give each actor enough access for its job, then
+keep evidence that proves the boundary. That protects production without
+turning every deployment into a permissions puzzle.
 
 For an Azure beginner, that habit is the whole first security model:
 identity says who or what.

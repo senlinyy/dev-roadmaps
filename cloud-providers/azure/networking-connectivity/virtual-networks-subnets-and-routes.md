@@ -41,8 +41,9 @@ We will follow one service:
 The app receives checkout requests, talks to a private database, sends logs, and calls a payment provider on the internet.
 The team wants one production network shape that is easy to reason about before any deployment tool creates it.
 
-This article is not a subnet naming checklist.
-It is the mental model you use before you click through the portal, write Bicep, or run `az network` commands.
+This article gives you the mental model to use before
+you click through the portal, write Bicep, or run
+`az network` commands.
 By the end, you should be able to read a VNet, subnet list, and route table and say:
 "this traffic leaves from here, matches this route, and should go there next."
 
@@ -503,10 +504,10 @@ Name                 AddressPrefix    NextHopType       NextHopIpAddress
 default-to-firewall  0.0.0.0/0        VirtualAppliance  10.42.100.4
 ```
 
-This output is useful because it is small.
-It answers one question:
-what custom routes did the team add?
-You still need effective routes to see the combined result of system routes, BGP routes, and user-defined routes for a specific network interface.
+This small output answers one question: what custom routes did the team
+add? You still need effective routes to see the combined result of
+system routes, BGP routes, and user-defined routes for a specific
+network interface.
 
 ## Failure Modes And Fix Directions
 
@@ -667,9 +668,8 @@ Checks:
   NSG and DNS checks are separate from route checks.
 ```
 
-That note is not busywork.
-It is the simplest form of design review.
-It gives a junior engineer, a platform engineer, and an incident responder the same map.
+That note is a lightweight design review. It gives a junior engineer, a
+platform engineer, and an incident responder the same map.
 
 When you are unsure, return to four questions:
 where is the source resource placed, what destination IP is it trying to reach, which route wins for traffic leaving that subnet, and what security or DNS layer might still block it?

@@ -136,10 +136,10 @@ open questions:
   restore drill not tested since receipt retry feature shipped
 ```
 
-This note is not trying to be perfect. It gives the
-team a starting point. There are running resources,
-stored objects, retained logs, stored recovery points,
-and a few unanswered questions. A good cost and
+This note gives the team a practical starting point.
+There are running resources, stored objects, retained
+logs, stored recovery points, and a few unanswered
+questions. A good cost and
 resilience review starts from that kind of real state,
 not from a generic list of best practices.
 
@@ -166,15 +166,11 @@ response can increase data transfer. Hidden cost is not
 secret. It is hidden because engineers often do not
 connect it to the code path or setting that created it.
 
-Idle cost is the cost of capacity that waits around.
-Idle does not always mean bad. A minimum app instance
-may be idle at night, but it may protect cold starts or
-keep the service ready. A larger database tier may have
-spare CPU most of the day, but that spare room may
-protect checkout during a real traffic spike. The
-question is not "is any capacity idle?" The better
-question is "does this idle capacity protect a failure
-or performance risk we still care about?"
+Idle cost is the cost of capacity that waits around. Idle capacity can
+be useful when it protects cold starts, keeps the service ready, or
+gives the database room for real traffic spikes. Review whether that
+spare capacity protects a failure or performance risk the team still
+cares about.
 
 Growth cost is the cost that rises with usage, data, or
 time. If order volume doubles, the service may need
@@ -200,10 +196,9 @@ Here is the mental model in one table:
 | Growth cost | Cost that rises with traffic or time | More orders, receipts, logs, and backups | What will this look like next month? |
 | Recovery cost | Cost paid to restore or diagnose later | Backups and retained telemetry | Can we recover within the promise? |
 
-This table is not a pricing calculator. It is a
-thinking tool. Before you ask whether something is
-expensive, ask which cost shape you are looking at.
-That one step makes the conversation calmer.
+Use this table as a thinking tool. Before you ask whether something is
+expensive, first identify which cost shape you are looking at. That one
+step makes the tradeoff easier to discuss.
 
 ## Resilience Means Serving Or Recovering
 
@@ -291,19 +286,15 @@ Vault is a security dependency, but it is also part of
 recovery because the restored app still needs access to
 secrets.
 
-The review node is not an Azure service. It is the
-team's habit of asking whether the running shape still
-matches the promise. This matters because a change in
-one layer can change both cost and resilience. Turning
-up telemetry helps debugging, but may increase
-ingestion cost. Reducing database capacity may reduce
-spend, but can hurt checkout latency. Increasing
-storage redundancy can improve recovery options, but
-costs more than simpler redundancy.
+The review node represents the team habit of checking whether the
+running shape still matches the promise. A change in one layer can
+change both cost and resilience: more telemetry can help debugging while
+increasing ingestion cost, lower database capacity can reduce spend
+while hurting checkout latency, and stronger storage redundancy can
+improve recovery while costing more.
 
-The goal is not to make every resource as large and
-protected as possible. The goal is to make each layer's
-cost match the value and risk of that layer.
+Make each layer's cost match the value and risk of that layer. The most
+protected option is not automatically the best option.
 
 ## The Temptation To Overprotect Everything
 
@@ -408,13 +399,11 @@ resilience effect it changes.
 | Use stronger storage redundancy | Increases storage cost | Improves protection against storage failures | Which files truly need that recovery promise? |
 | Keep more backups | Increases storage and management cost | Improves recovery options | Have we tested restore, or only stored copies? |
 
-This table is not telling you which choice is correct.
-It is teaching the shape of the conversation. Cost-only
-language says, "This is expensive." Resilience-only
-language says, "We need this just in case." The mature
-version says, "This resource costs this much, protects
-this failure, and the evidence says we should keep,
-reduce, or change it." That is the skill.
+The table teaches the shape of the conversation. Cost-only language
+says, "This is expensive." Resilience-only language says, "We need this
+just in case." The mature version says, "This resource costs this much,
+protects this failure, and the evidence says we should keep, reduce, or
+change it."
 
 ## A Practical Review Habit
 
@@ -447,12 +436,11 @@ decisions:
   schedule restore drill before next schema migration
 ```
 
-This is not a finance ceremony. It is an engineering
-habit. The team is not trying to make the bill tiny. It
-is trying to make the bill explainable. The team is not
-trying to make failure impossible. It is trying to make
-failure recoverable within a promise it can actually
-keep. That is the heart of Azure cost and resilience.
+Cost and resilience belong in normal engineering review. The team is not
+trying to make the bill tiny; it is trying to make the bill explainable.
+The team is not trying to make failure impossible; it is trying to make
+failure recoverable within a promise it can actually keep. That is the
+heart of Azure cost and resilience.
 
 ---
 

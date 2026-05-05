@@ -100,9 +100,8 @@ unit: devpolaris-orders.service
 public entry: HTTPS load balancer or internal caller, not direct SSH from the internet
 ```
 
-This record is not a command list. It is the shape of responsibility. The app does not run
-because an image was deployed to Cloud Run. It runs because a server boots, installs or
-receives the app, starts a process, and keeps that process alive.
+This record shows the shape of responsibility. The app runs because a server boots, installs
+or receives the app, starts a process, and keeps that process alive.
 
 That makes debugging more server-like. If checkout fails, you may inspect the load balancer,
 the firewall, the process, the service account, the disk, the journal, and guest logs. None
@@ -110,7 +109,7 @@ of those checks are strange. They are the price of server-shaped control.
 
 ## What A Compute Engine Instance Includes
 
-A Compute Engine instance is not only a name and an IP address. It is a bundle of choices:
+A Compute Engine instance bundles several choices:
 
 | Instance Piece | Beginner Meaning | Why It Matters |
 |---|---|---|
@@ -132,9 +131,8 @@ Compute Engine instances are zonal resources. That means a VM lives in one zone,
 `us-central1-a`. Some resources it uses may also be zonal. A boot disk is tied to the VM's
 placement. If you attach extra persistent disks, placement compatibility matters.
 
-This is different from the first feeling many beginners have about "the cloud." A cloud VM
-is not floating everywhere. It is placed somewhere. That placement affects latency,
-availability, disk attachment, and recovery planning.
+A cloud VM has a specific placement. That placement affects latency, availability, disk
+attachment, and recovery planning.
 
 For the orders API, the VM and database plan should be reviewed together:
 
@@ -191,8 +189,8 @@ VM-based applications need a startup story. A startup script can install package
 artifact, write configuration, or register the machine with a deployment system. A process
 manager such as `systemd` can start the app and restart it when it fails.
 
-The process manager is not a boring detail. It is what turns "the file exists on disk" into
-"the app is running." A simple `systemd` unit record might look like this:
+The process manager turns "the file exists on disk" into "the app is running." A simple
+`systemd` unit record might look like this:
 
 ```text
 unit: devpolaris-orders.service
@@ -282,8 +280,8 @@ depending on one person's terminal access to one sick machine.
 
 ## When A VM Is The Right Choice
 
-VMs are not a failure of cloud learning. They are the right answer for some workloads. The
-mistake is using them by habit when the app would be simpler on a managed runtime.
+VMs are the right answer for some workloads. The mistake is using them by habit when the app
+would be simpler on a managed runtime.
 
 Choose Compute Engine when at least one of these is true:
 

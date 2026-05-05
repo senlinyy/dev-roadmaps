@@ -42,11 +42,10 @@ EC2 is closest to a server you operate.
 ECS on Fargate runs your container as a managed service without making you manage EC2 hosts.
 Lambda runs a function when an event arrives.
 
-The goal is not to crown one winner.
-The goal is to give you a practical mental model.
+This comparison gives you a practical mental model instead of crowning one winner.
 When a team asks where `devpolaris-orders-api` should run, you should be able to say what each option makes easier, what each option makes more visible, and what each option asks the team to own.
 
-> The compute choice is not only "where does the code run?" It is also "where will I debug the code when it does not run?"
+> The compute choice answers both "where does the code run?" and "where will I debug the code when it does not run?"
 
 Here is the high-level map.
 Read it from top to bottom.
@@ -235,7 +234,7 @@ $ ss -ltnp | grep 3000
 LISTEN 0      511          0.0.0.0:3000       0.0.0.0:*    users:(("node",pid=1842,fd=22))
 ```
 
-That output proves the process is listening on all interfaces, not only `127.0.0.1`.
+That output proves the process is listening on all interfaces, including addresses beyond `127.0.0.1`.
 That detail matters because the ALB is not inside the process.
 It reaches the instance through the network.
 If Node only listens on `127.0.0.1`, the app might work from the server itself while the ALB health check fails.
@@ -249,7 +248,7 @@ That is like adding more servers to share requests.
 EC2 is a good first choice when the team needs server control, has existing server-based operations, or runs software that does not fit cleanly into a container or function.
 It is a weaker first choice when the team wants to avoid OS patching, instance replacement, and process supervision work.
 
-The EC2 mental model is simple:
+Use this EC2 mental model:
 you get a server-shaped runtime.
 That shape is flexible, but the server is now part of your job.
 
@@ -485,7 +484,7 @@ That evidence belongs to a different runtime shape.
 You are looking at invocations, errors, throttles, duration, and memory.
 No target group appears because the event source is not forwarding to a long-running process port.
 
-The practical lesson is simple:
+The practical lesson is:
 first identify the traffic shape, then pick the diagnostic tool.
 
 ## Where Scaling And Failures Show Up
@@ -576,8 +575,7 @@ You would check timeout settings, VPC access if the database is private, securit
 You would not check whether a container port is registered in a target group unless this Lambda function is deliberately behind an ALB target group.
 
 The same business symptom can have different evidence depending on compute shape.
-That is why the compute mental model is not trivia.
-It saves time when the system is noisy.
+The compute mental model saves time when the system is noisy because it tells you which evidence belongs to which runtime.
 
 ## A Practical Diagnostic Path
 
@@ -675,8 +673,8 @@ Here is the compact diagnostic table:
 | 5 | Did IAM allow the action? | Role error, `AccessDenied`, or resource initialization error |
 | 6 | Did the app report the real failure? | CloudWatch Logs around request ID or health check |
 
-This table is not a replacement for deeper runbooks.
-It is the beginner path that stops you from debugging in random order.
+This table gives you the beginner path before deeper runbooks.
+It stops you from debugging in random order.
 In cloud systems, random debugging is expensive because every layer has its own correct-looking dashboard.
 
 ## The First Decision

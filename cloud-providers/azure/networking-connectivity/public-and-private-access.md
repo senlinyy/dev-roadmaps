@@ -51,10 +51,8 @@ It is a Node backend for checkout traffic.
 Customers need a public HTTPS entry point for `POST /orders`.
 The app needs private access to Azure SQL for order records, Blob Storage for invoice exports, and Key Vault for secrets.
 
-That shape is common.
-The service can be public at the API layer without making every dependency public too.
-The useful beginner question is not "is the resource deployed?"
-The useful question is:
+That shape is common. The service can be public at the API layer without
+making every dependency public too. The useful beginner question is:
 
 > From this caller, which network path reaches this exact resource, and does the resource allow that path?
 
@@ -183,10 +181,10 @@ If a data service is public by accident, treat that as a design bug even if iden
 
 ## Private Endpoint Brings One Resource Onto Your Network
 
-A private endpoint is a network interface in your virtual network with a private IP address.
-That interface connects privately to a service powered by Azure Private Link.
-The beginner mental model is simple:
-Azure gives your virtual network a private door for one specific service instance.
+A private endpoint is a network interface in your virtual network with a
+private IP address. That interface connects privately to a service
+powered by Azure Private Link. In plain English, Azure gives your
+virtual network a private door for one specific service instance.
 
 For the orders API, the SQL private endpoint might create an IP such as `10.21.2.5`.
 The Blob private endpoint might create `10.21.2.6`.
@@ -258,10 +256,10 @@ That JSON is the kind of output you want during a review.
 It names the endpoint, shows the private IP, shows the target subresource, and confirms the approval state.
 If the status is `Pending`, the private endpoint may look created, but the service is not ready for traffic.
 
-This is another reason "resource exists" is not enough.
-The private endpoint resource can exist as an Azure object while the connection it represents is not usable yet.
-When a junior teammate says "but I created it," the calm answer is:
-good, now check whether the target approved it.
+A private endpoint resource can exist as an Azure object while the
+connection it represents is still unusable. When a junior teammate says
+"but I created it," the next check is whether the target approved
+it.
 
 ## Service Endpoints Are A Lighter Network Allow Rule
 
@@ -379,11 +377,11 @@ Name:    blob.ams25prdstr01a.store.core.windows.net
 Address: 20.60.144.36
 ```
 
-That output means the app is not getting the private answer.
-If public network access is disabled, the next application request probably fails even though the private endpoint exists.
-The fix direction is not a new password.
-The fix direction is DNS:
-link the right private DNS zone to the virtual network, fix custom DNS forwarding, or add the correct private records.
+That output means the app is not getting the private DNS answer. If
+public network access is disabled, the next application request probably
+fails even though the private endpoint exists. Fix DNS by linking the
+right private DNS zone to the virtual network, fixing custom DNS
+forwarding, or adding the correct private records.
 
 Common private DNS zones include names like `privatelink.blob.core.windows.net`, `privatelink.database.windows.net`, and `privatelink.vaultcore.azure.net`.
 Do not memorize those as a complete list.
@@ -430,10 +428,8 @@ It simply makes the reachable network path match the architecture you meant to b
 
 ## Evidence From A Working Setup
 
-A good review does not rely on a diagram alone.
-It collects small pieces of evidence from the actual environment.
-The goal is not to paste every Azure CLI output into a ticket.
-The goal is to prove the important claims.
+A good review does not rely on a diagram alone. It collects small pieces
+of evidence from the actual environment to prove the important claims.
 
 For the orders API, the claims are:
 the public API is reachable, the data services have private endpoints, DNS resolves to private IPs from the app network, and resource network rules do not leave broad public access open.
@@ -474,10 +470,10 @@ HTTP/1.1 403 This request is not authorized to perform this operation
 x-ms-error-code: AuthorizationFailure
 ```
 
-The exact error can vary by service and request shape.
-The teaching point is not the status code alone.
-The teaching point is that direct public access to the data service is not the normal path.
-The app should reach storage from the private network path with its managed identity.
+The exact error can vary by service and request shape. The teaching
+point is that direct public access to the data service is not the normal
+path. The app should reach storage from the private network path with
+its managed identity.
 
 Finally, test the application behavior, not only the infrastructure objects.
 If the app can create an order and write an invoice export while public access is disabled on the data services, you have stronger evidence than a list of resources.
@@ -509,11 +505,10 @@ Startup check failed: could not load secret OrdersDbConnection
 RequestFailedException: getaddrinfo ENOTFOUND kv-devpolaris-orders-prod.vault.azure.net
 ```
 
-This is not an RBAC error yet.
-The app cannot resolve the vault name.
-Start with DNS.
-Check whether the Key Vault private DNS zone is linked to the virtual network the app uses.
-If the environment uses custom DNS, check whether that DNS server forwards the private link zone correctly.
+The app cannot resolve the vault name, so start with DNS before changing
+RBAC. Check whether the Key Vault private DNS zone is linked to the
+virtual network the app uses. If the environment uses custom DNS, check
+whether that DNS server forwards the private link zone correctly.
 
 The second failure shape is a pending private endpoint.
 The resource exists, but the target has not approved the connection.
@@ -605,16 +600,14 @@ Release access checklist for devpolaris-orders-api
 7. A real app request proves order creation, blob write, and secret read.
 ```
 
-This is not ceremony.
-It is a way to avoid guessing during an outage.
-When the path is written down, the team can debug one link at a time.
+The written path prevents guessing during an outage. When the path is
+clear, the team can debug one link at a time.
 
-Keep the final mental model simple:
-the public API is the front door for users.
-Private endpoints are private doors for the app.
-Private Link powers those private doors.
-Service endpoints are subnet-based allow rules for supported services.
-Resource firewalls and identity still decide whether a request is accepted.
+The final mental model is direct: the public API is the front door for
+users, private endpoints are private doors for the app, Private Link
+powers those private doors, service endpoints are subnet-based allow
+rules for supported services, and resource firewalls plus identity still
+decide whether a request is accepted.
 
 ---
 

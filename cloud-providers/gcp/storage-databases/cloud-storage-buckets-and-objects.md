@@ -31,8 +31,8 @@ the bytes.
 
 Cloud Storage is GCP object storage. It is a good first home for file-like application data.
 It gives the app durable buckets, named objects, access controls, signed URLs, lifecycle
-rules, and integration with the rest of Google Cloud. It is not a relational database, and
-it should not be treated like one.
+rules, and integration with the rest of Google Cloud. Use it for object bytes, not for
+relational records that need joins, constraints, and transactions.
 
 For `devpolaris-orders-api`, Cloud Storage fits receipt PDFs and order exports. The orders
 database can remember which receipt belongs to which order. Cloud Storage can hold the PDF
@@ -70,10 +70,9 @@ owner: orders team
 environment: production
 ```
 
-The bucket is not just a folder. It is a resource with IAM policies, location, lifecycle
-configuration, retention settings, and billing behavior. The object is not just a local file
-on one server. It is stored in Cloud Storage and can be read by systems with the right
-access.
+The bucket is a resource with IAM policies, location, lifecycle configuration, retention
+settings, and billing behavior. The object is stored in Cloud Storage rather than on one
+server, and systems with the right access can read it.
 
 That distinction matters when the app runs on Cloud Run. A Cloud Run instance can disappear.
 Anything important written only to the instance filesystem should be treated as temporary.
@@ -128,7 +127,8 @@ content_type: application/pdf
 created_at: 2026-05-04T09:43:00Z
 ```
 
-The object path is not the whole business record. It is the pointer to the bytes.
+The object path points to the bytes. The database or application record still carries the
+business meaning.
 
 ## Object Names Are Part Of The Design
 
@@ -154,8 +154,8 @@ These names are easy to inspect. They also make lifecycle rules and support sear
 predictable. If every object is named `file.pdf` under a random folder, the app may still
 work, but humans lose the ability to reason about the bucket.
 
-Object names are not security controls. Do not depend on "hard to guess" names to protect
-private files. Use IAM, signed URLs, and application authorization.
+Object names help organization, but they do not control access. Use IAM, signed URLs, and
+application authorization to protect private files.
 
 ## Keep Business Meaning In The Database
 
@@ -208,9 +208,9 @@ Generated files need cleanup. Export files may only be useful for 30 days. Tempo
 processing objects may only be useful for a few hours. Receipt files may need a longer
 retention policy because customers and compliance processes depend on them.
 
-Cloud Storage lifecycle rules can act on objects when conditions are met. The point is not
-to click a cleanup checkbox. The point is to write down the product decision: which objects
-should remain, for how long, and what happens afterward?
+Cloud Storage lifecycle rules can act on objects when conditions are met. Write down the
+product decision first: which objects should remain, for how long, and what happens
+afterward?
 
 A simple review might be:
 
@@ -233,8 +233,7 @@ replaced accidentally, support may download the wrong file. If retention rules a
 aggressive, the team may lose data it promised to keep.
 
 Cloud Storage has features such as object versioning and retention policies that can help in
-specific designs. The beginner lesson is not to enable every safety feature blindly. The
-lesson is to decide what must be recoverable.
+specific designs. Decide what must be recoverable before enabling safety features by habit.
 
 For production receipts, ask:
 
@@ -246,8 +245,7 @@ For production receipts, ask:
 | Is replacement safe? | Replacing a receipt may create trust and audit problems |
 | How do we prove recovery works? | A policy is not enough without a tested path |
 
-Safe deletion is an operating habit. It belongs in the feature design, not only in the
-bucket settings.
+Safe deletion belongs in the feature design as well as the bucket settings.
 
 ## Failure Modes And First Checks
 

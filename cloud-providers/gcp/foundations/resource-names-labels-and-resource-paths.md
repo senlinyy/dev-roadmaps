@@ -29,8 +29,7 @@ engineer needs to find the database that holds orders. A finance review
 needs to group cost by team. A platform engineer needs to know which
 resources belong to the checkout system before changing a policy.
 
-That is why names and labels are not cosmetic. They are part of
-operations.
+Names and labels are part of operations.
 
 GCP gives you several ways to identify and organize resources:
 
@@ -101,9 +100,9 @@ Secret Manager secret:
   orders-db-url
 ```
 
-Those names are not random. They carry enough meaning that a human can
-spot the service, app, and environment. Different teams may prefer
-different prefixes. The important part is consistency and clarity.
+Those names carry enough meaning that a human can spot the service, app,
+and environment. Different teams may prefer different prefixes. The
+important part is consistency and clarity.
 
 The same resources should also carry labels:
 
@@ -353,8 +352,8 @@ incident responder filters logs by `service=orders-api`, the response is
 faster. If cleanup scripts search for `env=dev`, they are less likely to
 touch production when labels are correct and reviewed.
 
-Naming is not glamour work. It is small operational kindness for the
-next person who has to understand the system.
+Clear naming helps the next person understand the system without
+guesswork.
 
 ## A Practical Naming And Labeling Review
 
@@ -425,8 +424,8 @@ symptom: reviewer cannot tell whether target is safe
 first check: naming convention and deploy metadata
 ```
 
-The fix direction is not only renaming. The team should make production
-targets visually obvious in the release record.
+The team should make production targets visually obvious in the release
+record before resource names create confusion.
 
 The third failure is cleanup risk:
 

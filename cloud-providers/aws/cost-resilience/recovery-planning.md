@@ -103,8 +103,7 @@ logs: CloudWatch log group /ecs/devpolaris-orders-api
 release evidence: task definition revision, image digest, deploy time
 ```
 
-This card is not paperwork for its own sake.
-It keeps the team from saying "restore orders" and meaning five different things.
+This card keeps the team from saying "restore orders" and meaning five different things.
 During an incident, vague words waste time.
 Concrete resource names give the next engineer a place to look.
 
@@ -127,7 +126,7 @@ RPO means recovery point objective.
 It is the target for how much data the business can afford to lose, measured as time.
 If the orders database has an RPO of 5 minutes, the team is saying, "after recovery, we should not lose more than about the last 5 minutes of accepted order writes."
 
-These are objectives, not magic guarantees.
+These are objectives, not guarantees.
 Writing `RTO: 30 minutes` in a document does not make a restore complete in 30 minutes.
 The backup schedule, restore process, validation checks, app config, traffic switch, and human practice must make that target realistic.
 
@@ -304,7 +303,7 @@ A typical item might look like this:
 
 Point-in-time recovery for DynamoDB protects against accidental writes or deletes by letting the team restore table data to a chosen time.
 Like RDS, the restore target is a new resource.
-The application will not magically read that new table unless configuration or repair code points at it.
+The application will read the new table only if configuration or repair code points at it.
 
 For `devpolaris-orders-api`, DynamoDB restore is often an inspection and repair tool.
 If idempotency records were deleted too early, the team may restore a side table, compare keys, and repair only the missing safety records.
@@ -449,7 +448,7 @@ S3 and DynamoDB need the same care.
 If a finance export was generated from corrupted totals, the team may restore or regenerate the export after the database repair.
 If idempotency records were created during the bad window, the team may inspect the restored DynamoDB table and production table before deciding which keys are safe.
 
-Recovery is a data decision, not only an AWS action.
+Recovery is a data decision as well as an AWS action.
 
 ## Restore Drills Make the Plan Real
 

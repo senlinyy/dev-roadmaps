@@ -27,7 +27,7 @@ A backend can be healthy and still unreachable if the public name sends browsers
 That is the quiet lesson behind many first cloud traffic problems.
 The app is running.
 The health check is green.
-The logs are calm.
+The logs are clean.
 But the user typed `orders.devpolaris.com`, and that name did not land on the entry point that knows how to reach the app.
 
 DNS, custom domains, and TLS are the pieces that turn a friendly public name into a working encrypted request path.
@@ -198,10 +198,11 @@ In Azure DNS, the zone apex, shown as `@`, already has required NS and SOA recor
 That is why a root name like `devpolaris.com` cannot simply become a CNAME.
 Our running example uses `orders.devpolaris.com`, a subdomain, so a CNAME is usually fine.
 
-The record type is not a style choice.
-It is part of how DNS standards work and how the Azure entry service expects to be reached.
-Before you change a production record, check the service instructions for the exact target type.
-Front Door, App Service, Container Apps, and Application Gateway do not all ask for the same record shape in every scenario.
+The record type is part of how DNS standards work and how the Azure
+entry service expects to be reached. Before you change a production
+record, check the service instructions for the exact target type. Front
+Door, App Service, Container Apps, and Application Gateway do not all
+ask for the same record shape in every scenario.
 
 ## Custom Domains Prove Ownership Before Traffic Moves
 
@@ -276,8 +277,9 @@ If the browser reaches Application Gateway first, the Application Gateway listen
 If the browser reaches App Service directly, App Service needs a TLS binding for the custom domain.
 If the browser reaches Container Apps ingress directly, the Container App custom domain needs a certificate binding.
 
-You can inspect the certificate the browser would see.
-This is not the only command you can use, but it gives a clear signal.
+You can inspect the certificate the browser would see. This command
+gives a clear first signal about the certificate subject, issuer,
+validity window, and hostname match.
 
 ```bash
 $ openssl s_client \
@@ -570,7 +572,7 @@ The entry service is the door.
 TLS is the lock and identity check.
 The backend health check tells you whether the room behind the door is ready.
 
-For `orders.devpolaris.com`, a calm production checklist looks like this:
+For `orders.devpolaris.com`, a production checklist looks like this:
 
 ```text
 Before changing traffic:
@@ -586,10 +588,10 @@ Before changing traffic:
   10. App logs show the expected request after the public check.
 ```
 
-That checklist is not ceremony.
-It is a way to keep each layer honest.
-When the user types `orders.devpolaris.com`, the browser is about to walk through all of those layers.
-Your job is to make sure each layer has exactly one clear answer.
+The checklist keeps each layer honest. When the user types
+`orders.devpolaris.com`, the browser walks through DNS, the public entry
+point, TLS, routing, backend health, and application behavior, and each
+layer needs one clear answer.
 
 ---
 

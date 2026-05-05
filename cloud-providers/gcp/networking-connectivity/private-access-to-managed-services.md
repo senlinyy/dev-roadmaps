@@ -38,8 +38,8 @@ protected by IAM.
 
 Sometimes the path is a private IP connection. Sometimes the path is Private Service
 Connect. Sometimes the path is Private Google Access. Those names sound similar because they
-all involve private access. They are not the same feature. This article teaches when each
-idea appears.
+all involve private access, but each feature solves a different path problem. This article
+teaches when each idea appears.
 
 ## The Private Access Question
 
@@ -117,11 +117,10 @@ Without an external IP address, the VM cannot simply use normal internet egress.
 Google Access lets eligible private VMs reach Google APIs and services when enabled on the
 subnet and when the network requirements are met.
 
-This is not the same as Cloud SQL private IP. It is also not the same as Private Service
-Connect. It answers a specific question: Can a private VM reach Google APIs without having
-its own external IP? For example, a private VM batch worker might need to write an export to
-Cloud Storage. If the VM has no external IP, Private Google Access may be part of the
-answer.
+Private Google Access answers a specific question: Can a private VM reach Google APIs
+without having its own external IP? For example, a private VM batch worker might need to
+write an export to Cloud Storage. If the VM has no external IP, Private Google Access may be
+part of the answer.
 
 The VM still needs IAM permission to write the object. Private Google Access gives a network
 path. IAM gives API authorization. Both are required.
@@ -140,15 +139,15 @@ private access without wide network peering. For beginners, Private Service Conn
 answer to this kind of question: How can my VPC reach a managed or published service through
 a private endpoint I control?
 
-It is not the first thing you need for every Cloud Run app. It is a pattern to recognize
-when the private access requirement is service-oriented.
+You do not need Private Service Connect for every Cloud Run app. Recognize it when the
+private access requirement is service-oriented.
 
 ## Cloud Run Needs Its Own Outbound Path
 
-Cloud Run is not a VM with a normal network interface you manage. It needs a configured
-outbound path when it must reach private VPC resources. For Cloud Run, that usually means
-Direct VPC egress when it fits, or Serverless VPC Access connectors for designs that use
-that older or alternate path. This sits beside managed service private access.
+Cloud Run needs a configured outbound path when it must reach private VPC resources. For
+Cloud Run, that usually means Direct VPC egress when it fits, or Serverless VPC Access
+connectors for designs that use that older or alternate path. This sits beside managed
+service private access.
 
 For Cloud SQL private IP, Cloud Run needs:
 
@@ -160,8 +159,7 @@ Cloud SQL private IP path
 
 One without the other is incomplete. If Cloud SQL has private IP but Cloud Run has no VPC
 egress, the service may not reach it. If Cloud Run has VPC egress but Cloud SQL only has a
-public path, the database is not private just because the app has VPC egress. Write both
-sides down.
+public path, the database still uses a public path. Write both sides down.
 
 Caller outbound path. Destination private access path. That one habit prevents a lot of
 confusion.
@@ -174,10 +172,9 @@ If that hostname resolves to a public address, the app may leave the private pat
 resolves to a private address that the caller cannot route to, the app may time out.
 
 If private DNS is missing, the app may not find the service at all. This is why private
-access reviews should include DNS. The question is not only: Does the private endpoint
-exist? The question is also: Does the application name resolve to the private destination
-from the caller's network? For GCP, the exact DNS setup depends on the service and private
-access pattern.
+access reviews should include DNS. Check both the private endpoint and name resolution: Does
+the application name resolve to the private destination from the caller's network? For GCP,
+the exact DNS setup depends on the service and private access pattern.
 
 Do not assume the public hostname automatically becomes private. Verify what the caller
 sees.
@@ -233,7 +230,7 @@ Each dependency has its own access pattern.
 ## Failure Modes And Fix Directions
 
 The first failure is assuming private IP is automatic. Cloud SQL exists in the same project,
-but it is not configured for the private path the app expects. The fix direction is to
+but the private path the app expects still needs configuration. The fix direction is to
 configure and verify the supported private IP path, including private services access where
 required. The second failure is forgetting the caller path.
 

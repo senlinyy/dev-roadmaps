@@ -38,7 +38,7 @@ You ask AWS to create resources for you.
 A resource is one thing AWS manages, such as a virtual machine, a load balancer, a database, a storage bucket, or a log group.
 
 The beginner mistake is trying to memorize service names too early.
-EC2, S3, IAM, VPC, RDS, ECS, Lambda, CloudWatch, Route 53, and dozens more can start to feel like a wall of nouns.
+EC2, S3, IAM, VPC, RDS, ECS, Lambda, CloudWatch, Route 53, and dozens more can start to feel like a long list of service names.
 The better first move is to learn the shape of the place.
 
 AWS is a set of APIs (application programming interfaces, meaning controlled entry points that software can call).
@@ -136,8 +136,7 @@ That is the map you need before the service names start to matter.
 
 An AWS account is the first big boundary.
 For a beginner, it helps to think of it as a separate cloud workspace.
-It is not just a login screen.
-It is where resources live, where bills collect, and where access rules start.
+The account is where resources live, where bills collect, and where access rules start.
 
 If your company has a staging account and a production account, those accounts are like two separate workrooms.
 Both workrooms may contain similar things: a load balancer, an app service, a database, and logs.
@@ -176,15 +175,14 @@ For `devpolaris-orders-api`, the team might use separate accounts:
 | `devpolaris-staging` | Release checks before production | Bad config blocks a release |
 | `devpolaris-prod` | Real checkout traffic | Mistake can affect customers |
 
-This separation is not decoration.
-It gives mistakes a smaller place to land.
+This separation gives mistakes a smaller place to land.
 If a junior engineer experiments in the dev account, they should not be able to delete the production database by accident.
 
 Accounts also make cost and ownership easier to understand.
 If production spend jumps, the team can look at the production account.
 If a staging resource is left running, the staging account carries the bill.
 
-The rule is simple:
+Use this rule:
 
 > Before you change AWS, know the account.
 
@@ -297,11 +295,11 @@ User arn:aws:iam::123456789012:user/maya is not authorized
 to perform s3:CreateBucket on resource arn:aws:s3:::devpolaris-orders-exports
 ```
 
-That message is not friendly, but it is useful.
+The message is dense, but it gives you the facts you need.
 It tells you four things:
 the API call, the caller, the action, and the resource.
 
-The beginner move is to read it slowly instead of panicking.
+Start with the fields in the error message.
 Which action was denied?
 Who made the request?
 Which resource did they try to touch?
@@ -366,7 +364,7 @@ A month later, nobody knows which service owns them.
 The team becomes afraid to delete anything.
 
 Good names and tags are not about being tidy.
-They make cloud work less scary.
+They make cloud work easier to inspect.
 
 ## Managed Services Still Need Owners
 
@@ -438,8 +436,7 @@ The S3 bucket stores exported files.
 CloudWatch receives logs and metrics.
 IAM roles decide what the service is allowed to do.
 
-This is not the only possible architecture.
-It is just a useful first map.
+Treat this architecture as a useful first map, not as the only possible design.
 
 The same map also gives you a debugging path.
 If users cannot reach checkout, ask where the request stops.
@@ -518,9 +515,7 @@ They have learned that cloud mistakes often hide in plain sight.
 
 ## What This Mental Model Prepares You For
 
-This article does not make you an AWS expert.
-That is not the goal.
-The goal is to give you a map so later service details have a place to land.
+This article gives you a map so later service details have a place to land.
 
 When you learn compute, you will know to ask which account and Region the server or container lives in.
 When you learn networking, you will understand why location and boundaries matter.

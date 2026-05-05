@@ -36,9 +36,7 @@ You can put a PDF as bytes inside a SQL table. You can put order state into Dyna
 
 Some of those choices work for a demo and hurt later. In this article, the DevPolaris team is adding features to a Node.js backend called `devpolaris-orders-api`. The service handles checkout and order workflows.
 
-The team needs order records, receipt files, export files, idempotency checks, job status, temporary report generation, and maybe shared file input for workers. We will use those features as review cards. The goal is not to memorize a vendor chart.
-
-The goal is to look at a feature request and ask better questions before you choose.
+The team needs order records, receipt files, export files, idempotency checks, job status, temporary report generation, and maybe shared file input for workers. We will use those features as review cards so you can look at a feature request and ask better questions before you choose.
 
 > Start with the shape of the data, the read path, and the failure you cannot accept. The service name comes after that.
 
@@ -125,7 +123,7 @@ In SQL, you can often add a new query later. In DynamoDB, you design around know
 
 ## Feature Review: Order Records
 
-The first feature card is the core checkout record. `devpolaris-orders-api` receives a checkout request, creates an order, records line items, stores payment state, and later shows the order history page. This data is not just a blob of JSON.
+The first feature card is the core checkout record. `devpolaris-orders-api` receives a checkout request, creates an order, records line items, stores payment state, and later shows the order history page. This data has more structure than one JSON blob.
 
 It has relationships. One customer has many orders. One order has many order items.
 
@@ -260,7 +258,7 @@ state: completed
 created_at: 2026-05-02T10:14:22Z
 ```
 
-This is not "DynamoDB for all checkout." It is DynamoDB for a narrow, predictable check. The main order can still live in RDS.
+DynamoDB fits this narrow, predictable check while the main order can still live in RDS.
 
 The idempotency item can protect the edge of the workflow. The review question is: "Can we name the key and the exact reads?" If the answer is yes, DynamoDB may be a good fit.
 
@@ -334,7 +332,7 @@ That path only exists on the machine that wrote it. If the instance is replaced,
 
 The fix direction is to move durable receipt files to S3 and keep only temporary work files on local disk. EBS enters the conversation when an EC2 instance needs a persistent disk attached to that instance. For example, a self-managed tool running on one EC2 instance may need a normal filesystem path and durable volume.
 
-EBS behaves like a drive attached to that instance. It is useful for machine-shaped storage, but it does not magically become a shared application storage layer. EFS enters when multiple workers need the same shared filesystem path at the same time.
+EBS behaves like a drive attached to that instance. It is useful for machine-shaped storage, but it does not become a shared application storage layer. EFS enters when multiple workers need the same shared filesystem path at the same time.
 
 Suppose the operations team receives large vendor input files over a private transfer process. Several EC2 workers need to read files from `/mnt/devpolaris-input/incoming/`. The code expects normal file operations: open, read, rename, and directory listing.
 
@@ -459,7 +457,7 @@ They do not ask "which AWS service is best?" They ask "what promise does this fe
 | Shared worker input directory | EFS only when shared filesystem behavior is truly needed | Multiple workers need the same mounted path |
 | Single EC2 machine disk | EBS | Instance-attached block storage for machine-shaped needs |
 
-This is the practical habit to keep. Records, objects, key-value items, block devices, and shared filesystems are not interchangeable just because they all store bytes. When you describe the data first, the AWS choice becomes much calmer.
+This is the practical habit to keep. Records, objects, key-value items, block devices, and shared filesystems are not interchangeable just because they all store bytes. When you describe the data first, the AWS choice becomes easier to explain.
 
 ---
 

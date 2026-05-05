@@ -30,11 +30,12 @@ That is the practical confusion this article is about.
 Azure may accept your login, show you resources, and let you click around.
 But the resource you are viewing may belong to the wrong tenant, the wrong subscription, or the wrong resource group.
 
-That sounds like a small naming problem.
-It is not.
-A deployment pointed at the wrong subscription can create production infrastructure from a staging pipeline.
-A database placed in the wrong resource group can be deleted with an unrelated cleanup.
-A teammate can have access to one tenant and still not be able to see the subscription where the application bill lives.
+That confusion can become a real production problem. A deployment
+pointed at the wrong subscription can create production infrastructure
+from a staging pipeline, a database placed in the wrong resource group
+can be deleted with an unrelated cleanup, and a teammate can have access
+to one tenant while still being unable to see the subscription where the
+application bill lives.
 
 Azure uses several boundaries before you ever create a virtual machine, web app, storage account, or database.
 A **tenant** is the identity home.
@@ -60,8 +61,11 @@ If you know AWS, the closest familiar idea is the AWS account.
 An AWS account is where resources live, where billing lands, and where IAM rules protect production.
 Azure splits that feeling across a few boxes.
 
-That split is the part worth slowing down for.
-It is not harder once you see the shape, but it is easy to misread if you expect one Azure word to replace one AWS word.
+That split is the part worth slowing down for because Azure does not
+replace one AWS word with one Azure word. Once you see the shape, the
+model is manageable: identity lives in the tenant, resources and billing
+live in subscriptions, and lifecycle grouping happens in resource
+groups.
 
 | AWS idea you know | Azure idea to learn | Practical warning |
 |-------------------|---------------------|-------------------|
@@ -269,11 +273,10 @@ If a database must outlive the app compute, it may need its own group.
 The right boundary is not "all databases together" or "all web apps together."
 The right boundary is "what changes and dies together?"
 
-There is one more beginner wrinkle:
-a resource group has a location, but resources inside it can be in different locations.
-The resource group location is where Azure stores metadata about that group.
-It is not a guarantee that every resource inside runs there.
-So `rg-devpolaris-orders-prod` in `eastus` can contain a resource in `centralus`, even if that is not what you intended.
+The resource group location is where Azure stores metadata about that
+group. Resources inside the group can still run in other regions, so
+`rg-devpolaris-orders-prod` in `eastus` can contain a resource in
+`centralus`, even if that is not what you intended.
 
 That is why you check both:
 the resource group location and the resource location.
@@ -287,9 +290,8 @@ That sentence matters because it explains why the same scope model appears every
 The portal and CLI may look different, but both are asking ARM to create, update, read, or delete resources.
 ARM checks identity, authorization, policy, locks, and the requested resource shape before the change reaches the Azure service that owns the resource.
 
-For the orders API, imagine a deployment command that creates an App Service.
-The important thing is not the exact syntax yet.
-The important path is:
+For the orders API, imagine a deployment command that creates an App
+Service. Focus first on the path the request takes:
 
 ```text
 Maya or CI pipeline
@@ -366,9 +368,9 @@ The placement plan can look like this:
 | Staging | `devpolaris.onmicrosoft.com` | `sub-devpolaris-staging` | `rg-devpolaris-orders-staging` | Release checks before production |
 | Production | `devpolaris.onmicrosoft.com` | `sub-devpolaris-prod` | `rg-devpolaris-orders-prod` | Real checkout traffic |
 
-The names are not magic.
-They are boring on purpose.
-When someone reads `rg-devpolaris-orders-prod`, they should know the company, app, and environment without opening a wiki.
+The names are boring on purpose. When someone reads
+`rg-devpolaris-orders-prod`, they should know the company, app, and
+environment without opening a wiki.
 
 The team also chooses a small tag set.
 Tags are key-value metadata attached to resources, resource groups, and subscriptions.
@@ -471,10 +473,11 @@ Target group:          rg-devpolaris-orders-staging
 ERROR: Resource group 'rg-devpolaris-orders-staging' could not be found.
 ```
 
-The error is useful if you read it carefully.
-The staging resource group is missing because the command is looking in the production subscription.
-The fix is not to create `rg-devpolaris-orders-staging` in production.
-The fix is to switch the active subscription to `sub-devpolaris-staging` and rerun the deployment there.
+The error is useful if you read it carefully. The staging resource group
+is missing because the command is looking in the production
+subscription. Switch the active subscription to `sub-devpolaris-staging`
+and rerun the deployment there instead of creating staging resources in
+production.
 
 That distinction is the whole lesson.
 Do not repair the symptom inside the wrong boundary.
@@ -536,9 +539,10 @@ sql-devpolaris-orders-prod      westus2
 appi-devpolaris-orders-prod     eastus
 ```
 
-The fix is not to rename the group.
-The fix is to inspect resource locations and decide whether the out-of-region resource is intentional.
-For many beginner app environments, keeping the group and resources in the same region is the simpler default.
+Inspect resource locations before renaming anything. Decide whether the
+out-of-region resource is intentional. For many beginner app
+environments, keeping the group and resources in the same region is the
+simpler default.
 
 The fourth failure is deleting a resource group with live resources.
 Resource group deletion is convenient when the group is a lab.
@@ -578,11 +582,10 @@ rg-devpolaris-orders-staging
 rg-devpolaris-orders-prod
 ```
 
-This shape is simple.
-It gives each environment a clear deployment target.
-It makes inventory easy.
-It lets the team grant the CI pipeline access to one environment without handing it a whole subscription.
-It also makes cleanup safer because staging and production are not in the same container.
+This shape gives each environment a clear deployment target. It makes
+inventory easy, lets the team grant the CI pipeline access to one
+environment without handing it a whole subscription, and makes cleanup
+safer because staging and production are not in the same container.
 
 The tradeoff is that too many tiny resource groups can create noise.
 If every small helper resource gets its own group, ownership becomes harder to read.
@@ -608,8 +611,8 @@ The final operating checklist is short:
 | Role scope | Access is broad enough to work and narrow enough to limit mistakes |
 | Tags | Ownership and cost metadata are readable |
 
-This is not ceremony.
-It is how you avoid the quiet Azure mistake where every command is technically valid and still aimed at the wrong place.
+This checklist helps you avoid the quiet Azure mistake where every
+command is technically valid and still aimed at the wrong place.
 
 ---
 

@@ -117,8 +117,6 @@ export const handler = async (event, context) => {
 };
 ```
 
-This is not the whole application.
-That is the point.
 The handler only knows how to process receipt email messages.
 It does not know how to accept checkout requests, manage carts, or serve the public orders API.
 
@@ -322,11 +320,11 @@ Here is the practical comparison:
 | Asynchronous | Event sender does not wait | Lambda can retry failed events | S3 object event, EventBridge event |
 | SQS event source | Queue stores messages | Message returns to queue on failure | Receipt email and export work queues |
 
-Retries are helpful, but they are not magic.
+Retries are helpful only when the work can safely run again.
 They turn some temporary failures into later success.
 They also turn unsafe code into duplicated side effects.
 
-The safe mindset is simple:
+Use this safety rule:
 assume the same event can appear again.
 Log a stable event ID.
 Make the handler able to detect work that is already complete.
@@ -530,7 +528,7 @@ If you are unsure, start from the job sentence.
 
 ## A First Review Checklist
 
-Before shipping a Lambda function, review it like an operator, not just like a programmer.
+Before shipping a Lambda function, review the operating behavior as carefully as the code.
 The code can pass unit tests and still be hard to run safely.
 
 Start with the event contract.
@@ -561,7 +559,7 @@ Finally, review the compute fit.
 If the function has grown into a mini application with many routes, many permissions, and many dependencies, pause.
 It may belong in the ECS service, or it may need to be split into smaller event handlers.
 
-That is the calm way to use Lambda.
+That is the reliable way to use Lambda.
 You are not avoiding servers because servers are bad.
 You are choosing event-driven compute when the job is naturally an event reaction.
 

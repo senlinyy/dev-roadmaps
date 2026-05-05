@@ -67,16 +67,16 @@ flowchart TD
     IDENTITY -. "read attempt can be audited" .-> AUDIT
 ```
 
-The secret name is not the value. The version contains the sensitive payload. The service
-account must have permission to access that payload. The app uses the payload to connect to
-the dependency. That is the basic flow.
+The secret name identifies the entry. The version contains the sensitive payload. The
+service account must have permission to access that payload. The app uses the payload to
+connect to the dependency. That is the basic flow.
 
 ## Names Are Not The Same As Values
 
-New teams sometimes hide secret names as if the name were the secret. Usually the dangerous
-part is not the name. The dangerous part is the payload. It is usually fine for engineers to
-know that a production secret called `orders-db-url` exists. It is not fine for every
-engineer to read the database password inside that secret.
+New teams sometimes hide secret names as if the name were the secret. The sensitive part is
+the payload. It is usually fine for engineers to know that a production secret called
+`orders-db-url` exists. It is risky for every engineer to read the database password inside
+that secret.
 
 This distinction makes access design easier. Some people may need to manage secret metadata.
 Fewer people need to read secret payloads. Some automation may need to create new versions.
@@ -90,9 +90,7 @@ Different jobs should receive different roles. For example:
 | On-call debugger | Rarely | Prefer logs and configuration evidence first |
 | CI/CD deployer | Usually no | Deploy app without reading runtime secret values |
 
-The table is not a rule for every company.
-
-It is a way to avoid giving payload access just because someone works on the service.
+Use the table to avoid giving payload access just because someone works on the service.
 
 ## Versions Make Rotation Possible
 
@@ -101,15 +99,15 @@ expired. It can happen because a vendor asks for a new token. It can happen beca
 may have leaked. It can also happen as a normal security habit. Versions make rotation safer
 because the secret name can stay stable. The app keeps asking for `orders-db-url`.
 
-Secret Manager can hold a new enabled version under that same secret. The risky part is not
-creating the new value. The risky part is making sure the app and dependency agree on the
-new value. For a database password, rotation usually involves both sides. The database must
-accept the new credential. The secret must store the new credential.
+Secret Manager can hold a new enabled version under that same secret. The risky part is
+making sure the app and dependency agree on the new value. For a database password, rotation
+usually involves both sides. The database must accept the new credential. The secret must
+store the new credential.
 
 The app must read and use the new credential. Old connections may still exist for a short
-time. A rollback plan may be needed if the new value breaks production. That is why secret
-rotation is a release plan, not just a storage edit. The safest rotation plans define the
-order, the validation check, and the rollback target.
+time. A rollback plan may be needed if the new value breaks production. Treat secret
+rotation as a release plan that includes storage, the app, and the dependency. The safest
+rotation plans define the order, the validation check, and the rollback target.
 
 ## IAM Controls Who Reads Payloads
 
@@ -166,10 +164,10 @@ validation: /health/db returns ok after revision starts
 rollback target: version 6 until database credential is removed
 ```
 
-This is not a command. It is the operating story. It tells the team what changed and how to
-check it. The validation matters because a secret can exist and still be wrong. The app may
-read the secret successfully, then fail to connect because the value is malformed. Secret
-access proves permission. It does not prove the value is correct.
+This release record tells the team what changed and how to check it. The validation matters
+because a secret can exist and still be wrong. The app may read the secret successfully,
+then fail to connect because the value is malformed. Secret access proves permission. It
+does not prove the value is correct.
 
 For that, the app needs a health check or a smoke test that exercises the dependency.
 
@@ -196,22 +194,19 @@ A simple rotation plan might be:
 6. Disable the old database credential after the rollback window.
 ```
 
-The steps are not the main lesson.
-
 The main lesson is that the secret, the app, and the dependency must move together.
 
 ## Encryption Is The Baseline, Not The Whole Story
 
 GCP encrypts data in many managed services. That baseline matters. But beginners often hear
 "encrypted" and assume the security work is done. Encryption protects data at rest and in
-transit in important ways. It does not decide which engineer can read a secret payload. It
-does not make a leaked service account key safe. It does not prevent an overpowered runtime
-service account from reading too many secrets.
+transit in important ways. Access control still decides which engineer or workload can read
+a secret payload. A leaked service account key is still dangerous. An overpowered runtime
+service account can still read too many secrets. A rotated value can still be wrong.
 
-It does not verify that the rotated value is correct. Access control still matters. Audit
-logs still matter. Network design still matters. Application behavior still matters.
-Encryption is one layer. It is not the whole security model. For Secret Manager, the
-practical beginner focus is: Where is the secret stored? Who can access the payload?
+Access control, audit logs, network design, and application behavior still matter. For
+Secret Manager, the practical beginner focus is: Where is the secret stored? Who can access
+the payload?
 
 Which workload uses it? How is the value rotated? What evidence exists when it is read or
 changed? Those questions help more than saying "it is encrypted" and stopping.
@@ -283,7 +278,7 @@ direction is to use Secret Manager for application secrets and KMS for encryptio
 
 ## A Practical Secret Review
 
-Review secrets as operating resources, not just hidden strings.
+Review secrets as operating resources with owners, readers, rotation plans, and evidence.
 
 For each production secret, ask:
 
@@ -315,10 +310,10 @@ It tells the team who owns the secret, who reads it, and how to recover from a b
 
 ## The Habit To Build
 
-Treat secrets as living dependencies. They are not just strings. They connect the app to
-other systems. They need owners. They need narrow readers. They need rotation plans. They
-need validation. They need audit evidence. They need cleanup when the dependency goes away.
-Secret Manager gives GCP teams a good managed home for these values.
+Treat secrets as living dependencies that connect the app to other systems. They need
+owners. They need narrow readers. They need rotation plans. They need validation. They need
+audit evidence. They need cleanup when the dependency goes away. Secret Manager gives GCP
+teams a good managed home for these values.
 
 IAM decides who can open that home. Cloud KMS handles key-management needs when encryption
 control is the problem. Audit logs help show what changed or was accessed. The mature habit

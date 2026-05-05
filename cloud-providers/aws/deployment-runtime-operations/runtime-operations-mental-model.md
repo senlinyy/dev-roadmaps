@@ -46,8 +46,7 @@ AWS Secrets Manager provides sensitive values.
 CloudWatch Logs stores stdout and stderr from the container.
 The ALB health check decides whether each task is safe to receive traffic.
 
-The point of this article is not to turn you into an ECS expert in one sitting.
-The point is to give you a mental checklist for the moment after the build is green.
+This article gives you a mental checklist for the moment after the build is green.
 If you can name what must remain true at runtime, you can debug failed deployments without treating AWS as one large mystery box.
 
 > A release is not alive because an image exists. It is alive because the right version is running, healthy, observable, and reversible.
@@ -129,8 +128,7 @@ That promise is what makes a backend feel like a service instead of a one-time c
 
 The ALB target group is the traffic filter.
 It should only send user requests to task IPs that pass the health check.
-That means your health endpoint is not decoration.
-It is part of the runtime contract.
+Your health endpoint is part of the runtime contract.
 
 CloudWatch Logs is the evidence trail.
 When a task exits, loops, rejects a request, or fails startup, the logs should help the next engineer ask a better question.
@@ -192,7 +190,7 @@ Rollout state tells you whether ECS thinks the deployment finished.
 
 You still need target health too, because "running" does not always mean "receiving traffic."
 A process can be running while the ALB rejects it as unhealthy.
-That is why the release record includes `Healthy targets: 2/2`, not only `Running count: 2`.
+That is why the release record includes `Healthy targets: 2/2` alongside `Running count: 2`.
 
 ## From Artifact To Running Version
 
@@ -259,8 +257,7 @@ If the task role is wrong, the app may start and then fail when it tries to read
 That difference matters because it changes where you look first.
 
 The task definition revision is the runtime version boundary.
-`devpolaris-orders-api:42` is not only "the same app with a new image."
-It is a complete runtime recipe.
+`devpolaris-orders-api:42` is a complete runtime recipe, not merely the same app with a new image.
 Rollback usually means pointing the ECS service back to a previous known-good recipe, not manually editing one field during an incident.
 
 ## Config, Secrets, And Permissions
@@ -294,7 +291,7 @@ Here is the beginner map:
 | CloudWatch log write setup | Log configuration and execution role | Task fails silently from the team's point of view |
 
 One subtle point: injected secrets are read when the task starts.
-If the secret value changes later, already-running tasks do not magically reload that value.
+If the secret value changes later, already-running tasks keep the value they received at startup.
 You normally need to start fresh tasks, often by forcing a new deployment, so the running process sees the new value.
 
 That behavior is not strange once you compare it to Node.js.
@@ -470,9 +467,7 @@ Rollback means returning production to a known-good runtime version.
 For this ECS service, the clean rollback target is usually the previous task definition revision that points to the previous image digest and previous runtime settings.
 
 That target should be known before you need it.
-The release record above kept `devpolaris-orders-api:41` as the previous good revision.
-That is not paperwork.
-It is the difference between a calm recovery and a rushed search through old pipeline runs.
+The release record above kept `devpolaris-orders-api:41` as the previous good revision, so the team can recover without searching through old pipeline runs during an incident.
 
 A rollback command might look like this:
 

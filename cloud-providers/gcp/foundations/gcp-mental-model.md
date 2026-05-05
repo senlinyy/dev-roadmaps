@@ -187,13 +187,13 @@ graph TD
 Read the solid line as the main placement story. A company can have
 folders. A folder can contain a project. A project enables services.
 Resources are created in the project, often in a region. The dotted
-lines are not places where the app runs. They are supporting rules.
+lines show supporting rules rather than places where the app runs.
 Billing decides where cost lands. IAM decides who or what can act.
 
-That distinction prevents many beginner mistakes. A billing account does
-not run your app. A permission role is not a network path. An enabled
-API is not a deployed service. A region is not a project. Each box has a
-job.
+That distinction prevents many beginner mistakes. Keep the jobs
+separate: billing pays for usage, IAM controls actions, enabled APIs
+open service doors, regions place resources, and projects organize the
+workspace.
 
 ## Projects Are The Daily Workspace
 
@@ -227,14 +227,13 @@ devpolaris-orders-staging
 devpolaris-orders-prod
 ```
 
-That layout is not the only possible design, but it is easy for
-beginners to reason about. Staging resources are not mixed with
-production resources. Production IAM can be stricter. Billing can still
-roll up through the same billing account or folder reports.
+This layout is one possible design, and it is easy for beginners to
+reason about. Staging resources stay separate from production resources.
+Production IAM can be stricter. Billing can still roll up through the
+same billing account or folder reports.
 
-The practical habit is simple: before you create anything in GCP, check
-the current project. A correct command in the wrong project is still a
-wrong change.
+Before you create anything in GCP, check the current project. A correct
+command in the wrong project is still a wrong change.
 
 ## APIs Must Be Enabled Before Services Can Be Used
 
@@ -258,10 +257,10 @@ For the orders project, the team may need service doors like this:
 | Store private config | Secret Manager |
 | Collect logs and metrics | Cloud Logging and Cloud Monitoring |
 
-API enablement is not the same as permission. A project can have the
-Cloud Run API enabled while a developer still lacks permission to deploy
-a service. A developer can have the right IAM role while the API is
-still disabled. Both must be true.
+Separate API enablement from permission. A project can have the Cloud
+Run API enabled while a developer still lacks permission to deploy a
+service. A developer can have the right IAM role while the API is still
+disabled. Both must be true.
 
 This failure shape is common enough to remember:
 
@@ -272,10 +271,10 @@ result: API not enabled for project
 first check: is run.googleapis.com enabled in this project?
 ```
 
-The fix is not to give the pipeline broader permissions first. The first
-fix is to inspect the project setup. Is the service enabled? Is billing
-attached? Is the identity allowed to deploy? Separate those questions
-and debugging becomes more direct.
+Inspect the project setup before giving the pipeline broader
+permissions. Is the service enabled? Is billing attached? Is the
+identity allowed to deploy? Separate those questions and debugging
+becomes more direct.
 
 ## Regions And Zones Put Resources On The Map
 
@@ -303,11 +302,10 @@ Cloud SQL database: us-central1
 Cloud Storage bucket: us-central1 or a reviewed storage location
 ```
 
-The point is not that `us-central1` is always the right answer. The
-point is that app, database, storage, latency, compliance, and recovery
-all connect to location. A backend in one region talking to a database
-in another region may work, but it can add latency, cost, and failure
-paths.
+`us-central1` is only an example. The lasting lesson is that app,
+database, storage, latency, compliance, and recovery all connect to
+location. A backend in one region talking to a database in another
+region may work, but it can add latency, cost, and failure paths.
 
 If you know AWS or Azure, the basic region idea transfers. The service
 scope details do not. Always ask whether the specific GCP resource is
@@ -414,10 +412,10 @@ labels required: team, service, env, cost_center
 budget alert: production order services
 ```
 
-The goal is not paperwork. The goal is not being surprised later. If a
-Cloud Run service scales up, a Cloud SQL instance is oversized, or a
-storage bucket grows because exports never expire, the team needs to see
-the cost and know who owns the decision.
+The project record helps the team avoid surprise later. If a Cloud Run
+service scales up, a Cloud SQL instance is oversized, or a storage
+bucket grows because exports never expire, the team needs to see the
+cost and know who owns the decision.
 
 Billing is part of engineering because resources are choices. The bill
 is one way the system tells you whether those choices still make sense.
@@ -501,9 +499,9 @@ symptom: checkout latency increased
 The first check is location. The resources may be healthy, but placed in
 a way that adds avoidable distance.
 
-The pattern is simple: before diving into the product console, place the
-problem on the map. Project, API, region, resource, identity, billing,
-or evidence. One of those boxes is usually where the first answer lives.
+Before diving into the product console, place the problem on the map:
+project, API, region, resource, identity, billing, or evidence. One of
+those boxes is usually where the first answer lives.
 
 ## The Mental Checklist Before You Deploy
 
@@ -521,10 +519,9 @@ to answer a short set of questions.
 | Billing owner | The approved production billing account |
 | Healthy evidence | Health checks, logs, metrics, traces, and release records |
 
-This checklist is not fancy. It is the part of cloud work that keeps the
-rest from becoming guesswork. When the map is clear, service-specific
-articles become easier. Cloud Run has a place. Cloud SQL has a place.
-IAM has a place. Logs and billing have a place.
+This checklist keeps cloud work from becoming guesswork. When the map is
+clear, service-specific articles become easier. Cloud Run has a place.
+Cloud SQL has a place. IAM has a place. Logs and billing have a place.
 
 That is the real goal of a foundation article: the next noun should have
 somewhere to land.

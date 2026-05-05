@@ -105,7 +105,7 @@ metadata:
 
 Metadata is useful for small labels that describe an object. It is not a replacement for a database index. If finance needs to query "all orders over 500 dollars by customer segment," that belongs in a database or analytics system, not in S3 object metadata.
 
-The key lesson is simple:
+The key lesson is:
 
 > In S3, the path-looking string is the object name, not proof that real folders exist.
 
@@ -125,7 +125,7 @@ A simple bucket and prefix plan could look like this:
 | Manifests | `manifests/YYYY/MM/DD/` | `manifests/2026/05/02/...` |
 | Temporary staging writes | `tmp/releases/RELEASE_ID/` | `tmp/releases/2026-05-02.4/...` |
 
-The date parts are not magic. They are a naming convention. They make common operations easier: list today's export, review one order's receipt, expire temporary release files, or grant finance read access only to export prefixes.
+The date parts are a naming convention. They make common operations easier: list today's export, review one order's receipt, expire temporary release files, or grant finance read access only to export prefixes.
 
 A daily export object might use `exports/daily/2026/05/02/devpolaris-orders-export-2026-05-02.json`. The manifest for the same export might use `manifests/2026/05/02/devpolaris-orders-manifest.json`. The receipt for one checkout might use `receipts/2026/05/02/order_ord_8x7k2n/devpolaris-orders-receipt.pdf`.
 
@@ -144,7 +144,7 @@ Here is the shape of that decision:
 
 The prefix is doing real work here. It lets your team describe access in the same shape as the data. That makes a review easier because the reviewer can ask, "does this caller really need this prefix?"
 
-The release mistake in this article comes from a small naming change. A developer changes the export prefix from `exports/daily/` to `export/daily/`. The missing `s` looks harmless in code review. In S3, it is a totally different key prefix.
+The release mistake in this article comes from a small naming change. A developer changes the export prefix from `exports/daily/` to `export/daily/`. The missing `s` can be easy to miss in code review, but in S3 it creates a totally different key prefix.
 
 The app still writes an object. Finance still looks in the old prefix. Everyone says, "the export is missing." Really, the export exists under the wrong name.
 
@@ -218,7 +218,7 @@ download: s3://devpolaris-orders-prod-objects/exports/daily/2026/05/02/devpolari
 
 That output proves only one thing: the current AWS caller could read that exact object. It does not prove the Node.js app can write tomorrow's export. It does not prove finance can read receipts. Each S3 action is still checked against the caller, action, bucket, key, and surrounding policies.
 
-This is why good app logs and good CLI checks use the same bucket and key strings. When the strings match, you can reason calmly. When they differ, you have found the first suspect.
+This is why good app logs and good CLI checks use the same bucket and key strings. When the strings match, the evidence points to the same object. When they differ, you have found the first suspect.
 
 ## Access, IAM, and Real AccessDenied Errors
 
@@ -334,13 +334,13 @@ Safe deletion in this article means three modest habits:
 1. Use prefixes that separate temporary objects from important objects.
 2. Use versioning where accidental overwrite or delete would hurt.
 3. Use lifecycle rules carefully so old versions and temporary objects do not grow forever.
-This is not the full backup strategy. The later backup article can go deeper into recovery objectives, retention plans, restore testing, and legal holds. Here, the practical point is smaller: S3 deletion and overwrite behavior depends heavily on versioning and lifecycle configuration.
+The later backup article goes deeper into recovery objectives, retention plans, restore testing, and legal holds. Here, the practical point is smaller: S3 deletion and overwrite behavior depends heavily on versioning and lifecycle configuration.
 
 Before adding delete permission to `devpolaris-orders-api`, ask what the app truly needs. Most checkout backends need to write receipts and exports. They rarely need broad deletion over the whole bucket. A narrow cleanup job with a narrow `tmp/releases/` prefix is easier to reason about than an app role that can delete every receipt.
 
 ## Lifecycle Rules, Metadata, and Encryption
 
-Once objects start accumulating, somebody will ask how long to keep them. That question is not only about cost. It is also about operations. If temporary release files never expire, listings get noisy. If daily exports disappear too soon, finance loses evidence. If old noncurrent versions stay forever, versioning can surprise the bill.
+Once objects start accumulating, somebody will ask how long to keep them. That question affects cost and operations. If temporary release files never expire, listings get noisy. If daily exports disappear too soon, finance loses evidence. If old noncurrent versions stay forever, versioning can surprise the bill.
 
 S3 Lifecycle rules let S3 take actions on objects over time. A rule can target a prefix or tags, then transition objects to another storage class or expire them. For this article, focus on the beginner-safe idea: use lifecycle rules for data with a clear lifecycle, and review the prefix very carefully before enabling expiration.
 
@@ -353,7 +353,7 @@ A cautious lifecycle plan might look like this:
 | `receipts/` | Customer receipt PDFs | Keep according to product and legal needs |
 | `manifests/` | Export manifests | Keep with the export they describe |
 
-The dangerous part is the filter. If you mean to expire `tmp/releases/` but accidentally configure `exports/`, S3 will apply the rule to real exports. If you enable a rule that applies to existing objects, old matching objects can become eligible too. That is why lifecycle review should include example keys, not just a rule name.
+The filter is the dangerous part. If you mean to expire `tmp/releases/` but accidentally configure `exports/`, S3 will apply the rule to real exports. If you enable a rule that applies to existing objects, old matching objects can become eligible too. That is why lifecycle review should include example keys and a rule name.
 
 Metadata helps you keep context close to the object. For exports, the app can attach user-defined metadata:
 
@@ -385,7 +385,7 @@ A KMS-related failure often looks unfair at first:
 
 The S3 policy may be correct. The missing permission may be on the KMS key. That is why the diagnostic path should include encryption settings when access looks correct but reads still fail.
 
-The storage decision is not only "can we upload?" It is: can the right caller upload, can the right reader read, can we explain why the object exists, can we avoid accidental deletion, and can we afford the lifecycle we chose?
+The storage decision asks more than "can we upload?" It asks: can the right caller upload, can the right reader read, can we explain why the object exists, can we avoid accidental deletion, and can we afford the lifecycle we chose?
 
 ## Debugging Missing or Unreadable Objects
 
@@ -397,7 +397,7 @@ For the release mistake, finance says `s3://devpolaris-orders-prod-objects/expor
 
 That one-letter difference is the incident. Finance reads `exports/daily/`. The app wrote `export/daily/`. S3 did exactly what the app asked. The team needs to fix the prefix and decide whether to move or copy the misplaced object.
 
-Here is a calm diagnostic path you can reuse:
+Here is a diagnostic path you can reuse:
 
 | Symptom | First Check | What It Tells You |
 |---------|-------------|-------------------|

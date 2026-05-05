@@ -65,13 +65,11 @@ how it connects to Azure Monitor.
 | APM service map | Application map | Visual view of app components and dependencies |
 | OpenTelemetry | Supported instrumentation path | A standard way to collect telemetry from app code |
 
-The useful bridge is this: Application Insights is not
-only a log bucket. It tries to understand application
-behavior. That means you can ask higher-level questions
-like: which API routes are slow? Which dependency calls
-fail? Which exception caused these failed requests?
-Which request ID connects this log line to this SQL
-call? Those questions are exactly what a backend
+Application Insights collects logs, but it also tries to understand
+application behavior. That means you can ask higher-level questions
+like: which API routes are slow? Which dependency calls fail? Which
+exception caused these failed requests? Which request ID connects this
+log line to this SQL call? Those questions are exactly what a backend
 developer needs during a production issue.
 
 ## Application Insights Watches The Application Layer
@@ -326,16 +324,16 @@ Here is a compact first-check table.
 | One checkout cannot be followed | Correlation context |
 | Telemetry volume is too high | Sampling, log level, and noisy health checks |
 
-The goal is not to make Application Insights perfect.
-The goal is to make production requests understandable.
+The goal is practical request evidence. A junior engineer should be able
+to follow a production request and understand where it failed.
 
 ## A Practical Application Insights Review
 
 Before shipping a backend API, ask whether Application
 Insights can answer the first incident questions. For
-`devpolaris-orders-api`, ask: can we see `POST
-/checkout` request count, failures, and duration? Can
-we find one failed checkout by operation ID or request
+`devpolaris-orders-api`, ask: can we see `POST /checkout`
+request count, failures, and duration? Can we find one
+failed checkout by operation ID or request
 ID? Can we see Azure SQL dependency calls from that
 request? Can we see Blob Storage dependency calls from
 that request? Can we see exceptions with safe messages?

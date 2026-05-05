@@ -32,12 +32,12 @@ They are also the real shape behind Azure location vocabulary.
 You do not choose a region because a dropdown asks for one.
 You choose it because customers need reasonable latency, the business has data residency rules, and the service needs a known failure posture.
 
-This article follows one backend service: `devpolaris-orders-api`.
-It accepts checkout requests, stores order records in Azure SQL, saves generated receipts in Blob Storage, and sends logs and metrics to Azure Monitor.
-The app runs on Azure Container Apps or App Service.
-We are using those services only as placement examples.
-The lesson is not how to configure each service.
-The lesson is how to decide where the pieces belong.
+This article follows one backend service: `devpolaris-orders-api`. It
+accepts checkout requests, stores order records in Azure SQL, saves
+generated receipts in Blob Storage, and sends logs and metrics to Azure
+Monitor. The app runs on Azure Container Apps or App Service. We use
+those services as placement examples while focusing on how to decide
+where the pieces belong.
 
 An Azure region is a real-world Azure location area that contains datacenters and network infrastructure.
 It is the first location choice for most cloud resources.
@@ -105,8 +105,8 @@ The service would be passing tests while violating a business rule.
 The third question is capacity and service availability.
 Not every Azure service is available in every region.
 Not every available service supports every feature in every region.
-That is why a careful region decision is not only "nearest to users."
-It is "nearest acceptable region that supports the services and resilience settings this workload needs."
+A careful region decision considers more than distance to users.
+The useful target is the nearest acceptable region that supports the services and resilience settings this workload needs.
 
 Here is a practical first-pass region record.
 It is the kind of small artifact a reviewer can inspect before the team creates production resources.
@@ -138,13 +138,12 @@ Open questions:
   What is the manual recovery plan if the whole region is unavailable?
 ```
 
-The useful part is not the exact region name.
-The useful part is the shape of the record.
-It connects user location, data rules, service availability, and recovery questions in one place.
+The useful part is the shape of the record. It connects user location,
+data rules, service availability, and recovery questions in one place.
 
-Notice the phrase "checked per service."
-Azure regions differ, and Azure services differ.
-You should treat region support as evidence to inspect, not trivia to remember.
+Notice the phrase "checked per service." Azure regions differ, and Azure
+services differ, so region support is evidence to inspect during design
+rather than trivia to memorize.
 
 ## Availability Zones Are Local Failure Boundaries
 
@@ -152,9 +151,10 @@ After the region, the next question is what happens inside that region.
 An availability zone is a local failure boundary.
 You can think of it as one separated part of a region, with independent power, cooling, and networking.
 
-The point is not that a zone can never fail.
-The point is that the workload should not be forced to fail just because one zone has a problem.
-If the app has copies in multiple zones and the database or storage layer can keep serving, the service has a better chance of staying available.
+A zone can fail. The design goal is that the workload should not be
+forced to fail just because one zone has a problem. If the app has
+copies in multiple zones and the database or storage layer can keep
+serving, the service has a better chance of staying available.
 
 Azure zone names are logical inside your subscription.
 That means `zone 1` in one subscription does not have to map to the same physical datacenter group as `zone 1` in another subscription.
@@ -233,9 +233,8 @@ Here is the vocabulary tied back to the orders API:
 | Regional | Resource placed in a region | Log workspace in `eastus2` | Region plus service reliability guide |
 | Secondary region | Recovery region | `centralus` candidate | Replication and failover plan |
 
-The main habit is simple:
-ask the service how it supports zones.
-Do not ask the region alone.
+Ask the service how it supports zones, not only whether the region has
+zones.
 
 That matters for the services in this article.
 Azure SQL Database and Blob Storage appear in common production designs, but their resilience behavior comes from tier and redundancy choices.
@@ -261,9 +260,8 @@ That record might look like this:
 | Logs and metrics | Azure Monitor | `eastus2` | Regional service behavior checked | Keeps signals near the workload |
 | Recovery target | Same services later | `centralus` candidate | Not active yet | Gives a place to plan regional recovery |
 
-This is not a final architecture diagram.
-It is a decision table.
-It says what the team believes and what they still need to verify.
+This decision table says what the team believes and what they still need
+to verify. It is a planning artifact, not the final architecture.
 
 A careful reviewer would ask four questions:
 Are the customers mostly near `eastus2`?
@@ -272,9 +270,10 @@ Do these service tiers support the desired zone posture in `eastus2`?
 If `eastus2` is unavailable, what exactly can the team restore in `centralus`?
 
 That last question is where many beginner designs get uncomfortable.
-Zone spread helps with a local zone problem.
-It does not magically make a single-region service survive a full regional outage.
-If the only database exists in one region, then a major region failure is a recovery event, not a smooth failover event.
+Zone spread helps with a local zone problem, but a single-region service
+still has a regional failure boundary. If the only database exists in
+one region, then a major region failure is a recovery event, not a
+smooth failover event.
 
 For a first production backend, that may be acceptable.
 Acceptable does not mean ignored.
@@ -392,19 +391,19 @@ Risk:
   Database and receipt storage settings do not prove zone resilience.
 ```
 
-This is not an outage yet.
-It is better than an outage.
-It is evidence caught during review.
+This is review evidence caught before an outage. The team can fix the
+design while users are still safe.
 
 The API has three replicas, but three replicas in one zone are not the same as three replicas across zones.
 Replica count helps with process crashes, rolling updates, and traffic load.
 Zone spread helps with a local datacenter group problem.
 They solve different problems.
 
-The storage line has another important clue.
-`LRS` means locally redundant storage.
-It keeps multiple copies inside a single region, but it is not the same as zone-redundant storage.
-For a receipt file system that should survive a zone problem, the team needs to inspect whether `ZRS` (zone-redundant storage) is available and appropriate for the storage account.
+The storage line has another important clue. `LRS` means locally
+redundant storage: Azure keeps multiple copies inside a single region.
+For a receipt file system that should survive a zone problem, the team
+needs to inspect whether `ZRS` (zone-redundant storage) is available and
+appropriate for the storage account.
 
 The database line is similar.
 "Azure SQL in the right region" is not enough evidence.
@@ -423,17 +422,15 @@ Here is the corrected table the reviewer wants to see:
 | Blob Storage | LRS | ZRS where available and suitable | Receipts should not depend on one local zone |
 | Azure Monitor | Regional workspace | Regional behavior documented | Logs may be affected by regional service behavior |
 
-The phrase "or risk accepted" is not a loophole.
-It is honest engineering.
-Sometimes the simplest design is the right first design.
-The problem is pretending it is more resilient than it is.
+The phrase "or risk accepted" means the team is honest about the design.
+Sometimes the simplest design is the right first design. The problem is
+pretending it is more resilient than it is.
 
 ## Single Region, Multi-Zone, Or Multi-Region
 
-Every resilience design spends something.
-It spends money, time, mental load, testing effort, and incident complexity.
-The job is not to choose the biggest design by default.
-The job is to choose the smallest design that honestly matches the service risk.
+Every resilience design spends money, time, mental load, testing effort,
+and incident complexity. Choose the smallest design that honestly
+matches the service risk.
 
 The simplest design is a single-region design.
 All production resources live in one Azure region.

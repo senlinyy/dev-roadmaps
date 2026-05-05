@@ -44,9 +44,10 @@ We will keep one running example:
 The service team has human maintainers, a group for deployers, an app registration, and a service principal used by the pipeline.
 The team wants the pipeline to deploy the orders API to the production resource group without giving a human password or broad owner access to every Azure resource.
 
-The practical goal is simple.
-After this article, you should be able to look at an Azure access problem and separate four questions:
-which tenant is the identity from, which object is the exact identity, which role was assigned, and which scope did Azure check?
+After this article, you should be able to look at an Azure access
+problem and separate four questions: which tenant is the identity from,
+which object is the exact identity, which role was assigned, and which
+scope did Azure check?
 
 > Being signed in proves identity. It does not prove permission.
 
@@ -84,7 +85,7 @@ which app registration or workload identity issues the token, which service prin
 
 That sentence is longer than the AWS version, but it is more precise.
 Azure separates identity description, tenant-local identity, and resource permission.
-Once you see the split, troubleshooting gets much calmer.
+Once you see the split, troubleshooting becomes more direct.
 
 ## The Identity Map In One Picture
 
@@ -148,9 +149,10 @@ $ az account show --query "{user:user.name,subscription:name,subscriptionId:id,t
 }
 ```
 
-That output is a safety check, not trivia.
-Before you create a service principal or assign a role, the `tenantId` tells you which identity home Azure is using.
-The `subscriptionId` tells you which resource boundary your CLI is pointed at.
+That output is a safety check. Before you create a service principal or
+assign a role, the `tenantId` tells you which identity home Azure is
+using, and the `subscriptionId` tells you which resource boundary your
+CLI is pointed at.
 
 For the orders API team, a small identity inventory might look like this:
 
@@ -310,10 +312,10 @@ grp-orders-api-deployers   22222222-3333-4444-5555-666666666666  Group          
 sp-devpolaris-orders-ci    44444444-5555-6666-7777-888888888888  ServicePrincipal  Contributor
 ```
 
-This output lets you answer a precise question:
-which exact group and which exact service principal have access to the production resource group?
-The answer is not the display name alone.
-The answer is the principal ID plus principal type plus scope.
+This output lets you answer a precise question: which exact group and
+which exact service principal have access to the production resource
+group? The answer needs the principal ID, principal type, and scope, not
+only the display name.
 
 For beginners, the safe working rule is:
 use display names to search, then use object IDs to assign or audit access.
@@ -357,8 +359,10 @@ The useful parts are the object ID, the action, and the scope.
 Azure knows who Maya is.
 Azure is blocking the specific write action at the Container App scope because no matching role assignment allows it.
 
-The fix is not "log in again" unless the tenant or subscription context is wrong.
-The normal fix is to grant the right role to the right principal at the smallest useful scope, or add Maya to the group that already has the correct role.
+Logging in again helps only when the tenant or subscription context is
+wrong. The normal fix is to grant the right role to the right principal
+at the smallest useful scope, or add Maya to the group that already has
+the correct role.
 
 For the orders API, that might mean:
 Maya joins `grp-orders-api-deployers`, and that group has `Contributor` on `rg-devpolaris-orders-prod`.
@@ -398,10 +402,9 @@ It means the team starts with the job the pipeline performs, then grants the sma
 For a first learning example, `Contributor` at one resource group is easy to understand.
 In a mature production setup, a narrower custom role or separate deployment resource scopes may be better.
 
-Modern CI/CD systems often use workload federation instead of storing a long-lived client secret.
-Federation means the pipeline provider issues a short-lived token, and Microsoft Entra ID trusts that token only when it matches configured rules such as repository, branch, environment, or workflow.
-The important beginner idea is not the exact provider syntax.
-The important idea is that the pipeline proves itself as the pipeline, not as a human.
+The provider syntax matters when you configure the pipeline, but the
+beginner concept is simpler: the pipeline proves itself as the pipeline,
+not as a human.
 
 When that identity is missing permission, the pipeline error has a familiar shape:
 

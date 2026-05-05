@@ -85,10 +85,13 @@ Those are related, but they are not the same thing.
 
 ## The Orders API Shape
 
-The `devpolaris-orders-api` team starts with a normal Node backend.
-On a laptop, a developer runs `npm run dev`, opens `http://localhost:3000/healthz`, and sees a small JSON response.
-That is enough for development.
-It is not enough for a shared production URL.
+The `devpolaris-orders-api` team starts with a normal Node backend. On a
+laptop, a developer runs `npm run dev`, opens
+`http://localhost:3000/healthz`, and sees a small JSON response. That
+local response is enough for development because one person is testing
+one process. A shared production URL needs a managed runtime, stable
+configuration, logs, health checks, and a traffic path that does not
+depend on one laptop.
 
 Production needs a few more pieces.
 The API needs a stable HTTPS hostname.
@@ -379,10 +382,10 @@ $ az role assignment create \
   --scope "$vault_id"
 ```
 
-The role assignment is not decoration.
-Without it, the identity exists but Key Vault still rejects the read.
-That is a very common beginner mistake:
-the app has a badge, but the door has not been told that this badge is allowed.
+The role assignment is the permission step that makes the identity
+useful. Without it, the identity exists but Key Vault still rejects the
+read, which is a common beginner mistake: the app has an identity, but
+Key Vault has not been told to trust it.
 
 Then the app setting can use a Key Vault reference:
 
@@ -398,17 +401,17 @@ That identity is its own Azure resource and can survive web app recreation.
 If you use a user-assigned identity for Key Vault references, App Service also needs to know which identity should resolve those references.
 That is where the `keyVaultReferenceIdentity` property matters.
 
-At a high level, the decision is simple:
-system-assigned identity is tidy when one web app owns one identity.
-User-assigned identity is useful when identity and permissions need a separate lifecycle.
-Do not share one identity across many apps unless those apps truly need the same access.
+Use system-assigned identity when one web app owns one identity and the
+lifecycle can stay attached to that app. Use user-assigned identity when
+identity and permissions need a separate lifecycle. Share one identity
+across many apps only when those apps truly need the same access.
 
 ## Logs, Health Checks, And First Diagnosis
 
-The first production question is not "which screen looks green?"
-The first question is "what evidence proves the app is doing the right thing?"
-For App Service, the beginner evidence usually comes from three places:
-the app's own console logs, App Service platform logs, and Azure Monitor metrics or queries.
+For production, ask what evidence proves the app is doing the right
+thing. For App Service, the beginner evidence usually comes from three
+places: the app's own console logs, App Service platform logs, and Azure
+Monitor metrics or queries.
 
 During early debugging, log stream is the fastest feedback loop.
 It shows output written by your app and some platform events.
@@ -541,10 +544,10 @@ $ az webapp deployment slot swap \
   --target-slot production
 ```
 
-The best part of slots is not the button or command.
-It is the operating habit they encourage:
-deploy somewhere real, test through a real hostname, warm the runtime, inspect logs, then move traffic.
-That habit catches a surprising number of mistakes before customers do.
+Slots encourage a useful operating habit: deploy somewhere real, test
+through a real hostname, warm the runtime, inspect logs, then move
+traffic. That habit catches a surprising number of mistakes before
+customers do.
 
 ## Failure Modes You Will Actually See
 
@@ -574,10 +577,10 @@ You might see a startup signal like this:
 2026-05-03T09:19:11.027Z ERROR app did not respond to HTTP pings on the expected port
 ```
 
-The fix is not to open a VM firewall.
-There is no VM you are managing here.
-The fix is in the app code:
-listen on `process.env.PORT`, log it during startup, and make sure the start command runs the server file you expect.
+There is no VM firewall to open because App Service owns the host layer.
+Fix the app code instead: listen on `process.env.PORT`, log it during
+startup, and make sure the start command runs the server file you
+expect.
 
 A Key Vault failure has a different shape.
 The app may start, but the secret value is missing or the Key Vault reference status shows an access problem.
@@ -597,7 +600,7 @@ The team treats staging as a copy of production, but some settings should not co
 If staging points at a sandbox payment provider and production points at the real provider, those values must stay attached to their slots.
 Otherwise, a swap can put a good build into production with the wrong environment wiring.
 
-The pattern is calm when you keep evidence close:
+The pattern is easier to operate when you keep evidence close:
 logs for startup, app settings for configuration, identity for secret access, health check for readiness, plan metrics for capacity, and slot settings for release safety.
 
 ## The Tradeoff You Are Making
@@ -624,8 +627,9 @@ But for a team that wants a reliable HTTPS home for a Node API without becoming 
 The practical checklist before a production release is short:
 the plan has enough capacity, the app listens on `process.env.PORT`, required app settings exist, secrets come from Key Vault or another controlled secret store, the managed identity has only the access it needs, logs show the correct version, `/healthz` means ready, and staging has been warmed before the swap.
 
-That checklist is not ceremony.
-It is how you keep a managed service understandable when real users are depending on it.
+The checklist keeps a managed service understandable when real users
+depend on it. Each item gives the next engineer a specific place to
+inspect before they change traffic, config, identity, or scale.
 
 ---
 

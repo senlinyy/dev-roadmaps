@@ -216,16 +216,12 @@ new revision: devpolaris-orders-api--4c91b7f
 traffic: 5%
 ```
 
-This is useful when a change may behave differently
-under real traffic, but traffic splitting is not magic.
-Both revisions must be compatible with the database
-schema. Both revisions must understand current config.
-Both revisions must be safe to run at the same time. If
-the new version writes data in a format the old version
-cannot read, rolling traffic back may not fix the
-problem. That is why database and message format
-changes need special care. A safe traffic split is not
-only a routing rule. It is a compatibility promise.
+Traffic splitting is useful when a change may behave differently under
+real traffic, but both revisions must be compatible with the database
+schema, current config, and message formats. If the new version writes
+data in a format the old version cannot read, rolling traffic back may
+not fix the problem. A safe traffic split is a compatibility promise as
+much as a routing rule.
 
 ## Labels And Direct Access Help Humans Test A Revision
 

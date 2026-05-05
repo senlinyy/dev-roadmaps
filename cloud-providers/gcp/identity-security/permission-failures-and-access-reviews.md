@@ -28,7 +28,7 @@ id: article-cloud-providers-gcp-identity-security-permission-failures-access-rev
 A permission denied error can feel like a wall. The app tried to do something. GCP said no.
 The team is tired. Someone suggests granting Owner just to get production moving. That
 impulse is understandable. It is also how small access problems become large security
-problems. A permission denied error is usually not random. It is a clue.
+problems. A permission denied error usually gives you a clue.
 
 It often tells you the missing permission, the target resource, and sometimes the service
 involved. You still need to find the principal and the scope. Once you have those facts, the
@@ -152,8 +152,8 @@ context. A CLI may have one project selected. A Terraform workspace may point at
 CI/CD workflow may pass a project ID through an environment variable. The console may be
 open to a project from a previous task.
 
-The fix is not to distrust every tool. The fix is to make the project visible in release
-records and errors. When debugging, write down:
+Make the project visible in release records and errors so tool context does not stay hidden.
+When debugging, write down:
 
 ```text
 requesting principal:
@@ -233,9 +233,7 @@ while the runtime configuration is wrong. For `devpolaris-orders-api`, check:
 | Network path | Does the service also need private connectivity? |
 | IAM binding | Does the right principal have the right role at the right scope? |
 
-The table is not a procedure.
-
-It is a reminder that permissions live inside a larger runtime setup.
+Use the table as a reminder that permissions live inside a larger runtime setup.
 
 ## Common Failure Examples
 
@@ -288,8 +286,8 @@ example has its own service detail. The access sentence stays the same.
 ## Access Reviews Before Incidents
 
 The best time to review access is before an incident. An access review asks whether current
-permissions still match current jobs. It is not only a compliance task. It is maintenance
-for production understanding. Review service accounts first because they often collect
+permissions still match current jobs. It is maintenance for production understanding as well
+as a compliance activity. Review service accounts first because they often collect
 permissions as systems grow. For each service account, ask:
 
 | Review item | What you are looking for |
@@ -337,9 +335,9 @@ to orders-api-prod service account
 on only orders-db-url
 ```
 
-Then verify with the app, not only with the IAM page. The Cloud Run revision should start.
-The database health check should pass. The logs should no longer show the permission error.
-For the deploy act-as failure, a narrow fix might be:
+Then verify with the app as well as the IAM page. The Cloud Run revision should start. The
+database health check should pass. The logs should no longer show the permission error. For
+the deploy act-as failure, a narrow fix might be:
 
 ```text
 allow orders-deployer to act as orders-api-prod service account
@@ -362,8 +360,7 @@ the story involves a change. Apply the smallest useful fix. Verify with the appl
 behavior. Then leave a short note explaining why the grant exists. That note might save the
 next engineer from granting the same access in a broader place.
 
-Good access work is not about never seeing permission denied. It is about turning permission
-denied into a clear, small, reviewable change.
+Good access work turns permission denied into a clear, small, reviewable change.
 
 ---
 

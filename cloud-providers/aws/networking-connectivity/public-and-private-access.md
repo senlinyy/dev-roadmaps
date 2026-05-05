@@ -59,8 +59,7 @@ Here is the decision in plain English:
 | VPC endpoint | No public internet path needed | Private subnets |
 
 This article uses one service throughout: `devpolaris-orders-api`.
-The goal is not to memorize every AWS networking option.
-The goal is to learn the first judgment call:
+The first judgment call matters more than memorizing every AWS networking option:
 which pieces should be internet-reachable, which pieces should stay private, and which private pieces still need a safe way out.
 
 > Public access is a product decision. Private access is a safety decision. Outbound access is an operations decision.
@@ -155,8 +154,7 @@ A simple placement plan might look like this:
 | NAT gateways | Public subnets | They need a path to the internet gateway |
 | Interface VPC endpoints | Private subnets | Private tasks need AWS APIs without public internet |
 
-This is not the only possible design, but it is a good first design.
-It separates the public edge from the private workload.
+This first design separates the public edge from the private workload.
 That one separation prevents many expensive mistakes.
 
 ## Internet Gateways And Public Routes
@@ -293,10 +291,8 @@ detail: unable to pull secrets or registry auth:
 connect timeout to ecr.us-east-1.amazonaws.com
 ```
 
-This is not saying "your app code is broken."
-It is saying the task could not finish initialization.
-For a private task, the next question is not only "does IAM allow ECR?"
-It is also "does this subnet have a route to reach ECR, either through NAT or through the right VPC endpoints?"
+The message says the task could not finish initialization.
+For a private task, the subnet also needs a route to reach ECR, either through NAT or through the right VPC endpoints.
 
 That is the shift from simple private placement to real private operations.
 Private resources need fewer inbound paths, not zero outbound paths.
@@ -399,9 +395,8 @@ For `devpolaris-orders-api`, a private ECS design may include endpoints like the
 | Read database secret | Secrets Manager interface endpoint | App can fetch secrets privately |
 | Read or write exports | S3 gateway endpoint | App can use S3 without NAT |
 
-Do not treat that table as a universal checklist for every account.
-AWS service behavior can have service-specific details, and your region and runtime choices matter.
-Treat it as the reasoning pattern:
+AWS service behavior can have service-specific details, and your Region and runtime choices matter.
+Use the table as a reasoning pattern:
 list what the private task needs, then decide whether each need should use a VPC endpoint or a controlled internet egress path.
 
 Here is how the route picture changes when you use endpoints:
@@ -428,8 +423,7 @@ That can reduce exposure and, in some designs, reduce NAT data processing cost.
 Endpoints have their own controls.
 Interface endpoints have security groups.
 Some endpoints support endpoint policies, which can narrow what actions or resources may be used through that endpoint.
-That means a VPC endpoint is not just a network shortcut.
-It can become part of your access boundary.
+A VPC endpoint can become part of your access boundary as well as a network shortcut.
 
 There is also a tradeoff.
 Endpoints add more resources to manage.
@@ -502,8 +496,7 @@ Security group inbound:
   0.0.0.0/0  tcp/5432
 ```
 
-This is not a small warning.
-It means the database has several public exposure signals at once:
+The database has several public exposure signals at once:
 public accessibility is enabled, the subnet group uses public subnets, and the security group allows inbound database traffic from anywhere.
 The fix direction is to move the database into a private DB subnet group, disable public accessibility, and allow inbound database traffic only from the ECS task security group.
 
@@ -578,7 +571,7 @@ As the design matures, move AWS service traffic to VPC endpoints and keep NAT on
 For production, the database should be private from the start.
 Do not use public database access as a shortcut for local debugging.
 If a developer or migration job needs database access, use a private path such as a controlled bastion pattern, a VPN or Direct Connect path, an SSM-based access pattern, or a one-off job running inside the VPC.
-Those are separate topics, but the principle is simple:
+Those are separate topics, but they should follow the same rule:
 do not make the database public just because the admin path is inconvenient.
 
 For the ALB, public access is the point.

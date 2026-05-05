@@ -62,10 +62,9 @@ Say which piece failed. The more specific sentence leads to the better fix.
 
 ## VPC Networks Are The Private Map
 
-A VPC network is a private network area inside Google Cloud. It is global. That means the
-VPC network is not tied to one region. The VPC network can contain subnets in many regions.
-It can also have routes and firewall rules associated with it. For the orders service, the
-production VPC might be:
+A VPC network is a private network area inside Google Cloud. It is global, so it can contain
+subnets in many regions and have routes and firewall rules associated with it. For the
+orders service, the production VPC might be:
 
 ```text
 vpc-orders-prod
@@ -102,7 +101,7 @@ subnets:
 The exact ranges are examples. The important part is that the subnet is in `us-central1`.
 Cloud Run also runs in a region. Cloud SQL also lives in a region. If the service runs in
 `us-central1`, the team should understand which regional subnet supplies private egress
-addresses. Subnet size is not just bookkeeping. If a serverless service uses VPC egress, it
+addresses. Subnet size affects runtime capacity. If a serverless service uses VPC egress, it
 may consume IP addresses from a subnet while instances scale.
 
 If the subnet is too small, new instances can fail to start or connect. That is a real
@@ -189,11 +188,11 @@ Or:
 target service account: orders-api-vm@devpolaris-orders-prod.iam.gserviceaccount.com
 ```
 
-This is not the same as granting IAM permissions. Using a service account as a firewall
-target means the rule matches network interfaces for instances using that service account.
-Granting IAM roles to the service account controls what Google APIs the workload can call.
-Same identity name. Different control plane. That difference matters. If you mix it up, you
-might grant an IAM role when the actual missing piece is a firewall target.
+Using a service account as a firewall target and granting IAM roles to that service account
+are different controls. A firewall target matches network interfaces for instances using
+that service account. IAM roles control what Google APIs the workload can call. Same
+identity name, different control plane. If you mix it up, you might grant an IAM role when
+the actual missing piece is a firewall target.
 
 ## IAM Still Does A Different Job
 
@@ -294,10 +293,9 @@ database:
   validation: /health/db
 ```
 
-The inventory is not a full architecture document. It is enough to prevent the most common
-confusion. Which project? Which region? Which VPC? Which subnet? Which runtime? Which
-private dependency? Which validation proves it works? If the team cannot fill this out, the
-design is not ready for a clean handoff.
+This inventory prevents the most common handoff confusion. Which project? Which region?
+Which VPC? Which subnet? Which runtime? Which private dependency? Which validation proves it
+works? If the team cannot fill this out, the design is not ready for a clean handoff.
 
 ## Failure Modes And Fix Directions
 
@@ -353,7 +351,7 @@ private access pattern? Which firewall or service rule allows the connection? Th
 what is outside networking. Which service account is used? Which IAM role is needed for the
 service setup? Which DNS name does the app use? Which health check proves the path works?
 
-This habit is simple. It prevents vague fixes. GCP networking becomes much easier when every
+This path-first review prevents vague fixes. GCP networking becomes much easier when every
 change can be read as a path, not a pile of settings.
 
 ---

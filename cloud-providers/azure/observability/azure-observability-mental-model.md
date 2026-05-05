@@ -49,23 +49,19 @@ is a place where logs can be stored and queried.
 Metrics, dashboards, alerts, and traces help you see
 patterns, not just one event.
 
-Those product names can feel like a lot. The beginner
-mental model is simpler: logs tell you what happened.
-Metrics tell you how much or how often. Traces tell you
-where one request went. Alerts tell humans when to
-look. This article teaches that model first. The Azure
-product names make more sense after that.
+Those product names can feel like a lot, so start with the signal types.
+Logs tell you what happened. Metrics tell you how much or how often.
+Traces tell you where one request went. Alerts tell humans when to look.
+The Azure product names make more sense after that model is clear.
 
 ## If You Know AWS Monitoring
 
-If you have learned AWS, Azure observability has
-familiar ideas. CloudWatch Logs has a similar job to
-Azure Monitor Logs and Log Analytics. CloudWatch
-metrics have a similar job to Azure Monitor Metrics.
-CloudWatch alarms have a similar job to Azure Monitor
-alert rules. AWS X-Ray has a similar teaching role to
-Application Insights tracing. The mapping is useful,
-but it is not perfect.
+If you have learned AWS, Azure observability has familiar ideas.
+CloudWatch Logs has a similar job to Azure Monitor Logs and Log
+Analytics. CloudWatch metrics have a similar job to Azure Monitor
+Metrics. CloudWatch alarms have a similar job to Azure Monitor alert
+rules. AWS X-Ray has a similar teaching role to Application Insights
+tracing, even though the provider surfaces and data models differ.
 
 | AWS idea you may know | Azure idea to compare first | What to remember |
 |---|---|---|
@@ -75,14 +71,11 @@ but it is not perfect.
 | SNS notification target | Action group | Action groups decide who or what gets notified |
 | X-Ray trace | Application Insights transaction and tracing views | Application Insights connects requests, dependencies, exceptions, and traces |
 
-The useful AWS habit is not memorizing the translation.
-The useful habit is asking which signal answers your
-question. If a user says checkout failed once, start
-with logs and traces. If the API is slow for everyone,
-start with metrics and traces. If nobody noticed a
-database problem until customers complained, inspect
-alerts. Provider names change. The debugging questions
-stay surprisingly stable.
+The useful AWS habit is asking which signal answers your question. If a
+user says checkout failed once, start with logs and traces. If the API
+is slow for everyone, start with metrics and traces. If nobody noticed a
+database problem until customers complained, inspect alerts. Provider
+names change, but the debugging questions stay surprisingly stable.
 
 ## Four Signals With Different Jobs
 
@@ -192,20 +185,16 @@ much better than this:
 checkout failed
 ```
 
-The second log may be true, but it is not very helpful.
-Good logs have context. They include request IDs,
-operation names, dependency names, and useful error
-details. They avoid leaking secrets. They use
-consistent field names. If one service logs `requestId`
-and another logs `correlation_id`, humans and queries
-have to work harder. Logs are especially good for:
-finding the first meaningful error. Checking what the
-app thought it was doing. Inspecting one customer or
-request path. Seeing exact exception messages.
-Confirming whether code reached a step. Logs are not
-good for every question. If you want to know whether
-checkout errors are rising across all users, metrics
-are usually easier.
+The second log may be true, but it is hard to use during an incident.
+Good logs include context such as request IDs, operation names,
+dependency names, and useful error details. They avoid leaking secrets
+and use consistent field names. If one service logs `requestId` and
+another logs `correlation_id`, humans and queries have to work harder.
+Logs are especially good for finding the first meaningful error,
+checking what the app thought it was doing, inspecting one customer or
+request path, seeing exact exception messages, and confirming whether
+code reached a step. For broad trends such as rising checkout errors
+across all users, metrics are usually easier.
 
 If you want to know whether one request spent most of
 its time in SQL or Blob Storage, tracing is usually
@@ -278,23 +267,19 @@ the same operation ID or trace ID, you can follow the
 request. If each piece uses a different ID or no ID,
 the investigation becomes manual.
 
-Application Insights helps with this for instrumented
-applications. The important beginner idea is not the
-setup detail. The important idea is that one user
-action should be followable.
+Application Insights helps with this for instrumented applications. The
+setup details matter later; the beginner concept is that one user action
+should be followable.
 
 ## Alerts Tell Humans When To Look
 
-Alerts are rules that turn signals into human
-attention. An alert might say: failed checkout rate is
-above 5 percent for 10 minutes. API response time is
-above the agreed limit. Azure SQL database CPU or DTU
-pressure is high. Blob upload failures are happening
-repeatedly. The point of an alert is not to create
-noise. The point is to catch important problems before
-users have to explain them to you. An alert needs three
-things: the resource or data to watch. The condition
-that matters. The action group that decides who or what
+Alerts are rules that turn signals into human attention. An alert might
+say: failed checkout rate is above 5 percent for 10 minutes, API
+response time is above the agreed limit, Azure SQL database CPU or DTU
+pressure is high, or Blob upload failures are happening repeatedly. A
+good alert catches important problems before users have to explain them
+to you. It needs three things: the resource or data to watch, the
+condition that matters, and the action group that decides who or what
 gets notified.
 
 An action group is the Azure Monitor object that holds
@@ -320,12 +305,11 @@ once. Start with the question. Then choose the signal.
 | Receipt files are missing | Logs and resource logs | App logs plus Blob Storage diagnostic logs if enabled |
 | No one noticed until support reported it | Alerts | Azure Monitor alert rules and action groups |
 
-This table is not a script. It is a thinking guide. The
-first check should match the shape of the problem. If
-the problem is one request, find the request. If the
-problem is a trend, find the metric. If the problem is
-a slow path, find the trace. If the problem was missed,
-inspect the alerting design.
+Use this table as a thinking guide. The first check should match the
+shape of the problem. If the problem is one request, find the request.
+If the problem is a trend, find the metric. If the problem is a slow
+path, find the trace. If the problem was missed, inspect the alerting
+design.
 
 ## Tradeoffs In Observability
 

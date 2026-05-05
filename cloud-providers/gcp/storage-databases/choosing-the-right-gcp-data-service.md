@@ -24,7 +24,7 @@ id: article-cloud-providers-gcp-storage-databases-choosing-right-gcp-data-servic
 
 ## A Data Choice Is A Promise
 
-Choosing a data service is not just choosing where bytes sit. It is choosing a promise. The
+Choosing a data service means choosing the promise the system makes about the data. The
 promise might be "this order record stays consistent." It might be "this receipt file can be
 downloaded later." It might be "this checkout draft can be found by user ID." It might be
 "this table can answer analytics questions over millions of events."
@@ -114,8 +114,8 @@ which promise failed.
 
 The map can change as the product grows. Maybe the checkout draft does not need Firestore
 yet and can live in Cloud SQL. Maybe analytics starts as a daily export before it becomes a
-streaming pipeline. That is fine. A clear first map is not a prison. It is a starting point
-you can review.
+streaming pipeline. That is fine. A clear first map gives the team a starting point it can
+review.
 
 ## Choose Cloud Storage For File-Like Objects
 
@@ -148,10 +148,9 @@ Choose Cloud SQL when the app needs relational records, SQL queries, constraints
 transactions. Orders, line items, payment attempts, customer account records, receipt
 metadata, and support lookup data often belong here.
 
-Cloud SQL is not only for old-fashioned applications. Relational records remain one of the
-clearest ways to protect business state. Checkout needs consistency. Support needs queries.
-Finance needs reliable records. Those needs are not solved by putting every order into one
-object file.
+Relational records remain one of the clearest ways to protect business state. Checkout
+needs consistency. Support needs queries. Finance needs reliable records. Those needs are
+not solved by putting every order into one object file.
 
 Good Cloud SQL decision:
 
@@ -255,8 +254,8 @@ Mixed signals show that the data choice and the feature shape do not agree.
 | Firestore stores data that support wants to join across many tables | The feature may be relational |
 | VM local disk holds product data nobody can restore | Data service and recovery plan are missing |
 
-Mixed signals are not moral failures. They are design clues. If the current choice makes
-every new requirement harder to explain, stop and review the data shape.
+Mixed signals are design clues. If the current choice makes every new requirement harder to
+explain, stop and review the data shape.
 
 ## Failure Scenarios That Reveal The Wrong Choice
 
@@ -350,9 +349,9 @@ Firestore for document-shaped app state with clear access patterns. Use BigQuery
 analytics and data-engineering questions. Use attached storage when the compute design
 requires a disk or shared filesystem.
 
-The mature system is not the one with the most services. It is the one where each service
-has a clear job. When checkout fails, receipts vanish, drafts go stale, or dashboards look
-wrong, the team should know which data promise to inspect first.
+Mature systems give each data service a clear job. When checkout fails, receipts vanish,
+drafts go stale, or dashboards look wrong, the team should know which data promise to
+inspect first.
 
 ---
 

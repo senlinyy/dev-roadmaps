@@ -76,13 +76,11 @@ Use this bridge carefully:
 | Lambda | Azure Functions | Both fit event-driven code, but triggers, hosting plans, timeout behavior, and deployment models differ |
 | Elastic Beanstalk or App Runner style web hosting | Azure App Service | The web app experience, deployment slots, plans, and runtime stacks are Azure-specific |
 
-The useful AWS habit is not the name translation.
-The useful habit is asking what the workload needs.
-Is it a long-running web API?
-Is it a container image?
-Is it triggered by events?
-Does it need root-level control of the server?
-Does the team want to patch the operating system?
+If you know AWS, the helpful bridge is the workload question, not a
+one-word translation. Ask whether the workload is a long-running web
+API, a container image, an event reaction, a job, or a server that needs
+root-level control. Then ask whether the team wants to own the operating
+system.
 
 If you know Lambda, Azure Functions will feel familiar because both reward small event-shaped handlers.
 But that does not mean an HTTP API should automatically become a function app.
@@ -91,10 +89,12 @@ But that does not mean every container platform feature maps one-to-one.
 If you know EC2, Azure VMs will feel familiar because you get a server.
 But getting a server also means accepting server work.
 
-For `devpolaris-orders-api`, the AWS callback is simple:
-the public API is not automatically a Lambda-style workload just because serverless sounds attractive.
-The nightly invoice export is not automatically a VM workload just because it runs a command.
-The container image is not automatically App Service or Container Apps until the team checks runtime assumptions, scaling, and debugging.
+For `devpolaris-orders-api`, use the AWS comparison to ask workload
+questions. The public API is not automatically a Lambda-style workload
+just because serverless sounds attractive. The nightly invoice export is
+not automatically a VM workload just because it runs a command. The
+container image is not automatically App Service or Container Apps until
+the team checks runtime assumptions, scaling, and debugging.
 
 ## The Orders API Has More Than One Workload
 
@@ -223,8 +223,7 @@ The nightly invoice export also fits Container Apps jobs because it is a finite 
 The email sender might fit Azure Functions if each message can be handled as a small retry-friendly unit.
 The tax importer might temporarily fit a VM if the OS assumptions are real and hard to remove.
 
-That combination is not messy.
-It is honest.
+That combination reflects the real workload mix.
 Production systems often use more than one compute service because the workloads have different shapes.
 
 ## Always-On APIs Need A Stable Home
@@ -285,9 +284,9 @@ Rejected for first release:
   App Service, because the team wants the container runtime contract to be the primary deployment unit.
 ```
 
-This is not saying App Service is worse.
-It is saying this team's evidence points toward Container Apps.
-Another team with a simple non-container web API might make the opposite choice and be completely right.
+This evidence points this team toward Container Apps. Another team with
+a simple non-container web API might choose App Service and be
+completely right.
 
 ## Containers Change The Question
 
@@ -319,12 +318,12 @@ The catch is that App Service still has its own web hosting assumptions.
 For example, the app must listen on the expected port and fit the App Service container startup model.
 If the image expects a different port, writes important data to local disk, starts several unrelated processes, or needs host-level dependencies, App Service may feel like a tight jacket.
 
-Container Apps also has assumptions.
-It is not the same as owning a Kubernetes cluster.
-You do not get direct access to the underlying Kubernetes API.
-That is often the point: less cluster ownership.
-But if your team needs raw Kubernetes control, custom admission controllers, or direct node-level behavior, Container Apps may not be enough.
-At that point, the conversation might move to Azure Kubernetes Service, which is outside this article, or to VMs for a temporary lift-and-shift.
+Container Apps also has assumptions. You do not get direct access to the
+underlying Kubernetes API, which is often the benefit because the team
+owns less cluster machinery. If the team needs raw Kubernetes control,
+custom admission controllers, or direct node-level behavior, the
+conversation may move to Azure Kubernetes Service, which is outside this
+article, or to VMs for a temporary lift-and-shift.
 
 Here is a practical container readiness check:
 
@@ -535,9 +534,9 @@ $ systemctl status devpolaris-orders-api --no-pager
      Memory: 164.8M
 ```
 
-The VM output is not bad.
-It is useful if your team is ready to operate Linux services.
-It is a warning if your team expected the platform to hide Linux service management.
+The VM output is useful if your team is ready to operate Linux services.
+It is a warning if your team expected the platform to hide Linux service
+management.
 
 The safest compute choice is the one whose debugging path your team can actually follow during a failed release.
 
@@ -567,10 +566,8 @@ Better direction:
   Return a request id to the client instead of holding the HTTP request open.
 ```
 
-The diagnosis is not "Functions is bad."
-The diagnosis is "this part of the workload is not a small event handler."
-Use Functions for the event-shaped part.
-Give the long-running API a web-app or container-app home.
+The failure shows that this part of the workload is not a small event handler.
+Use Functions for the event-shaped part and give the long-running API a web-app or container-app home.
 
 The second failure is choosing a VM when the team does not want patch ownership.
 The app deploys successfully, then the real work arrives two months later.
@@ -640,8 +637,8 @@ write down the workload shape before writing down the Azure service.
 ## A Decision Record You Can Reuse
 
 A decision record is a short note that explains what you chose and why.
-It is not ceremony.
-It saves future teammates from guessing whether the choice was thoughtful or accidental.
+It saves future teammates from guessing whether the choice was
+thoughtful, accidental, or based on constraints that have changed.
 
 Here is a reusable record for the orders system:
 
@@ -704,11 +701,11 @@ Before you choose, ask these seven questions:
 | How will we deploy and roll back? | Slots, revisions, invocation packages, and server updates feel different |
 | What will we inspect at 10 minutes into a failed release? | Logs and status shape must match team skills |
 
-For the first production version of `devpolaris-orders-api`, the likely answer is:
-Container Apps for the API, Container Apps jobs for the scheduled container task, Functions for small event handlers, and VMs only for the legacy host-shaped piece.
-That is a practical Azure compute decision.
-It is not about chasing the newest service.
-It is about making ownership match reality.
+For the first production version of `devpolaris-orders-api`, the likely
+answer is Container Apps for the API, Container Apps jobs for the
+scheduled container task, Functions for small event handlers, and VMs
+only for the legacy host-shaped piece. That is a practical Azure compute
+decision because ownership matches the real workload.
 
 ---
 

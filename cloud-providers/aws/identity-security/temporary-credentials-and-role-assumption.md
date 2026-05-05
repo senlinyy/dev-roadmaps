@@ -38,10 +38,9 @@ Role assumption is the usual way you get those temporary credentials.
 A role is an AWS identity with permissions, but without permanent access keys of its own.
 A caller proves who they are, asks AWS Security Token Service (STS) for a session, and STS returns short-lived credentials for that role.
 
-The reason this exists is not just neat security vocabulary.
-It exists because a team needs to let humans, pipelines, and running services touch AWS without giving each one a permanent production key.
-The role becomes a controlled handoff point.
-AWS can ask, "who is asking to use this role, are they trusted, and what will the role allow them to do?"
+This handoff solves a practical access problem for teams.
+Humans, pipelines, and running services all need to touch AWS, but none of them should carry a permanent production key.
+The role becomes the controlled handoff point where AWS can ask, "who is asking to use this role, are they trusted, and what will the role allow them to do?"
 
 This article follows one running example:
 the `devpolaris-orders-api` team deploys a Node.js orders service to AWS from GitHub Actions, then runs that service on Amazon ECS.
@@ -195,9 +194,8 @@ It is using a temporary session for the role `devpolaris-orders-api-deploy`.
 The final segment, `github-actions-9482`, is the session name.
 Good session names make audit logs easier to read.
 
-For a beginner, this output is one of the best calming tools in AWS.
-When something fails, first prove who AWS thinks you are.
-Then debug from that identity forward.
+This output is useful because it proves which identity AWS sees.
+When something fails, first confirm that identity, then debug from there.
 
 ## Three Ways Access Shows Up
 
@@ -312,9 +310,8 @@ $ aws sts get-caller-identity
 }
 ```
 
-That output is useful evidence in a deployment log.
-It proves the workflow is not using a plain IAM user key.
-It also proves the account number and role name before the deploy command changes anything.
+Keep that identity output in the deployment log as early evidence.
+It proves the workflow is using the expected role session, account number, and role name before the deploy command changes anything.
 
 In a real team, you might keep this identity check near the deploy step.
 It is not a security control by itself.
@@ -522,7 +519,7 @@ The diagnosis path is short and repeatable:
 3. Decide whether the failure happened before or after role assumption.
 4. Inspect the trust policy only for assumption failures.
 5. Inspect the permissions policy for action failures.
-6. For ECS runtime, confirm `taskRoleArn`, not only `executionRoleArn`.
+6. For ECS runtime, confirm both `taskRoleArn` and `executionRoleArn`.
 7. Check CloudTrail when you need to tie a request back to a session.
 
 Here is a small field guide:
@@ -566,15 +563,13 @@ Each role has a reason.
 Each role has a different permission boundary.
 Each session can show up in `sts get-caller-identity` and CloudTrail.
 
-That is the habit to build.
+Build the habit around the handoff.
 Before you add an AWS key to `.env`, ask whether the caller can use a role instead.
 Before you widen a policy, ask whether the failure is trust or permission.
 Before you debug a deploy, prove the caller identity.
 Before you debug an app's AWS access, check the task role.
 
-The goal is not to memorize STS.
-The goal is to stop treating AWS access like a password copied into every place that needs it.
-AWS access should be a short, intentional handoff.
+STS matters because it moves AWS access away from copied passwords and toward short, intentional sessions.
 The caller proves who they are, STS issues temporary credentials for the right role, and AWS evaluates the work under that role.
 
 That is how a small team can let automation move quickly without leaving permanent production keys scattered across laptops, repositories, and running containers.

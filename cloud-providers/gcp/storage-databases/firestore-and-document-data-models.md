@@ -74,9 +74,8 @@ fields:
   updatedAt: 2026-05-04T10:14:00Z
 ```
 
-This document is not trying to replace the final order database. It is temporary or
-operational app state. If the user returns to checkout, the app can read the draft and
-continue the flow.
+This document holds temporary or operational app state rather than the final order record.
+If the user returns to checkout, the app can read the draft and continue the flow.
 
 Firestore becomes easier when you write down the document's job. Is it a draft? A
 preference? A status record? A collaborative document? A mobile-friendly app record? If the
@@ -86,7 +85,8 @@ job is vague, the model will be vague too.
 
 If you know AWS DynamoDB, Firestore may feel related because both are NoSQL services where
 access patterns matter. If you know Azure Cosmos DB, Firestore may feel related because both
-can store document-shaped data. These comparisons help, but they are not exact.
+can store document-shaped data. Use those comparisons for orientation, then learn the
+Firestore model directly.
 
 DynamoDB pushes key design and table access patterns into the conversation early. Cosmos DB
 has containers, partition keys, request units, and multiple API models. Firestore has
@@ -194,15 +194,14 @@ supported. It also reveals when Firestore may be the wrong fit. If the list of a
 patterns starts to sound like many joins and reports, Cloud SQL or BigQuery may belong in
 the conversation.
 
-Firestore can query, but query support is not the same as "ask anything later." Model for
-the reads you know the app needs.
+Firestore can query, but the model works best when you design for the reads the app already
+knows it needs.
 
 ## Indexes Are Part Of The Query Design
 
-Firestore uses indexes to support queries. The beginner lesson is not to memorize index
-types. The beginner lesson is that query shape and index design are connected. If the app
-needs to query by `status` and order by `updatedAt`, Firestore may require the right index
-to serve that query.
+Firestore uses indexes to support queries. For beginners, the important connection is query
+shape and index design. If the app needs to query by `status` and order by `updatedAt`,
+Firestore may require the right index to serve that query.
 
 A cleanup job might need this query shape:
 
@@ -216,8 +215,8 @@ order by expiresAt
 If the index is missing, the app may fail with an error that points to the required index.
 That is a helpful failure. It tells you the data model and query plan were not complete.
 
-Treat indexes as part of the feature. They are not optional polish. A feature that depends
-on a query should include the index needed to make that query reliable.
+Treat indexes as part of the feature. A feature that depends on a query should include the
+index needed to make that query reliable.
 
 ## Consistency, Transactions, And Boundaries
 
@@ -277,9 +276,8 @@ For the orders system, these are warning signs:
 | Store receipt PDFs or CSV exports | Cloud Storage |
 | Query unknown future reports across many fields | Cloud SQL or BigQuery, depending on purpose |
 
-The point is not to avoid Firestore. The point is to use it where document storage makes the
-feature simpler. If Firestore makes every new question feel like a workaround, the data
-shape may be wrong.
+Use Firestore where document storage makes the feature simpler. If Firestore makes every new
+question feel like a workaround, the data shape may be wrong.
 
 ## Failure Modes And First Checks
 
@@ -330,8 +328,8 @@ first checks:
   retry or duplicate write behavior
 ```
 
-These failures are not the same. A path problem, index problem, permission problem, and
-state-transition problem need different fixes.
+These failures need different fixes: path problems, index problems, permission problems, and
+state-transition problems point to different layers.
 
 ## A Practical Firestore Review
 

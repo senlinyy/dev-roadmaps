@@ -1,7 +1,7 @@
 ---
 title: "Storage Accounts and Blob Storage"
 description: "Use storage accounts, containers, and blobs to store generated files safely without turning object storage into a database."
-overview: "Blob Storage is the Azure home for file-like data, but the important beginner move is understanding the storage account, container, blob name, access path, and ownership record."
+overview: "Blob Storage is the Azure home for file-like data. This article explains the storage account, container, blob name, access path, and ownership record."
 tags: ["blob-storage", "storage-account", "containers", "lifecycle"]
 order: 2
 id: article-cloud-providers-azure-storage-databases-storage-accounts-blob-storage
@@ -47,10 +47,9 @@ app needs to keep. For a beginner, the plain mental
 model is: Blob Storage is where the app puts files that
 should outlive the process that created them.
 
-The important part is not just "upload a file." The
-important part is knowing what names, access rules,
-lifecycle rules, and database pointers make that file
-usable later.
+Uploading the file is only the first step. The durable
+design question is which names, access rules, lifecycle
+rules, and database pointers make that file usable later.
 
 ## If You Know S3
 
@@ -97,9 +96,8 @@ access be public, private, or restricted to selected
 networks? Which identity can read and write? Which
 redundancy option should protect the data? Which data
 protection features should be enabled? Those questions
-are not decoration. They change how the app behaves
-during failures and incidents. Here is a small mental
-picture.
+change how the app behaves during failures and incidents.
+Here is a small mental picture.
 
 ```mermaid
 flowchart TD
@@ -148,7 +146,9 @@ usually: one storage account for a bounded application
 area, then containers for related classes of object
 data.
 
-That is not a law. It is a good first review habit.
+Treat that as a good first review habit rather than a universal law. The
+right layout still depends on ownership, access patterns, lifecycle
+rules, and recovery needs.
 
 ## Blob Names Are Not Database Records
 
@@ -203,8 +203,8 @@ content_type: application/pdf
 created_at: 2026-05-03T09:31:00Z
 ```
 
-This row is not storing the PDF. It is storing the
-pointer and the business ownership. When the customer
+This row stores the pointer and the business ownership,
+while Blob Storage stores the PDF bytes. When the customer
 asks to download the receipt, the app should not trust
 only the blob name. The app checks the database first.
 Does this order belong to the signed-in customer? Is
@@ -300,10 +300,9 @@ container=receipts
 blob=receipts/2026/05/ord_1042.pdf
 ```
 
-The fix direction is not "retry harder." Check the
-managed identity and role assignment for the storage
-account or container. The app can write in staging but
-not production.
+For a production write failure after staging works,
+check the managed identity and role assignment for the
+storage account or container.
 
 ```text
 storageAccount=devpolarisstgorders result=success

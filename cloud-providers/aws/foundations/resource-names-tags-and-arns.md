@@ -162,7 +162,7 @@ arn:aws:ecs:us-east-1:123456789012:service/devpolaris-prod/orders-api-prod
 literal prefix: arn
 ```
 
-That split gives you a calm reading order.
+That split gives you a practical reading order.
 You do not have to understand the whole string at once.
 Ask one small question per segment:
 which partition, which service, which Region, which account, which resource?
@@ -234,9 +234,7 @@ $ aws configure get region
 us-east-1
 ```
 
-That output is boring in the best way.
-It says the deploy job is using account `123456789012`.
-It says the default CLI Region is `us-east-1`.
+The output confirms the deploy job is using account `123456789012` and default CLI Region `us-east-1`.
 Now you can compare those values with the ARN in the error message or resource detail page.
 
 Imagine the deployment for `devpolaris-orders-api` fails like this:
@@ -324,7 +322,7 @@ A healthy beginner tag set is small and boring:
 | `data-classification` | `internal` | Helps reviewers understand data risk |
 | `managed-by` | `terraform` | Shows whether humans should edit it directly |
 
-This set is not magic.
+This set works because each tag answers a review question.
 Your organization may use different keys.
 The important part is consistency.
 Five boring keys used everywhere are better than twenty clever keys used randomly.
@@ -342,7 +340,7 @@ service=devpolaris-orders-api
 env=prod
 ```
 
-This is not a safe tag:
+Avoid tags that expose private or sensitive details:
 
 ```text
 customer-email=alex@example.com
@@ -380,8 +378,7 @@ That gives names like:
 There is a tradeoff here.
 Long names carry more meaning, but very long names become hard to read.
 Short names are pleasant until several teams create similar resources.
-The goal is not to encode every detail into the name.
-The goal is to make the name useful at a glance, then let tags carry the structured details.
+Make the name useful at a glance, then let tags carry the structured details.
 
 Here is the matching tag plan:
 
@@ -393,7 +390,6 @@ Here is the matching tag plan:
 | IAM task role | `devpolaris-orders-api` | `prod` | `checkout` | `terraform` | `internal` |
 
 Notice the S3 exports bucket has a different data classification.
-That is not decoration.
 If the bucket stores order exports, it may deserve tighter review than a log group or role.
 The tag helps humans ask the right question before they change access or lifecycle rules.
 
@@ -445,7 +441,7 @@ That is useful when you are cleaning up an account that has grown messy.
 Tags become more valuable when other systems use them.
 A tag sitting on a resource is only a label.
 A tag used by billing, access rules, dashboards, cleanup jobs, and owner reports becomes part of how the team operates.
-That is why tag design is an engineering decision, not just a naming preference.
+That is why tag design is an engineering decision as well as a naming preference.
 
 For cost, AWS cost allocation tags can group spend by tag key after the tags are activated in Billing and Cost Management.
 That activation step matters.
@@ -540,10 +536,9 @@ arn:aws:logs:us-east-1:123456789012:log-group:/ecs/orders-api-temp         no   
 arn:aws:s3:::devpolaris-orders-api-prod-exports                            yes       yes    no
 ```
 
-The diagnosis is simple:
+Use this diagnosis path:
 search by expected service and environment tags, then search for resources with no useful tags.
-The fix is not only to add the missing tags once.
-The better fix is to update the creation path, such as Terraform, CloudFormation, a service template, or a runbook, so future resources are created with the same required tags.
+The durable fix is to update the creation path, such as Terraform, CloudFormation, a service template, or a runbook, so future resources are created with the same required tags.
 
 The third failure is duplicate-looking resources.
 You see `orders-api-prod` in two places and assume one is wrong.
@@ -614,8 +609,7 @@ Use the name for human recognition, tags for grouping, and ARN for exact AWS ide
 ## The Review Habit
 
 Before you grant access, delete a resource, or explain a cost spike, pause for a small review.
-This is not ceremony.
-It is how you avoid acting on the wrong resource.
+The review is how you avoid acting on the wrong resource.
 The review should fit on one screen and answer the questions that AWS will not answer for you.
 
 For `devpolaris-orders-api`, a careful review might look like this:

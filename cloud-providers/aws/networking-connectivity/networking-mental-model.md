@@ -34,7 +34,7 @@ It keeps internal resources private.
 It decides which subnet sends traffic to which next hop.
 It lets you place firewall-style rules close to each resource.
 
-The reason AWS networking exists is simple:
+AWS networking exists because:
 a production service needs more than "open a port."
 You need to choose who can reach the front door, who can reach the app, who can reach the database, and how traffic moves between each hop.
 If those questions are mixed together, every outage becomes a foggy sentence like "the network is broken."
@@ -346,7 +346,7 @@ The load balancer does not forward traffic to "ECS" in a vague way.
 It forwards traffic to specific healthy task targets in the target group.
 If a task fails health checks, the target group should stop sending customer requests to it.
 
-That is why health checks are part of networking, not only observability.
+That is why health checks belong to networking and observability.
 The health check decides whether the path is allowed to use a target.
 If `/health` returns `500`, the load balancer treats that target as unhealthy even if the process is still running.
 
@@ -391,12 +391,8 @@ Private subnets help, but the actual connection also needs DNS, route tables, se
 
 AWS beginners often lose time because two different checks both feel like "access."
 IAM access and network reachability are not the same check.
-
-IAM answers:
-is this principal allowed to call this AWS API action on this AWS resource?
-
-Network reachability answers:
-can traffic move from this source to this destination on this protocol and port?
+IAM answers whether a principal is allowed to call an AWS API action on an AWS resource.
+Network reachability answers whether traffic can move from this source to this destination on this protocol and port.
 
 For `devpolaris-orders-api`, the ECS task role might have permission to read a database secret:
 
@@ -607,7 +603,7 @@ Target IP       Port    Health
 10.20.12.39     3000    healthy
 ```
 
-The diagnosis path was not magic.
+The diagnosis path worked because each check answered one specific question.
 It followed the request path:
 customer symptom, DNS and front door, target group, task log, database rule.
 
@@ -625,11 +621,10 @@ Here is the same method as a compact checklist:
 
 Different symptoms choose different first checks.
 If the browser says the certificate name is wrong, start at TLS and DNS.
+Let the evidence choose the next hop.
 If the load balancer says all targets are unhealthy, start at target health and app logs.
 If the app says `AccessDeniedException`, start at IAM.
 If the app says `ETIMEDOUT`, start at network reachability.
-
-The useful habit is to let evidence choose the next hop.
 
 ## Tradeoffs For A First Design
 

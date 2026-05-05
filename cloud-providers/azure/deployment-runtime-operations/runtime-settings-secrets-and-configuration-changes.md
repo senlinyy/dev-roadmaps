@@ -206,9 +206,9 @@ For Container Apps, a secret can reference a Key Vault
 secret when managed identity and permission are
 configured.
 
-The beginner lesson is not the exact reference syntax.
-The lesson is that the app setting name remains stable,
-while the secret value can be managed in Key Vault. For
+The exact Key Vault reference syntax matters when you configure the
+service, but the beginner lesson is the stable contract: the app setting
+name remains stable while the secret value is managed in Key Vault. For
 `devpolaris-orders-api`:
 
 ```text
@@ -325,7 +325,8 @@ Here is the same idea as a compact release table.
 | Blob upload now denied | Managed identity role assignment on storage |
 | Telemetry missing after deploy | Application Insights setting or connection string |
 
-The common thread is simple:
+The common thread is that runtime settings need the same release
+discipline as code:
 
 > Config failures are runtime failures.
 

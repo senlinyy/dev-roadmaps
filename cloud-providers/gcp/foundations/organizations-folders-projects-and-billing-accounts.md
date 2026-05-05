@@ -71,7 +71,7 @@ its own:
 | AWS organizational unit | Folder | Folders group projects and can carry inherited policies |
 | Azure management group | Folder or organization policy layer | GCP folders can group projects for policy and access |
 
-The portable lesson is simple: production resources need a deliberate
+The portable lesson is that production resources need a deliberate
 home. In GCP, that means a project with a clear folder, an attached
 billing account, and inherited policies the team understands.
 
@@ -177,11 +177,10 @@ organization
 Neither tree is automatically best. The right folder shape depends on
 how the company manages ownership, policy, access, and cost review.
 
-The important beginner idea is that folders can carry inherited rules.
-If a production folder has stricter policy, projects under that folder
-may inherit those rules. If a commerce folder grants a read-only group
-access to all commerce projects, the orders project may inherit that
-access.
+Folders can carry inherited rules. If a production folder has stricter
+policy, projects under that folder may inherit those rules. If a
+commerce folder grants a read-only group access to all commerce
+projects, the orders project may inherit that access.
 
 That can be helpful. It can also be confusing if nobody knows where a
 permission came from. When access surprises you, inspect the project and
@@ -250,10 +249,10 @@ budget: orders production monthly budget
 labels required: team=orders, service=orders-api, env=prod
 ```
 
-Billing is not only a finance topic. It affects engineering because
-Cloud Run instances, Cloud SQL sizing, logging volume, storage
-retention, and network traffic are all design choices. If the bill grows
-and no labels exist, the team may not know which service caused it.
+Billing affects engineering because Cloud Run instances, Cloud SQL
+sizing, logging volume, storage retention, and network traffic are all
+design choices. If the bill grows and no labels exist, the team may not
+know which service caused it.
 
 Good project structure and labels make cost questions easier:
 
@@ -264,8 +263,8 @@ Good project structure and labels make cost questions easier:
 | Which resource grew unexpectedly? | Billing reports grouped by project and label |
 | Who gets budget alerts? | Budget tied to the right billing account and owner |
 
-The goal is not to make developers afraid of cost. The goal is to make
-cost visible enough that teams can make good choices.
+Make cost visible enough that teams can make good choices without making
+developers afraid to use the platform.
 
 ## APIs And Quotas Are Project Conversations
 
@@ -302,8 +301,8 @@ result: quota limit reached
 first check: quota page for the project and region
 ```
 
-Those failures are not app code failures. They are project setup
-failures. That distinction keeps debugging focused.
+Those failures come from project setup rather than app code. That
+distinction keeps debugging focused.
 
 ## IAM Can Be Granted At Several Levels
 
@@ -377,9 +376,9 @@ initial owners:
   orders production reader group
 ```
 
-This is not documentation for decoration. It is a debugging shortcut.
-When a deploy fails, a cost spike appears, or a user asks who owns a
-resource, this record gives the team a place to start.
+This record is a debugging shortcut. When a deploy fails, a cost spike
+appears, or a user asks who owns a resource, it gives the team a place
+to start.
 
 Small records like this also help new engineers. Instead of asking them
 to understand the whole company hierarchy on day one, you show them the

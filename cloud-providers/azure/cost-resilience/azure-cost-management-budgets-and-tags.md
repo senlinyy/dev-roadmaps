@@ -45,7 +45,7 @@ runtime, Azure SQL Database, Blob Storage, Application
 Insights, Key Vault, or staging resources. If the bill
 can show `Service=devpolaris-orders-api`,
 `Environment=prod`, and `Owner=orders-api`, the
-conversation becomes much calmer. Now the team can ask:
+conversation becomes more specific. Now the team can ask:
 which layer changed, and is that layer sized for the
 work it is doing?
 
@@ -75,17 +75,14 @@ familiar in purpose, but different in shape.
 | Resource Groups as tagging equivalent does not exist in AWS | Azure resource groups | Which resources belong to one app or environment? |
 | Trusted Advisor cost checks | Azure Advisor cost recommendations | Which idle or underused resources should we inspect? |
 
-The bridge is useful, but do not force a one-to-one
-dictionary. Azure resource groups matter more than many
-AWS beginners expect. A resource group is a logical
-container for Azure resources. It is not a network
-boundary, and it is not automatically a billing
-account, but it is a very useful way to group resources
-that belong to the same application or environment.
-Tags matter too. A tag is a key-value label attached to
-a resource, resource group, or subscription. Tags help
-answer human questions like "who owns this?" and "is
-this production or staging?"
+The bridge is useful, but do not force a one-to-one dictionary. Azure
+resource groups matter more than many AWS beginners expect. A resource
+group is a logical container for Azure resources, useful for grouping
+resources that belong to the same application or environment, but
+network boundaries and billing boundaries are separate ideas. Tags are
+key-value labels attached to a resource, resource group, or
+subscription, and they help answer human questions like "who owns this?"
+and "is this production or staging?"
 
 In practice, Azure cost visibility usually comes from
 scopes, resource groups, and tags working together.
@@ -194,16 +191,13 @@ important part is that tags answer real questions.
 | `Component` | Is this runtime, database, storage, telemetry, or network? |
 | `CostCenter` | Which budget or accounting bucket pays for it? |
 
-Tags are not magic. Some resources may not emit tags
-into cost data in the way you expect, and tagging rules
-need governance. Microsoft documents tag support
-details because not every resource behaves exactly the
-same. The beginner habit is still valuable: create
-resources with ownership metadata from the start.
-Missing ownership creates unowned spend. Unowned spend
-is dangerous because nobody feels safe changing it.
-People either ignore it, or they cut it blindly. Both
-outcomes are bad.
+Tags need governance because some resources may not emit tags into cost
+data in the way you expect. Microsoft documents tag support details
+because not every resource behaves exactly the same. The useful beginner
+habit is still to create resources with ownership metadata from the
+start, because missing ownership creates unowned spend. Unowned spend is
+dangerous: people either ignore it because nobody feels safe changing
+it, or they cut it blindly.
 
 ## Cost Analysis Shows Movement
 
@@ -265,9 +259,9 @@ operating signals:
 | Blob Storage cost increased | Object count, object size, lifecycle policy, and old versions |
 | Network cost increased | Response size, export downloads, region paths, and public data transfer |
 
-The goal is not to explain every cent during every
-review. The goal is to notice meaningful movement early
-enough to understand it.
+A budget review does not need to explain every cent every time. It
+should notice meaningful movement early enough for the team to
+understand it.
 
 ## Budgets Catch Drift Early
 

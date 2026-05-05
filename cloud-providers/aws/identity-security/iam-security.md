@@ -20,7 +20,7 @@ aliases:
 6. [Actions, Resources, And Conditions](#actions-resources-and-conditions)
 7. [The ECS Task Role For The Orders API](#the-ecs-task-role-for-the-orders-api)
 8. [Explicit Deny And Real AccessDenied Messages](#explicit-deny-and-real-accessdenied-messages)
-9. [A Calm Diagnostic Path](#a-calm-diagnostic-path)
+9. [Diagnostic Path](#diagnostic-path)
 10. [The Least-Privilege Tradeoff](#the-least-privilege-tradeoff)
 
 ## The Request Check IAM Is Trying To Answer
@@ -44,7 +44,7 @@ It is a decision process.
 You will hear many IAM nouns:
 principal, user, group, role, policy, action, resource, ARN, condition, explicit deny.
 Those words are useful only when they answer the request check.
-If you can read an error and find the caller, action, resource, and reason for denial, IAM becomes much less scary.
+If you can read an error and find the caller, action, resource, and reason for denial, IAM becomes easier to debug.
 
 Here is the beginner picture:
 
@@ -72,7 +72,7 @@ If there is a matching explicit deny, the request is denied even if another poli
 That last sentence is the one to remember.
 An explicit deny wins.
 
-> IAM gets easier when you treat every error as a request story, not as a wall of security vocabulary.
+> Treat every IAM error as a request story: caller, action, resource, and decision.
 
 ## The Running Example: One API, Two AWS Touches
 
@@ -544,7 +544,7 @@ on resource: arn:aws:secretsmanager:us-east-1:123456789012:secret:devpolaris/ord
 because no identity-based policy allows the secretsmanager:GetSecretValue action
 ```
 
-Read it in five calm passes:
+Read the message by checking five fields:
 
 | Clue | Value In The Message |
 |------|----------------------|
@@ -562,7 +562,7 @@ The likely fix is to attach or correct an identity-based policy on the task role
 
 Do not fix this by adding `secretsmanager:*` on `*`.
 That would make the error disappear by giving the app much more access than it needs.
-The calm fix is smaller:
+A safer fix is smaller:
 allow the exact action on the exact secret.
 
 Now look at an S3 prefix mistake.
@@ -611,7 +611,7 @@ This is why wording matters.
 `no policy allows` points you toward a missing or mismatched allow.
 `explicit deny` points you toward a guardrail, boundary, service control policy, resource policy, or deny statement that matched.
 
-## A Calm Diagnostic Path
+## Diagnostic Path
 
 When IAM breaks, the worst first move is guessing.
 The second worst move is adding broad permissions because the deploy is blocked.
@@ -730,8 +730,8 @@ That is the tradeoff:
 | Conditions | Stronger rules for context-sensitive access | More places where a request can fail |
 | Separate roles per workload | Cleaner ownership and audit trails | More IAM resources to name and manage |
 
-For a beginner team, the goal is not a perfect policy on day one.
-The goal is a policy that clearly matches the service's current behavior and can be reviewed without guesswork.
+For a beginner team, start with a policy that clearly matches the service's current behavior and can be reviewed without guesswork.
+Perfection can come later as the team learns the service's real access pattern.
 
 A good review question sounds like this:
 
@@ -750,14 +750,11 @@ no:
   create new IAM roles
 ```
 
-That review is not bureaucracy.
-It is a simple way to keep the role honest.
-The role should describe the job.
-If the job changes, update the role intentionally.
+That review keeps the role honest by comparing access to the job the service actually performs.
+The role should describe the job, and if the job changes, update the role intentionally.
 
-The final IAM habit is calm precision.
-When a request fails, do not read the error as "AWS hates me."
-Read it as:
+The final IAM habit is to be precise.
+When a request fails, translate the error into the decision AWS made:
 who asked, what action, which resource, under what conditions, and which policy decision followed?
 
 Once you can answer those questions, IAM becomes a tool you can operate, not a maze you hope to survive.

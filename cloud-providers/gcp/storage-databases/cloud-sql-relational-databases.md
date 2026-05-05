@@ -24,7 +24,7 @@ id: article-cloud-providers-gcp-storage-databases-cloud-sql-relational-databases
 
 ## Some Data Needs Rules Between Records
 
-An order is not just one blob of data. It belongs to a customer. It has line items. It has a
+An order is a set of related facts. It belongs to a customer. It has line items. It has a
 payment state. It may have refunds, receipts, and support notes. Those pieces need to agree
 with each other. If the payment is marked paid but the order row is missing, support cannot
 explain what happened. If an order item points at a product snapshot that does not exist,
@@ -54,8 +54,7 @@ flowchart TD
     API --> LOGS
 ```
 
-The database is not only a place to write rows. It is part of the runtime path, the release
-path, and the recovery plan.
+The database participates in the runtime path, the release path, and the recovery plan.
 
 ## What Cloud SQL Provides
 
@@ -79,9 +78,9 @@ The useful beginner split is:
 | Monitoring and logs | Knowing which signals matter |
 | High availability options | Deciding what failure target the product needs |
 
-That split prevents two bad assumptions. Cloud SQL is not "just a VM with Postgres" that
-you operate entirely yourself. It is also not "a database that designs itself." It sits in
-the middle: managed service, real database responsibility.
+That split prevents two bad assumptions. Cloud SQL reduces infrastructure work compared with
+operating a database on your own VM, but it still requires real database responsibility:
+schema, migrations, access, restore testing, and operational signals.
 
 ## If RDS Or Azure SQL Is Familiar
 
@@ -263,15 +262,15 @@ For example, adding a nullable `receipt_status` column is usually easier than re
 required column used by running code. The first change can support a gradual rollout. The
 second can break every instance that still expects the old name.
 
-Database migrations deserve the same calm review as application deploys. They change the
+Database migrations deserve the same review as application deploys. They change the
 system of record.
 
 ## Backups Matter Only If Restore Is Understood
 
 Cloud SQL has backup features, but a backup is only useful if the team understands restore.
-A backup that exists somewhere is not the same as a working recovery plan. The app must know
-where restored data would live, how to point services at it, and what time the team is
-trying to recover to.
+A backup file or recovery point only becomes useful when the team has a working recovery
+plan. The app must know where restored data would live, how to point services at it, and
+what time the team is trying to recover to.
 
 For the orders database, ask:
 
@@ -292,8 +291,8 @@ validation:
   sample order lookup, checkout smoke test, support query
 ```
 
-This is not overthinking. A restore is a production change. It can save the business during
-a bad incident, but only if the team has practiced the path and understands the tradeoffs.
+A restore is a production change. It can save the business during a bad incident, but only
+if the team has practiced the path and understands the tradeoffs.
 
 ## Failure Modes And First Checks
 

@@ -38,9 +38,9 @@ or read every secret in the company. GCP security exists to draw those lines. It
 humans and software identities.
 
 It gives resources names and parents. It gives permissions through roles. It records
-permission decisions in policies. It records many important actions in audit logs. The goal
-is not to memorize every IAM role on day one. The goal is to learn how GCP thinks about an
-access decision. Once that picture is clear, the role names become easier to read.
+permission decisions in policies. It records many important actions in audit logs. Learn how
+GCP thinks about an access decision before trying to memorize every IAM role. Once that
+picture is clear, the role names become easier to read.
 
 ## The GCP Shape In One Sentence
 
@@ -81,7 +81,7 @@ flowchart TD
     POLICY -. "important changes leave evidence" .-> LOGS
 ```
 
-The arrows are not a network path. They are a permission story. The actor asks to do
+The arrows show a permission story rather than a network path. The actor asks to do
 something to the target. GCP checks whether a policy binding gives that actor a role that
 allows the action. Some actions also produce audit log records so the team can investigate
 later.
@@ -237,19 +237,18 @@ depends on the API or tool you use, but the idea stays the same. The binding doe
 the app can access every secret. It says this principal receives this role on this target.
 That makes policy bindings readable if you slow down.
 
-When you see a policy, do not read it as a wall of security text. Read it like sentences.
-Who is named? Which role are they getting? Where is the binding attached? Is the scope
-larger than the task needs? Is there a condition attached? Does this binding affect
-production, staging, or both? Those questions catch many mistakes before they become
-incidents.
+When you see a policy, turn it into sentences. Who is named? Which role are they getting?
+Where is the binding attached? Is the scope larger than the task needs? Is there a condition
+attached? Does this binding affect production, staging, or both? Those questions catch many
+mistakes before they become incidents.
 
 ## Service Accounts Let Software Act
 
-Cloud services are not people, but they still need identities. That is the purpose of a
-service account. A service account is an identity for software. When Cloud Run runs
-`devpolaris-orders-api`, the service runs as a service account. When the app calls Secret
-Manager, GCP checks the permissions of that service account. When the app connects to Cloud
-SQL through a GCP-supported path, GCP can also check that identity.
+Cloud services need identities even though they are software, not people. That is the
+purpose of a service account. A service account is an identity for software. When Cloud Run
+runs `devpolaris-orders-api`, the service runs as a service account. When the app calls
+Secret Manager, GCP checks the permissions of that service account. When the app connects to
+Cloud SQL through a GCP-supported path, GCP can also check that identity.
 
 This is safer than storing a human user's credential inside the app. People leave teams.
 People need many permissions for different tasks. Human credentials are usually not the
@@ -275,9 +274,9 @@ vendor is sensitive. These values should not live in a Git repository. They shou
 copied into a wiki page. They should not be passed around in chat.
 
 In GCP, Secret Manager is the service that stores secrets as named secrets with versions.
-The secret name is not the dangerous part. The secret payload is the dangerous part. That
-distinction matters. Many people may be allowed to know that a secret called `orders-db-url`
-exists. Very few actors should be allowed to read the current value.
+The secret name identifies the entry, while the secret payload contains the sensitive value.
+Many people may be allowed to know that a secret called `orders-db-url` exists. Very few
+actors should be allowed to read the current value.
 
 For `devpolaris-orders-api`, the runtime service account may need access to this one secret:
 
@@ -298,22 +297,21 @@ be able to find who or what changed it. If someone grants a broad role on the pr
 project, the team should be able to see that change. If an app receives a permission denied
 error, logs should help identify which identity was used.
 
-GCP records many admin and data events through Cloud Audit Logs. An audit log is not a
-replacement for good access design. It is the receipt that helps the team understand what
-happened. Imagine a production secret changed on Friday. The app starts failing on Monday.
-Without audit logs, the team may rely on memory and chat history.
+GCP records many admin and data events through Cloud Audit Logs. Audit logs help the team
+understand what happened, but they do not replace good access design. Imagine a production
+secret changed on Friday. The app starts failing on Monday. Without audit logs, the team may
+rely on memory and chat history.
 
-With audit logs, the team can look for the secret change and the actor that made it. That
-does not make the failure pleasant. It does make the investigation grounded in evidence. For
-beginners, the first audit habit is simple. When access surprises you, ask for the identity
-and the resource. Then check the logs for the action.
+With audit logs, the team can look for the secret change and the actor that made it. The
+failure is still unpleasant, but the investigation is grounded in evidence. When access
+surprises you, ask for the identity and the resource. Then check the logs for the action.
 
 The log is often the first place where the story becomes specific.
 
 ## Common Failure Modes
 
-Most GCP identity problems are not mysterious once you translate them back into the access
-sentence. Here are common shapes. The first is the wrong principal. The developer tested
+Most GCP identity problems become easier to understand once you translate them back into the
+access sentence. Here are common shapes. The first is the wrong principal. The developer tested
 locally as `ana@devpolaris.example`, but Cloud Run runs as
 `orders-api-prod@devpolaris-orders-prod.iam.gserviceaccount.com`. Local testing passes.
 Production fails when the service account lacks access. The second is the wrong resource.
@@ -323,15 +321,14 @@ with the same name in `devpolaris-orders-prod`. The name looks familiar. The pro
 different. The third is the wrong role. The app can view secret metadata, but it cannot
 access the secret payload. That is a useful safety boundary.
 
-Seeing that a secret exists is not the same as reading the sensitive value. The fourth is
-the wrong scope. A developer grants a role on the whole project because granting it on a
-specific secret felt slower. The app works, but it now has more access than it needs. That
-is not a runtime bug.
+Seeing that a secret exists and reading the sensitive value are different permissions. The
+fourth is the wrong scope. A developer grants a role on the whole project because granting
+it on a specific secret felt slower. The app works, but it now has more access than it
+needs.
 
-It is a risk that should be cleaned up before the shortcut becomes normal. The fifth is
-missing API enablement. IAM might be correct, but the required service API is not enabled in
-the project. That failure does not mean the principal is bad. It means the project is not
-ready to use that service.
+That risk should be cleaned up before the shortcut becomes normal. The fifth is missing API
+enablement. IAM might be correct, but the required service API is not enabled in the
+project. That failure means the project is not ready to use that service.
 
 Good debugging separates these cases.
 
@@ -343,10 +340,9 @@ request touching? Which permission does that action require? Which role contains
 permission? Where is the binding attached? Is the binding inherited from a parent?
 
 Is there a condition? Is the service API enabled? Is there an audit log that proves the
-request? This is not extra ceremony. It is how you avoid guessing. When the orders API
-cannot read its secret, the fix might be a missing binding on one secret. When a deploy
-pipeline cannot update Cloud Run, the fix might be a missing deploy role and service account
-use permission.
+request? These checks keep the team from guessing. When the orders API cannot read its
+secret, the fix might be a missing binding on one secret. When a deploy pipeline cannot
+update Cloud Run, the fix might be a missing deploy role and service account use permission.
 
 When a developer cannot see logs, the fix might be a viewer role on the right project.
 Different problems need different fixes. The mental model keeps them separate.
