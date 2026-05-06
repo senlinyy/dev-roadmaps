@@ -1,0 +1,61 @@
+{
+  "passThreshold": 0.75,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "The orders team sees `asp-devpolaris-orders-prod` and `app-devpolaris-orders-api-prod`. Which description is correct?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The App Service plan is the app code, and the web app is only DNS."
+        },
+        {
+          "id": "b",
+          "text": "The App Service plan is the compute capacity boundary, while the web app holds the application runtime settings, host name, identity, and deployment behavior."
+        },
+        {
+          "id": "c",
+          "text": "The web app and plan are duplicate names for the same Azure resource."
+        },
+        {
+          "id": "d",
+          "text": "The plan stores secrets and the web app stores only static files."
+        }
+      ],
+      "correct": [
+        "b"
+      ],
+      "explanation": "App Service separates the plan that pays for and supplies capacity from the web app that represents the running backend."
+    },
+    {
+      "id": "q2",
+      "type": "multiple",
+      "scenario": "The team is reviewing `app-devpolaris-orders-api-prod` after a failed release. They need to know which facts describe the web app runtime itself, not only the App Service plan that supplies capacity. Which evidence belongs to the web app side of an App Service review?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Runtime version such as Node 20."
+        },
+        {
+          "id": "b",
+          "text": "App settings and Key Vault references."
+        },
+        {
+          "id": "c",
+          "text": "Deployment slots and health check path."
+        },
+        {
+          "id": "d",
+          "text": "The number of workers purchased by the plan only."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "The web app is where the team checks the runtime behavior. Worker count is plan capacity evidence, not the whole web app picture."
+    }
+  ]
+}

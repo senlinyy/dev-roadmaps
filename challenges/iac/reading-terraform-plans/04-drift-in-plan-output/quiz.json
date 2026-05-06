@@ -1,0 +1,70 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "No Terraform files changed for the public access block, but a normal plan shows:\n\n```text\n# aws_s3_bucket_public_access_block.orders_invoices will be updated in-place\n~ resource \"aws_s3_bucket_public_access_block\" \"orders_invoices\" {\n  ~ block_public_acls       = false -> true\n  ~ block_public_policy     = false -> true\n  ~ ignore_public_acls      = false -> true\n  ~ restrict_public_buckets = false -> true\n}\n```\n\nWhat is the most likely meaning?",
+      "options": [
+        { "id": "a", "text": "Terraform refreshed provider state and found drift that it wants to return to the configuration." },
+        { "id": "b", "text": "Terraform cannot update public access blocks in place and must replace the bucket." },
+        { "id": "c", "text": "The plan is impossible because normal plans never use provider refresh data." },
+        { "id": "d", "text": "The file changed secretly because drift cannot come from console edits." }
+      ],
+      "correct": ["a"],
+      "explanation": "A normal plan refreshes state by default. If reality differs from configuration, Terraform may propose an in-place correction even when the file did not change. This plan does not show replacement, and console or external automation changes are common drift sources."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "An emergency console change disabled a production access control to restore service. The next Terraform plan wants to put the old setting back. What should the team decide before apply?",
+      "options": [
+        { "id": "a", "text": "Whether the file remains the intended source of truth or the Terraform code should be updated to preserve the emergency fix." },
+        { "id": "b", "text": "Whether to delete the state file so Terraform forgets the resource." },
+        { "id": "c", "text": "Whether to approve the plan automatically because drift correction is always good." },
+        { "id": "d", "text": "Whether to stop using Terraform for the whole service." }
+      ],
+      "correct": ["a"],
+      "explanation": "Drift is evidence of disagreement between code and reality. The team must decide which side is intended now. Sometimes Terraform should restore reality to code, and sometimes the code should change to record an intentional emergency fix. Deleting state or auto-approving ignores the real decision."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "During an investigation, you want to inspect drift without mixing it with a larger feature change. Which planning mode fits that goal?",
+      "options": [
+        { "id": "a", "text": "`terraform plan -refresh-only`, because it asks what state learns from provider refresh without proposing normal configuration changes." },
+        { "id": "b", "text": "`terraform apply`, because apply is the only way to compare provider data." },
+        { "id": "c", "text": "`terraform plan -destroy`, because drift always means real resources should be deleted." },
+        { "id": "d", "text": "`terraform show -json`, because JSON output refreshes remote resources by itself." }
+      ],
+      "correct": ["a"],
+      "explanation": "A refresh-only plan is useful when the team wants drift evidence separated from feature work. Apply changes infrastructure, destroy plans deletion, and show reads existing state or saved plan data rather than refreshing remote infrastructure by itself."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "A normal plan wants to create `aws_s3_bucket.orders_invoices`, but the team knows `dp-orders-invoices-prod` already exists and should already be managed. Which review comments are valid?",
+      "options": [
+        { "id": "a", "text": "This could be a state gap, wrong backend, wrong workspace, or wrong root module." },
+        { "id": "b", "text": "Inspect state and backend context before applying, because creating a known existing object is suspicious." },
+        { "id": "c", "text": "Apply anyway because Terraform will automatically import any existing object with the same name." },
+        { "id": "d", "text": "Assume the real bucket is safe to delete because the plan wants to create it." }
+      ],
+      "correct": ["a", "b"],
+      "explanation": "A plan that wants to create an object the team believes is already managed points at context or state trouble. The reviewer should inspect backend, workspace, root module, and state before apply. Terraform does not automatically import arbitrary existing objects, and creation intent is not evidence that deletion is safe."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A plan correction appears after a teammate changed production manually in the console. The plan would restore all four public access block flags to `true`. The pull request did not mention this drift. What is the best review response?",
+      "options": [
+        { "id": "a", "text": "Record the drift in the review and confirm whether the apply should restore the Terraform configuration or the code should change." },
+        { "id": "b", "text": "Ignore the drift because it is a safe-looking in-place update." },
+        { "id": "c", "text": "Ask the author to hide the drift by running a plan without refresh." },
+        { "id": "d", "text": "Approve only if the plan also contains a replacement marker." }
+      ],
+      "correct": ["a"],
+      "explanation": "Drift should be visible in the review, especially in production. Restoring public access controls may be correct, but the team should confirm the reason and desired source of truth. Hiding refresh output weakens review, and replacement markers are not required for drift to matter."
+    }
+  ]
+}

@@ -1,0 +1,61 @@
+{
+  "passThreshold": 0.75,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "The team deploys `devpolaris-orders-api` as a container image and wants Azure to run replicas, expose HTTPS, keep logs, and support revision traffic. Which Azure concept is central to this service?",
+      "options": [
+        {
+          "id": "a",
+          "text": "A container app inside a managed Container Apps environment."
+        },
+        {
+          "id": "b",
+          "text": "A storage account container."
+        },
+        {
+          "id": "c",
+          "text": "A VM data disk."
+        },
+        {
+          "id": "d",
+          "text": "A DNS TXT record."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Container Apps gives the container image a managed runtime, ingress, revision history, scale behavior, and identity surface."
+    },
+    {
+      "id": "q2",
+      "type": "multiple",
+      "scenario": "The orders API runs as a container app, and the next release will move traffic between two revisions. The team needs enough evidence to explain what users may hit after the change. Which facts help explain a Container Apps production release?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The image tag used by each active revision."
+        },
+        {
+          "id": "b",
+          "text": "Traffic weights across revisions."
+        },
+        {
+          "id": "c",
+          "text": "Ingress target port and public or private exposure."
+        },
+        {
+          "id": "d",
+          "text": "Only the name of the Azure subscription."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "A release review needs revision, traffic, and ingress details. Subscription context matters, but it does not explain how the container is currently serving traffic."
+    }
+  ]
+}

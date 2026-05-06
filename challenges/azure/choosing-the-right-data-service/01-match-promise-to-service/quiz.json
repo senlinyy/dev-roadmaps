@@ -1,0 +1,61 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "multiple",
+      "scenario": "A product review lists four promises for `devpolaris-orders-api`: keep checkout records consistent, let customers download receipts, remember payment retries for seven days, and support a temporary legacy folder. Which service matches are reasonable?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Azure SQL Database for checkout records that need relational consistency."
+        },
+        {
+          "id": "b",
+          "text": "Blob Storage for receipt files and daily export objects."
+        },
+        {
+          "id": "c",
+          "text": "Cosmos DB for short-lived known-key retry records."
+        },
+        {
+          "id": "d",
+          "text": "A single managed disk for every promise because one disk is easier to back up."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "Different promises call for different services. A managed disk is useful for VM-shaped storage, but it is not the right general answer for relational records, object downloads, and known-key TTL data."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A team picks Cosmos DB because it sounds flexible, then adds SQL-like reporting requirements a month later. What decision habit would have reduced this risk?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Write a short decision record that names the access pattern, consistency need, retention, and restore expectation before choosing the service."
+        },
+        {
+          "id": "b",
+          "text": "Choose the newest managed service because newer services cover older database use cases."
+        },
+        {
+          "id": "c",
+          "text": "Avoid documenting tradeoffs until after the feature has real traffic."
+        },
+        {
+          "id": "d",
+          "text": "Use the service with the smallest resource name to keep IaC readable."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "A small decision record forces the team to describe behavior before choosing a service. It makes later changes easier to review because the original assumption is visible."
+    }
+  ]
+}

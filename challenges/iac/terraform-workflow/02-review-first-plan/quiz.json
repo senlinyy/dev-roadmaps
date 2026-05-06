@@ -1,0 +1,70 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "The pull request says: add the first private invoice bucket for `devpolaris-orders` in production. The plan summary says:\n\n```text\nTerraform will perform the following actions:\n\n  # aws_s3_bucket.orders_invoices will be created\n  + resource \"aws_s3_bucket\" \"orders_invoices\" {\n      + bucket = \"dp-orders-invoices-prod\"\n      + tags   = {\n          + \"environment\" = \"prod\"\n          + \"owner\"       = \"platform\"\n          + \"service\"     = \"orders-api\"\n        }\n    }\n\nPlan: 1 to add, 0 to change, 0 to destroy.\n```\n\nWhat is the best review comment?",
+      "options": [
+        { "id": "a", "text": "The plan broadly matches the request because it creates one expected bucket and shows no updates or destroys." },
+        { "id": "b", "text": "The plan must be rejected because every first Terraform run should show at least one data source read." },
+        { "id": "c", "text": "The plan is unsafe because any line starting with `+` means Terraform will destroy something first." },
+        { "id": "d", "text": "The plan is complete proof that the cloud account will accept the bucket name and all future settings." }
+      ],
+      "correct": ["a"],
+      "explanation": "The plan action and summary match the stated intent: one bucket is being created, with no changes or destroys. A reviewer should still check whether the settings are complete enough, but the plan itself does not show a surprise. A `+` means create, not destroy, and a plan is not a guarantee that every provider API call will succeed."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A second pull request says: add the `owner` tag to the existing invoice bucket. The plan shows:\n\n```text\n  # aws_s3_bucket.orders_invoices must be replaced\n-/+ resource \"aws_s3_bucket\" \"orders_invoices\" {\n      ~ bucket = \"dp-orders-invoices-prod\" -> \"dp-orders-invoices-production\"\n      ~ tags   = {\n          + \"owner\" = \"platform\"\n        }\n    }\n\nPlan: 1 to add, 0 to change, 1 to destroy.\n```\n\nWhat should you do before approving?",
+      "options": [
+        { "id": "a", "text": "Stop and ask why a tag-only request is replacing the bucket and changing its real name." },
+        { "id": "b", "text": "Approve because adding one tag always requires replacement in Terraform." },
+        { "id": "c", "text": "Approve because `-/+` is Terraform's symbol for a harmless metadata refresh." },
+        { "id": "d", "text": "Ignore the destroy count because it is balanced by one add." }
+      ],
+      "correct": ["a"],
+      "explanation": "The plan does not match a tag-only intent. `-/+` and the destroy count mean replacement, and the bucket name is changing. A balanced add and destroy can still be risky because it may replace a real object the team meant to keep."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "You are reviewing a Terraform plan in a pull request. Which review habits are sound?",
+      "options": [
+        { "id": "a", "text": "Compare the action summary with the story in the pull request." },
+        { "id": "b", "text": "Read the resource addresses so you know which objects Terraform thinks it is touching." },
+        { "id": "c", "text": "Treat any destroy or replacement as a reason to pause unless that risk is explicitly intended." },
+        { "id": "d", "text": "Skip the detailed plan body when the final line has more adds than destroys." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "A useful plan review compares intent, resource addresses, and action symbols. Destroys and replacements are sometimes correct, but they deserve explicit attention. The final summary is helpful, but it does not replace reading the affected resources."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "A plan for a new bucket includes this excerpt:\n\n```text\n+ arn    = (known after apply)\n+ bucket = \"dp-orders-invoices-prod\"\n+ id     = (known after apply)\n```\n\nWhat is the most accurate reading?",
+      "options": [
+        { "id": "a", "text": "The chosen bucket name is visible now, while provider-assigned values such as ARN or ID may only be known after creation." },
+        { "id": "b", "text": "Terraform has no idea which bucket it will create, so the plan cannot be reviewed." },
+        { "id": "c", "text": "Every `(known after apply)` value means the provider region is missing." },
+        { "id": "d", "text": "The reviewer should manually fill in ARN and ID before apply." }
+      ],
+      "correct": ["a"],
+      "explanation": "Some provider values are not known until the API creates or reads the object. That is normal for IDs and ARNs. The bucket name is still visible and reviewable, so the plan can be checked against intent."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "The plan says:\n\n```text\n  # aws_s3_bucket.orders_invoices will be created\n  + resource \"aws_s3_bucket\" \"orders_invoices\" {\n      + bucket = \"dp-orders-invoices-prod\"\n    }\n\n  # aws_s3_bucket.temp_exports will be destroyed\n  - resource \"aws_s3_bucket\" \"temp_exports\" {\n      - bucket = \"dp-orders-temp-exports-prod\"\n    }\n\nPlan: 1 to add, 0 to change, 1 to destroy.\n```\n\nThe pull request description only mentions adding the invoice bucket. What is the safest review decision?",
+      "options": [
+        { "id": "a", "text": "Request clarification or a fix because the destroy is outside the stated intent." },
+        { "id": "b", "text": "Approve because the create action is present and that was the main request." },
+        { "id": "c", "text": "Approve because Terraform always deletes temporary buckets during a first bucket change." },
+        { "id": "d", "text": "Ignore the destroy because it appears after the create in the output." }
+      ],
+      "correct": ["a"],
+      "explanation": "The plan contains an extra lifecycle change that the request did not explain. A destroy can be correct only when the team intends and reviews it. Output order does not make the operation safer."
+    }
+  ]
+}

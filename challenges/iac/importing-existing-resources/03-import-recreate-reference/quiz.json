@@ -1,0 +1,57 @@
+{
+  "passThreshold": 0.75,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "`dp-orders-invoices-prod` stores production invoice PDFs. The orders team owns the bucket and wants future changes reviewed in the production Terraform root module. What is the best first path?",
+      "options": [
+        { "id": "a", "text": "Import the bucket into the orders production root module, then review the first plan carefully." },
+        { "id": "b", "text": "Delete and recreate the bucket because Terraform should only manage resources it created." },
+        { "id": "c", "text": "Reference it as data forever even though the orders team is the owner." },
+        { "id": "d", "text": "Rename it outside Terraform so the import ID is easier to type." }
+      ],
+      "correct": ["a"],
+      "explanation": "A long-lived production bucket with important data should not be recreated casually. If the orders team owns it, import is the path that preserves the object while bringing future changes under review."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A developer created `dp-orders-scratch-senlin` in a sandbox account for a one-day experiment. It has no objects, no application depends on it, and the team wants a clean development bucket pattern. What is usually the better choice?",
+      "options": [
+        { "id": "a", "text": "Recreate the disposable resource through Terraform and delete the old manual bucket after checking there are no dependencies." },
+        { "id": "b", "text": "Import the bucket because every manual object must be adopted." },
+        { "id": "c", "text": "Reference it as data from production so both environments share the bucket." },
+        { "id": "d", "text": "Leave it unmanaged and start using it for staging exports." }
+      ],
+      "correct": ["a"],
+      "explanation": "Disposable test resources often do not need the ceremony of import. A clean Terraform-managed replacement is simpler when there is no data or dependency to preserve."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "The orders service needs a DNS record inside `devpolaris.internal`, but the platform team owns the hosted zone and its lifecycle. What should the orders repository usually do?",
+      "options": [
+        { "id": "a", "text": "Reference the hosted zone as data and manage only the orders-owned record." },
+        { "id": "b", "text": "Import the whole hosted zone into the orders repository." },
+        { "id": "c", "text": "Delete and recreate the hosted zone inside the orders account." },
+        { "id": "d", "text": "Copy the hosted zone ID into comments and avoid Terraform." }
+      ],
+      "correct": ["a"],
+      "explanation": "Import should follow ownership. If the platform team owns the shared zone, the orders repository should read that shared resource and manage only its own record."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "A production log bucket exists, but nobody can say which services write to it, who owns retention policy, or whether legal hold applies. Which review comments are sound before import?",
+      "options": [
+        { "id": "a", "text": "Investigate dependencies and ownership before claiming the bucket in Terraform state." },
+        { "id": "b", "text": "Record the intended future owner and verification steps before changing state." },
+        { "id": "c", "text": "Import immediately because state will reveal every business dependency." },
+        { "id": "d", "text": "Treat unknown dependencies as a reason to slow down, not as a reason to guess." }
+      ],
+      "correct": ["a", "b", "d"],
+      "explanation": "Import changes responsibility. Unknown dependencies, retention rules, and ownership are signals to investigate before Terraform can safely become the source of intended behavior."
+    }
+  ]
+}

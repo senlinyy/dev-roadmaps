@@ -1,0 +1,70 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A plan for a new queue shows:\n\n```text\n+ arn = (known after apply)\n+ id  = (known after apply)\n```\n\nThe queue name, tags, and environment are visible and correct. What should the reviewer conclude?",
+      "options": [
+        { "id": "a", "text": "Unknown generated values are normal, so review should focus on the known names, tags, account, region, and actions." },
+        { "id": "b", "text": "Unknown values mean the plan is incomplete and cannot be reviewed." },
+        { "id": "c", "text": "Unknown values prove Terraform will create the resource in the wrong account." },
+        { "id": "d", "text": "The reviewer should approve without checking surrounding fields because Terraform hides only safe values." }
+      ],
+      "correct": ["a"],
+      "explanation": "`(known after apply)` is normal for generated ids, ARNs, URLs, and timestamps. The reviewer should inspect the values that Terraform knows before apply, such as names, tags, region, account context, IAM actions, and replacement markers. Unknown values are not proof of wrong account, and they are not a reason to skip review."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A plan adds a secret version:\n\n```text\n# aws_secretsmanager_secret_version.orders_db will be created\n+ resource \"aws_secretsmanager_secret_version\" \"orders_db\" {\n  + secret_id     = \"orders-db-prod\"\n  + secret_string = (sensitive value)\n}\n```\n\nWhat is the best review question?",
+      "options": [
+        { "id": "a", "text": "Where does the secret value come from, who can read state or saved plans, and how will rotation work?" },
+        { "id": "b", "text": "Can the author paste the secret into the pull request so reviewers can verify it?" },
+        { "id": "c", "text": "Can the plan be approved because the terminal output redacts the secret?" },
+        { "id": "d", "text": "Can Terraform ignore the value because secret versions are not real infrastructure?" }
+      ],
+      "correct": ["a"],
+      "explanation": "Sensitive redaction protects the terminal display, but state and saved plan files may still contain sensitive material. Review should cover source, access, retention, and rotation. Pasting the secret into the review is unsafe. Redaction is not approval, and secret versions are real managed objects."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "A policy document includes this planned resource:\n\n```text\n+ policy = jsonencode({\n    Statement = [\n      {\n        Action   = \"s3:PutObject\"\n        Resource = (known after apply)\n      }\n    ]\n  })\n```\n\nThe resource value comes from a newly created bucket ARN. What should the reviewer do?",
+      "options": [
+        { "id": "a", "text": "Check the surrounding known fields, including the bucket name, role attachment, and allowed action, to confirm the unknown ARN will belong to the intended bucket." },
+        { "id": "b", "text": "Reject the plan because IAM policies can never contain unknown values." },
+        { "id": "c", "text": "Approve immediately because unknown policy resources cannot grant access until apply." },
+        { "id": "d", "text": "Replace the unknown value with a hardcoded wildcard so the plan is readable." }
+      ],
+      "correct": ["a"],
+      "explanation": "Unknown values can flow through dependencies. The reviewer should use known context to verify intent: which bucket is being created, which identity receives the policy, and which actions are allowed. Unknown IAM values are not automatically invalid, but they also are not approval. Hardcoding a wildcard would weaken the policy."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "A team saves a reviewed plan as `tfplan` and also exports `tfplan.json` for policy checks. The human-readable terminal output hides one value as `(sensitive value)`. Which statements are accurate?",
+      "options": [
+        { "id": "a", "text": "Saved plan files should be handled like operational secrets because they can contain sensitive data needed for apply." },
+        { "id": "b", "text": "The JSON output is useful for automation, but it does not replace human review of service, environment, and intent." },
+        { "id": "c", "text": "Redaction in terminal output guarantees that no saved artifact contains the sensitive value." },
+        { "id": "d", "text": "Committing `tfplan` to the repository is safe if the value looked redacted on screen." }
+      ],
+      "correct": ["a", "b"],
+      "explanation": "Saved plans and plan JSON can include sensitive operational details, so access controls and retention matter. JSON is helpful for policy checks and summaries, but reviewers still inspect whether the plan matches the service story. Terminal redaction does not guarantee every artifact is free of sensitive data, and committing plan files is unsafe."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A reviewer sees this plan excerpt:\n\n```text\n+ resource \"aws_iam_policy\" \"orders_invoice_writer\" {\n  + name = \"dp-orders-invoice-writes-prod\"\n  + arn  = (known after apply)\n}\n```\n\nThe pull request says it is adding a write policy for the orders API. Which field deserves the most review attention before apply?",
+      "options": [
+        { "id": "a", "text": "The policy document and attachment target, because they define what access is granted and to whom." },
+        { "id": "b", "text": "The generated policy ARN, because unknown ARNs are the main source of risk." },
+        { "id": "c", "text": "The resource address only, because names and actions do not matter until apply." },
+        { "id": "d", "text": "The exact timestamp Terraform will assign to the resource." }
+      ],
+      "correct": ["a"],
+      "explanation": "The generated ARN being unknown is normal. Review risk lives in known access details: actions, resources, and which identity receives the policy. Addresses help navigation, but they do not replace checking permissions. Timestamps are usually provider-generated metadata, not the core review target."
+    }
+  ]
+}

@@ -1,0 +1,88 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "The API subnet has the expected route table, but the route for partner traffic points to the wrong next-hop IP. What is the narrow fix?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Repair the specific route entry for the partner CIDR."
+        },
+        {
+          "id": "b",
+          "text": "Move the whole API into a new VNet."
+        },
+        {
+          "id": "c",
+          "text": "Delete the NSG so routing is easier to test."
+        },
+        {
+          "id": "d",
+          "text": "Change the public DNS record."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The evidence names one route entry. A targeted route repair is safer than moving the app or changing unrelated boundaries."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A deploy fails because the subnet lacks the delegation required by Azure Container Apps. Which layer is responsible?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Subnet configuration."
+        },
+        {
+          "id": "b",
+          "text": "Public DNS."
+        },
+        {
+          "id": "c",
+          "text": "Application Gateway backend health."
+        },
+        {
+          "id": "d",
+          "text": "SQL private endpoint approval."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Delegation is part of subnet configuration. It controls which Azure service can place resources there."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "What should be verified after changing a route table attached to the API subnet?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The route table still has the expected entries."
+        },
+        {
+          "id": "b",
+          "text": "The API can reach its required private and outbound dependencies."
+        },
+        {
+          "id": "c",
+          "text": "The user-facing path still reaches a healthy backend."
+        },
+        {
+          "id": "d",
+          "text": "Only that the change saved successfully in Azure."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "Saving a route is not enough. The team needs route evidence plus application reachability evidence."
+    }
+  ]
+}

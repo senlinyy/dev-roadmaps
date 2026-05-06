@@ -1,0 +1,70 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A pull request plan job for `infra/orders/prod` fails with this output:\n\n```text\nError: No valid credential sources found\n```\n\nA developer proposes pasting their personal AWS access key into `provider \"aws\"` so CI can plan. What should the team do instead?",
+      "options": [
+        { "id": "a", "text": "Paste the key into Terraform for the PR and remove it after merge." },
+        { "id": "b", "text": "Configure a deliberate CI identity with the least access needed to read state and resources for planning." },
+        { "id": "c", "text": "Disable planning because credentials make CI too dangerous." },
+        { "id": "d", "text": "Give the pull request job production apply permissions so it can test everything." }
+      ],
+      "correct": ["b"],
+      "explanation": "A plan job still touches real infrastructure data, so it needs a deliberate identity with limited permissions. Pasting personal credentials into Terraform commits a secret and hides who really ran the job. Disabling plans removes useful review evidence, while giving apply permissions to a PR job exceeds the work it needs to do."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "Two workflows start against the same production state. The first apply is still running. The second job fails with:\n\n```text\nError: Error acquiring the state lock\n\nLock Info:\n  Operation: OperationTypeApply\n  Who:       github-actions@devpolaris-orders\n```\n\nWhat is the safest first response?",
+      "options": [
+        { "id": "a", "text": "Force unlock immediately so the second job can continue." },
+        { "id": "b", "text": "Find the active Terraform run, wait for it to finish, and use the team's lock recovery process only if the holder is gone." },
+        { "id": "c", "text": "Delete the remote state file and let Terraform rebuild it from cloud resources." },
+        { "id": "d", "text": "Re-run the second job with a local backend so it does not need the lock." }
+      ],
+      "correct": ["b"],
+      "explanation": "A state lock conflict is protective evidence that another run is operating on the same state. The safe response is to identify the holder and wait or follow recovery if the holder is dead. Force unlock without context can allow concurrent writes. Deleting state or switching to a local backend makes state consistency worse."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "Reviewers are approving a Terraform CI design for production. Which statements correctly describe what the backend and lock should provide?",
+      "options": [
+        { "id": "a", "text": "The backend stores shared state where the team and CI can read the same infrastructure record." },
+        { "id": "b", "text": "The lock prevents two Terraform runs from writing the same state at the same time." },
+        { "id": "c", "text": "A remote backend removes the need for cloud credentials because state already has all resource data." },
+        { "id": "d", "text": "A lock conflict should normally be treated as a signal to inspect the active run, not as random CI noise." }
+      ],
+      "correct": ["a", "b", "d"],
+      "explanation": "A remote backend gives the team one shared state record, and locking protects that record from concurrent writes. A lock conflict is useful evidence that another operation may be active. State does not replace provider credentials because Terraform still needs to read resources and, in apply workflows, change them."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "A repository stores a long-lived cloud access key as a repository-level secret. The key is available to `lint`, `test`, `plan`, and `apply` jobs, even though only Terraform needs it. What is the main risk?",
+      "options": [
+        { "id": "a", "text": "The key might expire too quickly for long Terraform plans." },
+        { "id": "b", "text": "Any job that can reference the secret has access to a broad, long-lived credential, which increases blast radius if a workflow step leaks it." },
+        { "id": "c", "text": "Terraform cannot use repository secrets, so the workflow will ignore the key." },
+        { "id": "d", "text": "The backend lock will reveal the key in the lock holder field." }
+      ],
+      "correct": ["b"],
+      "explanation": "Long-lived repository-level credentials create a broad exposure window and are available wherever the workflow references them. A short-lived, job-scoped identity is safer because it narrows scope and lifetime. Terraform can read secrets from the CI environment, and the lock holder records who holds the lock, not the secret value."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A teammate wants the PR plan identity and the production apply identity to use the same cloud role because it is easier to configure once. The role can read state, describe resources, and apply changes to production. What review comment is most accurate?",
+      "options": [
+        { "id": "a", "text": "This is fine because Terraform plan never changes infrastructure." },
+        { "id": "b", "text": "The PR plan identity should be narrower than the production apply identity, with apply permissions reserved for a protected workflow." },
+        { "id": "c", "text": "The apply role should be used only from local laptops, not from CI." },
+        { "id": "d", "text": "Both jobs should use administrator permissions so missing permissions never block delivery." }
+      ],
+      "correct": ["b"],
+      "explanation": "A PR plan identity should have enough access to initialize, read state, read resources, and produce review evidence. Apply permissions belong in the protected production workflow because they can change real infrastructure. Plan itself is normally read-focused, but sharing an apply-capable role with pull request jobs makes the boundary too wide. Administrator permissions make that blast radius worse."
+    }
+  ]
+}

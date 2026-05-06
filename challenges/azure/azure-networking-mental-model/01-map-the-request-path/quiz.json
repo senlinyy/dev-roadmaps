@@ -1,0 +1,115 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A customer request to `orders.devpolaris.com` times out. Application logs for `devpolaris-orders-api` have no matching request ID. Which layer should the team inspect before changing the Node.js handler?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The public name, entry point, and network path before the backend receives the request."
+        },
+        {
+          "id": "b",
+          "text": "The Azure SQL schema because checkout eventually writes an order."
+        },
+        {
+          "id": "c",
+          "text": "The deployment slot because any timeout means the release process failed."
+        },
+        {
+          "id": "d",
+          "text": "The resource group tags because ownership metadata controls runtime traffic."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "If the app logs never saw the request, the first evidence should come from the path in front of the app: DNS, the entry point, routing, and security rules."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "The API can reach Azure SQL from staging, but production returns a connection timeout. Both environments use the same container image. What does that evidence suggest?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The container image is invalid in both environments."
+        },
+        {
+          "id": "b",
+          "text": "The production network path, private endpoint, DNS, or security rule needs inspection."
+        },
+        {
+          "id": "c",
+          "text": "The production subscription should be replaced."
+        },
+        {
+          "id": "d",
+          "text": "The checkout code should retry more often before any network review."
+        }
+      ],
+      "correct": [
+        "b"
+      ],
+      "explanation": "Same image plus different network behavior points at the environment around the app. The next step is to inspect production network evidence."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "Which evidence helps explain the request path for `devpolaris-orders-api` without relying on memory?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The public DNS record for `orders.devpolaris.com`."
+        },
+        {
+          "id": "b",
+          "text": "The entry point backend health for the orders API pool."
+        },
+        {
+          "id": "c",
+          "text": "The subnet, route table, NSG, and private endpoint records used by the API."
+        },
+        {
+          "id": "d",
+          "text": "A screenshot of the Azure portal landing page with no resource details."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "Useful evidence names resources and current behavior. A generic screenshot does not show which boundary accepted, routed, blocked, or dropped traffic."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "A teammate suggests granting wider RBAC because network and permission failures both look like access problems in tickets. What is the better first response?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Grant Contributor for one hour, then remove it after the incident."
+        },
+        {
+          "id": "b",
+          "text": "Check whether the failure is a management permission problem or a data-plane network path problem."
+        },
+        {
+          "id": "c",
+          "text": "Move the app to a new resource group so old rules stop applying."
+        },
+        {
+          "id": "d",
+          "text": "Restart the app because network settings reload after process start."
+        }
+      ],
+      "correct": [
+        "b"
+      ],
+      "explanation": "RBAC controls management or service access decisions. It does not open network paths by itself. The team should classify the boundary first."
+    }
+  ]
+}

@@ -1,0 +1,59 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "The exports team wants to delete temporary retry files under `tmp/` from Blob Storage. The lifecycle policy says temporary files can be deleted after seven days, and the current files are from the last hour. What should happen?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Do not delete those current files under the seven-day rule; confirm whether they are still part of the retry workflow."
+        },
+        {
+          "id": "b",
+          "text": "Delete them immediately because every path named tmp is safe to remove."
+        },
+        {
+          "id": "c",
+          "text": "Move them into SQL so backups protect them longer."
+        },
+        {
+          "id": "d",
+          "text": "Disable lifecycle management so no file is ever removed automatically."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Retention rules need to match the actual age and workflow. A tmp prefix is not enough reason to delete current retry data."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A support engineer asks to restore a single order record after a bad manual update. The database has long-term retention, but the app also wrote receipt files and idempotency keys during the same period. What is the best response?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Treat the restore as an application recovery task and check related data stores before changing production data."
+        },
+        {
+          "id": "b",
+          "text": "Restore only SQL because the order record is the main business fact."
+        },
+        {
+          "id": "c",
+          "text": "Delete matching blobs and keys so SQL becomes the only source of truth."
+        },
+        {
+          "id": "d",
+          "text": "Use the file share snapshot because file shares can recover all Azure data services."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Recovery often crosses service boundaries. SQL may be the main record, but related blobs and keys may affect what users and support see."
+    }
+  ]
+}

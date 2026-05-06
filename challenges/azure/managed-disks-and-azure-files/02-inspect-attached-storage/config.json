@@ -1,0 +1,322 @@
+{
+  "cwd": "/home/dev",
+  "env": {
+    "USER": "dev",
+    "HOME": "/home/dev"
+  },
+  "fs": {
+    "/home/dev": {
+      "type": "dir"
+    }
+  },
+  "commandModules": [
+    "azure"
+  ],
+  "cloud": {
+    "azure": {
+      "tenantId": "tenant-devpolaris",
+      "subscriptionId": "sub-devpolaris-training",
+      "currentSubscription": "sub-devpolaris-training",
+      "defaultLocation": "eastus",
+      "resourceGroups": [
+        {
+          "name": "rg-devpolaris-data-prod",
+          "location": "eastus",
+          "tags": {
+            "team": "orders",
+            "env": "prod"
+          }
+        },
+        {
+          "name": "rg-devpolaris-storage-prod",
+          "location": "eastus",
+          "tags": {
+            "team": "orders",
+            "env": "prod"
+          }
+        },
+        {
+          "name": "rg-devpolaris-compute-prod",
+          "location": "eastus",
+          "tags": {
+            "team": "platform",
+            "env": "prod"
+          }
+        }
+      ],
+      "roleAssignments": [],
+      "managedIdentities": [],
+      "appServicePlans": [],
+      "webApps": [],
+      "containerApps": [],
+      "functionApps": [],
+      "virtualMachines": [],
+      "keyVaults": [],
+      "storageAccounts": [
+        {
+          "name": "stdevpolarisordersprod",
+          "resourceGroup": "rg-devpolaris-storage-prod",
+          "location": "eastus",
+          "kind": "StorageV2",
+          "sku": "Standard_GRS",
+          "accessTier": "Hot",
+          "allowBlobPublicAccess": false,
+          "minimumTlsVersion": "TLS1_2",
+          "supportsHttpsTrafficOnly": true,
+          "networkDefaultAction": "Deny",
+          "blobSoftDeleteDays": 14,
+          "containerSoftDeleteDays": 7,
+          "versioningEnabled": true,
+          "lifecycleRules": [
+            {
+              "name": "cool-daily-exports",
+              "enabled": true,
+              "prefixMatch": [
+                "exports/daily/"
+              ],
+              "tierToCoolAfterDays": 30,
+              "deleteAfterDays": 365
+            },
+            {
+              "name": "delete-temp-files",
+              "enabled": true,
+              "prefixMatch": [
+                "tmp/"
+              ],
+              "deleteAfterDays": 7
+            }
+          ],
+          "containers": [
+            {
+              "name": "receipts",
+              "publicAccess": "None",
+              "metadata": {
+                "owner": "orders",
+                "dataShape": "receipt-files"
+              },
+              "blobs": [
+                {
+                  "name": "2026/05/order-1001.pdf",
+                  "contentType": "application/pdf",
+                  "size": 84211,
+                  "accessTier": "Hot",
+                  "lastModified": "2026-05-05T10:30:00Z",
+                  "metadata": {
+                    "orderId": "1001",
+                    "customerVisible": "true"
+                  }
+                },
+                {
+                  "name": "2026/05/order-1002.pdf",
+                  "contentType": "application/pdf",
+                  "size": 79910,
+                  "accessTier": "Hot",
+                  "lastModified": "2026-05-05T10:41:00Z",
+                  "metadata": {
+                    "orderId": "1002",
+                    "customerVisible": "true"
+                  }
+                }
+              ]
+            },
+            {
+              "name": "exports",
+              "publicAccess": "None",
+              "metadata": {
+                "owner": "orders",
+                "dataShape": "batch-exports"
+              },
+              "blobs": [
+                {
+                  "name": "exports/daily/2026/05/05/orders.csv",
+                  "contentType": "text/csv",
+                  "size": 19984,
+                  "accessTier": "Cool",
+                  "lastModified": "2026-05-05T03:00:00Z",
+                  "metadata": {
+                    "job": "daily-export"
+                  }
+                },
+                {
+                  "name": "tmp/retry-queue-2026-05-05.json",
+                  "contentType": "application/json",
+                  "size": 2048,
+                  "accessTier": "Hot",
+                  "lastModified": "2026-05-05T03:10:00Z",
+                  "metadata": {
+                    "temporary": "true"
+                  }
+                }
+              ]
+            }
+          ],
+          "fileShares": [
+            {
+              "name": "legacy-orders-share",
+              "quotaGb": 128,
+              "enabledProtocols": "SMB",
+              "accessTier": "TransactionOptimized",
+              "metadata": {
+                "workload": "legacy-worker"
+              },
+              "snapshots": [
+                {
+                  "name": "legacy-orders-share",
+                  "snapshotTime": "2026-05-05T00:00:00Z"
+                }
+              ]
+            }
+          ],
+          "tags": {
+            "service": "orders",
+            "env": "prod"
+          }
+        }
+      ],
+      "sqlServers": [
+        {
+          "name": "sql-devpolaris-orders-prod",
+          "resourceGroup": "rg-devpolaris-data-prod",
+          "location": "eastus",
+          "administratorLogin": "sqladmin",
+          "fullyQualifiedDomainName": "sql-devpolaris-orders-prod.database.windows.net",
+          "publicNetworkAccess": "Disabled",
+          "identity": {
+            "type": "SystemAssigned",
+            "principalId": "principal-sql-orders-prod"
+          },
+          "firewallRules": [
+            {
+              "name": "DenyPublicByDefault",
+              "startIpAddress": "0.0.0.0",
+              "endIpAddress": "0.0.0.0"
+            }
+          ],
+          "privateEndpointConnections": [
+            {
+              "name": "pe-orders-sql",
+              "status": "Approved",
+              "privateEndpointId": "/subscriptions/sub-devpolaris-training/resourceGroups/rg-devpolaris-data-prod/providers/Microsoft.Network/privateEndpoints/pe-orders-sql"
+            }
+          ],
+          "tags": {
+            "service": "orders-api",
+            "env": "prod"
+          }
+        }
+      ],
+      "sqlDatabases": [
+        {
+          "name": "sqldb-devpolaris-orders-prod",
+          "serverName": "sql-devpolaris-orders-prod",
+          "resourceGroup": "rg-devpolaris-data-prod",
+          "location": "eastus",
+          "sku": "GP_Gen5_2",
+          "tier": "GeneralPurpose",
+          "maxSizeGb": 32,
+          "status": "Online",
+          "zoneRedundant": false,
+          "backupRetentionDays": 14,
+          "longTermRetention": {
+            "weeklyRetention": "P8W",
+            "monthlyRetention": "P12M",
+            "yearlyRetention": "P5Y",
+            "weekOfYear": 1
+          },
+          "tags": {
+            "service": "orders-api",
+            "env": "prod"
+          }
+        }
+      ],
+      "cosmosDbAccounts": [
+        {
+          "name": "cosmos-devpolaris-orders-prod",
+          "resourceGroup": "rg-devpolaris-data-prod",
+          "location": "eastus",
+          "apiKind": "GlobalDocumentDB",
+          "consistencyLevel": "Session",
+          "publicNetworkAccess": "Disabled",
+          "backupPolicy": "Continuous",
+          "locations": [
+            {
+              "locationName": "eastus",
+              "failoverPriority": 0
+            }
+          ],
+          "databases": [
+            {
+              "name": "orders-events",
+              "throughput": 400,
+              "containers": [
+                {
+                  "name": "idempotency-keys",
+                  "partitionKey": "/idempotencyKey",
+                  "defaultTtl": 604800,
+                  "throughput": 400,
+                  "indexingMode": "consistent"
+                },
+                {
+                  "name": "job-status",
+                  "partitionKey": "/jobId",
+                  "defaultTtl": 2592000,
+                  "throughput": 400,
+                  "indexingMode": "consistent"
+                }
+              ]
+            }
+          ],
+          "tags": {
+            "service": "orders-api",
+            "env": "prod"
+          }
+        }
+      ],
+      "managedDisks": [
+        {
+          "name": "disk-orders-legacy-data-01",
+          "resourceGroup": "rg-devpolaris-data-prod",
+          "location": "eastus",
+          "diskSizeGb": 128,
+          "sku": "Premium_LRS",
+          "osType": "Linux",
+          "attachedTo": "/subscriptions/sub-devpolaris-training/resourceGroups/rg-devpolaris-compute-prod/providers/Microsoft.Compute/virtualMachines/vm-devpolaris-orders-legacy-01",
+          "encryption": "EncryptionAtRestWithPlatformKey",
+          "tags": {
+            "workload": "legacy-orders-worker",
+            "env": "prod"
+          }
+        }
+      ],
+      "virtualNetworks": [],
+      "subnets": [],
+      "routeTables": [],
+      "networkSecurityGroups": [],
+      "privateEndpoints": [],
+      "privateDnsARecords": [],
+      "dnsARecords": [],
+      "dnsCnameRecords": [],
+      "dnsTxtRecords": [],
+      "applicationGateways": []
+    }
+  },
+  "grader": {
+    "strategy": "contains",
+    "source": "all-stdout",
+    "expected": [
+      "disk-orders-legacy-data-01",
+      "128",
+      "Premium_LRS",
+      "vm-devpolaris-orders-legacy-01",
+      "legacy-orders-share",
+      "SMB",
+      "TransactionOptimized",
+      "stdevpolarisordersprod"
+    ],
+    "loose": true,
+    "requireCommands": [
+      "az"
+    ],
+    "minCommandCount": 3
+  }
+}

@@ -1,0 +1,88 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A proposed rule says `Allow Any Any to Any`. What is the main review problem?",
+      "options": [
+        {
+          "id": "a",
+          "text": "It does not name the expected source, destination, protocol, or port, so the blast radius is unclear."
+        },
+        {
+          "id": "b",
+          "text": "It uses words instead of Azure resource IDs."
+        },
+        {
+          "id": "c",
+          "text": "It will never match any traffic."
+        },
+        {
+          "id": "d",
+          "text": "It proves the app code needs a retry loop."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "A broad rule may work, but it hides intent and expands exposure. Review should require a named source, destination, protocol, and port."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "Why are ASGs useful in a beginner-friendly rule?",
+      "options": [
+        {
+          "id": "a",
+          "text": "They let the rule describe app roles such as `asg-app-gateway` and `asg-orders-api` instead of raw IP lists."
+        },
+        {
+          "id": "b",
+          "text": "They replace route tables."
+        },
+        {
+          "id": "c",
+          "text": "They store TLS certificates."
+        },
+        {
+          "id": "d",
+          "text": "They grant Azure RBAC roles."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Application security groups make rules read closer to application roles. They do not replace routing, certificates, or RBAC."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "What should a release record include for an NSG change?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The old and new rule intent."
+        },
+        {
+          "id": "b",
+          "text": "The expected source, destination, protocol, and port."
+        },
+        {
+          "id": "c",
+          "text": "The verification signal after release."
+        },
+        {
+          "id": "d",
+          "text": "Only the portal blade where the change was made."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "A release record should help another person verify or roll back the change. A portal location is not enough."
+    }
+  ]
+}

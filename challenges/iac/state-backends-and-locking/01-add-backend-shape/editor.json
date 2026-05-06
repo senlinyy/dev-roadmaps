@@ -1,0 +1,52 @@
+{
+  "language": "hcl",
+  "completionProfile": "terraform",
+  "activeFile": "main.tf",
+  "files": [
+    {
+      "filename": "main.tf",
+      "initialValue": "terraform {\n  required_providers {\n    aws = {\n      source  = \"hashicorp/aws\"\n      version = \"~> 6.0\"\n    }\n  }\n}\n\nprovider \"aws\" {\n  region = \"eu-west-2\"\n}\n"
+    },
+    {
+      "filename": "s3.tf",
+      "initialValue": "resource \"aws_s3_bucket\" \"orders_invoices\" {\n  bucket = \"dp-devpolaris-orders-prod-invoices\"\n}\n"
+    }
+  ],
+  "grader": {
+    "strategy": "regex-all",
+    "expected": [
+      {
+        "file": "main.tf",
+        "pattern": "terraform\\s*\\{[\\s\\S]*backend\\s+\"s3\"\\s*\\{",
+        "label": "terraform settings include an s3 backend block"
+      },
+      {
+        "file": "main.tf",
+        "pattern": "backend\\s+\"s3\"\\s*\\{[\\s\\S]*bucket\\s*=\\s*\"dp-terraform-state-prod\"",
+        "label": "backend uses the protected production state bucket"
+      },
+      {
+        "file": "main.tf",
+        "pattern": "backend\\s+\"s3\"\\s*\\{[\\s\\S]*key\\s*=\\s*\"devpolaris-orders/prod/terraform\\.tfstate\"",
+        "label": "backend key names the orders production state object"
+      },
+      {
+        "file": "main.tf",
+        "pattern": "backend\\s+\"s3\"\\s*\\{[\\s\\S]*region\\s*=\\s*\"eu-west-2\"",
+        "label": "backend region is eu-west-2"
+      },
+      {
+        "file": "main.tf",
+        "pattern": "(access_key|secret_key|session_token)\\s*=",
+        "label": "backend does not inline credential fields",
+        "negate": true
+      },
+      {
+        "file": "main.tf",
+        "pattern": "AWS_(ACCESS_KEY_ID|SECRET_ACCESS_KEY|SESSION_TOKEN)",
+        "label": "backend does not inline AWS credential environment names",
+        "negate": true
+      }
+    ]
+  }
+}

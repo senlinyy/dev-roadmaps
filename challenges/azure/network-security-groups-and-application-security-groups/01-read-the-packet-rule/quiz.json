@@ -1,0 +1,88 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "An inbound NSG rule allows TCP 443 from `asg-app-gateway` to `asg-orders-api`. What does it allow?",
+      "options": [
+        {
+          "id": "a",
+          "text": "New HTTPS connections from the application gateway group to the orders API group."
+        },
+        {
+          "id": "b",
+          "text": "All traffic from the Internet to the API subnet."
+        },
+        {
+          "id": "c",
+          "text": "Database writes from the API to Azure SQL."
+        },
+        {
+          "id": "d",
+          "text": "Management-plane edits to the API resource."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The rule names direction, protocol, port, source, and destination. It does not grant database access or management permissions."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "Why are priority numbers important in NSG rules?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Azure checks lower priority numbers first and stops at the first matching rule."
+        },
+        {
+          "id": "b",
+          "text": "Higher numbers always allow more secure traffic."
+        },
+        {
+          "id": "c",
+          "text": "Priorities decide which resource group owns the NSG."
+        },
+        {
+          "id": "d",
+          "text": "Priority only affects the portal display order."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "NSG rule priority controls evaluation order. A broad earlier rule can prevent a later rule from mattering."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "Which fields are part of the packet decision in an NSG rule?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Direction."
+        },
+        {
+          "id": "b",
+          "text": "Source and destination."
+        },
+        {
+          "id": "c",
+          "text": "Protocol and destination port."
+        },
+        {
+          "id": "d",
+          "text": "The Git branch that deployed the app."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "NSGs evaluate network traffic fields. Deployment metadata can help review but it is not a packet-match field."
+    }
+  ]
+}

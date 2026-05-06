@@ -1,0 +1,61 @@
+{
+  "passThreshold": 0.75,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "Queue messages are building up, but the receipt function shows no recent successful runs. What should the team inspect first?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Whether the function is enabled, its trigger configuration, app settings, storage access, and invocation logs."
+        },
+        {
+          "id": "b",
+          "text": "The public load balancer, because all Azure traffic uses it."
+        },
+        {
+          "id": "c",
+          "text": "The VM data disk."
+        },
+        {
+          "id": "d",
+          "text": "The DNS CNAME record for the checkout API."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The symptom belongs to event processing, so trigger and invocation evidence should come first."
+    },
+    {
+      "id": "q2",
+      "type": "multiple",
+      "scenario": "The receipt sender failed for one customer order, and the team needs to follow the event through the function app without guessing from memory. Which evidence helps explain a failed function invocation?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The trigger that started the function."
+        },
+        {
+          "id": "b",
+          "text": "The correlation ID or message ID for the event."
+        },
+        {
+          "id": "c",
+          "text": "Runtime settings and secret references available to the function app."
+        },
+        {
+          "id": "d",
+          "text": "The exact size of the developer laptop."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "A function incident is easier to diagnose when the event, invocation, and runtime inputs are visible."
+    }
+  ]
+}

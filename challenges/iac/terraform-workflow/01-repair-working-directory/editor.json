@@ -1,0 +1,45 @@
+{
+  "language": "hcl",
+  "completionProfile": "terraform-aws",
+  "activeFile": "s3.tf",
+  "files": [
+    {
+      "filename": "main.tf",
+      "initialValue": "terraform {\n  required_providers {\n    aws = {\n    }\n  }\n}\n\nprovider \"aws\" {\n}\n"
+    },
+    {
+      "filename": "s3.tf",
+      "initialValue": ""
+    }
+  ],
+  "grader": {
+    "strategy": "regex-all",
+    "expected": [
+      {
+        "file": "main.tf",
+        "pattern": "terraform\\s*\\{[\\s\\S]*required_providers\\s*\\{[\\s\\S]*aws\\s*=\\s*\\{[\\s\\S]*source\\s*=\\s*\"hashicorp/aws\"[\\s\\S]*\\}",
+        "label": "AWS provider requirement uses the HashiCorp registry source"
+      },
+      {
+        "file": "main.tf",
+        "pattern": "required_providers\\s*\\{[\\s\\S]*aws\\s*=\\s*\\{[\\s\\S]*version\\s*=\\s*\"[^\"]*(~>|>=|<=|<|>)[^\"]*\"",
+        "label": "AWS provider requirement includes an intentional version constraint"
+      },
+      {
+        "file": "main.tf",
+        "pattern": "provider\\s+\"aws\"\\s*\\{[\\s\\S]*region\\s*=\\s*\"eu-west-2\"[\\s\\S]*\\}",
+        "label": "AWS provider is configured for eu-west-2"
+      },
+      {
+        "file": "s3.tf",
+        "pattern": "resource\\s+\"aws_s3_bucket\"\\s+\"orders_invoices\"\\s*\\{[\\s\\S]*bucket\\s*=\\s*\"dp-orders-invoices-prod\"",
+        "label": "orders_invoices bucket uses the intended production bucket name"
+      },
+      {
+        "file": "s3.tf",
+        "pattern": "resource\\s+\"aws_s3_bucket\"\\s+\"orders_invoices\"\\s*\\{[\\s\\S]*tags\\s*=\\s*\\{[\\s\\S]*service\\s*=\\s*\"orders-api\"[\\s\\S]*environment\\s*=\\s*\"prod\"[\\s\\S]*owner\\s*=\\s*\"platform\"",
+        "label": "orders bucket has service, environment, and owner tags"
+      }
+    ]
+  }
+}

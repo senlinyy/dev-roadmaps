@@ -1,0 +1,88 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "The public DNS record resolves, Application Gateway receives traffic, and backend health shows one API copy unhealthy. What is the smallest useful first action?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Delete and recreate the public DNS record."
+        },
+        {
+          "id": "b",
+          "text": "Inspect the unhealthy backend copy and keep the healthy copy serving traffic."
+        },
+        {
+          "id": "c",
+          "text": "Open the API subnet to the Internet to remove possible NSG issues."
+        },
+        {
+          "id": "d",
+          "text": "Change the SQL private endpoint because all checkout failures eventually touch SQL."
+        }
+      ],
+      "correct": [
+        "b"
+      ],
+      "explanation": "The evidence has reached backend health. The first action should stay at that boundary and avoid changing DNS, SQL, or broad access rules."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "The app logs show SQL connection timeouts. The private endpoint exists, but the private DNS record points at an old IP. What fix direction matches the evidence?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Update or repair the private DNS record for the SQL private endpoint."
+        },
+        {
+          "id": "b",
+          "text": "Increase the app timeout so users wait longer."
+        },
+        {
+          "id": "c",
+          "text": "Replace the VNet address space."
+        },
+        {
+          "id": "d",
+          "text": "Grant the app broader Azure RBAC."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The failure is a name-to-private-IP mismatch. More retries, broad RBAC, or address-space replacement do not address the named boundary."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "Which changes should make the team pause because they are broader than the evidence?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Changing an NSG rule for every subnet when only the API subnet is affected."
+        },
+        {
+          "id": "b",
+          "text": "Repairing one private DNS record that is proven stale."
+        },
+        {
+          "id": "c",
+          "text": "Replacing the whole VNet during a checkout incident."
+        },
+        {
+          "id": "d",
+          "text": "Adding a public SQL endpoint to bypass the private endpoint."
+        }
+      ],
+      "correct": [
+        "a",
+        "c",
+        "d"
+      ],
+      "explanation": "Broad network changes can create new exposure or downtime. A proven stale DNS record is narrow and directly tied to the evidence."
+    }
+  ]
+}

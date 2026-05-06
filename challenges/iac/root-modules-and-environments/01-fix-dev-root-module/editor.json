@@ -1,0 +1,55 @@
+{
+  "language": "hcl",
+  "completionProfile": "terraform",
+  "activeFile": "envs/dev/main.tf",
+  "files": [
+    {
+      "filename": "envs/dev/main.tf",
+      "initialValue": "module \"orders_service\" {\n  source = \"../modules/orders-service\"\n\n  service_name        = \"orders-api\"\n  environment         = \"prod\"\n  invoice_bucket_name = \"dp-orders-invoices-prod\"\n  export_bucket_name  = \"dp-orders-exports-prod\"\n  deletion_protection = true\n  replica_count       = 3\n}\n"
+    },
+    {
+      "filename": "modules/orders-service/variables.tf",
+      "initialValue": "variable \"service_name\" {\n  type = string\n}\n\nvariable \"environment\" {\n  type = string\n}\n\nvariable \"invoice_bucket_name\" {\n  type = string\n}\n\nvariable \"export_bucket_name\" {\n  type = string\n}\n\nvariable \"deletion_protection\" {\n  type = bool\n}\n\nvariable \"replica_count\" {\n  type = number\n}\n"
+    }
+  ],
+  "grader": {
+    "strategy": "regex-all",
+    "expected": [
+      {
+        "file": "envs/dev/main.tf",
+        "pattern": "module\\s+\"orders_service\"\\s+\\{",
+        "label": "orders_service module call exists"
+      },
+      {
+        "file": "envs/dev/main.tf",
+        "pattern": "\\n\\s*source\\s*=\\s*\"\\.\\./\\.\\./modules/orders-service\"",
+        "label": "module source points from envs/dev to modules/orders-service"
+      },
+      {
+        "file": "envs/dev/main.tf",
+        "pattern": "\\n\\s*environment\\s*=\\s*\"dev\"",
+        "label": "environment is dev"
+      },
+      {
+        "file": "envs/dev/main.tf",
+        "pattern": "\\n\\s*invoice_bucket_name\\s*=\\s*\"dp-orders-invoices-dev\"",
+        "label": "invoice bucket uses the dev name"
+      },
+      {
+        "file": "envs/dev/main.tf",
+        "pattern": "\\n\\s*export_bucket_name\\s*=\\s*\"dp-orders-exports-dev\"",
+        "label": "export bucket uses the dev name"
+      },
+      {
+        "file": "envs/dev/main.tf",
+        "pattern": "\\n\\s*deletion_protection\\s*=\\s*false",
+        "label": "deletion protection is disabled for dev"
+      },
+      {
+        "file": "envs/dev/main.tf",
+        "pattern": "\\n\\s*replica_count\\s*=\\s*1",
+        "label": "replica count is one for dev"
+      }
+    ]
+  }
+}

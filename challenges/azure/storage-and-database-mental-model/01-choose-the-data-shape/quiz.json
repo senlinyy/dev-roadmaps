@@ -1,0 +1,61 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "The DevPolaris team is reviewing `devpolaris-orders-api`. The same feature produces an order record, a PDF receipt, a short-lived idempotency key, and a legacy worker folder. Which review frame leads to the safest service choice?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Choose one storage service for all four pieces so ownership and billing are easier to explain."
+        },
+        {
+          "id": "b",
+          "text": "Start by naming what each piece of data must do: stay relational, behave like a file, expire by key, or look like a mounted folder."
+        },
+        {
+          "id": "c",
+          "text": "Let the runtime decide, because a Container App can usually reach any Azure storage service after deployment."
+        },
+        {
+          "id": "d",
+          "text": "Pick the service that has the shortest setup guide, then revisit the data shape after production traffic starts."
+        }
+      ],
+      "correct": [
+        "b"
+      ],
+      "explanation": "The article starts with the job of the data. Order records, receipt files, idempotency keys, and mounted folders have different behavior, so the first decision is the shape and promise of each one."
+    },
+    {
+      "id": "q2",
+      "type": "multiple",
+      "scenario": "A teammate wants to replace every data store behind `devpolaris-orders-api` during a cleanup. The service is live, checkout writes order records, support downloads receipts, and retry logic uses keys that expire after a week. Which evidence should be gathered before changing anything?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Which Azure resource currently stores each data type and which resource group owns it."
+        },
+        {
+          "id": "b",
+          "text": "Whether the data needs relational consistency, file download behavior, key-based lookup, or filesystem semantics."
+        },
+        {
+          "id": "c",
+          "text": "The latest production evidence for backup, retention, and restore expectations."
+        },
+        {
+          "id": "d",
+          "text": "The personal preference of the engineer who will run the next deployment."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "The useful evidence is resource ownership, data behavior, and recovery expectation. Personal preference does not tell the team which Azure service should hold production data."
+    }
+  ]
+}

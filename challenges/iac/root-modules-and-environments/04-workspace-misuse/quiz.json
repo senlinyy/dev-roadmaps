@@ -1,0 +1,57 @@
+{
+  "passThreshold": 0.75,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "The team uses one root directory and this bucket name pattern for all long-lived environments:\n\n```hcl\nbucket = \"dp-orders-invoices-${terraform.workspace}\"\n```\n\nProduction applies depend on someone selecting the `prod` CLI workspace before running the plan. What is the best review response?",
+      "options": [
+        { "id": "a", "text": "This is risky for serious environments because names change with workspace selection, but credentials, root module design, and review boundaries are still shared." },
+        { "id": "b", "text": "This is safest because workspace names fully replace separate root modules." },
+        { "id": "c", "text": "This makes Terraform ignore state, so production cannot be changed accidentally." },
+        { "id": "d", "text": "This is only risky if the bucket name does not include the service name." }
+      ],
+      "correct": ["a"],
+      "explanation": "CLI workspaces are separate state instances inside one working directory. They can change names and state selection, but they do not create separate provider identity, permissions, or root module boundaries by themselves."
+    },
+    {
+      "id": "q2",
+      "type": "multiple",
+      "scenario": "A repository intentionally uses CLI workspaces for short-lived pull request environments. Which practices make that safer?",
+      "options": [
+        { "id": "a", "text": "Print the selected workspace in CI logs before planning." },
+        { "id": "b", "text": "Name temporary workspaces after the pull request or branch being tested." },
+        { "id": "c", "text": "Destroy and delete temporary workspaces after the preview is no longer needed." },
+        { "id": "d", "text": "Use the same workspace for development, staging, and production so plans are easier to compare." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "Workspaces can be useful for temporary copies when the team makes the selected state visible and cleans it up. Reusing one workspace for long-lived environments hides the target instead of clarifying it."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "A production incident review finds this CI log:\n\n```text\nRun target:\n  directory: infra/envs/orders\n  workspace: staging\n  backend: s3://dp-terraform-state/devpolaris-orders\n```\n\nThe pull request claimed it was a production apply. What is the most important lesson?",
+      "options": [
+        { "id": "a", "text": "Workspace evidence belongs in every plan record when a repository relies on CLI workspaces." },
+        { "id": "b", "text": "The workspace line is harmless because the backend bucket name is the same." },
+        { "id": "c", "text": "The directory line is enough, so the workspace line can be removed from future logs." },
+        { "id": "d", "text": "Production and staging should share a workspace if they use the same root directory." }
+      ],
+      "correct": ["a"],
+      "explanation": "When workspaces affect state selection, the selected workspace is part of the target evidence. Logging it helps reviewers catch a mismatch before apply."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "A teammate says, \"HCP Terraform has workspaces, so Terraform CLI workspaces must be a good production isolation model too.\" What should you clarify?",
+      "options": [
+        { "id": "a", "text": "The word workspace means different things: HCP workspaces can have their own state, variables, run settings, and permissions, while CLI workspaces are selected state instances in one working directory." },
+        { "id": "b", "text": "They are exactly the same feature and should be used interchangeably." },
+        { "id": "c", "text": "HCP workspaces do not store state, so CLI workspaces are more isolated." },
+        { "id": "d", "text": "The distinction matters only for OpenTofu, not Terraform." }
+      ],
+      "correct": ["a"],
+      "explanation": "Do not reason from the word workspace alone. Ask what the workspace actually isolates: configuration directory, state, variables, identity, permissions, and run history."
+    }
+  ]
+}

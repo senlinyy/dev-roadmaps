@@ -1,0 +1,88 @@
+{
+  "passThreshold": 0.75,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A Node.js app starts locally but fails in production after deployment. Logs show the process cannot connect to the database. Which first check fits the article?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Check the production app setting for the database reference and the identity that reads the secret."
+        },
+        {
+          "id": "b",
+          "text": "Increase the App Service plan tier before looking at configuration."
+        },
+        {
+          "id": "c",
+          "text": "Change the public DNS record."
+        },
+        {
+          "id": "d",
+          "text": "Replace App Service with Container Apps immediately."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The symptom points at runtime configuration or secret access. Changing capacity or hosting service first would skip the most direct evidence."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "The web app returns 503 only after a deployment. The health endpoint path was changed in code from `/healthz` to `/ready`, but Azure still checks `/healthz`. What is the problem?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The health check configuration and application route no longer agree."
+        },
+        {
+          "id": "b",
+          "text": "The App Service plan cannot serve HTTPS."
+        },
+        {
+          "id": "c",
+          "text": "The deployment slot is always broken after a swap."
+        },
+        {
+          "id": "d",
+          "text": "The database schema must be missing."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Health checks are part of the runtime contract. The platform and app need to agree on the endpoint that proves readiness."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "A production setting change is proposed for `app-devpolaris-orders-api-prod` during a busy release window. The reviewer wants facts that explain how the running app receives values and proves readiness. Which App Service evidence should be collected before changing production settings?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Current app settings and which ones are slot-specific."
+        },
+        {
+          "id": "b",
+          "text": "The attached managed identity and secret references."
+        },
+        {
+          "id": "c",
+          "text": "Recent logs and the configured health check path."
+        },
+        {
+          "id": "d",
+          "text": "A screenshot of the portal left navigation."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "The useful evidence describes what the running app receives and how Azure decides it is healthy."
+    }
+  ]
+}

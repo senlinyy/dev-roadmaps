@@ -1,9 +1,9 @@
 ---
 title: "DNS, Custom Domains, and TLS Entry Points"
-description: "Practice public names and TLS entry for Azure by reading production evidence, choosing safe first checks, and avoiding broad changes."
+description: "Practice reading public DNS, custom domain proof, and TLS entry evidence before a traffic cutover."
 articleId: article-cloud-providers-azure-networking-connectivity-dns-custom-domains-and-tls-entry-points
 articleSlug: dns-custom-domains-and-tls-entry-points
 difficulty: medium
-order: 15
-tags: ["azure","networking","traffic","dns","security"]
+order: 16
+tags: ["azure","dns","tls","custom-domains","networking"]
 ---

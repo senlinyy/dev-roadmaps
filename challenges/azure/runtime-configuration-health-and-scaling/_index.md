@@ -1,9 +1,9 @@
 ---
 title: "Runtime Configuration, Health, and Scaling"
-description: "Practice runtime readiness for Azure by reading production evidence, choosing safe first checks, and avoiding broad changes."
+description: "Practice verifying runtime inputs, health checks, and scale signals before trusting a release."
 articleId: article-cloud-providers-azure-compute-application-hosting-runtime-configuration-health-scaling
 articleSlug: runtime-configuration-health-and-scaling
 difficulty: medium
 order: 23
-tags: ["azure","compute","runtime","health","scaling"]
+tags: ["azure","runtime","configuration","scaling"]
 ---

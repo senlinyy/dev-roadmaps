@@ -1,0 +1,61 @@
+{
+  "passThreshold": 0.75,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A team says, `The API failed on App Service once, so move everything to VMs.` What is the better review response?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Agree, because VMs are easier to debug for every workload."
+        },
+        {
+          "id": "b",
+          "text": "First identify whether the failure came from code, settings, identity, health checks, deployment slots, scale, or a true platform limitation."
+        },
+        {
+          "id": "c",
+          "text": "Move only production to a VM and keep staging on App Service."
+        },
+        {
+          "id": "d",
+          "text": "Disable health checks so App Service stops blocking traffic."
+        }
+      ],
+      "correct": [
+        "b"
+      ],
+      "explanation": "A failure on one service does not prove the hosting category is wrong. The team needs evidence before increasing ownership."
+    },
+    {
+      "id": "q2",
+      "type": "multiple",
+      "scenario": "During an incident review, the team finds an old compute decision record that only says `we used the default`. They want a record that would help the next on-call engineer reason about App Service, Container Apps, Functions, or VMs. Which details make that record useful?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The workload shape and why the selected Azure service matches it."
+        },
+        {
+          "id": "b",
+          "text": "The owner, resource group, region, health check, logs, identity, and rollback or recovery path."
+        },
+        {
+          "id": "c",
+          "text": "A statement that the portal default was accepted."
+        },
+        {
+          "id": "d",
+          "text": "Known limits, such as cold starts, revision traffic, VM maintenance, or app plan capacity."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "d"
+      ],
+      "explanation": "The decision record should help the on-call engineer understand why the service exists and how to inspect it."
+    }
+  ]
+}

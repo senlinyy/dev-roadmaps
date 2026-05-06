@@ -1,0 +1,105 @@
+{
+  "passThreshold": 0.75,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A plan shows:\n\n```text\n+ password = (sensitive value)\n```\n\nA teammate says the state backend can be broadly readable because the password is redacted. What is the best correction?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Plan redaction protects normal display, but state may still contain sensitive provider data and needs restricted access."
+        },
+        {
+          "id": "b",
+          "text": "Redacted plan values are deleted before Terraform writes state."
+        },
+        {
+          "id": "c",
+          "text": "Only output values can appear in state, not resource arguments."
+        },
+        {
+          "id": "d",
+          "text": "Sensitive values become safe to paste into tickets after plan output hides them."
+        }
+      ],
+      "correct": ["a"],
+      "explanation": "Terraform can hide a value from CLI output while still storing data it needs for future comparisons or provider operations. Backend read access should be treated carefully."
+    },
+    {
+      "id": "q2",
+      "type": "multiple",
+      "scenario": "The team is designing controls for the production state backend. Which controls belong in the review?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Restrict who can read state."
+        },
+        {
+          "id": "b",
+          "text": "Restrict who can write state."
+        },
+        {
+          "id": "c",
+          "text": "Use encryption, audit logs, and versioning or backups where the backend supports them."
+        },
+        {
+          "id": "d",
+          "text": "Make the state bucket public so incidents are easier to debug."
+        }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "State is operational data and can contain sensitive attributes. Read and write access, encryption, auditability, and recovery are all part of a reasonable backend design."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "A failed CI job leaves a saved Terraform plan file as a downloadable artifact. The plan includes database changes that use sensitive variables. What should the team assume?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Saved plan files may contain sensitive values and should be short-lived, access-controlled, and kept out of source control."
+        },
+        {
+          "id": "b",
+          "text": "Saved plan files are always safe because terminal output redacts sensitive values."
+        },
+        {
+          "id": "c",
+          "text": "Only state files can contain sensitive data; plans cannot."
+        },
+        {
+          "id": "d",
+          "text": "The plan should be pasted into chat so reviewers can inspect it faster."
+        }
+      ],
+      "correct": ["a"],
+      "explanation": "A saved plan can include values Terraform needs for apply. Treat it with similar care to state: limited access, short retention, and no Git or casual chat sharing."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "An engineer needs help debugging a state mismatch and proposes attaching `terraform.tfstate` to a ticket. What is the best response?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Do not attach the state file; give the helper appropriate backend access or share minimal redacted evidence."
+        },
+        {
+          "id": "b",
+          "text": "Attach it if the ticket is private because state never contains secrets."
+        },
+        {
+          "id": "c",
+          "text": "Commit the file temporarily and delete it after the helper downloads it."
+        },
+        {
+          "id": "d",
+          "text": "Email the state file because email has better audit logs than the backend."
+        }
+      ],
+      "correct": ["a"],
+      "explanation": "State should move through the backend's identity and audit model, not tickets, chat, email, or temporary commits. Share only the evidence needed to diagnose the problem."
+    }
+  ]
+}

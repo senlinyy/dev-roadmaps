@@ -1,0 +1,40 @@
+{
+  "language": "hcl",
+  "completionProfile": "terraform-aws",
+  "activeFile": "imports.tf",
+  "files": [
+    {
+      "filename": "main.tf",
+      "initialValue": "provider \"aws\" {\n  region = \"eu-west-2\"\n}\n"
+    },
+    {
+      "filename": "imports.tf",
+      "initialValue": ""
+    }
+  ],
+  "grader": {
+    "strategy": "regex-all",
+    "expected": [
+      {
+        "file": "main.tf",
+        "pattern": "resource\\s+\"aws_s3_bucket\"\\s+\"orders_invoices\"\\s+\\{",
+        "label": "orders_invoices resource block remains present"
+      },
+      {
+        "file": "main.tf",
+        "pattern": "\\n\\s*bucket\\s*=\\s*\"dp-orders-invoices-prod\"",
+        "label": "resource still points at the existing bucket name"
+      },
+      {
+        "file": "imports.tf",
+        "pattern": "import\\s+\\{[\\s\\S]*?\\n\\s*to\\s*=\\s*aws_s3_bucket\\.orders_invoices",
+        "label": "import block targets the orders_invoices address"
+      },
+      {
+        "file": "imports.tf",
+        "pattern": "import\\s+\\{[\\s\\S]*?\\n\\s*id\\s*=\\s*\"dp-orders-invoices-prod\"",
+        "label": "import block uses the existing bucket name as the ID"
+      }
+    ]
+  }
+}

@@ -1,0 +1,88 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "The team wants Azure SQL to appear as a private IP inside the VNet. Which feature provides that shape?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Private endpoint backed by Private Link."
+        },
+        {
+          "id": "b",
+          "text": "Public DNS A record."
+        },
+        {
+          "id": "c",
+          "text": "Resource group tag."
+        },
+        {
+          "id": "d",
+          "text": "Application Gateway listener."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "A private endpoint places a private network interface in the VNet for one target resource."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "What is a service endpoint better described as?",
+      "options": [
+        {
+          "id": "a",
+          "text": "A lighter network allow path from a subnet to an Azure service, without creating a private IP for one resource."
+        },
+        {
+          "id": "b",
+          "text": "A public user-facing load balancer."
+        },
+        {
+          "id": "c",
+          "text": "A DNS record type for ownership validation."
+        },
+        {
+          "id": "d",
+          "text": "A replacement for RBAC permissions."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "A service endpoint changes the network path from a subnet to an Azure service. It does not create a private endpoint resource or replace permissions."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "Which checks still matter after private access is configured?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The app resolves the expected private name."
+        },
+        {
+          "id": "b",
+          "text": "The resource firewall or network allow rules permit the path."
+        },
+        {
+          "id": "c",
+          "text": "The app identity has permission if the service checks identity."
+        },
+        {
+          "id": "d",
+          "text": "The database becomes public so external clients can test it."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "Private networking is one part of access. DNS, service firewalls, and identity checks can still block the app."
+    }
+  ]
+}

@@ -1,0 +1,30 @@
+{
+  "language": "hcl",
+  "completionProfile": "terraform",
+  "activeFile": "outputs.tf",
+  "files": [
+    {
+      "filename": "s3.tf",
+      "initialValue": "resource \"aws_s3_bucket\" \"orders_invoices\" {\n  bucket = \"dp-devpolaris-orders-prod-invoices\"\n\n  tags = {\n    service     = \"devpolaris-orders\"\n    environment = \"prod\"\n    managed_by  = \"terraform\"\n  }\n}\n"
+    },
+    {
+      "filename": "outputs.tf",
+      "initialValue": ""
+    }
+  ],
+  "grader": {
+    "strategy": "regex-all",
+    "expected": [
+      {
+        "file": "outputs.tf",
+        "pattern": "output\\s+\"bucket_name\"\\s*\\{[\\s\\S]*?description\\s*=\\s*\"[^\"]+\"[\\s\\S]*?value\\s*=\\s*aws_s3_bucket\\.orders_invoices\\.bucket",
+        "label": "bucket_name output exposes the bucket name with a description"
+      },
+      {
+        "file": "outputs.tf",
+        "pattern": "output\\s+\"bucket_arn\"\\s*\\{[\\s\\S]*?description\\s*=\\s*\"[^\"]+\"[\\s\\S]*?value\\s*=\\s*aws_s3_bucket\\.orders_invoices\\.arn",
+        "label": "bucket_arn output exposes the bucket ARN with a description"
+      }
+    ]
+  }
+}

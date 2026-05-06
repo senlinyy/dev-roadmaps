@@ -1,0 +1,32 @@
+{
+  "language": "hcl",
+  "completionProfile": "terraform",
+  "activeFile": "modules/private-bucket/outputs.tf",
+  "files": [
+    {
+      "filename": "modules/private-bucket/outputs.tf",
+      "initialValue": "output \"bucket_name\" {\n  description = \"Name of the created S3 bucket.\"\n  value       = aws_s3_bucket.this.bucket\n}\n"
+    }
+  ],
+  "grader": {
+    "strategy": "regex-all",
+    "expected": [
+      {
+        "file": "modules/private-bucket/outputs.tf",
+        "pattern": "output\\s+\"bucket_name\"\\s*{[\\s\\S]*value\\s*=\\s*aws_s3_bucket\\.this\\.bucket[\\s\\S]*}",
+        "label": "existing bucket_name output remains"
+      },
+      {
+        "file": "modules/private-bucket/outputs.tf",
+        "pattern": "output\\s+\"bucket_arn\"\\s*{[\\s\\S]*description\\s*=\\s*\"[^\"]+\"[\\s\\S]*value\\s*=\\s*aws_s3_bucket\\.this\\.arn[\\s\\S]*}",
+        "label": "bucket_arn output returns the managed bucket ARN"
+      },
+      {
+        "file": "modules/private-bucket/outputs.tf",
+        "pattern": "arn:aws:s3:::",
+        "label": "bucket ARN is not rebuilt as a literal string",
+        "negate": true
+      }
+    ]
+  }
+}

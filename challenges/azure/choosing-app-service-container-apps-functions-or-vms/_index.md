@@ -1,9 +1,9 @@
 ---
 title: "Choosing App Service, Container Apps, Functions, or VMs"
-description: "Practice choosing the right compute shape for Azure by reading production evidence, choosing safe first checks, and avoiding broad changes."
+description: "Practice choosing the smallest Azure compute option that still matches the workload, evidence, and operating needs."
 articleId: article-cloud-providers-azure-compute-application-hosting-choosing-app-service-container-apps-functions-vms
 articleSlug: choosing-app-service-container-apps-functions-or-vms
 difficulty: medium
-order: 22
-tags: ["azure","compute","runtime","health","scaling"]
+order: 18
+tags: ["azure","compute","decision-records"]
 ---

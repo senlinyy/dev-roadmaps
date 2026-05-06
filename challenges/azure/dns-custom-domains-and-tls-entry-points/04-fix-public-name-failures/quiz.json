@@ -1,0 +1,88 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "After a cutover, some users still reach the old entry point. The DNS record was changed five minutes ago and the old TTL was one hour. What is the likely explanation?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Some resolvers still have the old answer cached."
+        },
+        {
+          "id": "b",
+          "text": "The Node.js backend cannot read its environment variables."
+        },
+        {
+          "id": "c",
+          "text": "The SQL private endpoint is missing."
+        },
+        {
+          "id": "d",
+          "text": "The NSG priority order is reversed."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "A previous TTL can keep old answers alive for a while. That is a DNS propagation and caching issue, not an app runtime issue."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "Browsers reach the new entry point, but TLS fails because the certificate only covers `api.devpolaris.com`. What is the narrow fix?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Bind or issue a certificate that covers `orders.devpolaris.com`."
+        },
+        {
+          "id": "b",
+          "text": "Change the SQL private DNS zone."
+        },
+        {
+          "id": "c",
+          "text": "Open all inbound ports on the API subnet."
+        },
+        {
+          "id": "d",
+          "text": "Increase backend health probe timeout."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The failure names a hostname mismatch. The fix belongs at the certificate and entry-point binding."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "Which checks belong before closing a DNS/TLS incident?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Fresh DNS answer for `orders.devpolaris.com`."
+        },
+        {
+          "id": "b",
+          "text": "TLS certificate matches the public hostname."
+        },
+        {
+          "id": "c",
+          "text": "The entry point routes to a healthy backend."
+        },
+        {
+          "id": "d",
+          "text": "Only the fact that the DNS record saved successfully."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "Saving a DNS record is not enough. The team needs name resolution, TLS, and backend routing evidence."
+    }
+  ]
+}

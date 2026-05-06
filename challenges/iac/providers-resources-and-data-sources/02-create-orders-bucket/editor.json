@@ -1,0 +1,49 @@
+{
+  "language": "hcl",
+  "completionProfile": "terraform-aws",
+  "activeFile": "s3.tf",
+  "files": [
+    {
+      "filename": "main.tf",
+      "initialValue": "terraform {\n  required_providers {\n    aws = {\n      source  = \"hashicorp/aws\"\n      version = \"~> 5.0\"\n    }\n  }\n}\n\nprovider \"aws\" {\n  region = \"eu-west-2\"\n}\n"
+    },
+    {
+      "filename": "locals.tf",
+      "initialValue": "locals {\n  invoice_bucket_name = \"dp-orders-invoices-prod\"\n  common_tags = {\n    service     = \"devpolaris-orders\"\n    environment = \"prod\"\n    owner       = \"platform\"\n  }\n}\n"
+    },
+    {
+      "filename": "s3.tf",
+      "initialValue": ""
+    }
+  ],
+  "grader": {
+    "strategy": "regex-all",
+    "expected": [
+      {
+        "file": "s3.tf",
+        "pattern": "resource\\s+\"aws_s3_bucket\"\\s+\"orders_invoices\"\\s*\\{",
+        "label": "orders_invoices is an aws_s3_bucket resource"
+      },
+      {
+        "file": "s3.tf",
+        "pattern": "resource\\s+\"aws_s3_bucket\"\\s+\"orders_invoices\"\\s*\\{[\\s\\S]*bucket\\s*=\\s*(\"dp-orders-invoices-prod\"|local\\.invoice_bucket_name)",
+        "label": "orders bucket uses the intended production bucket name"
+      },
+      {
+        "file": "s3.tf",
+        "pattern": "resource\\s+\"aws_s3_bucket\"\\s+\"orders_invoices\"\\s*\\{[\\s\\S]*tags\\s*=\\s*(local\\.common_tags|\\{[\\s\\S]*service\\s*=\\s*\"devpolaris-orders\")",
+        "label": "orders bucket includes the service tag"
+      },
+      {
+        "file": "s3.tf",
+        "pattern": "resource\\s+\"aws_s3_bucket\"\\s+\"orders_invoices\"\\s*\\{[\\s\\S]*tags\\s*=\\s*(local\\.common_tags|\\{[\\s\\S]*environment\\s*=\\s*\"prod\")",
+        "label": "orders bucket includes the environment tag"
+      },
+      {
+        "file": "s3.tf",
+        "pattern": "resource\\s+\"aws_s3_bucket\"\\s+\"orders_invoices\"\\s*\\{[\\s\\S]*tags\\s*=\\s*(local\\.common_tags|\\{[\\s\\S]*owner\\s*=\\s*\"platform\")",
+        "label": "orders bucket includes the owner tag"
+      }
+    ]
+  }
+}

@@ -1,0 +1,47 @@
+{
+  "language": "hcl",
+  "completionProfile": "terraform-aws",
+  "activeFile": "main.tf",
+  "files": [
+    {
+      "filename": "main.tf",
+      "initialValue": "provider \"aws\" {\n  region = \"eu-west-2\"\n}\n"
+    }
+  ],
+  "grader": {
+    "strategy": "regex-all",
+    "expected": [
+      {
+        "file": "main.tf",
+        "pattern": "resource\\s+\"aws_s3_bucket\"\\s+\"orders_invoices\"\\s+\\{",
+        "label": "orders_invoices S3 bucket resource exists"
+      },
+      {
+        "file": "main.tf",
+        "pattern": "\\n\\s*bucket\\s*=\\s*\"dp-orders-invoices-prod\"",
+        "label": "bucket argument matches the existing production bucket"
+      },
+      {
+        "file": "main.tf",
+        "pattern": "tags\\s*=\\s*\\{[\\s\\S]*?\\n\\s*\"?service\"?\\s*=\\s*\"orders-api\"",
+        "label": "service tag is captured"
+      },
+      {
+        "file": "main.tf",
+        "pattern": "tags\\s*=\\s*\\{[\\s\\S]*?\\n\\s*\"?environment\"?\\s*=\\s*\"prod\"",
+        "label": "environment tag is captured"
+      },
+      {
+        "file": "main.tf",
+        "pattern": "tags\\s*=\\s*\\{[\\s\\S]*?\\n\\s*\"?owner\"?\\s*=\\s*\"platform\"",
+        "label": "owner tag is captured"
+      },
+      {
+        "file": "main.tf",
+        "pattern": "^\\s*import\\s*\\{",
+        "label": "import block is not added in the resource-first step",
+        "negate": true
+      }
+    ]
+  }
+}

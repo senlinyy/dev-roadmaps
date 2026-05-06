@@ -1,0 +1,59 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "The app stores daily CSV exports in Azure SQL as large text rows. Reports work, but database backups grow quickly and support only downloads the files by date. Which refactor should the team consider?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Move the CSV files to Blob Storage and keep searchable metadata in SQL."
+        },
+        {
+          "id": "b",
+          "text": "Move all order records to Blob Storage so exports and orders share one service."
+        },
+        {
+          "id": "c",
+          "text": "Move the SQL server to a managed disk because backups are large."
+        },
+        {
+          "id": "d",
+          "text": "Disable backups for the SQL database because exports can be recreated."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The symptom points to file-like data being stored in a relational database. Blob Storage can hold the files while SQL keeps the metadata and business records."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "The app stores idempotency keys in Azure SQL and deletes old rows with a scheduled job. The table is only read by exact key, and old records should expire after seven days. What is a reasonable alternative to review?",
+      "options": [
+        {
+          "id": "a",
+          "text": "A Cosmos DB container with a key-based partition design and TTL."
+        },
+        {
+          "id": "b",
+          "text": "A storage account lifecycle rule on receipt PDFs."
+        },
+        {
+          "id": "c",
+          "text": "A managed disk attached to the database server."
+        },
+        {
+          "id": "d",
+          "text": "A public Blob container so retry checks can happen without authentication."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Known-key data with a clear expiry window can be a good Cosmos DB use case. The review should still check access pattern, consistency, and operational ownership."
+    }
+  ]
+}

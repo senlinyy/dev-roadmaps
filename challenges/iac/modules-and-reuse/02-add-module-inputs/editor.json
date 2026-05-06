@@ -1,0 +1,31 @@
+{
+  "language": "hcl",
+  "completionProfile": "terraform",
+  "activeFile": "variables.tf",
+  "files": [
+    {
+      "filename": "variables.tf",
+      "initialValue": "variable \"bucket_name\" {\n  description = \"Globally unique S3 bucket name for this application-owned bucket.\"\n  type        = string\n}\n\nvariable \"service\" {\n  description = \"Service name used in tags, such as orders-api.\"\n  type        = string\n}\n"
+    }
+  ],
+  "grader": {
+    "strategy": "regex-all",
+    "expected": [
+      {
+        "file": "variables.tf",
+        "pattern": "variable\\s+\"environment\"\\s*{[\\s\\S]*description\\s*=\\s*\"[^\"]+\"[\\s\\S]*type\\s*=\\s*string[\\s\\S]*validation\\s*{[\\s\\S]*condition\\s*=\\s*contains\\(\\s*\\[\\s*\"dev\"\\s*,\\s*\"staging\"\\s*,\\s*\"prod\"\\s*\\]\\s*,\\s*var\\.environment\\s*\\)[\\s\\S]*error_message\\s*=\\s*\"[^\"]+\"[\\s\\S]*}",
+        "label": "environment variable has a string type and validation for dev, staging, and prod"
+      },
+      {
+        "file": "variables.tf",
+        "pattern": "variable\\s+\"owner\"\\s*{[\\s\\S]*description\\s*=\\s*\"[^\"]+\"[\\s\\S]*type\\s*=\\s*string[\\s\\S]*default\\s*=\\s*\"platform\"[\\s\\S]*}",
+        "label": "owner variable is a string with the platform default"
+      },
+      {
+        "file": "variables.tf",
+        "pattern": "variable\\s+\"versioning_enabled\"\\s*{[\\s\\S]*description\\s*=\\s*\"[^\"]+\"[\\s\\S]*type\\s*=\\s*bool[\\s\\S]*default\\s*=\\s*false[\\s\\S]*}",
+        "label": "versioning_enabled variable is a bool with a false default"
+      }
+    ]
+  }
+}

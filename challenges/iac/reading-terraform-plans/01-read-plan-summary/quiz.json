@@ -1,0 +1,70 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A pull request says it adds S3 bucket versioning, public access blocking, and an IAM write policy for `devpolaris-orders`. The plan ends with:\n\n```text\nPlan: 3 to add, 1 to change, 0 to destroy.\n```\n\nWhat is the best first review response?",
+      "options": [
+        { "id": "a", "text": "Continue into the resource details and verify that the three creates and one update match the pull request story." },
+        { "id": "b", "text": "Approve the plan immediately because the destroy count is zero." },
+        { "id": "c", "text": "Block the change because any nonzero add count means Terraform will create unsafe resources." },
+        { "id": "d", "text": "Ask for a refresh-only plan because normal plans cannot show adds safely." }
+      ],
+      "correct": ["a"],
+      "explanation": "The summary matches the expected shape, but it is only the first checkpoint. The reviewer still needs to connect each create and update to the stated intent. A zero destroy count is encouraging, not approval by itself. Adds can be expected. A refresh-only plan is for drift inspection, not the normal review path for a pull request."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "The pull request intent says:\n\n```text\nAdd bucket versioning.\nAdd a public access block.\nAttach one write policy.\nNo resource deletion expected.\n```\n\nThe plan summary says:\n\n```text\nPlan: 3 to add, 0 to change, 1 to destroy.\n```\n\nWhat should you do before approving?",
+      "options": [
+        { "id": "a", "text": "Ask the author to name the destroyed resource and explain why deletion is part of this change." },
+        { "id": "b", "text": "Ignore the destroy because the add count is higher than the destroy count." },
+        { "id": "c", "text": "Approve if the destroyed resource is listed near the bottom of the plan." },
+        { "id": "d", "text": "Run apply with auto-approve so Terraform can show the final state." }
+      ],
+      "correct": ["a"],
+      "explanation": "The destroy does not match the stated intent, so it needs a concrete explanation before review continues. Add counts do not cancel deletion risk. Plan location is not a safety signal. Applying first would move the team from review into cleanup mode."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "A CI job runs `terraform plan -detailed-exitcode` for a pull request and exits with code `2`. The job also uploads the readable plan. What does the exit code mean?",
+      "options": [
+        { "id": "a", "text": "The plan command failed and no reviewable plan exists." },
+        { "id": "b", "text": "The plan succeeded and contains proposed changes." },
+        { "id": "c", "text": "The plan succeeded and found no infrastructure changes." },
+        { "id": "d", "text": "Terraform detected drift but refused to compare configuration." }
+      ],
+      "correct": ["b"],
+      "explanation": "With the detailed exit code, `2` means Terraform found changes and the command completed successfully. `0` means no changes. `1` means an error. The exit code does not replace the uploaded plan, because reviewers still need to inspect what changed."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "A reviewer sees this plan summary for a production change:\n\n```text\nPlan: 2 to add, 0 to change, 1 to destroy.\n```\n\nThe pull request only mentions creating two new monitoring alarms. Which review comments are valid?",
+      "options": [
+        { "id": "a", "text": "The destroy must be explained because it is outside the stated intent." },
+        { "id": "b", "text": "The summary alone cannot identify which resource is being destroyed, so resource details still matter." },
+        { "id": "c", "text": "The plan is safe because two additions outweigh one deletion." },
+        { "id": "d", "text": "The detailed exit code would be `1` because any destroy is an error." }
+      ],
+      "correct": ["a", "b"],
+      "explanation": "A destroy outside the stated intent needs explanation, and the reviewer must inspect the resource details to learn what is affected. Terraform does not weigh additions against deletions. A plan with changes usually uses detailed exit code `2`; a destroy is not automatically a command error."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A pull request says it adds an invoice bucket module call, but the plan summary says:\n\n```text\nNo changes. Your infrastructure matches the configuration.\n```\n\nWhich conclusion is most accurate?",
+      "options": [
+        { "id": "a", "text": "The review should verify the branch, root module directory, workspace, and environment because the plan is not seeing the intended change." },
+        { "id": "b", "text": "The pull request is approved because no changes are always safer than changes." },
+        { "id": "c", "text": "Terraform automatically skipped bucket creation because the bucket name was globally unique." },
+        { "id": "d", "text": "The author should add a destroy action so the plan summary is not empty." }
+      ],
+      "correct": ["a"],
+      "explanation": "A quiet plan can be correct, but it conflicts with a pull request that claims to add infrastructure. The likely problem is the review context: wrong branch, wrong root module, wrong workspace, or wrong environment. No changes are not approval when the expected change is missing."
+    }
+  ]
+}

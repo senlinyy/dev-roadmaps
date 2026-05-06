@@ -1,0 +1,70 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A teammate proposes this module call:\n\n```hcl\nmodule \"orders_bucket\" {\n  source = \"../../modules/s3-bucket\"\n\n  bucket = \"dp-orders-invoices-prod\"\n}\n```\n\nThe child module contains only one `aws_s3_bucket` resource and exposes most bucket arguments as variables. What is the best review comment?",
+      "options": [
+        { "id": "a", "text": "The module is probably too thin because it adds indirection without encoding a policy, pattern, or safer default." },
+        { "id": "b", "text": "The module is ideal because every repeated resource should be wrapped immediately." },
+        { "id": "c", "text": "The module is unsafe only because the source is a local path." },
+        { "id": "d", "text": "The module should be approved because a shorter root module is always easier to operate." }
+      ],
+      "correct": ["a"],
+      "explanation": "A module should name a useful concept, not only hide one provider resource. If it exposes the same arguments the caller would set on the resource, the caller gains little and loses direct readability. Local paths can be fine. Shorter root code is not automatically more operable."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A different module is named `private-application-bucket`. It creates an S3 bucket, blocks public access, applies standard tags, optionally enables versioning, and returns the bucket name and ARN. Why is this module more defensible?",
+      "options": [
+        { "id": "a", "text": "It packages a repeated infrastructure pattern while keeping caller decisions like name, environment, owner, and versioning explicit." },
+        { "id": "b", "text": "It hides every implementation detail so callers never need to read a plan." },
+        { "id": "c", "text": "It is better only because it has a longer module name." },
+        { "id": "d", "text": "It avoids outputs, which prevents callers from depending on the module." }
+      ],
+      "correct": ["a"],
+      "explanation": "The stronger module has a real purpose: private application bucket behavior. It reduces repeated decisions while keeping meaningful differences explicit. A longer name alone is not enough. Callers still need to read plans, and purposeful outputs are part of a useful contract."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "A proposed module has fifteen boolean inputs such as `block_public_acls`, `ignore_public_acls`, `restrict_public_buckets`, `enable_lifecycle`, and `force_destroy`. Which concerns are valid?",
+      "options": [
+        { "id": "a", "text": "The caller may be forced to understand provider internals that the module should have packaged as a policy." },
+        { "id": "b", "text": "The module may lack a strong opinion if every safety behavior is pushed back to the caller." },
+        { "id": "c", "text": "A long boolean list always proves the provider resource should be deleted." },
+        { "id": "d", "text": "Boolean variables are invalid in Terraform modules." }
+      ],
+      "correct": ["a", "b"],
+      "explanation": "A long list of booleans can mean the module is leaking implementation details and has no clear default behavior. The caller should choose meaningful differences, not rebuild the module author's resource decisions. Boolean variables are valid, and input design does not imply resources should be deleted."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "A service team wants one module called `all-infra` that creates buckets, queues, IAM roles, alarms, and deployment resources for every environment. What is the main review risk?",
+      "options": [
+        { "id": "a", "text": "The module may hide too many unrelated decisions behind one call, making plans and failures harder to understand." },
+        { "id": "b", "text": "Terraform cannot call modules that create more than one resource type." },
+        { "id": "c", "text": "Large modules always run faster because Terraform has fewer files to read." },
+        { "id": "d", "text": "The module is safe if it has no outputs." }
+      ],
+      "correct": ["a"],
+      "explanation": "A broad `all-infra` module can hide many operational decisions and make review harder. Terraform can call modules with multiple resource types, but the boundary should still be readable and purposeful. File count is not the important performance signal, and removing outputs does not make a module safer."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A reviewer asks, \"Can we name this module without repeating the provider resource type?\" What is the purpose of that question?",
+      "options": [
+        { "id": "a", "text": "It tests whether the module describes an architecture concept, such as a private application bucket, instead of only wrapping a provider block." },
+        { "id": "b", "text": "It checks whether the module source path is remote instead of local." },
+        { "id": "c", "text": "It proves the module should expose every provider argument as a variable." },
+        { "id": "d", "text": "It decides whether Terraform will require `terraform init`." }
+      ],
+      "correct": ["a"],
+      "explanation": "A useful module name often says what pattern or policy it enforces. If the best name is only `s3-bucket`, the module may be a thin wrapper. The naming test is not about local versus remote sources, exposing every argument, or initialization behavior."
+    }
+  ]
+}

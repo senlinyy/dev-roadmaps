@@ -1,0 +1,88 @@
+{
+  "passThreshold": 0.75,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "The orders API is deployed to Container Apps. Users report intermittent failures after 10 percent of traffic moved to a new revision. What should the team inspect first?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The active revisions, traffic weights, image tags, health state, and logs for the candidate revision."
+        },
+        {
+          "id": "b",
+          "text": "The billing account, because traffic movement usually changes cost."
+        },
+        {
+          "id": "c",
+          "text": "The VM agent status, because all Azure compute depends on VM agents."
+        },
+        {
+          "id": "d",
+          "text": "The public DNS zone only, because users are reaching the service through a name."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The symptom changed when revision traffic changed. The first evidence should come from the Container Apps release surface."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A web app starts, but the health endpoint fails only in production. Which explanation should be checked before replacing the hosting service?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The app service plan is always too small when health fails."
+        },
+        {
+          "id": "b",
+          "text": "The runtime configuration, secret references, managed identity, and dependency endpoints may differ from staging."
+        },
+        {
+          "id": "c",
+          "text": "Azure App Service cannot run production APIs reliably."
+        },
+        {
+          "id": "d",
+          "text": "The deployment slot must be deleted and recreated."
+        }
+      ],
+      "correct": [
+        "b"
+      ],
+      "explanation": "Health can fail because the production runtime starts with different inputs and permissions. Changing the hosting service before checking that evidence adds noise."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "Which signals help decide whether a compute incident belongs to the runtime layer rather than the database schema or application code alone?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The deployed image or runtime version differs from the expected release."
+        },
+        {
+          "id": "b",
+          "text": "The service cannot read a secret or connect with its managed identity."
+        },
+        {
+          "id": "c",
+          "text": "The health endpoint fails before meaningful application traffic reaches business logic."
+        },
+        {
+          "id": "d",
+          "text": "The resource group name contains the word prod."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "Runtime evidence shows how Azure started and routed the process. Naming is helpful context, but it is not runtime proof."
+    }
+  ]
+}

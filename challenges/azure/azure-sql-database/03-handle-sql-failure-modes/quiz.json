@@ -1,0 +1,61 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "After a release, the app starts but checkout writes fail. Logs show connection timeouts to `sql-devpolaris-orders-prod.database.windows.net`. The database status is Online, and public network access is disabled. What should the team inspect next?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The private network path and identity or connection settings used by the app runtime."
+        },
+        {
+          "id": "b",
+          "text": "The receipt blob lifecycle policy, because old files can block checkout writes."
+        },
+        {
+          "id": "c",
+          "text": "The Cosmos DB partition key, because all database timeouts come from NoSQL routing."
+        },
+        {
+          "id": "d",
+          "text": "The app version number only, because database status Online proves the connection path works."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Online database status is necessary but not enough. The app still needs the correct network path and credentials or identity to reach the SQL server."
+    },
+    {
+      "id": "q2",
+      "type": "multiple",
+      "scenario": "The team is reviewing backup readiness for the orders database before a risky data migration. The database is online and has 14 days of short-term backup retention. Which extra evidence belongs in the review?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The long-term retention policy for weekly, monthly, and yearly recovery needs."
+        },
+        {
+          "id": "b",
+          "text": "The restore target and how the app would be pointed at restored data if needed."
+        },
+        {
+          "id": "c",
+          "text": "The schema migration rollback or forward-fix plan."
+        },
+        {
+          "id": "d",
+          "text": "The number of receipt blobs in the storage account, because blob count proves database backups are usable."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "Backup readiness includes retention, restore plan, and how the application will use restored data. Blob count does not prove SQL recovery is usable."
+    }
+  ]
+}

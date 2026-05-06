@@ -1,0 +1,88 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "`orders.devpolaris.com` should point at `fd-devpolaris-orders.azurefd.net`. Which record type is a natural fit?",
+      "options": [
+        {
+          "id": "a",
+          "text": "CNAME."
+        },
+        {
+          "id": "b",
+          "text": "TXT."
+        },
+        {
+          "id": "c",
+          "text": "MX."
+        },
+        {
+          "id": "d",
+          "text": "NSG rule."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "A CNAME maps one name to another name. TXT is for text values such as ownership proof."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "What does a lower TTL help with during a planned cutover?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Resolvers may refresh the answer sooner after the record changes."
+        },
+        {
+          "id": "b",
+          "text": "The TLS certificate becomes trusted automatically."
+        },
+        {
+          "id": "c",
+          "text": "The backend pool becomes healthy."
+        },
+        {
+          "id": "d",
+          "text": "The SQL private endpoint changes IP address."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "TTL affects how long DNS answers can be cached. It does not fix TLS, backend health, or private endpoint state."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "Which mistakes can break a custom-domain cutover?",
+      "options": [
+        {
+          "id": "a",
+          "text": "CNAME points at the old entry point."
+        },
+        {
+          "id": "b",
+          "text": "TXT ownership proof is missing or wrong."
+        },
+        {
+          "id": "c",
+          "text": "Certificate does not cover `orders.devpolaris.com`."
+        },
+        {
+          "id": "d",
+          "text": "The API uses managed identity."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "The public name, ownership proof, and certificate all matter. Managed identity is important, but it is not what breaks this DNS/TLS cutover."
+    }
+  ]
+}

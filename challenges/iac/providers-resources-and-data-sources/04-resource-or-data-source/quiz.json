@@ -1,0 +1,70 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "The orders service needs a new invoice bucket that should be created with the service environment, tagged by the service team, updated through pull requests, and eventually deleted when the service retires. Which Terraform block shape fits best?",
+      "options": [
+        { "id": "a", "text": "A resource, because this root module owns the bucket lifecycle." },
+        { "id": "b", "text": "A data source, because S3 buckets are always shared infrastructure." },
+        { "id": "c", "text": "A provider block, because providers create all resources automatically." },
+        { "id": "d", "text": "An output only, because outputs create infrastructure after apply." }
+      ],
+      "correct": ["a"],
+      "explanation": "A service-owned bucket should be a resource because Terraform will create, update, track, and eventually remove it through state. A data source only reads something that already exists. Providers configure API access, and outputs print values rather than creating objects."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "The platform team already owns a shared log bucket named `dp-platform-shared-logs-prod`. The orders service needs its ARN for an IAM policy, but the service must not create or destroy that bucket. What should the orders root module use?",
+      "options": [
+        { "id": "a", "text": "A data source that reads the existing shared bucket." },
+        { "id": "b", "text": "A new `aws_s3_bucket` resource with the same bucket name." },
+        { "id": "c", "text": "A provider alias named after the bucket." },
+        { "id": "d", "text": "A variable with no validation and no lookup, because shared objects should never appear in plans." }
+      ],
+      "correct": ["a"],
+      "explanation": "The service needs information about an existing object owned elsewhere, so a data source is the right fit. Declaring a resource with the same name would claim lifecycle ownership and can create dangerous plan behavior. A provider alias changes provider configuration, not ownership."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "A teammate writes this review note: `Use data.aws_caller_identity.current because the AWS account already exists and we only need its ID for naming and tags.` Is the note sound?",
+      "options": [
+        { "id": "a", "text": "Yes. The current account is existing context selected by credentials, so Terraform should read it rather than manage it." },
+        { "id": "b", "text": "No. Any value used in a name must come from a resource." },
+        { "id": "c", "text": "No. Data sources are only for remote state files, not provider facts." },
+        { "id": "d", "text": "No. Reading the account ID means Terraform will delete the account during destroy." }
+      ],
+      "correct": ["a"],
+      "explanation": "The current caller identity is read-only provider context. It is useful for names, tags, and review evidence, and using it does not mean Terraform owns the AWS account. Values in resource arguments can come from data sources when the relationship is read-only."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "The service team is reviewing these Terraform design comments. Which comments are correct?",
+      "options": [
+        { "id": "a", "text": "Use a resource for the service-specific IAM role that this root module creates and updates." },
+        { "id": "b", "text": "Use a data source for an existing VPC owned by the platform networking module." },
+        { "id": "c", "text": "Use references between resources instead of copying the same bucket name into every dependent block." },
+        { "id": "d", "text": "Use a data source when you want Terraform to create a missing object for you." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "Service-owned objects belong in resources, while shared existing objects are usually read through data sources. References tell Terraform about relationships and avoid copied strings. A data source reads existing information and normally fails if the object is missing, so it does not create the object for you."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A plan unexpectedly shows this action after someone changed an existing shared DNS zone from a data source to a resource:\n\n```text\n  # aws_route53_zone.platform will be created\n  + resource \"aws_route53_zone\" \"platform\" {\n      + name = \"devpolaris.example\"\n    }\n\nPlan: 1 to add, 0 to change, 0 to destroy.\n```\n\nWhat is the best interpretation?",
+      "options": [
+        { "id": "a", "text": "Terraform is now trying to own a zone this module was supposed to read, so the change should be challenged." },
+        { "id": "b", "text": "The plan is safer because resources never affect existing shared infrastructure." },
+        { "id": "c", "text": "This proves the data source was broken because data sources should show creates." },
+        { "id": "d", "text": "The zone will be read only because the name matches an existing platform object." }
+      ],
+      "correct": ["a"],
+      "explanation": "Changing from data source to resource changes the ownership meaning. Terraform now plans to create and track a Route 53 zone in this root module. The matching name does not make it read-only, and data sources do not show create actions."
+    }
+  ]
+}

@@ -1,0 +1,87 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "An inbound rule at priority 90 denies `Internet` to `*`. A later rule at priority 100 allows `asg-app-gateway` to `asg-orders-api` on 443. Which rule matches first for Application Gateway traffic if the source is not classified as Internet?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The allow rule at priority 100."
+        },
+        {
+          "id": "b",
+          "text": "The deny rule at priority 90."
+        },
+        {
+          "id": "c",
+          "text": "Both rules merge together."
+        },
+        {
+          "id": "d",
+          "text": "Neither rule matters because NSGs do not evaluate source."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The first matching rule wins. If Application Gateway traffic matches the ASG source and not the Internet source, the allow rule can still apply."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "The API cannot reach SQL private endpoint on port 1433. Which rule direction should be inspected first?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Outbound from the API source toward the SQL private endpoint."
+        },
+        {
+          "id": "b",
+          "text": "Inbound from Internet to the API."
+        },
+        {
+          "id": "c",
+          "text": "Inbound from users to Front Door."
+        },
+        {
+          "id": "d",
+          "text": "Outbound from SQL to the browser."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The API is initiating the database connection. The first packet decision is outbound from the API side toward the private endpoint."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "Which changes keep scope narrow?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Allow only `asg-app-gateway` to reach `asg-orders-api` on 443."
+        },
+        {
+          "id": "b",
+          "text": "Allow `Internet` to reach the whole subnet on all ports."
+        },
+        {
+          "id": "c",
+          "text": "Allow `asg-orders-api` to reach private SQL IP `10.30.40.7` on 1433."
+        },
+        {
+          "id": "d",
+          "text": "Remove the NSG while testing a production timeout."
+        }
+      ],
+      "correct": [
+        "a",
+        "c"
+      ],
+      "explanation": "Narrow rules name the expected source, destination, and port. Broad Internet access or removing the NSG changes too much."
+    }
+  ]
+}

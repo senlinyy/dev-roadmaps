@@ -1,0 +1,70 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "You run `terraform apply` for the invoice bucket change. Terraform prints the planned actions again and asks for approval before changing anything. What is the main reason for that pause?",
+      "options": [
+        { "id": "a", "text": "Apply is about to change real infrastructure, so the operator gets one more chance to confirm the plan still matches intent." },
+        { "id": "b", "text": "Apply cannot read the Terraform files until a person types approval." },
+        { "id": "c", "text": "Apply always asks because `terraform validate` has not run yet." },
+        { "id": "d", "text": "The prompt is only a logging feature and has no relationship to risk." }
+      ],
+      "correct": ["a"],
+      "explanation": "The approval prompt exists because apply changes real resources. It is the last review checkpoint before Terraform calls provider APIs. Validation may already have run, and the prompt is not just logging."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "The reviewed plan was approved yesterday. This morning, before applying, a teammate changed the provider region in the branch from `eu-west-2` to `eu-west-1`. What should happen next?",
+      "options": [
+        { "id": "a", "text": "Run a fresh plan and review it again before applying." },
+        { "id": "b", "text": "Apply the old approval because the resource block name did not change." },
+        { "id": "c", "text": "Apply with auto approval because provider region changes are invisible to resources." },
+        { "id": "d", "text": "Skip Terraform and create the bucket by hand in both regions." }
+      ],
+      "correct": ["a"],
+      "explanation": "The approved evidence is no longer current after the provider target changed. A fresh plan is needed because the same resource block can point at a different region or account. Manual creation would break the reviewable Terraform workflow."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "Which statements explain why apply should come after plan review?",
+      "options": [
+        { "id": "a", "text": "The plan may reveal creates, updates, replacements, or destroys that do not match the request." },
+        { "id": "b", "text": "Provider settings such as account or region can make a correct-looking resource affect the wrong target." },
+        { "id": "c", "text": "Human review catches intent problems that formatting and validation cannot decide." },
+        { "id": "d", "text": "Once validation succeeds, the cloud provider is guaranteed to accept the change." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "Plan review is for intent and blast radius: what will change, where it will change, and whether that matches the request. Formatting and validation catch mechanical problems, but they do not prove the provider API will accept the change or that the change is safe."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "The apply finishes with `Apply complete! Resources: 1 added, 0 changed, 0 destroyed.` What is the best next step for a team workflow?",
+      "options": [
+        { "id": "a", "text": "Verify the real infrastructure or trusted inventory so the team knows the intended object exists with the expected settings." },
+        { "id": "b", "text": "Delete the Terraform files because the bucket now exists." },
+        { "id": "c", "text": "Assume no verification is needed because successful apply means every operational setting is perfect." },
+        { "id": "d", "text": "Run apply repeatedly until the output changes to one destroyed resource." }
+      ],
+      "correct": ["a"],
+      "explanation": "A successful apply is important evidence, but teams still verify the real system or an approved inventory view. Terraform files remain the source of desired state. Repeated applies should converge toward no changes, not destruction."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "Apply fails because the S3 bucket name is already taken globally. The resource address and tags look correct. What is the healthiest response?",
+      "options": [
+        { "id": "a", "text": "Choose a naming fix in code, run plan again, and apply only after the new plan is reviewed." },
+        { "id": "b", "text": "Create a different bucket by hand and leave the Terraform file unchanged." },
+        { "id": "c", "text": "Delete `.terraform/` and retry until AWS releases the name." },
+        { "id": "d", "text": "Ignore the failure because Terraform already stored the resource in state." }
+      ],
+      "correct": ["a"],
+      "explanation": "A provider API failure should feed back into the reviewed configuration. Fix the desired name, review the new plan, then apply. Manual creation and stale files split reality from the source of truth, and deleting local working data does not make a taken S3 name available."
+    }
+  ]
+}

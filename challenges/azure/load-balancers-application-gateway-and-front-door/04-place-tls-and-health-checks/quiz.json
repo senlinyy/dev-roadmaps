@@ -1,0 +1,88 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A browser reports a certificate mismatch for `orders.devpolaris.com` before the request reaches the backend. Which layer should be inspected first?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The public entry listener and certificate binding."
+        },
+        {
+          "id": "b",
+          "text": "The API subnet route table."
+        },
+        {
+          "id": "c",
+          "text": "The SQL private endpoint."
+        },
+        {
+          "id": "d",
+          "text": "The Node.js package lockfile."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "A certificate mismatch happens at the HTTPS entry before backend code or private data paths are involved."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "Backend health shows one unhealthy API copy after release. What does that prove?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The entry point can see at least one backend failing its probe path."
+        },
+        {
+          "id": "b",
+          "text": "The public DNS record is wrong."
+        },
+        {
+          "id": "c",
+          "text": "All customer checkout paths are broken."
+        },
+        {
+          "id": "d",
+          "text": "The TLS certificate must be expired."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Backend health is a signal about backend readiness for the probe path. It does not by itself prove DNS, TLS, or every user workflow."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "Which rollback evidence matters after changing an Application Gateway listener?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The previous listener and certificate binding."
+        },
+        {
+          "id": "b",
+          "text": "Fresh backend health after the change."
+        },
+        {
+          "id": "c",
+          "text": "A public request check for the hostname."
+        },
+        {
+          "id": "d",
+          "text": "The Azure SQL table count."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "Listener rollback needs the old binding and proof that public HTTPS traffic still reaches healthy backends."
+    }
+  ]
+}

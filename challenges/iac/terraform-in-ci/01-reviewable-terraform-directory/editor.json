@@ -1,0 +1,48 @@
+{
+  "language": "hcl",
+  "completionProfile": "terraform-aws",
+  "activeFile": "infra/orders/prod/main.tf",
+  "files": [
+    {
+      "filename": "infra/orders/prod/main.tf",
+      "initialValue": "terraform {\n  required_providers {\n    aws = {\n      source = \"hashicorp/aws\"\n    }\n  }\n}\n\nprovider \"aws\" {\n  region     = \"eu-west-2\"\n  access_key = \"AKIAIOSFODNN7EXAMPLE\"\n  secret_key = \"orders-prod-secret-key-example\"\n}\n"
+    },
+    {
+      "filename": "infra/orders/prod/s3.tf",
+      "initialValue": "resource \"aws_s3_bucket\" \"orders_invoices\" {\n  bucket = \"dp-orders-invoices-prod\"\n}\n"
+    }
+  ],
+  "grader": {
+    "strategy": "regex-all",
+    "expected": [
+      {
+        "file": "infra/orders/prod/main.tf",
+        "pattern": "required_providers\\s*\\{[\\s\\S]*aws\\s*=\\s*\\{[\\s\\S]*source\\s*=\\s*\"hashicorp/aws\"[\\s\\S]*version\\s*=\\s*\"~>\\s*5\\.0\"",
+        "label": "AWS provider source is constrained to the 5.x line"
+      },
+      {
+        "file": "infra/orders/prod/main.tf",
+        "pattern": "provider\\s+\"aws\"\\s*\\{[\\s\\S]*region\\s*=\\s*\"eu-west-2\"",
+        "label": "AWS provider still targets eu-west-2"
+      },
+      {
+        "file": "infra/orders/prod/main.tf",
+        "pattern": "\\baccess_key\\s*=",
+        "label": "hardcoded access_key is removed",
+        "negate": true
+      },
+      {
+        "file": "infra/orders/prod/main.tf",
+        "pattern": "\\bsecret_key\\s*=",
+        "label": "hardcoded secret_key is removed",
+        "negate": true
+      },
+      {
+        "file": "infra/orders/prod/main.tf",
+        "pattern": "AKIAIOSFODNN7EXAMPLE|orders-prod-secret-key-example",
+        "label": "seeded credential literals are removed",
+        "negate": true
+      }
+    ]
+  }
+}

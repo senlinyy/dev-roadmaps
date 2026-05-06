@@ -1,0 +1,70 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A pull request for `devpolaris-orders` adds an invoice bucket lifecycle rule. The PR workflow ran a speculative plan yesterday and showed `Plan: 1 to add, 0 to change, 0 to destroy.` The team wants every merge to `main` to auto-apply production immediately from that old PR result. What is the safest beginner boundary?",
+      "options": [
+        { "id": "a", "text": "Auto-apply production from the old PR plan because the plan had no destroys." },
+        { "id": "b", "text": "Use the PR plan as review evidence, then run a protected apply workflow from the merged commit with a fresh final plan and approval." },
+        { "id": "c", "text": "Skip the PR plan and let the apply workflow be the first place Terraform runs." },
+        { "id": "d", "text": "Let any branch apply production as long as the workflow file contains `fmt` and `validate`." }
+      ],
+      "correct": ["b"],
+      "explanation": "The safest beginner boundary separates review evidence from production change. A speculative PR plan can become stale after other changes, so production apply should run from the merged commit, produce a fresh final plan, wait for approval, and then verify. The no-destroy summary is encouraging but not a license to auto-apply. Skipping PR plans removes useful evidence, and branch-wide apply is too broad for production."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A team is comfortable auto-applying a disposable development environment after merge, but production serves customers and has a change window. Which automation split fits that maturity level?",
+      "options": [
+        { "id": "a", "text": "Auto-apply development after merge, but keep production behind a protected workflow with approval, a final plan, and verification." },
+        { "id": "b", "text": "Use the same auto-apply workflow for development and production so environments stay consistent." },
+        { "id": "c", "text": "Disable all CI plans until production can also auto-apply." },
+        { "id": "d", "text": "Allow production auto-apply only when the pull request changes fewer than five lines." }
+      ],
+      "correct": ["a"],
+      "explanation": "Different environments can have different automation boundaries. Auto-applying development can be reasonable when the blast radius is low, while production still deserves approval, a current plan, state locking, and post-apply checks. Sharing the exact same auto-apply boundary with production ignores impact. Line count is not a risk model, and disabling plans removes the evidence reviewers need."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "A production apply workflow is being designed for `infra/orders/prod`. Which controls should be present before the team considers it safe enough for routine use?",
+      "options": [
+        { "id": "a", "text": "It runs only from the reviewed main branch or a protected release trigger." },
+        { "id": "b", "text": "It generates a final plan close to the apply moment." },
+        { "id": "c", "text": "It uses a production identity that can apply only the intended environment scope." },
+        { "id": "d", "text": "It accepts apply requests from any pull request branch so reviewers get faster feedback." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "A production apply workflow should run from a protected source, generate a current plan, and use a tightly scoped identity. Those controls help answer which commit ran, what it proposed, and what identity changed production. Pull request branches are useful for speculative plans, but allowing them to apply production gives unmerged code too much power."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "A green Terraform PR check shows `fmt`, `validate`, and `plan` all passed. The author writes, \"CI is green, so this change is safe.\" The plan summary is `0 to add, 4 to change, 1 to destroy`, but the pull request only says it updates tags. What should the reviewer do?",
+      "options": [
+        { "id": "a", "text": "Approve because a green check means Terraform accepted the change." },
+        { "id": "b", "text": "Ask the author to explain the destroy action or change the Terraform before approval." },
+        { "id": "c", "text": "Ignore the plan body because validation already caught configuration mistakes." },
+        { "id": "d", "text": "Merge and let the production apply workflow decide whether the destroy is acceptable." }
+      ],
+      "correct": ["b"],
+      "explanation": "A green check proves the commands exited successfully, not that the infrastructure change is wise. A destroy action that was not described by the pull request is review evidence that needs explanation or a code change. Validation checks configuration shape, not business risk. Deferring the question to apply moves risk later instead of handling it during review."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "Leadership asks for auto-apply production because Terraform changes are slowing releases. The current workflow has no environment approval, no post-apply verification, and no written answer for which identity ran the change. What is the best response?",
+      "options": [
+        { "id": "a", "text": "Auto-apply production now and add verification after the team has a failure to learn from." },
+        { "id": "b", "text": "Keep production manual for now and first add the missing controls that prove who ran, what changed, who approved, and what verification passed." },
+        { "id": "c", "text": "Replace Terraform plans with screenshots from the cloud console so approvals are faster." },
+        { "id": "d", "text": "Move production apply back to laptops because CI is too slow." }
+      ],
+      "correct": ["b"],
+      "explanation": "The article recommends the smallest boundary the team can operate well. If the team cannot answer identity, approval, plan, and verification questions, production auto-apply is premature. Screenshots are weaker evidence than Terraform output, and laptop applies reduce repeatability. Learning from an avoidable production failure is not a responsible control."
+    }
+  ]
+}

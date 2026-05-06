@@ -1,0 +1,59 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "The orders team wants to store idempotency keys so a repeated payment request can be recognized quickly. Each lookup starts with one key, the record can expire after a week, and the data is not joined to order line items. Which design fits best?",
+      "options": [
+        {
+          "id": "a",
+          "text": "A Cosmos DB container with a partition key based on the idempotency key and a TTL that matches the retry window."
+        },
+        {
+          "id": "b",
+          "text": "A single SQL table with every retry key and every receipt file as binary columns."
+        },
+        {
+          "id": "c",
+          "text": "A Blob Storage prefix where each key becomes a folder name and the app scans the folder."
+        },
+        {
+          "id": "d",
+          "text": "A managed disk attached to the current worker so lookup latency stays local to the VM."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Cosmos DB is a good fit when the access pattern is known and key-based. TTL also matches short-lived idempotency records."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A developer proposes Cosmos DB for order reporting because it can store JSON documents. The report needs customer totals, date ranges, joins to product snapshots, and monthly aggregates. What should the reviewer say?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Document storage alone is not enough reason. The read patterns look relational or analytical, so review SQL or analytics options first."
+        },
+        {
+          "id": "b",
+          "text": "Cosmos DB is always better for JSON, so move reporting there before modeling queries."
+        },
+        {
+          "id": "c",
+          "text": "Use a random partition key so the write load spreads evenly and query design can wait."
+        },
+        {
+          "id": "d",
+          "text": "Store each monthly report as a blob and stop keeping order details."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "NoSQL design starts with access patterns. JSON support does not make every reporting workload a good Cosmos DB fit."
+    }
+  ]
+}

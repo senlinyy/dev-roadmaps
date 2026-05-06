@@ -1,0 +1,61 @@
+{
+  "passThreshold": 0.75,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A team wants to move the normal checkout API from Container Apps to a VM because they understand SSH better than revisions. What is the best review question?",
+      "options": [
+        {
+          "id": "a",
+          "text": "What specific OS-level control does the API need, and is that control worth patching, disk, process, and access ownership?"
+        },
+        {
+          "id": "b",
+          "text": "Can we make the VM name match the container app name?"
+        },
+        {
+          "id": "c",
+          "text": "Can we skip health checks after moving to a VM?"
+        },
+        {
+          "id": "d",
+          "text": "Can we turn off managed identity because SSH is available?"
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Comfort with SSH is not the same as a workload requirement. A VM should earn its extra ownership."
+    },
+    {
+      "id": "q2",
+      "type": "multiple",
+      "scenario": "The platform team is reviewing old Azure VMs and wants to decide which machines still have a real reason to exist. They need evidence that separates necessary control from historical accident. Which evidence helps decide whether a VM should remain a VM?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The workload needs a specific OS package, kernel behavior, local agent, or disk shape."
+        },
+        {
+          "id": "b",
+          "text": "The team has a tested patching and recovery process."
+        },
+        {
+          "id": "c",
+          "text": "The machine exists because nobody has revisited it."
+        },
+        {
+          "id": "d",
+          "text": "Logs, metrics, and restart behavior are understood by more than one person."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "d"
+      ],
+      "explanation": "A VM can be appropriate when the requirement and operating plan are clear. Historical accident is not enough."
+    }
+  ]
+}

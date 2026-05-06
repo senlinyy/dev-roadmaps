@@ -1,0 +1,61 @@
+{
+  "passThreshold": 0.75,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "Container Apps is set to minimum 0 replicas for a checkout API that should avoid cold starts during business hours. What should the team consider?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Raise the minimum replica count or choose a runtime pattern that keeps warm capacity for the API."
+        },
+        {
+          "id": "b",
+          "text": "Delete all scale rules."
+        },
+        {
+          "id": "c",
+          "text": "Move secrets into the image."
+        },
+        {
+          "id": "d",
+          "text": "Turn the API into a DNS record."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Scale settings should match user expectations. A steady API may need warm capacity, while event jobs can often start from zero."
+    },
+    {
+      "id": "q2",
+      "type": "multiple",
+      "scenario": "Traffic is growing for the orders API, and the team wants scaling changes that can be explained during support. The release review needs to show what will cause more capacity to appear. Which scale evidence belongs in a release review?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Minimum and maximum replicas or worker count."
+        },
+        {
+          "id": "b",
+          "text": "The signal used for scale decisions, such as HTTP concurrency or queue depth."
+        },
+        {
+          "id": "c",
+          "text": "Whether the health check and logs still work as replicas change."
+        },
+        {
+          "id": "d",
+          "text": "Only the developer who clicked deploy."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "Scaling changes affect capacity and diagnosis. The review should show what signal drives the change and how the team will observe it."
+    }
+  ]
+}

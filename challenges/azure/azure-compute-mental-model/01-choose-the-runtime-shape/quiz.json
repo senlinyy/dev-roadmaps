@@ -1,0 +1,88 @@
+{
+  "passThreshold": 0.75,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "The team has a normal Node.js checkout API. It receives HTTPS requests all day, needs app settings, reads secrets, and should give the team logs and health checks without managing a full server. Which first runtime shape fits best?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Azure Functions, because every backend can be split into event handlers later."
+        },
+        {
+          "id": "b",
+          "text": "Azure Virtual Machines, because a server gives the most control by default."
+        },
+        {
+          "id": "c",
+          "text": "Azure App Service or Azure Container Apps, because the team is bringing application code or a container and wants Azure to own much of the runtime work."
+        },
+        {
+          "id": "d",
+          "text": "Azure Storage, because the service mostly stores order data after each request."
+        }
+      ],
+      "correct": [
+        "c"
+      ],
+      "explanation": "The article separates bringing code or a container from bringing a machine. A steady API usually wants a managed application runtime first. Functions and VMs can be right for specific cases, but they change what the team owns."
+    },
+    {
+      "id": "q2",
+      "type": "multiple",
+      "scenario": "The same product also has a nightly export job, a receipt sender triggered by queue messages, and one legacy worker that requires a custom Linux package. Which pairings are reasonable starting points?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Use Azure Functions for the queue-triggered receipt sender."
+        },
+        {
+          "id": "b",
+          "text": "Use a VM for the legacy worker if the custom package and OS control are real requirements."
+        },
+        {
+          "id": "c",
+          "text": "Use one large VM for everything because shared hosting reduces the number of Azure services."
+        },
+        {
+          "id": "d",
+          "text": "Use Container Apps for a packaged API if the team already ships a container image."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "d"
+      ],
+      "explanation": "Different jobs can use different compute choices. The question is what each workload needs at runtime, not how to force every job into one hosting model."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "A deployment succeeds, but the new API copy never becomes ready. The build artifact is the expected version. What evidence should the team collect before changing the runtime service?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Resource names only, because names prove the deployment reached Azure."
+        },
+        {
+          "id": "b",
+          "text": "The runtime image or code version, app settings, identity, health check path, recent logs, and scale or revision state."
+        },
+        {
+          "id": "c",
+          "text": "The developer machine output, because the same code passed locally."
+        },
+        {
+          "id": "d",
+          "text": "A list of all Azure services in the subscription, because the failure might be anywhere."
+        }
+      ],
+      "correct": [
+        "b"
+      ],
+      "explanation": "Compute failures usually sit at the boundary between artifact, configuration, identity, health, logs, and scaling. A broad inventory or local result is less useful than direct runtime evidence."
+    }
+  ]
+}

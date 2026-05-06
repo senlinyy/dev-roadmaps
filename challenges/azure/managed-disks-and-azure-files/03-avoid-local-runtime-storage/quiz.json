@@ -1,0 +1,61 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A worker writes generated invoices to `/tmp/invoices` inside the running container and support loses files after a restart. The files must be downloaded later by customers. What change fits the article?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Store the generated files in Blob Storage and keep lookup metadata in the database."
+        },
+        {
+          "id": "b",
+          "text": "Increase container memory so the temporary directory has more space."
+        },
+        {
+          "id": "c",
+          "text": "Move the files into Cosmos DB because restart loss proves they are key-value data."
+        },
+        {
+          "id": "d",
+          "text": "Attach a managed disk to each container replica so every replica has local durable files."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Temporary runtime storage is not a durable application store. Generated downloadable files usually belong in Blob Storage with metadata stored separately."
+    },
+    {
+      "id": "q2",
+      "type": "multiple",
+      "scenario": "A migration plan keeps a legacy shared folder for two months while a new Blob Storage path is rolled out. Which details should be written into the release record?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The file share name, storage account, quota, and protocol."
+        },
+        {
+          "id": "b",
+          "text": "Which workers still depend on the share and when they will stop writing to it."
+        },
+        {
+          "id": "c",
+          "text": "Snapshot or backup evidence for the share during the migration."
+        },
+        {
+          "id": "d",
+          "text": "A statement that shared folders are old, so they can be deleted after the next deploy."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "The release record should show what still uses the share and how it can be recovered. Age alone is not a deletion plan."
+    }
+  ]
+}

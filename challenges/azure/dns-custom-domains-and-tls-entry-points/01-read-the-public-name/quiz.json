@@ -1,0 +1,88 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "Users type `orders.devpolaris.com`. What is DNS responsible for in this path?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Turning the name into the next destination the browser should contact."
+        },
+        {
+          "id": "b",
+          "text": "Proving the API has permission to read Key Vault."
+        },
+        {
+          "id": "c",
+          "text": "Running the Node.js backend."
+        },
+        {
+          "id": "d",
+          "text": "Deciding the SQL transaction isolation level."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "DNS maps names to destinations. Identity, runtime, and database behavior are separate concerns."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "Why does Azure often require a TXT record when adding a custom domain?",
+      "options": [
+        {
+          "id": "a",
+          "text": "To prove the team controls the domain before Azure accepts the hostname."
+        },
+        {
+          "id": "b",
+          "text": "To store the TLS private key in DNS."
+        },
+        {
+          "id": "c",
+          "text": "To make the backend health probe faster."
+        },
+        {
+          "id": "d",
+          "text": "To route private SQL traffic."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "TXT records are commonly used for ownership proof. TLS keys and backend health do not belong in public DNS records."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "Which evidence matters before a DNS cutover for `orders.devpolaris.com`?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The current DNS record and TTL."
+        },
+        {
+          "id": "b",
+          "text": "The target entry point hostname."
+        },
+        {
+          "id": "c",
+          "text": "The certificate covers `orders.devpolaris.com`."
+        },
+        {
+          "id": "d",
+          "text": "Only the resource group tag on the DNS zone."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "A DNS cutover needs name, target, TTL, and TLS evidence. Tags help ownership but do not prove traffic behavior."
+    }
+  ]
+}

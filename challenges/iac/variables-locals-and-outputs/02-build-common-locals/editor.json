@@ -1,0 +1,44 @@
+{
+  "language": "hcl",
+  "completionProfile": "terraform",
+  "activeFile": "locals.tf",
+  "files": [
+    {
+      "filename": "variables.tf",
+      "initialValue": "variable \"environment\" {\n  description = \"Deployment environment for the orders service.\"\n  type        = string\n}\n\nvariable \"service_name\" {\n  description = \"Short service name used in tags and resource names.\"\n  type        = string\n  default     = \"devpolaris-orders\"\n}\n\nvariable \"extra_tags\" {\n  description = \"Additional tags to add to orders resources.\"\n  type        = map(string)\n  default     = {}\n}\n"
+    },
+    {
+      "filename": "locals.tf",
+      "initialValue": ""
+    },
+    {
+      "filename": "s3.tf",
+      "initialValue": "resource \"aws_s3_bucket\" \"orders_invoices\" {\n  bucket = \"dp-${var.service_name}-${var.environment}-invoices\"\n\n  tags = merge(\n    {\n      service     = var.service_name\n      environment = var.environment\n      managed_by  = \"terraform\"\n    },\n    var.extra_tags\n  )\n}\n"
+    }
+  ],
+  "grader": {
+    "strategy": "regex-all",
+    "expected": [
+      {
+        "file": "locals.tf",
+        "pattern": "locals\\s*\\{[\\s\\S]*name_prefix\\s*=\\s*\"\\$\\{\\s*var\\.service_name\\s*\\}-\\$\\{\\s*var\\.environment\\s*\\}\"",
+        "label": "locals define name_prefix from service_name and environment"
+      },
+      {
+        "file": "locals.tf",
+        "pattern": "locals\\s*\\{[\\s\\S]*common_tags\\s*=\\s*merge\\s*\\([\\s\\S]*service\\s*=\\s*var\\.service_name[\\s\\S]*environment\\s*=\\s*var\\.environment[\\s\\S]*managed_by\\s*=\\s*\"terraform\"[\\s\\S]*var\\.extra_tags[\\s\\S]*\\)",
+        "label": "locals define common_tags with base tags and extra_tags"
+      },
+      {
+        "file": "s3.tf",
+        "pattern": "bucket\\s*=\\s*\"dp-\\$\\{\\s*local\\.name_prefix\\s*\\}-invoices\"",
+        "label": "bucket name uses local.name_prefix"
+      },
+      {
+        "file": "s3.tf",
+        "pattern": "tags\\s*=\\s*local\\.common_tags",
+        "label": "resource tags use local.common_tags"
+      }
+    ]
+  }
+}

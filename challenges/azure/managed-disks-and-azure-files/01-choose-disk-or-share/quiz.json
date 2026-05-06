@@ -1,0 +1,59 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A legacy invoice worker expects a mounted folder path and several workers may need to read the same small files during a migration. The team does not need SQL queries over those files. Which Azure service should be considered first?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Azure Files, because it provides a managed file share that can look like a mounted folder."
+        },
+        {
+          "id": "b",
+          "text": "Azure SQL Database, because a folder path can be represented as a table column."
+        },
+        {
+          "id": "c",
+          "text": "Cosmos DB, because files can be converted to JSON documents."
+        },
+        {
+          "id": "d",
+          "text": "A managed disk attached to every worker at the same time, because disks are always shareable."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Azure Files fits the shared-folder shape. Managed disks are attached to VMs, while SQL and Cosmos DB are data services for different access patterns."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A VM-based worker needs a durable boot and data volume. The data does not need to be shared by several machines at the same time. Which Azure storage shape is the closer fit?",
+      "options": [
+        {
+          "id": "a",
+          "text": "A managed disk attached to the VM."
+        },
+        {
+          "id": "b",
+          "text": "A Blob Storage container mounted as the operating system disk."
+        },
+        {
+          "id": "c",
+          "text": "A Cosmos DB container with partition key /disk."
+        },
+        {
+          "id": "d",
+          "text": "An Azure SQL database with one row per disk block."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Managed disks are block-level volumes for VM-shaped workloads. They are the right mental model when the operating system expects a disk."
+    }
+  ]
+}

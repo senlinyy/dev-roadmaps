@@ -1,0 +1,61 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "The team says the orders database has backups, so a risky data migration is safe. The app has never been tested against a restored database, and nobody knows which connection setting would change during recovery. What is missing?",
+      "options": [
+        {
+          "id": "a",
+          "text": "A restore plan that names the recovery point, restored resource, app configuration change, and verification steps."
+        },
+        {
+          "id": "b",
+          "text": "A larger database tier, because larger databases restore more safely."
+        },
+        {
+          "id": "c",
+          "text": "A public firewall rule so everyone can test the restored database quickly."
+        },
+        {
+          "id": "d",
+          "text": "A Blob Storage lifecycle rule, because all Azure recovery uses storage lifecycle management."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Backups are useful only when restore is usable. The team needs a concrete restore path and application verification, not only a statement that backups exist."
+    },
+    {
+      "id": "q2",
+      "type": "multiple",
+      "scenario": "A cleanup ticket proposes deleting old receipt files, idempotency keys, and a legacy file share. Which checks should happen before deletion?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Confirm the retention rule or business requirement for each data type."
+        },
+        {
+          "id": "b",
+          "text": "Confirm recovery evidence such as soft delete, TTL, snapshots, or restore points where appropriate."
+        },
+        {
+          "id": "c",
+          "text": "Confirm no current app path or support workflow still depends on the data."
+        },
+        {
+          "id": "d",
+          "text": "Delete first if the resources are tagged old, then wait for user reports."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "Safe deletion needs retention rules, recovery evidence, and dependency checks. A tag can help find resources, but it is not enough evidence by itself."
+    }
+  ]
+}

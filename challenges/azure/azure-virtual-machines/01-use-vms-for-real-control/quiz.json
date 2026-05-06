@@ -1,0 +1,61 @@
+{
+  "passThreshold": 0.75,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "The legacy orders worker needs a vendor package installed at the OS level and writes to a mounted disk. The team cannot package it cleanly into App Service or Container Apps yet. Which compute option is honest?",
+      "options": [
+        {
+          "id": "a",
+          "text": "A VM, with an explicit operations plan for patching, boot, disk, access, logs, and monitoring."
+        },
+        {
+          "id": "b",
+          "text": "Azure Functions, because all background work should be event-driven."
+        },
+        {
+          "id": "c",
+          "text": "App Service, because it removes all OS concerns even when the app depends on them."
+        },
+        {
+          "id": "d",
+          "text": "Blob Storage, because the worker writes files."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The VM gives the required control, but it also gives the team more operating responsibility."
+    },
+    {
+      "id": "q2",
+      "type": "multiple",
+      "scenario": "The legacy worker is staying on a VM for now because it needs OS-level control. The team wants the decision record to show what extra work they accepted by choosing a machine. Which responsibilities increase when the team chooses a VM?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Operating system patching and package management."
+        },
+        {
+          "id": "b",
+          "text": "Boot diagnostics, VM agent health, disk capacity, and process supervision."
+        },
+        {
+          "id": "c",
+          "text": "All application bugs disappear because the machine is dedicated."
+        },
+        {
+          "id": "d",
+          "text": "Network access and identity still need review."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "d"
+      ],
+      "explanation": "A VM does not remove application or security work. It adds machine-level work the team must manage."
+    }
+  ]
+}

@@ -1,0 +1,61 @@
+{
+  "passThreshold": 0.75,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "The pipeline reports success for a new orders API image. Users will reach the version through Container Apps. Which statement is safest?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Pipeline success proves the version is ready for all traffic."
+        },
+        {
+          "id": "b",
+          "text": "The team still needs runtime evidence: image, configuration, secrets, identity, health, logs, and scale behavior."
+        },
+        {
+          "id": "c",
+          "text": "Only the source commit matters after deployment."
+        },
+        {
+          "id": "d",
+          "text": "A successful build means Azure settings cannot break the release."
+        }
+      ],
+      "correct": [
+        "b"
+      ],
+      "explanation": "Deployment success means Azure accepted an artifact or configuration. Readiness depends on how the runtime starts and behaves."
+    },
+    {
+      "id": "q2",
+      "type": "multiple",
+      "scenario": "A release passed staging, but production has different secret references, identity, and traffic behavior. The reviewer wants to check likely runtime differences before blaming the code alone. Which differences can make production fail even when staging worked?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Production uses a different managed identity."
+        },
+        {
+          "id": "b",
+          "text": "A secret reference points at a different Key Vault secret."
+        },
+        {
+          "id": "c",
+          "text": "The health endpoint path differs from what the platform checks."
+        },
+        {
+          "id": "d",
+          "text": "The article title is different in the sidebar."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "Runtime inputs and health contracts can differ by environment. Those differences need direct evidence."
+    }
+  ]
+}

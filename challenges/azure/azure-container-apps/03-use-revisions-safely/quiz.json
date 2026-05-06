@@ -1,0 +1,61 @@
+{
+  "passThreshold": 0.75,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "The latest revision is healthy during direct testing, but only 10 percent of real traffic reaches it. Errors appear only on checkout requests that write invoices. What should the team inspect next?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The active revision logs and dependency access used by the invoice path before increasing traffic."
+        },
+        {
+          "id": "b",
+          "text": "The old revision image only, because the old revision still gets most traffic."
+        },
+        {
+          "id": "c",
+          "text": "The resource group tags, because tags decide traffic routing."
+        },
+        {
+          "id": "d",
+          "text": "The Azure tenant name, because tenant identity changes routing."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Revision traffic lets the team limit blast radius while checking real behavior. The next evidence should focus on the failing path in the candidate revision."
+    },
+    {
+      "id": "q2",
+      "type": "multiple",
+      "scenario": "A candidate revision is receiving a small amount of checkout traffic while the old revision remains active. The team wants clear stop conditions before increasing the candidate revision to more users. Which conditions are good reasons to stop a Container Apps rollout?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The candidate revision has a different image than the release record."
+        },
+        {
+          "id": "b",
+          "text": "Health is green but logs show secret read failures on real checkout requests."
+        },
+        {
+          "id": "c",
+          "text": "Traffic weights are moving faster than the team can monitor."
+        },
+        {
+          "id": "d",
+          "text": "The old revision still exists."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "A rollout should stop when evidence conflicts with the release record, the app cannot access dependencies, or monitoring cannot keep up. Keeping the old revision is part of the safety model."
+    }
+  ]
+}

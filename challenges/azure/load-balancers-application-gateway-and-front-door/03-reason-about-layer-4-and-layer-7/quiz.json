@@ -1,0 +1,88 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A service only needs TCP forwarding and does not need to understand HTTP paths or hostnames. Which Azure entry is the simplest fit?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Azure Load Balancer."
+        },
+        {
+          "id": "b",
+          "text": "Application Gateway."
+        },
+        {
+          "id": "c",
+          "text": "Front Door."
+        },
+        {
+          "id": "d",
+          "text": "Azure Key Vault."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Azure Load Balancer is the layer 4 option. Application Gateway and Front Door are HTTP-aware layer 7 services."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "The team wants `/api/*` and `/admin/*` to route to different backend pools in one region. Which feature should they look for?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Layer 7 path-based routing."
+        },
+        {
+          "id": "b",
+          "text": "NSG priority order."
+        },
+        {
+          "id": "c",
+          "text": "VNet address space resizing."
+        },
+        {
+          "id": "d",
+          "text": "Private endpoint approval status."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Path-based routing requires an HTTP-aware entry point such as Application Gateway."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "Which evidence belongs before changing the public entry?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Current DNS target."
+        },
+        {
+          "id": "b",
+          "text": "Listener hostnames and TLS certificate status."
+        },
+        {
+          "id": "c",
+          "text": "Backend pool health."
+        },
+        {
+          "id": "d",
+          "text": "The database backup retention period."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "A public entry change should be reviewed with DNS, listener/TLS, and backend health evidence. Backup retention is a data-recovery concern."
+    }
+  ]
+}

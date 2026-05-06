@@ -1,0 +1,87 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "Only the workers in `snet-orders-api` lost outbound access to package downloads. Other subnets still work. Where should the first route check happen?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The route table associated with `snet-orders-api`."
+        },
+        {
+          "id": "b",
+          "text": "Every route table in the subscription."
+        },
+        {
+          "id": "c",
+          "text": "The public DNS zone for `devpolaris.com`."
+        },
+        {
+          "id": "d",
+          "text": "The Key Vault access policy."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The symptom is scoped to one subnet, so the first route check should use the route table associated with that subnet."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A route sends `0.0.0.0/0` to a firewall appliance. What does this route not prove by itself?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Which next hop default outbound traffic uses."
+        },
+        {
+          "id": "b",
+          "text": "Whether the firewall allows the connection after traffic reaches it."
+        },
+        {
+          "id": "c",
+          "text": "That default traffic leaves the subnet through a controlled path."
+        },
+        {
+          "id": "d",
+          "text": "That the route table has a default route."
+        }
+      ],
+      "correct": [
+        "b"
+      ],
+      "explanation": "The route chooses the next hop. The firewall still has its own policy and health state."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "Which changes are route-table changes rather than subnet placement changes?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Changing the next hop for `0.0.0.0/0`."
+        },
+        {
+          "id": "b",
+          "text": "Adding a route for a partner CIDR block."
+        },
+        {
+          "id": "c",
+          "text": "Moving the API to a different subnet."
+        },
+        {
+          "id": "d",
+          "text": "Changing the VNet address space."
+        }
+      ],
+      "correct": [
+        "a",
+        "b"
+      ],
+      "explanation": "Routes change next-hop decisions. Moving resources or changing address space changes placement and network design."
+    }
+  ]
+}

@@ -1,0 +1,59 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "The order service writes a customer, order header, line items, payment status, and fulfillment state during checkout. Support often asks questions that join these records together. Which storage choice best matches that shape?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Azure SQL Database, because relational records, constraints, and transactions fit this checkout data."
+        },
+        {
+          "id": "b",
+          "text": "Blob Storage, because each order can be written as a JSON file."
+        },
+        {
+          "id": "c",
+          "text": "Azure Files, because several processes might need a shared folder."
+        },
+        {
+          "id": "d",
+          "text": "Managed Disks, because block storage keeps data close to a VM."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Order records need relational consistency and queries across related facts. Azure SQL Database is the managed relational choice in this module."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A deploy adds a nullable `coupon_code` column and a later release will start writing values. The team wants to avoid breaking old and new app versions during rollout. What review fits the article?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Check that the schema change is compatible while both app versions can run."
+        },
+        {
+          "id": "b",
+          "text": "Skip database review because nullable columns cannot affect production behavior."
+        },
+        {
+          "id": "c",
+          "text": "Move coupon data to Blob Storage until every server has the new code."
+        },
+        {
+          "id": "d",
+          "text": "Restart the SQL server after deployment so old connections see the new column."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Schema changes are part of deployment. The safe question is whether old and new application versions can both tolerate the database state during rollout."
+    }
+  ]
+}

@@ -1,0 +1,58 @@
+{
+  "language": "hcl",
+  "completionProfile": "terraform-aws",
+  "activeFile": "data.tf",
+  "files": [
+    {
+      "filename": "main.tf",
+      "initialValue": "terraform {\n  required_providers {\n    aws = {\n      source  = \"hashicorp/aws\"\n      version = \"~> 5.0\"\n    }\n  }\n}\n\nprovider \"aws\" {\n  region = \"eu-west-2\"\n}\n"
+    },
+    {
+      "filename": "s3.tf",
+      "initialValue": "resource \"aws_s3_bucket\" \"orders_invoices\" {\n  bucket = \"dp-orders-invoices-prod\"\n\n  tags = {\n    service     = \"devpolaris-orders\"\n    environment = \"prod\"\n    owner       = \"platform\"\n  }\n}\n"
+    },
+    {
+      "filename": "data.tf",
+      "initialValue": ""
+    },
+    {
+      "filename": "locals.tf",
+      "initialValue": "locals {\n  service_name = \"devpolaris-orders\"\n  account_id   = \"123456789012\"\n  region       = \"eu-west-2\"\n}\n"
+    },
+    {
+      "filename": "outputs.tf",
+      "initialValue": "output \"deployment_context\" {\n  value = \"${local.service_name}:${local.account_id}:${local.region}\"\n}\n"
+    }
+  ],
+  "grader": {
+    "strategy": "regex-all",
+    "expected": [
+      {
+        "file": "data.tf",
+        "pattern": "data\\s+\"aws_caller_identity\"\\s+\"current\"\\s*\\{\\s*\\}",
+        "label": "current caller identity data source is declared"
+      },
+      {
+        "file": "data.tf",
+        "pattern": "data\\s+\"aws_region\"\\s+\"current\"\\s*\\{\\s*\\}",
+        "label": "current AWS region data source is declared"
+      },
+      {
+        "file": "locals.tf",
+        "pattern": "account_id\\s*=\\s*data\\.aws_caller_identity\\.current\\.account_id",
+        "label": "account context uses the caller identity data source"
+      },
+      {
+        "file": "locals.tf",
+        "pattern": "region\\s*=\\s*data\\.aws_region\\.current\\.name",
+        "label": "region context uses the AWS region data source"
+      },
+      {
+        "file": "locals.tf",
+        "pattern": "account_id\\s*=\\s*\"123456789012\"",
+        "label": "hardcoded placeholder account ID",
+        "negate": true
+      }
+    ]
+  }
+}

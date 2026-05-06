@@ -1,0 +1,61 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "The checkout service generates customer receipt PDFs after payment. Support needs to download a receipt by order ID, the app stores metadata in SQL, and the PDF itself is never queried with SQL joins. Which Azure storage choice fits the file best?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Blob Storage, because the PDF behaves like a durable object that can be downloaded later."
+        },
+        {
+          "id": "b",
+          "text": "Azure SQL Database, because every checkout-related value should live in the order database."
+        },
+        {
+          "id": "c",
+          "text": "Cosmos DB, because a receipt can be represented as a JSON document."
+        },
+        {
+          "id": "d",
+          "text": "A runtime-local folder, because the app can recreate the PDF if the container restarts."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "A receipt PDF is file-like data. Blob Storage is built for durable objects, while SQL can keep metadata such as order ID, blob name, and status."
+    },
+    {
+      "id": "q2",
+      "type": "multiple",
+      "scenario": "The storage account for receipts is `stdevpolarisordersprod`. The team is preparing a production review before exposing download links to customers. Which settings matter for the first safety check?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Public blob access is disabled unless the team has a deliberate public download design."
+        },
+        {
+          "id": "b",
+          "text": "HTTPS-only access and a modern minimum TLS version are enabled."
+        },
+        {
+          "id": "c",
+          "text": "The storage account has a lifecycle policy that matches the retention expectation for exports or temporary files."
+        },
+        {
+          "id": "d",
+          "text": "The account name contains the exact word receipt so every engineer can guess its purpose."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "The safety check is about access, transport, and lifecycle. Naming helps humans, but it does not replace the security and retention settings."
+    }
+  ]
+}

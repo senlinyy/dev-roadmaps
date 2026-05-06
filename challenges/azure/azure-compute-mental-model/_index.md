@@ -1,9 +1,9 @@
 ---
 title: "Azure Compute Mental Model"
-description: "Practice where code runs after the laptop for Azure by reading production evidence, choosing safe first checks, and avoiding broad changes."
+description: "Practice choosing an Azure runtime by reading what the workload needs, then checking real runtime evidence before changing production."
 articleId: article-cloud-providers-azure-compute-application-hosting-azure-compute-mental-model
 articleSlug: azure-compute-mental-model
 difficulty: medium
 order: 17
-tags: ["azure","compute","runtime","health","scaling"]
+tags: ["azure","compute","runtime","health"]
 ---

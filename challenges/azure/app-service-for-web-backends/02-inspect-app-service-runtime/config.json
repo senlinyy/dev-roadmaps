@@ -1,0 +1,375 @@
+{
+  "cwd": "/home/dev",
+  "env": {
+    "USER": "dev",
+    "HOME": "/home/dev"
+  },
+  "fs": {
+    "/home/dev": {
+      "type": "dir"
+    }
+  },
+  "commandModules": [
+    "azure"
+  ],
+  "cloud": {
+    "azure": {
+      "tenantId": "tenant-devpolaris",
+      "subscriptionId": "sub-devpolaris-training",
+      "currentSubscription": "sub-devpolaris-training",
+      "defaultLocation": "eastus",
+      "resourceGroups": [
+        {
+          "name": "rg-devpolaris-orders-prod",
+          "location": "eastus",
+          "tags": {
+            "team": "orders",
+            "env": "prod"
+          }
+        },
+        {
+          "name": "rg-devpolaris-compute-prod",
+          "location": "eastus",
+          "tags": {
+            "team": "platform",
+            "env": "prod"
+          }
+        },
+        {
+          "name": "rg-devpolaris-shared-prod",
+          "location": "eastus",
+          "tags": {
+            "team": "platform",
+            "env": "prod"
+          }
+        }
+      ],
+      "managedIdentities": [
+        {
+          "name": "mi-devpolaris-orders-api-prod",
+          "resourceGroup": "rg-devpolaris-orders-prod",
+          "location": "eastus",
+          "clientId": "client-orders-api-prod",
+          "principalId": "principal-orders-api-prod",
+          "tags": {
+            "service": "orders-api",
+            "env": "prod"
+          }
+        }
+      ],
+      "appServicePlans": [
+        {
+          "name": "asp-devpolaris-orders-prod",
+          "resourceGroup": "rg-devpolaris-orders-prod",
+          "location": "eastus",
+          "sku": "P1v3",
+          "tier": "PremiumV3",
+          "workerSize": "Small",
+          "numberOfWorkers": 2,
+          "osType": "Linux",
+          "tags": {
+            "service": "orders-api",
+            "env": "prod"
+          }
+        }
+      ],
+      "webApps": [
+        {
+          "name": "app-devpolaris-orders-api-prod",
+          "resourceGroup": "rg-devpolaris-orders-prod",
+          "location": "eastus",
+          "state": "Running",
+          "defaultHostName": "app-devpolaris-orders-api-prod.azurewebsites.net",
+          "appServicePlan": "asp-devpolaris-orders-prod",
+          "runtime": "NODE|20-lts",
+          "healthCheckPath": "/healthz",
+          "httpsOnly": true,
+          "identity": {
+            "type": "SystemAssigned,UserAssigned",
+            "principalId": "principal-webapp-system-prod",
+            "userAssignedIdentities": {
+              "/subscriptions/sub-devpolaris-training/resourceGroups/rg-devpolaris-orders-prod/providers/Microsoft.ManagedIdentity/userAssignedIdentities/mi-devpolaris-orders-api-prod": {
+                "clientId": "client-orders-api-prod",
+                "principalId": "principal-orders-api-prod"
+              }
+            }
+          },
+          "appSettings": [
+            {
+              "name": "NODE_ENV",
+              "value": "production",
+              "slotSetting": false
+            },
+            {
+              "name": "ORDERS_API_PORT",
+              "value": "3000",
+              "slotSetting": false
+            },
+            {
+              "name": "DATABASE_URL",
+              "value": "@Microsoft.KeyVault(SecretUri=https://kv-devpolaris-orders.vault.azure.net/secrets/orders-db-url)",
+              "slotSetting": true
+            },
+            {
+              "name": "APPINSIGHTS_CONNECTION_STRING",
+              "value": "@Microsoft.KeyVault(SecretUri=https://kv-devpolaris-orders.vault.azure.net/secrets/appinsights-connection)",
+              "slotSetting": true
+            }
+          ],
+          "deploymentSlots": [
+            {
+              "name": "staging",
+              "state": "Running",
+              "hostName": "app-devpolaris-orders-api-prod-staging.azurewebsites.net",
+              "trafficPercent": 0
+            },
+            {
+              "name": "warmup",
+              "state": "Stopped",
+              "hostName": "app-devpolaris-orders-api-prod-warmup.azurewebsites.net",
+              "trafficPercent": 0
+            }
+          ],
+          "tags": {
+            "service": "orders-api",
+            "env": "prod"
+          }
+        }
+      ],
+      "containerApps": [
+        {
+          "name": "ca-devpolaris-orders-api-prod",
+          "resourceGroup": "rg-devpolaris-orders-prod",
+          "location": "eastus",
+          "environmentName": "cae-devpolaris-prod",
+          "image": "acrdevpolarisprod.azurecr.io/devpolaris-orders-api:2026-05-03.4",
+          "activeRevisionsMode": "multiple",
+          "latestRevisionName": "ca-devpolaris-orders-api-prod--r42",
+          "ingress": {
+            "external": true,
+            "targetPort": 3000,
+            "transport": "auto",
+            "fqdn": "ca-devpolaris-orders-api-prod.eastus.azurecontainerapps.io",
+            "traffic": [
+              {
+                "revisionName": "ca-devpolaris-orders-api-prod--r42",
+                "weight": 90,
+                "label": "candidate"
+              },
+              {
+                "revisionName": "ca-devpolaris-orders-api-prod--r41",
+                "weight": 10,
+                "label": "stable"
+              }
+            ]
+          },
+          "scale": {
+            "minReplicas": 2,
+            "maxReplicas": 10,
+            "rules": [
+              {
+                "name": "http-concurrency",
+                "type": "http",
+                "metadata": {
+                  "concurrentRequests": "80"
+                }
+              }
+            ]
+          },
+          "secrets": [
+            {
+              "name": "orders-db-url",
+              "keyVaultUrl": "https://kv-devpolaris-orders.vault.azure.net/secrets/orders-db-url",
+              "identity": "mi-devpolaris-orders-api-prod"
+            },
+            {
+              "name": "stripe-webhook-secret",
+              "keyVaultUrl": "https://kv-devpolaris-orders.vault.azure.net/secrets/stripe-webhook-secret",
+              "identity": "mi-devpolaris-orders-api-prod"
+            }
+          ],
+          "revisions": [
+            {
+              "name": "ca-devpolaris-orders-api-prod--r42",
+              "active": true,
+              "trafficWeight": 90,
+              "image": "acrdevpolarisprod.azurecr.io/devpolaris-orders-api:2026-05-03.4",
+              "replicas": 2,
+              "healthState": "Healthy",
+              "provisioningState": "Provisioned",
+              "runningState": "Running",
+              "createdTime": "2026-05-03T10:15:00Z"
+            },
+            {
+              "name": "ca-devpolaris-orders-api-prod--r41",
+              "active": true,
+              "trafficWeight": 10,
+              "image": "acrdevpolarisprod.azurecr.io/devpolaris-orders-api:2026-04-29.2",
+              "replicas": 2,
+              "healthState": "Healthy",
+              "provisioningState": "Provisioned",
+              "runningState": "Running",
+              "createdTime": "2026-04-29T09:20:00Z"
+            },
+            {
+              "name": "ca-devpolaris-orders-api-prod--r40",
+              "active": false,
+              "trafficWeight": 0,
+              "image": "acrdevpolarisprod.azurecr.io/devpolaris-orders-api:2026-04-20.1",
+              "replicas": 0,
+              "healthState": "Inactive",
+              "provisioningState": "Provisioned",
+              "runningState": "Stopped",
+              "createdTime": "2026-04-20T08:05:00Z"
+            }
+          ],
+          "identity": {
+            "type": "UserAssigned",
+            "userAssignedIdentities": {
+              "/subscriptions/sub-devpolaris-training/resourceGroups/rg-devpolaris-orders-prod/providers/Microsoft.ManagedIdentity/userAssignedIdentities/mi-devpolaris-orders-api-prod": {
+                "clientId": "client-orders-api-prod",
+                "principalId": "principal-orders-api-prod"
+              }
+            }
+          }
+        }
+      ],
+      "functionApps": [
+        {
+          "name": "func-devpolaris-orders-jobs-prod",
+          "resourceGroup": "rg-devpolaris-orders-prod",
+          "location": "eastus",
+          "state": "Running",
+          "runtime": "node",
+          "version": "~4",
+          "appServicePlan": "Y1",
+          "hostingPlanType": "Consumption",
+          "defaultHostName": "func-devpolaris-orders-jobs-prod.azurewebsites.net",
+          "identity": {
+            "type": "SystemAssigned",
+            "principalId": "principal-functions-prod"
+          },
+          "appSettings": [
+            {
+              "name": "FUNCTIONS_WORKER_RUNTIME",
+              "value": "node",
+              "slotSetting": false
+            },
+            {
+              "name": "AzureWebJobsStorage",
+              "value": "@Microsoft.KeyVault(SecretUri=https://kv-devpolaris-orders.vault.azure.net/secrets/functions-storage)",
+              "slotSetting": true
+            },
+            {
+              "name": "ORDERS_QUEUE_NAME",
+              "value": "orders-events",
+              "slotSetting": false
+            },
+            {
+              "name": "APPINSIGHTS_CONNECTION_STRING",
+              "value": "@Microsoft.KeyVault(SecretUri=https://kv-devpolaris-orders.vault.azure.net/secrets/appinsights-connection)",
+              "slotSetting": true
+            }
+          ],
+          "functions": [
+            {
+              "name": "sendReceipt",
+              "trigger": "QueueTrigger: orders-events",
+              "status": "Enabled",
+              "lastRunStatus": "Succeeded"
+            },
+            {
+              "name": "cleanupExports",
+              "trigger": "TimerTrigger: 0 0 3 * * *",
+              "status": "Enabled",
+              "lastRunStatus": "Succeeded"
+            },
+            {
+              "name": "rebuildSearchIndex",
+              "trigger": "HttpTrigger: admin only",
+              "status": "Disabled",
+              "lastRunStatus": "NotRun"
+            }
+          ],
+          "tags": {
+            "service": "orders-jobs",
+            "env": "prod"
+          }
+        }
+      ],
+      "virtualMachines": [
+        {
+          "name": "vm-devpolaris-orders-legacy-01",
+          "resourceGroup": "rg-devpolaris-orders-prod",
+          "location": "eastus",
+          "vmSize": "Standard_B2ms",
+          "powerState": "VM running",
+          "provisioningState": "Succeeded",
+          "image": "UbuntuServer 22.04-lts",
+          "osType": "Linux",
+          "computerName": "orders-legacy-01",
+          "privateIpAddress": "10.30.2.21",
+          "publicIpAddress": "",
+          "subnetId": "/subscriptions/sub-devpolaris-training/resourceGroups/rg-devpolaris-orders-prod/providers/Microsoft.Network/virtualNetworks/vnet-devpolaris-prod/subnets/snet-orders-api",
+          "networkSecurityGroup": "nsg-orders-api",
+          "identity": {
+            "type": "SystemAssigned",
+            "principalId": "principal-vm-legacy-prod"
+          },
+          "zones": [
+            "1"
+          ],
+          "dataDisks": [
+            {
+              "name": "orders-legacy-data-01",
+              "sizeGb": 128,
+              "lun": 0
+            }
+          ],
+          "bootDiagnosticsEnabled": true,
+          "statuses": [
+            {
+              "code": "ProvisioningState/succeeded",
+              "displayStatus": "Provisioning succeeded",
+              "time": "2026-05-05T08:00:00Z"
+            },
+            {
+              "code": "PowerState/running",
+              "displayStatus": "VM running",
+              "time": "2026-05-05T08:02:00Z"
+            },
+            {
+              "code": "HealthState/available",
+              "displayStatus": "VM agent ready",
+              "message": "Guest agent is reporting."
+            }
+          ],
+          "tags": {
+            "service": "orders-legacy",
+            "env": "prod"
+          }
+        }
+      ]
+    }
+  },
+  "grader": {
+    "strategy": "contains",
+    "source": "all-stdout",
+    "expected": [
+      "app-devpolaris-orders-api-prod",
+      "NODE|20-lts",
+      "/healthz",
+      "DATABASE_URL",
+      "APPINSIGHTS_CONNECTION_STRING",
+      "SystemAssigned,UserAssigned",
+      "mi-devpolaris-orders-api-prod",
+      "staging",
+      "trafficPercent"
+    ],
+    "loose": true,
+    "requireCommands": [
+      "az"
+    ],
+    "minCommandCount": 4
+  }
+}

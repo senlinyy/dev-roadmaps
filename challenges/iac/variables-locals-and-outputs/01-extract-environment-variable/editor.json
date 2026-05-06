@@ -1,0 +1,45 @@
+{
+  "language": "hcl",
+  "completionProfile": "terraform",
+  "activeFile": "variables.tf",
+  "files": [
+    {
+      "filename": "main.tf",
+      "initialValue": "terraform {\n  required_providers {\n    aws = {\n      source  = \"hashicorp/aws\"\n      version = \"~> 6.0\"\n    }\n  }\n}\n\nprovider \"aws\" {\n  region = \"eu-west-2\"\n}\n"
+    },
+    {
+      "filename": "variables.tf",
+      "initialValue": ""
+    },
+    {
+      "filename": "s3.tf",
+      "initialValue": "resource \"aws_s3_bucket\" \"orders_invoices\" {\n  bucket = \"dp-devpolaris-orders-prod-invoices\"\n\n  tags = {\n    service     = \"devpolaris-orders\"\n    environment = \"prod\"\n    managed_by  = \"terraform\"\n  }\n}\n"
+    }
+  ],
+  "grader": {
+    "strategy": "regex-all",
+    "expected": [
+      {
+        "file": "variables.tf",
+        "pattern": "variable\\s+\"environment\"\\s*\\{[\\s\\S]*?type\\s*=\\s*string",
+        "label": "environment variable is declared as a string"
+      },
+      {
+        "file": "s3.tf",
+        "pattern": "bucket\\s*=\\s*\"[^\"]*\\$\\{\\s*var\\.environment\\s*\\}[^\"]*\"",
+        "label": "bucket name interpolates var.environment"
+      },
+      {
+        "file": "s3.tf",
+        "pattern": "environment\\s*=\\s*(?:var\\.environment|\"\\$\\{\\s*var\\.environment\\s*\\}\")",
+        "label": "environment tag uses var.environment"
+      },
+      {
+        "file": "s3.tf",
+        "pattern": "\"prod\"",
+        "label": "hardcoded prod string is removed from the bucket resource",
+        "negate": true
+      }
+    ]
+  }
+}

@@ -1,0 +1,88 @@
+{
+  "passThreshold": 0.75,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A container revision stays active but has zero healthy replicas. The image tag is new. What should the team check first?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Container logs, startup command, required environment values, secret references, and health probe behavior for that revision."
+        },
+        {
+          "id": "b",
+          "text": "The DNS registrar account."
+        },
+        {
+          "id": "c",
+          "text": "The Azure billing scope."
+        },
+        {
+          "id": "d",
+          "text": "Whether a VM could run the same image someday."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "A revision with unhealthy replicas needs runtime evidence from the container and its inputs."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "The app runs, but users cannot reach it from the internet. The container listens on port 3000. What Container Apps setting is most likely part of the first check?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Ingress exposure and target port."
+        },
+        {
+          "id": "b",
+          "text": "The number of tags on the resource group."
+        },
+        {
+          "id": "c",
+          "text": "The VM size."
+        },
+        {
+          "id": "d",
+          "text": "The function trigger type."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "If the process is running but unreachable, the entry path and port mapping are direct evidence."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "The team is deciding whether Container Apps is still the right home for the orders API after a release problem. They want to separate normal container ownership from platform concerns. Which tradeoffs should be clear before choosing Container Apps for the orders API?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The team must build and publish a good container image."
+        },
+        {
+          "id": "b",
+          "text": "The team must understand revision traffic and scale behavior."
+        },
+        {
+          "id": "c",
+          "text": "The team no longer needs logs or health checks."
+        },
+        {
+          "id": "d",
+          "text": "The team should know how identity and secrets reach the container."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "d"
+      ],
+      "explanation": "Container Apps removes cluster management, but the team still owns the image, runtime inputs, observability, and release decisions."
+    }
+  ]
+}

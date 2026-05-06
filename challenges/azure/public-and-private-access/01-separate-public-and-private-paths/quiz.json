@@ -1,0 +1,88 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "Users need to reach `orders.devpolaris.com`, but the API should reach Azure SQL over a private address. Which design matches that requirement?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Public entry point for users, private endpoint and private DNS for SQL."
+        },
+        {
+          "id": "b",
+          "text": "Public SQL endpoint so the browser and API use the same path."
+        },
+        {
+          "id": "c",
+          "text": "Private endpoint for the browser traffic and public endpoint for SQL."
+        },
+        {
+          "id": "d",
+          "text": "No DNS records, because private access removes name resolution."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Public user traffic and private data access are different paths. The app can be public-facing while the database stays private."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A private endpoint exists for Azure SQL, but the app still resolves the public SQL hostname. What is likely missing or wrong?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Private DNS integration or the private DNS A record."
+        },
+        {
+          "id": "b",
+          "text": "The browser CNAME record."
+        },
+        {
+          "id": "c",
+          "text": "The Application Gateway health probe."
+        },
+        {
+          "id": "d",
+          "text": "The resource group tags."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "A private endpoint gives the resource a private IP. Private DNS is what makes the normal service name resolve to that private IP."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "Which resources are reasonable public entry resources for `devpolaris-orders-api`?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Front Door for a global HTTPS entry."
+        },
+        {
+          "id": "b",
+          "text": "Application Gateway for regional HTTP routing."
+        },
+        {
+          "id": "c",
+          "text": "The Azure SQL private endpoint."
+        },
+        {
+          "id": "d",
+          "text": "A public DNS record for `orders.devpolaris.com`."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "d"
+      ],
+      "explanation": "The public path can include DNS and an HTTP entry point. A private endpoint for SQL should not become the public user door."
+    }
+  ]
+}

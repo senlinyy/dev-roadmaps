@@ -1,0 +1,70 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A production plan contains:\n\n```text\n# aws_s3_bucket.orders_invoices must be replaced\n-/+ resource \"aws_s3_bucket\" \"orders_invoices\" {\n  ~ bucket = \"dp-orders-invoices-prod\" -> \"dp-orders-invoice-archive-prod\"\n  ~ id     = \"dp-orders-invoices-prod\" -> (known after apply)\n}\n```\n\nThe author describes this as a simple rename. What is the best review response?",
+      "options": [
+        { "id": "a", "text": "Treat it as a bucket replacement and ask for a migration plan covering data, policies, alerts, and application configuration." },
+        { "id": "b", "text": "Approve it as a rename because the HCL change only edits one string." },
+        { "id": "c", "text": "Ignore the replacement because the new bucket id is unknown until apply." },
+        { "id": "d", "text": "Approve if the plan summary has exactly one add and one destroy." }
+      ],
+      "correct": ["a"],
+      "explanation": "The replacement marker says Terraform cannot update the existing bucket in place. A bucket name change can affect stored objects, IAM policies, alerts, and application references. A small HCL edit is not the same as a small infrastructure change. Unknown ids and balanced add or destroy counts do not remove the operational risk."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A development plan shows:\n\n```text\n# aws_sqs_queue.invoice_jobs must be replaced\n-/+ resource \"aws_sqs_queue\" \"invoice_jobs\" {\n  ~ fifo_queue = false -> true\n  ~ name       = \"orders-invoice-jobs-dev\" -> \"orders-invoice-jobs-dev.fifo\"\n}\n```\n\nThe pull request says this is a disposable development queue used to test FIFO ordering. What should the reviewer verify next?",
+      "options": [
+        { "id": "a", "text": "Confirm the plan is really for development and that no production queue or dependent worker will be surprised by the replacement." },
+        { "id": "b", "text": "Reject all queue replacements because replacement is never acceptable." },
+        { "id": "c", "text": "Approve without checking dependencies because development resources have no operational risk." },
+        { "id": "d", "text": "Ask Terraform to convert the standard queue into FIFO in place." }
+      ],
+      "correct": ["a"],
+      "explanation": "Replacement can be acceptable for disposable development resources, but the environment and dependencies still need review. Replacement is not always banned, and development does not mean risk-free. The plan shows the provider cannot treat the FIFO change as an in-place edit."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "A plan uses the marker `+/-` for a resource replacement instead of `-/+`. What does that marker tell you?",
+      "options": [
+        { "id": "a", "text": "Terraform plans to create the replacement before destroying the old object, if the provider and lifecycle rules allow it." },
+        { "id": "b", "text": "Terraform found only a read-only data source and will not change infrastructure." },
+        { "id": "c", "text": "Terraform will update the existing object in place." },
+        { "id": "d", "text": "Terraform failed during provider authentication." }
+      ],
+      "correct": ["a"],
+      "explanation": "`+/-` is create replacement then destroy old. It is still a replacement, so reviewers must check whether both objects can safely exist at once. Data sources use `<=`, in-place updates use `~`, and provider authentication failures produce errors rather than replacement markers."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "A production replacement is expected. The pull request description says:\n\n```text\nExpected replacement:\n  Replace development invoice queue to test FIFO ordering.\n  No production queue replacement.\n  No data migration needed because dev queue is disposable.\n```\n\nThe actual plan address is `aws_sqs_queue.invoice_jobs_prod`. Which review comments are correct?",
+      "options": [
+        { "id": "a", "text": "The plan does not match the stated environment, so review should stop until the mismatch is explained." },
+        { "id": "b", "text": "The address suggests production, so the author should prove the target environment and dependency impact." },
+        { "id": "c", "text": "The replacement is automatically safe because the pull request contains the words expected replacement." },
+        { "id": "d", "text": "The resource type is SQS, so the plan cannot affect workers or retry behavior." }
+      ],
+      "correct": ["a", "b"],
+      "explanation": "The written expectation says development, while the plan address points at production. That mismatch needs proof before apply. An expected replacement statement helps only when it matches the actual plan. SQS replacements can affect workers, message ordering, retries, alarms, and dead-letter handling."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A reviewer sees this resource action:\n\n```text\n# aws_lb.orders must be replaced\n-/+ resource \"aws_lb\" \"orders\" {\n  ~ name = \"orders-prod\" -> \"orders-public-prod\"\n}\n```\n\nThe plan summary is:\n\n```text\nPlan: 1 to add, 0 to change, 1 to destroy.\n```\n\nWhat is the safest interpretation?",
+      "options": [
+        { "id": "a", "text": "The load balancer identity is changing, so the review needs a cutover and dependency plan before apply." },
+        { "id": "b", "text": "The summary shows no in-place changes, so users will not notice anything." },
+        { "id": "c", "text": "The new name includes `public`, so Terraform will automatically preserve DNS and health checks." },
+        { "id": "d", "text": "A replacement is only risky for databases, not for network entry points." }
+      ],
+      "correct": ["a"],
+      "explanation": "A load balancer replacement can affect DNS, listeners, target health, certificates, security groups, and traffic cutover. The summary confirms a replacement shape, not safety. Terraform does not preserve external dependencies just because a name is descriptive. Network entry points can be highly service-impacting."
+    }
+  ]
+}

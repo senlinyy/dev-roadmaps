@@ -1,0 +1,88 @@
+{
+  "passThreshold": 0.75,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A nightly cleanup should delete temporary export files older than seven days. Which trigger shape fits?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Timer trigger."
+        },
+        {
+          "id": "b",
+          "text": "HTTP trigger exposed publicly."
+        },
+        {
+          "id": "c",
+          "text": "Queue trigger tied to checkout events."
+        },
+        {
+          "id": "d",
+          "text": "VM startup trigger."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The work starts from a schedule, so a timer trigger matches the cause."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "The receipt sender should run once for each order event and should retry when the downstream email provider is temporarily unavailable. What matters most in the design?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The queue trigger, retry behavior, idempotency, and logs for each invocation."
+        },
+        {
+          "id": "b",
+          "text": "A public DNS record for the function."
+        },
+        {
+          "id": "c",
+          "text": "A bigger VM size."
+        },
+        {
+          "id": "d",
+          "text": "A deployment slot for the main API only."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Event-driven work needs a reliable trigger, safe retry behavior, and evidence per invocation."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "A team is excited about Functions and wants to split every workflow into small event handlers. The reviewer wants to keep the design understandable during retries, failures, and support. Which problems are common when teams overuse Functions?",
+      "options": [
+        {
+          "id": "a",
+          "text": "A long-running workflow is split into tiny functions with unclear ownership and hard debugging."
+        },
+        {
+          "id": "b",
+          "text": "An always-on API is forced into HTTP functions even though it needs steady routing and release control."
+        },
+        {
+          "id": "c",
+          "text": "A small timer job uses a function instead of a full web app."
+        },
+        {
+          "id": "d",
+          "text": "Function app settings differ from the app that produced the event."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "d"
+      ],
+      "explanation": "Functions are helpful for event jobs, but too many small edges or mismatched settings can make the system harder to understand."
+    }
+  ]
+}

@@ -1,0 +1,88 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A change request says, `fix network timeout for orders`. Which version is ready for review?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Open inbound access to the API subnet until the timeout disappears."
+        },
+        {
+          "id": "b",
+          "text": "Change the route table because route tables often cause timeouts."
+        },
+        {
+          "id": "c",
+          "text": "For `snet-orders-api`, allow Application Gateway to reach port 443 from `asg-app-gateway`; verify backend health and keep the previous rule ready to restore."
+        },
+        {
+          "id": "d",
+          "text": "Restart all backend copies and then decide whether the network still needs work."
+        }
+      ],
+      "correct": [
+        "c"
+      ],
+      "explanation": "A reviewable network change names the resource, source, destination, port, verification signal, and recovery target."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "Why should the review record include the private DNS zone name?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Because DNS zone names prove the app code is correct."
+        },
+        {
+          "id": "b",
+          "text": "Because a private endpoint can exist while the app still resolves the public or wrong private name."
+        },
+        {
+          "id": "c",
+          "text": "Because Azure deletes private endpoints unless a DNS zone is present."
+        },
+        {
+          "id": "d",
+          "text": "Because the resource group name does not matter after deployment."
+        }
+      ],
+      "correct": [
+        "b"
+      ],
+      "explanation": "Private endpoint and private DNS are related but separate evidence. The team needs to know which name the app will resolve."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "Which details belong in a beginner network review for `devpolaris-orders-api`?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Public name and entry point."
+        },
+        {
+          "id": "b",
+          "text": "VNet, subnet, route table, NSG, and private endpoint names."
+        },
+        {
+          "id": "c",
+          "text": "The evidence that proves the change worked after release."
+        },
+        {
+          "id": "d",
+          "text": "Only the Azure service category because product names are enough for rollback."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "A useful review records the path and the proof. Product categories are too vague for rollback or incident handoff."
+    }
+  ]
+}

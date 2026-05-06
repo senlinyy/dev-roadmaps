@@ -1,0 +1,105 @@
+{
+  "passThreshold": 0.75,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A production apply fails with:\n\n```text\nError: Error acquiring the state lock\n\nLock Info:\n  Operation: OperationTypeApply\n  Who: mira@example.com\n  Path: dp-terraform-state-prod/devpolaris-orders/prod/terraform.tfstate\n```\n\nWhat should Jamal do first?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Check whether Mira's apply is still active before attempting any unlock or second apply."
+        },
+        {
+          "id": "b",
+          "text": "Immediately force-unlock because all locks are stale after an error."
+        },
+        {
+          "id": "c",
+          "text": "Copy the state file locally and apply without the backend."
+        },
+        {
+          "id": "d",
+          "text": "Delete the backend block so Terraform falls back to local state."
+        }
+      ],
+      "correct": ["a"],
+      "explanation": "A lock during an apply is normal protection. The first step is to verify whether the listed run is still active. Force-unlocking an active apply brings back the race locking was meant to prevent."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "Two CI jobs target the same production state within a minute. The team wants later jobs to wait briefly instead of failing immediately when another apply is finishing. Which behavior is appropriate?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Use a lock timeout so the second run waits for the lock, while still allowing only one writer at a time."
+        },
+        {
+          "id": "b",
+          "text": "Disable locking for CI because the jobs are automated."
+        },
+        {
+          "id": "c",
+          "text": "Run both applies with separate local state files."
+        },
+        {
+          "id": "d",
+          "text": "Give both jobs write access to the state object so the backend can merge them."
+        }
+      ],
+      "correct": ["a"],
+      "explanation": "A lock timeout keeps the one-writer rule but lets queued operations wait for a short, intentional period. It is different from ignoring the lock."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "A lock has been held for four hours. The listed owner confirms their laptop crashed during `terraform apply`, and no CI run is active. What is the safest next step?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Use the recorded lock ID to force-unlock, then run a plan to verify state and reality still match before applying changes."
+        },
+        {
+          "id": "b",
+          "text": "Force-unlock every state file in the bucket so future applies are not blocked."
+        },
+        {
+          "id": "c",
+          "text": "Delete the state object because a crashed apply means state is no longer useful."
+        },
+        {
+          "id": "d",
+          "text": "Commit a local copy of state so everyone can continue from Git."
+        }
+      ],
+      "correct": ["a"],
+      "explanation": "Force-unlock is for a confirmed stale lock. After unlocking, a plan is the low-risk check that Terraform still understands the managed objects before any new write."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "A reviewer is explaining what Terraform state locking does and does not do. Which statements are correct?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Locking helps prevent two writers from updating the same state record at the same time."
+        },
+        {
+          "id": "b",
+          "text": "Locking does not prove the proposed infrastructure change is safe or approved."
+        },
+        {
+          "id": "c",
+          "text": "A stale lock should be removed only after confirming no active run still owns it."
+        },
+        {
+          "id": "d",
+          "text": "Locking lets a team skip backend access controls because state writes are serialized."
+        }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "Locking serializes state writes. It is not a substitute for review, backend access control, state protection, or careful stale-lock cleanup."
+    }
+  ]
+}

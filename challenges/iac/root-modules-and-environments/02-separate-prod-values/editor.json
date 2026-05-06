@@ -1,0 +1,62 @@
+{
+  "language": "hcl",
+  "completionProfile": "terraform",
+  "activeFile": "envs/prod/terraform.tfvars",
+  "files": [
+    {
+      "filename": "envs/prod/main.tf",
+      "initialValue": "module \"orders_service\" {\n  source = \"../../modules/orders-service\"\n\n  service_name        = \"orders-api\"\n  environment         = var.environment\n  aws_region          = var.aws_region\n  replica_count       = var.replica_count\n  deletion_protection = var.deletion_protection\n  invoice_bucket_name = var.invoice_bucket_name\n  export_bucket_name  = var.export_bucket_name\n}\n"
+    },
+    {
+      "filename": "envs/prod/terraform.tfvars",
+      "initialValue": "environment         = \"staging\"\naws_region          = \"eu-west-2\"\nreplica_count       = 1\ndeletion_protection = false\ninvoice_bucket_name = \"dp-orders-invoices-staging\"\nexport_bucket_name  = \"dp-orders-exports-staging\"\n"
+    }
+  ],
+  "grader": {
+    "strategy": "regex-all",
+    "expected": [
+      {
+        "file": "envs/prod/terraform.tfvars",
+        "pattern": "^\\s*environment\\s*=\\s*\"prod\"",
+        "label": "environment value is prod"
+      },
+      {
+        "file": "envs/prod/terraform.tfvars",
+        "pattern": "^\\s*aws_region\\s*=\\s*\"eu-west-2\"",
+        "label": "provider region remains eu-west-2"
+      },
+      {
+        "file": "envs/prod/terraform.tfvars",
+        "pattern": "^\\s*replica_count\\s*=\\s*3",
+        "label": "production uses three replicas"
+      },
+      {
+        "file": "envs/prod/terraform.tfvars",
+        "pattern": "^\\s*deletion_protection\\s*=\\s*true",
+        "label": "production deletion protection is enabled"
+      },
+      {
+        "file": "envs/prod/terraform.tfvars",
+        "pattern": "^\\s*invoice_bucket_name\\s*=\\s*\"dp-orders-invoices-prod\"",
+        "label": "invoice bucket uses the production name"
+      },
+      {
+        "file": "envs/prod/terraform.tfvars",
+        "pattern": "^\\s*export_bucket_name\\s*=\\s*\"dp-orders-exports-prod\"",
+        "label": "export bucket uses the production name"
+      },
+      {
+        "file": "envs/prod/terraform.tfvars",
+        "pattern": "^\\s*source\\s*=",
+        "label": "tfvars file does not add a module source",
+        "negate": true
+      },
+      {
+        "file": "envs/prod/terraform.tfvars",
+        "pattern": "module\\s+\"",
+        "label": "tfvars file does not define a module block",
+        "negate": true
+      }
+    ]
+  }
+}

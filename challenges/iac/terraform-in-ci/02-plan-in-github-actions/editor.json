@@ -1,0 +1,71 @@
+{
+  "language": "yaml",
+  "filename": ".github/workflows/terraform-prod-checks.yml",
+  "completionProfile": "github-actions",
+  "initialValue": "name: terraform-prod-checks\n\non:\n  pull_request:\n    paths:\n      - \"infra/orders/prod/**\"\n\npermissions:\n  contents: read\n\njobs:\n  terraform:\n    runs-on: ubuntu-latest\n    defaults:\n      run:\n        shell: bash\n    steps:\n      - name: Checkout\n        uses: actions/checkout@v6\n      - name: Set up Terraform\n        uses: hashicorp/setup-terraform@v4\n      - name: Init\n        run: terraform -chdir=infra/orders/prod init -input=false\n",
+  "grader": {
+    "strategy": "yaml-paths",
+    "expected": [
+      {
+        "path": [
+          "on",
+          "pull_request",
+          "paths"
+        ],
+        "includes": "infra/orders/prod/**",
+        "label": "pull request trigger stays scoped to the production Terraform path"
+      },
+      {
+        "path": [
+          "permissions",
+          "contents"
+        ],
+        "equals": "read",
+        "label": "workflow token keeps contents read permission"
+      },
+      {
+        "path": [
+          "jobs",
+          "terraform",
+          "steps"
+        ],
+        "type": "array",
+        "minItems": 6,
+        "label": "terraform job has checkout, setup, init, format, validate, and plan steps"
+      },
+      {
+        "path": [
+          "jobs",
+          "terraform",
+          "steps",
+          3,
+          "run"
+        ],
+        "equals": "terraform -chdir=infra/orders/prod fmt -check",
+        "label": "format check runs after init"
+      },
+      {
+        "path": [
+          "jobs",
+          "terraform",
+          "steps",
+          4,
+          "run"
+        ],
+        "equals": "terraform -chdir=infra/orders/prod validate",
+        "label": "validate runs after formatting"
+      },
+      {
+        "path": [
+          "jobs",
+          "terraform",
+          "steps",
+          5,
+          "run"
+        ],
+        "equals": "terraform -chdir=infra/orders/prod plan -input=false",
+        "label": "speculative plan runs non-interactively after validation"
+      }
+    ]
+  }
+}

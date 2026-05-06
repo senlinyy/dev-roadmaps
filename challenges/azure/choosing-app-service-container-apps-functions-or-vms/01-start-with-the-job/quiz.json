@@ -1,0 +1,61 @@
+{
+  "passThreshold": 0.75,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "The team is choosing where to run `devpolaris-orders-api`. It is an always-on HTTPS API with a normal release process, managed identity, app settings, and health checks. What is the strongest first filter?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Choose the Azure service with the most features so the team can grow into it."
+        },
+        {
+          "id": "b",
+          "text": "Ask what runtime ownership the team wants: managed web app, managed container revision, event function, or full machine."
+        },
+        {
+          "id": "c",
+          "text": "Choose the service that appears first in the portal."
+        },
+        {
+          "id": "d",
+          "text": "Use Functions because serverless is the most modern default."
+        }
+      ],
+      "correct": [
+        "b"
+      ],
+      "explanation": "The article frames compute choice as an ownership decision. The job and operating model matter more than product familiarity."
+    },
+    {
+      "id": "q2",
+      "type": "multiple",
+      "scenario": "Which statements are useful when comparing App Service, Container Apps, Functions, and VMs for one product?",
+      "options": [
+        {
+          "id": "a",
+          "text": "A product can use more than one compute service when its workloads behave differently."
+        },
+        {
+          "id": "b",
+          "text": "The choice should include how the team will deploy, inspect health, read logs, and recover."
+        },
+        {
+          "id": "c",
+          "text": "The newest service should replace the others because fewer legacy names are easier to teach."
+        },
+        {
+          "id": "d",
+          "text": "A VM is reasonable when the team truly needs OS-level control and accepts the maintenance work."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "d"
+      ],
+      "explanation": "The course avoids one-size-fits-all decisions. Each workload earns its runtime by matching behavior and ownership."
+    }
+  ]
+}

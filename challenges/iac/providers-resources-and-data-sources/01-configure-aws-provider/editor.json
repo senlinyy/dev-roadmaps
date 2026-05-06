@@ -1,0 +1,36 @@
+{
+  "language": "hcl",
+  "completionProfile": "terraform-aws",
+  "activeFile": "main.tf",
+  "files": [
+    {
+      "filename": "main.tf",
+      "initialValue": "terraform {\n  required_providers {\n    aws = {\n    }\n  }\n}\n\nprovider \"aws\" {\n  default_tags {\n    tags = {\n      project    = \"devpolaris-orders\"\n      managed_by = \"terraform\"\n    }\n  }\n}\n"
+    }
+  ],
+  "grader": {
+    "strategy": "regex-all",
+    "expected": [
+      {
+        "file": "main.tf",
+        "pattern": "required_providers\\s*\\{[\\s\\S]*aws\\s*=\\s*\\{[\\s\\S]*source\\s*=\\s*\"hashicorp/aws\"",
+        "label": "AWS required provider source is hashicorp/aws"
+      },
+      {
+        "file": "main.tf",
+        "pattern": "required_providers\\s*\\{[\\s\\S]*aws\\s*=\\s*\\{[\\s\\S]*version\\s*=\\s*\"[^\"]*(~>|>=|<=|<|>)[^\"]*\"",
+        "label": "AWS required provider has a reviewed version constraint"
+      },
+      {
+        "file": "main.tf",
+        "pattern": "provider\\s+\"aws\"\\s*\\{[\\s\\S]*region\\s*=\\s*\"eu-west-2\"[\\s\\S]*\\}",
+        "label": "AWS provider region is eu-west-2"
+      },
+      {
+        "file": "main.tf",
+        "pattern": "default_tags\\s*\\{[\\s\\S]*tags\\s*=\\s*\\{[\\s\\S]*project\\s*=\\s*\"devpolaris-orders\"[\\s\\S]*managed_by\\s*=\\s*\"terraform\"",
+        "label": "default tags are preserved"
+      }
+    ]
+  }
+}

@@ -1,0 +1,57 @@
+{
+  "passThreshold": 0.75,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A staging root module has this backend configuration:\n\n```hcl\nterraform {\n  backend \"s3\" {\n    bucket = \"dp-terraform-state\"\n    key    = \"devpolaris-orders/prod/terraform.tfstate\"\n    region = \"eu-west-2\"\n  }\n}\n```\n\nThe staging resource names all include `staging`. What should the reviewer do first?",
+      "options": [
+        { "id": "a", "text": "Stop the change and fix the backend key before trusting the staging plan." },
+        { "id": "b", "text": "Approve because staging names prevent production state from being read." },
+        { "id": "c", "text": "Change every bucket name again until the plan no longer mentions production." },
+        { "id": "d", "text": "Run apply from staging because the backend bucket itself is shared by design." }
+      ],
+      "correct": ["a"],
+      "explanation": "Names help humans, but state decides Terraform's managed inventory. A staging root module pointing at the production state key can read or update production-managed objects, so the state boundary must be repaired before apply."
+    },
+    {
+      "id": "q2",
+      "type": "multiple",
+      "scenario": "A pull request says it updates only development, but the plan shows resources named `dp-orders-invoices-prod`. Which checks are reasonable before apply?",
+      "options": [
+        { "id": "a", "text": "Confirm the working directory or automation root module is the development directory." },
+        { "id": "b", "text": "Check the backend key or managed workspace state location." },
+        { "id": "c", "text": "Inspect the selected CLI workspace if this repository uses workspaces." },
+        { "id": "d", "text": "Ignore the names because Terraform plans are always environment-neutral." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "The mismatch may come from the run directory, state location, workspace selection, or variable values. Production names in a development plan are evidence to investigate, not noise to ignore."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "A teammate wants to write this backend block:\n\n```hcl\nterraform {\n  backend \"s3\" {\n    bucket = \"dp-terraform-state\"\n    key    = \"devpolaris-orders/${var.environment}/terraform.tfstate\"\n    region = var.aws_region\n  }\n}\n```\n\nWhat is the most accurate review comment?",
+      "options": [
+        { "id": "a", "text": "Backend configuration is resolved during initialization, so normal input variables are not the right mechanism here." },
+        { "id": "b", "text": "This is required because backend keys should always use variables." },
+        { "id": "c", "text": "This is safe only when the bucket name also changes with the environment." },
+        { "id": "d", "text": "This removes the need for separate state because the resource names will differ." }
+      ],
+      "correct": ["a"],
+      "explanation": "Terraform resolves backend configuration during init and backend blocks do not use normal input variables the way resource arguments do. Teams usually use separate backend files, partial backend config, or managed workspace settings."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "The production plan summary says:\n\n```text\nTarget: devpolaris-orders production app root module\nState key: devpolaris-orders/prod/terraform.tfstate\nPlan: 0 to add, 1 to change, 0 to destroy\n```\n\nThe changed resource is the production invoice bucket lifecycle rule. What makes this reviewable?",
+      "options": [
+        { "id": "a", "text": "The target, state key, and plan scope all point at the same production boundary." },
+        { "id": "b", "text": "The plan has only one change, so the environment target no longer matters." },
+        { "id": "c", "text": "Lifecycle rules are always safe because they do not use state." },
+        { "id": "d", "text": "The resource name contains `prod`, so no other evidence is needed." }
+      ],
+      "correct": ["a"],
+      "explanation": "A small plan is not enough by itself. It becomes reviewable because the working target, state key, and described resource all match the production change story."
+    }
+  ]
+}

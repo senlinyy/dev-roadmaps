@@ -1,0 +1,105 @@
+{
+  "passThreshold": 0.75,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "Mira and Jamal both work on the same `devpolaris-orders` AWS bucket from separate laptops. Each laptop has its own `terraform.tfstate`. Mira applies versioning while Jamal applies an IAM policy. What is the main risk?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The two state files can diverge, so future plans may not have a reliable memory of all managed objects."
+        },
+        {
+          "id": "b",
+          "text": "Terraform refuses to run when more than one local state file exists anywhere."
+        },
+        {
+          "id": "c",
+          "text": "AWS automatically merges the two local state files after both applies finish."
+        },
+        {
+          "id": "d",
+          "text": "The `.terraform.lock.hcl` file will prevent both applies from changing infrastructure."
+        }
+      ],
+      "correct": ["a"],
+      "explanation": "Local state is convenient for one learner, but it becomes unsafe for shared infrastructure. Each state file can remember only part of the managed system, making later plans harder to trust."
+    },
+    {
+      "id": "q2",
+      "type": "multiple",
+      "scenario": "A new Terraform learning directory contains:\n\n```text\n.terraform/\n.terraform.lock.hcl\nmain.tf\nterraform.tfstate\n```\n\nWhich repository choices are correct?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Commit `.terraform.lock.hcl` so provider selections and checksums are reviewable."
+        },
+        {
+          "id": "b",
+          "text": "Do not commit `.terraform/` because it is local working data."
+        },
+        {
+          "id": "c",
+          "text": "Do not commit `terraform.tfstate` because state is operational data and may contain sensitive values."
+        },
+        {
+          "id": "d",
+          "text": "Commit `terraform.tfstate` so everyone can share the latest state through Git history."
+        }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "The dependency lock file belongs in source control. The plugin/cache directory and state file do not. Git history is a poor state backend and a poor secret boundary."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "A teammate says local state is fine because the project is currently a one-person sandbox. Which review comment is most accurate?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Local state is acceptable for disposable learning, but move to a backend before the infrastructure becomes team-owned or important."
+        },
+        {
+          "id": "b",
+          "text": "Local state is never allowed, even for a first Terraform exercise."
+        },
+        {
+          "id": "c",
+          "text": "Local state is safer than remote state because it cannot contain secrets."
+        },
+        {
+          "id": "d",
+          "text": "Local state should be emailed after each apply so the team has backups."
+        }
+      ],
+      "correct": ["a"],
+      "explanation": "Local state has a place while learning alone on throwaway infrastructure. Once other people, production targets, backups, or access control matter, a backend becomes part of the safety model."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "The platform team proposes a remote backend for `devpolaris-orders`. Which benefits should reviewers expect from that move?",
+      "options": [
+        {
+          "id": "a",
+          "text": "A shared place for the state record instead of one laptop being the source of truth."
+        },
+        {
+          "id": "b",
+          "text": "Access controls, encryption, audit logs, or backups can protect operational state."
+        },
+        {
+          "id": "c",
+          "text": "Locking may prevent two writers from updating the same state at once."
+        },
+        {
+          "id": "d",
+          "text": "Terraform no longer needs providers or state once a backend exists."
+        }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "A backend gives the team shared, protectable state storage and often locking. It does not remove Terraform's need to use providers or maintain a state record."
+    }
+  ]
+}

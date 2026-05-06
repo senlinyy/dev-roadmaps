@@ -1,0 +1,61 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "The `job-status` container keeps background export status for support. The team wants status records available for about 30 days, then removed without manual cleanup. Which Cosmos DB setting should be checked?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Default TTL on the container, with a value that matches the retention window."
+        },
+        {
+          "id": "b",
+          "text": "The storage account lifecycle policy, because exports and job status are the same data shape."
+        },
+        {
+          "id": "c",
+          "text": "SQL long-term retention, because every support record should be recoverable for years."
+        },
+        {
+          "id": "d",
+          "text": "Managed disk SKU, because status records are safest when tied to the worker VM."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Cosmos DB TTL is the service feature for records that should expire automatically. The retention window should match the product and support need."
+    },
+    {
+      "id": "q2",
+      "type": "multiple",
+      "scenario": "A Cosmos DB review finds slow queries after the team added a dashboard for order events. The container uses partition key `/idempotencyKey`, but the dashboard filters mostly by customer and month. Which conclusions are reasonable?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The dashboard access pattern does not match the current partition key."
+        },
+        {
+          "id": "b",
+          "text": "The team may need a different model or a different service for the dashboard workload."
+        },
+        {
+          "id": "c",
+          "text": "Increasing throughput might hide symptoms but will not change the data model."
+        },
+        {
+          "id": "d",
+          "text": "The best fix is to remove TTL because TTL always slows down queries."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "Partition keys are design choices. If the new read path does not match the model, the team should revisit the model or service instead of assuming throughput is the only answer."
+    }
+  ]
+}

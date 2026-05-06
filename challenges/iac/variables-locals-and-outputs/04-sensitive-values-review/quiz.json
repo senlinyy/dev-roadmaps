@@ -1,0 +1,105 @@
+{
+  "passThreshold": 0.75,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A module declares:\n\n```hcl\nvariable \"database_password\" {\n  type      = string\n  sensitive = true\n}\n```\n\nA reviewer says this means the password can no longer appear in Terraform state. What is the best response?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Sensitive hides normal CLI display, but the real value may still be present in state and must be protected."
+        },
+        {
+          "id": "b",
+          "text": "Sensitive encrypts the value inside state, so backend access does not matter."
+        },
+        {
+          "id": "c",
+          "text": "Sensitive prevents providers from receiving the value, so the database password will not be configured."
+        },
+        {
+          "id": "d",
+          "text": "Sensitive only works for outputs, not variables."
+        }
+      ],
+      "correct": ["a"],
+      "explanation": "Terraform sensitivity is mainly a display boundary. It helps keep terminal output and routine logs cleaner, but state and saved plans can still contain the values Terraform needs to operate."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A teammate adds an output for `database_password` with `sensitive = true` because a one-off migration script might need it later. What is the best review comment?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Avoid exposing the password unless a real consumer needs it; sensitive redaction does not make the output harmless."
+        },
+        {
+          "id": "b",
+          "text": "Approve it because sensitive outputs are not stored anywhere after apply."
+        },
+        {
+          "id": "c",
+          "text": "Remove `sensitive = true` so reviewers can inspect the exact password."
+        },
+        {
+          "id": "d",
+          "text": "Rename it to `secret_password` and keep the output."
+        }
+      ],
+      "correct": ["a"],
+      "explanation": "Outputs are a module contract. A sensitive output still increases the number of places that value travels, and it can still be present in state. Expose it only when there is a deliberate consumer."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "A pull request marks `environment` as sensitive so production plans show less information. The value is one of `dev`, `staging`, or `prod`. What should the reviewer prefer?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Keep environment visible and validate allowed values, because hiding it removes useful operational context."
+        },
+        {
+          "id": "b",
+          "text": "Mark every variable sensitive so all plans are quieter."
+        },
+        {
+          "id": "c",
+          "text": "Move the environment into a password manager because it appears in tags."
+        },
+        {
+          "id": "d",
+          "text": "Hardcode production in the module so no variable appears in the plan."
+        }
+      ],
+      "correct": ["a"],
+      "explanation": "Sensitivity is for values that should not be exposed. Environment names are usually review context, not secrets. Validation is a better control for allowed environment choices."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "A team is reviewing how to handle Terraform values for `devpolaris-orders`. Which statements are correct?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Do not commit secret values in `.tfvars` files just because a matching variable is marked sensitive."
+        },
+        {
+          "id": "b",
+          "text": "Protect the state backend because state may include sensitive provider attributes."
+        },
+        {
+          "id": "c",
+          "text": "Output only values that humans, scripts, or other modules have a real reason to consume."
+        },
+        {
+          "id": "d",
+          "text": "Use sensitive on ordinary tags so reviewers cannot see what environment a plan targets."
+        }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "Sensitive flags reduce display exposure, but they do not replace secret handling, backend access control, or selective module interfaces. Ordinary review context should usually stay visible."
+    }
+  ]
+}

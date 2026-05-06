@@ -1,0 +1,88 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "`devpolaris-orders-api` runs in subnet `snet-orders-api` with address prefix `10.30.2.0/24`. What does that subnet mainly decide?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The private address range and subnet-level controls that apply to resources placed there."
+        },
+        {
+          "id": "b",
+          "text": "The human team allowed to approve deployments."
+        },
+        {
+          "id": "c",
+          "text": "The Node.js package versions available to the app."
+        },
+        {
+          "id": "d",
+          "text": "The public DNS name users type in a browser."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "A subnet is a placement and network-control boundary. It does not decide code packages, human approvals, or public DNS names."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A route table is associated with the API subnet. Which question should the route table answer?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Which user owns the resource group?"
+        },
+        {
+          "id": "b",
+          "text": "Which next hop should traffic use for matching destination ranges?"
+        },
+        {
+          "id": "c",
+          "text": "Which TLS certificate protects the public hostname?"
+        },
+        {
+          "id": "d",
+          "text": "Which secret version should the app read?"
+        }
+      ],
+      "correct": [
+        "b"
+      ],
+      "explanation": "Routes decide the next hop for traffic. Certificates, secrets, and ownership metadata live in other parts of the system."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "Which evidence helps review whether the API subnet is in the right place?",
+      "options": [
+        {
+          "id": "a",
+          "text": "VNet address space."
+        },
+        {
+          "id": "b",
+          "text": "Subnet address prefix."
+        },
+        {
+          "id": "c",
+          "text": "Attached NSG and route table."
+        },
+        {
+          "id": "d",
+          "text": "The latest Git commit author."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "Network placement is about address space and attached controls. Git metadata can help release review, but it does not explain packet flow."
+    }
+  ]
+}

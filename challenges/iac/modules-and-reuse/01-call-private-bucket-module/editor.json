@@ -1,0 +1,46 @@
+{
+  "language": "hcl",
+  "completionProfile": "terraform",
+  "activeFile": "main.tf",
+  "files": [
+    {
+      "filename": "main.tf",
+      "initialValue": "terraform {\n  required_version = \">= 1.6.0\"\n}\n\nprovider \"aws\" {\n  region = \"eu-west-2\"\n}\n"
+    }
+  ],
+  "grader": {
+    "strategy": "regex-all",
+    "expected": [
+      {
+        "file": "main.tf",
+        "pattern": "module\\s+\"invoice_bucket\"\\s*{[\\s\\S]*source\\s*=\\s*\"\\.\\./\\.\\./modules/private-bucket\"[\\s\\S]*}",
+        "label": "invoice_bucket module uses the local private bucket source"
+      },
+      {
+        "file": "main.tf",
+        "pattern": "module\\s+\"invoice_bucket\"\\s*{[\\s\\S]*bucket_name\\s*=\\s*\"dp-orders-invoices-prod\"[\\s\\S]*}",
+        "label": "invoice_bucket passes the production invoice bucket name"
+      },
+      {
+        "file": "main.tf",
+        "pattern": "module\\s+\"invoice_bucket\"\\s*{[\\s\\S]*service\\s*=\\s*\"orders-api\"[\\s\\S]*}",
+        "label": "invoice_bucket passes the service name"
+      },
+      {
+        "file": "main.tf",
+        "pattern": "module\\s+\"invoice_bucket\"\\s*{[\\s\\S]*environment\\s*=\\s*\"prod\"[\\s\\S]*}",
+        "label": "invoice_bucket passes the production environment"
+      },
+      {
+        "file": "main.tf",
+        "pattern": "module\\s+\"invoice_bucket\"\\s*{[\\s\\S]*owner\\s*=\\s*\"platform\"[\\s\\S]*}",
+        "label": "invoice_bucket passes the platform owner"
+      },
+      {
+        "file": "main.tf",
+        "pattern": "module\\s+\"invoice_bucket\"\\s*{[\\s\\S]*versioning_enabled\\s*=\\s*true[\\s\\S]*}",
+        "label": "invoice_bucket enables versioning"
+      }
+    ]
+  }
+}

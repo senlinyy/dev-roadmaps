@@ -118,6 +118,8 @@ type ChallengeConfig = Record<string, unknown>;
 
 type QuizConfig = Record<string, unknown>;
 
+type EditorConfig = Record<string, unknown>;
+
 type ChallengeStepBase = {
   id: string;
   title: string;
@@ -138,7 +140,12 @@ type QuizChallengeStep = ChallengeStepBase & {
   quiz: QuizConfig;
 };
 
-type ChallengeStep = PracticalChallengeStep | QuizChallengeStep;
+type EditorChallengeStep = ChallengeStepBase & {
+  kind: 'editor';
+  editor: EditorConfig;
+};
+
+type ChallengeStep = PracticalChallengeStep | QuizChallengeStep | EditorChallengeStep;
 
 type ChallengeGroupFull = ChallengeGroupMeta & {
   steps: ChallengeStep[];
@@ -470,8 +477,9 @@ function loadStep(groupDir: string, stepId: string): ChallengeStep | null {
   const challengePath = path.join(stepDir, 'challenge.md');
   const configPath = path.join(stepDir, 'config.json');
   const quizPath = path.join(stepDir, 'quiz.json');
+  const editorPath = path.join(stepDir, 'editor.json');
 
-  if (!exists(challengePath) || (!exists(configPath) && !exists(quizPath))) {
+  if (!exists(challengePath) || (!exists(configPath) && !exists(quizPath) && !exists(editorPath))) {
     return null;
   }
 
@@ -499,6 +507,14 @@ function loadStep(groupDir: string, stepId: string): ChallengeStep | null {
       ...base,
       kind: 'quiz',
       quiz: JSON.parse(fs.readFileSync(quizPath, 'utf-8')) as QuizConfig,
+    };
+  }
+
+  if (exists(editorPath)) {
+    return {
+      ...base,
+      kind: 'editor',
+      editor: JSON.parse(fs.readFileSync(editorPath, 'utf-8')) as EditorConfig,
     };
   }
 

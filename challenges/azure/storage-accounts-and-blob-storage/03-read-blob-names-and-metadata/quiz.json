@@ -1,0 +1,59 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A developer wants to find every paid order by scanning blob names under `receipts/2026/05/`. The order status already lives in Azure SQL. Which explanation fits the article?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Blob names are useful addresses for objects, but they should not become the source of truth for business status."
+        },
+        {
+          "id": "b",
+          "text": "Blob names are better than SQL indexes because prefixes can express every business query."
+        },
+        {
+          "id": "c",
+          "text": "The team should copy all order fields into blob metadata and stop using SQL for lookup."
+        },
+        {
+          "id": "d",
+          "text": "The team should avoid prefixes completely because Azure cannot list blobs by name pattern."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Blob names are addresses and grouping hints. Business facts such as payment state belong in a database that is designed for those records and queries."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "The exports container has daily CSV files and temporary retry files. The team expects daily exports to cool after 30 days, last for a year, and temporary files to disappear after a week. What Azure feature should be reviewed?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Blob lifecycle management rules on the storage account."
+        },
+        {
+          "id": "b",
+          "text": "SQL long-term retention on the orders database."
+        },
+        {
+          "id": "c",
+          "text": "Cosmos DB TTL on the idempotency key container."
+        },
+        {
+          "id": "d",
+          "text": "Managed disk snapshots for the legacy VM."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Lifecycle management is the Blob Storage feature that moves or deletes objects based on age and prefix. The other features protect different storage shapes."
+    }
+  ]
+}

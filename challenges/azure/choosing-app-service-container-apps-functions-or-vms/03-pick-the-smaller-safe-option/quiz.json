@@ -1,0 +1,86 @@
+{
+  "passThreshold": 0.75,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A background task runs for 20 seconds whenever a checkout event lands on a queue. It does not need its own public endpoint. Which option is the best first fit?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Azure Functions with a queue trigger."
+        },
+        {
+          "id": "b",
+          "text": "A public App Service web app."
+        },
+        {
+          "id": "c",
+          "text": "A VM with a cron job and a custom queue poller."
+        },
+        {
+          "id": "d",
+          "text": "A Container Apps environment only, without a container app."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The task starts from an event and can stay idle between events. Functions match that shape with less runtime ownership."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "The team already builds a Docker image for the orders API and wants traffic splitting between revisions. Which option fits that release model most directly?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Azure Container Apps."
+        },
+        {
+          "id": "b",
+          "text": "Azure Files."
+        },
+        {
+          "id": "c",
+          "text": "Azure Functions timer trigger."
+        },
+        {
+          "id": "d",
+          "text": "A standalone managed disk."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Container Apps centers the release around container revisions and traffic weights. That is the specific need in the scenario."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "A vendor agent must run on the same host as a legacy binary, writes to a mounted disk, and depends on OS packages not available in managed runtimes. What is the honest starting option?",
+      "options": [
+        {
+          "id": "a",
+          "text": "A VM, with a clear note that patching, boot, disk, access, and monitoring become team responsibilities."
+        },
+        {
+          "id": "b",
+          "text": "App Service, because managed runtimes remove those requirements."
+        },
+        {
+          "id": "c",
+          "text": "Functions, because events can launch any kind of binary safely."
+        },
+        {
+          "id": "d",
+          "text": "Container Registry, because the agent can be stored as an image."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "A VM is sometimes the correct answer, but the decision record should show what control is needed and what operations come with it."
+    }
+  ]
+}

@@ -1,0 +1,61 @@
+{
+  "passThreshold": 0.75,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "The staging slot starts successfully, but the production slot has a different Key Vault reference for `DATABASE_URL`. What should the team do before swapping?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Swap immediately because the code already started in staging."
+        },
+        {
+          "id": "b",
+          "text": "Compare slot-specific settings and confirm the production identity can read the production secret."
+        },
+        {
+          "id": "c",
+          "text": "Delete the setting from production to make both slots match."
+        },
+        {
+          "id": "d",
+          "text": "Move the database into the staging slot."
+        }
+      ],
+      "correct": [
+        "b"
+      ],
+      "explanation": "Slots help test the release, but slot-specific settings can still change behavior. The team should verify the values that will apply after traffic moves."
+    },
+    {
+      "id": "q2",
+      "type": "multiple",
+      "scenario": "Before a production slot swap, the candidate slot has passed smoke tests but the team still needs evidence that traffic can move safely and return if needed. Which checks make a slot swap safer for a backend API?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The candidate slot starts with the expected runtime and app settings."
+        },
+        {
+          "id": "b",
+          "text": "Health checks pass against the candidate slot."
+        },
+        {
+          "id": "c",
+          "text": "The rollback target and previous production slot are known."
+        },
+        {
+          "id": "d",
+          "text": "The app service plan name is shorter after the swap."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "A safe swap needs runtime, health, and rollback evidence. Naming style is not release safety."
+    }
+  ]
+}

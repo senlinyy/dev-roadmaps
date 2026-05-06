@@ -1,0 +1,57 @@
+{
+  "passThreshold": 0.75,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A pull request includes the bucket resource block and import block. The plan says:\n\n```text\nPlan: 1 to import, 0 to add, 0 to change, 0 to destroy.\n```\n\nWhat does this plan most strongly suggest?",
+      "options": [
+        { "id": "a", "text": "Terraform is connecting the existing bucket to state instead of creating or deleting infrastructure." },
+        { "id": "b", "text": "Terraform has already applied the import and no review is needed." },
+        { "id": "c", "text": "The bucket will be replaced after import." },
+        { "id": "d", "text": "The resource block can be deleted because the import block is enough." }
+      ],
+      "correct": ["a"],
+      "explanation": "A clean import-only plan is the desired adoption shape. It still needs review, but the summary says Terraform is connecting an existing object rather than proposing a create, update, or destroy."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "After import, the follow-up plan says:\n\n```text\n~ tags = {\n    ~ \"owner\" = \"legacy-ops\" -> \"platform\"\n      \"environment\" = \"prod\"\n      \"service\" = \"orders-api\"\n  }\n\nPlan: 0 to add, 1 to change, 0 to destroy.\n```\n\nHow should the reviewer treat this?",
+      "options": [
+        { "id": "a", "text": "As evidence of a tag mismatch that may be an intended cleanup or may mean the resource block used the wrong owner." },
+        { "id": "b", "text": "As proof that import failed because tags can never change after import." },
+        { "id": "c", "text": "As a replacement risk equal to deleting the bucket." },
+        { "id": "d", "text": "As irrelevant noise because tags are not part of Terraform plans." }
+      ],
+      "correct": ["a"],
+      "explanation": "The first plan after import is a comparison between configuration, state, and reality. A tag diff is review evidence; the team still decides whether the file or the real object should change."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "The first plan after importing the production invoice bucket says:\n\n```text\n-/+ resource \"aws_s3_bucket\" \"orders_invoices\" {\n  ~ bucket = \"dp-orders-invoices-prod\" -> \"dp-orders-invoices-production\"\n}\n\nPlan: 1 to add, 0 to change, 1 to destroy.\n```\n\nWhat should happen next?",
+      "options": [
+        { "id": "a", "text": "Stop before apply and decide whether the code name is wrong or a deliberate migration is needed." },
+        { "id": "b", "text": "Apply quickly because replacement proves the import worked." },
+        { "id": "c", "text": "Delete the import block and retry until the plan is quiet." },
+        { "id": "d", "text": "Ignore the replacement because S3 bucket names are not real identities." }
+      ],
+      "correct": ["a"],
+      "explanation": "A replacement on a production data-bearing bucket is a stop sign. The team should not approve a destroy/create plan just because the resource was imported."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "A teammate imported a bucket yesterday, but today's plan still tries to create `dp-orders-invoices-prod` and the provider returns `BucketAlreadyOwnedByYou`. Which causes should you check?",
+      "options": [
+        { "id": "a", "text": "The import may have targeted a different resource address than the block in the current file." },
+        { "id": "b", "text": "The current run may be using a different backend or CLI workspace than the import used." },
+        { "id": "c", "text": "The state entry may be missing, so `terraform state list` should be checked under the intended run context." },
+        { "id": "d", "text": "The bucket name is too long for Terraform state, so Terraform always recreates it." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "A duplicate-create plan after import usually means the state connection is missing from this run context, the address differs, or the backend/workspace is not the one that received the import."
+    }
+  ]
+}

@@ -1,0 +1,88 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "The team needs regional HTTP routing for `orders.devpolaris.com`, TLS termination, path-based rules, and backend health probes. Which service fits best?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Application Gateway."
+        },
+        {
+          "id": "b",
+          "text": "Azure Load Balancer."
+        },
+        {
+          "id": "c",
+          "text": "Azure SQL Database."
+        },
+        {
+          "id": "d",
+          "text": "Private DNS zone only."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Application Gateway is the regional layer 7 option for HTTP routing, TLS termination, and backend health checks."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "The team needs a global edge entry for users in multiple regions and wants traffic routed to the closest healthy origin. Which service fits best?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Front Door."
+        },
+        {
+          "id": "b",
+          "text": "A private endpoint."
+        },
+        {
+          "id": "c",
+          "text": "A route table."
+        },
+        {
+          "id": "d",
+          "text": "A managed identity."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Front Door is the global HTTP edge entry pattern. Private endpoints, route tables, and identities solve different problems."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "Which statements are true about health probes?",
+      "options": [
+        {
+          "id": "a",
+          "text": "They help keep unhealthy backends out of rotation."
+        },
+        {
+          "id": "b",
+          "text": "They prove every user action works."
+        },
+        {
+          "id": "c",
+          "text": "They should hit a path that reflects whether the backend can serve traffic."
+        },
+        {
+          "id": "d",
+          "text": "They can fail even when the VM or container process is running."
+        }
+      ],
+      "correct": [
+        "a",
+        "c",
+        "d"
+      ],
+      "explanation": "Health probes are operating signals, not full end-to-end tests. A running process can still fail the probe path."
+    }
+  ]
+}

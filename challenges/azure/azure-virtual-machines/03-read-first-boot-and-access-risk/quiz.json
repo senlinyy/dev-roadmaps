@@ -1,0 +1,61 @@
+{
+  "passThreshold": 0.75,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A VM was recreated from an image, but the orders worker did not start. Which first checks are most useful?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Boot diagnostics, cloud-init or first-boot logs, systemd service status, environment files, and disk mounts."
+        },
+        {
+          "id": "b",
+          "text": "The App Service deployment slot list."
+        },
+        {
+          "id": "c",
+          "text": "Only the public DNS record."
+        },
+        {
+          "id": "d",
+          "text": "The function trigger type."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "VM startup problems often sit inside boot configuration and process supervision, not only Azure resource metadata."
+    },
+    {
+      "id": "q2",
+      "type": "multiple",
+      "scenario": "The VM is used for a production worker with private data access. Before another team member is added to support rotation, the owner wants access rules that are clear and reviewable. Which VM access decisions should be recorded for production?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Who can administer the VM and through which approved path."
+        },
+        {
+          "id": "b",
+          "text": "Whether the VM has a public IP or only private network access."
+        },
+        {
+          "id": "c",
+          "text": "Which managed identity or service principal the workload uses."
+        },
+        {
+          "id": "d",
+          "text": "The favorite SSH alias of one developer as the only source of truth."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "VM access is a production control. It needs shared, reviewable information rather than a personal shortcut."
+    }
+  ]
+}

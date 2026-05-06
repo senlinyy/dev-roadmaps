@@ -1,0 +1,88 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "Public users can reach the API, but checkout fails only when writing to SQL. Which first check is most relevant?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Private endpoint, private DNS, SQL firewall, and app identity for SQL."
+        },
+        {
+          "id": "b",
+          "text": "The browser CNAME record only."
+        },
+        {
+          "id": "c",
+          "text": "The public TLS certificate only."
+        },
+        {
+          "id": "d",
+          "text": "The marketing site deployment history."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The public path works. The failure is in the private data path, so SQL private access and permissions are the right first checks."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A teammate wants to enable public network access on SQL during the incident. What should the reviewer ask first?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Which private path evidence failed, and is there a narrower repair that preserves private access?"
+        },
+        {
+          "id": "b",
+          "text": "Can the setting be enabled quickly from the portal?"
+        },
+        {
+          "id": "c",
+          "text": "Will a public endpoint make the dashboard greener?"
+        },
+        {
+          "id": "d",
+          "text": "Can the app retry enough times to hide the change?"
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Opening public access changes the exposure model. The reviewer should ask for evidence and a narrower private-path fix first."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "Which symptoms point at private DNS instead of public entry?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The API logs show SQL hostname resolution to a public address."
+        },
+        {
+          "id": "b",
+          "text": "The browser never reaches Application Gateway."
+        },
+        {
+          "id": "c",
+          "text": "The private endpoint has IP `10.30.40.7`, but the app connects to a different SQL IP."
+        },
+        {
+          "id": "d",
+          "text": "Only production fails, and production uses a different private DNS zone link."
+        }
+      ],
+      "correct": [
+        "a",
+        "c",
+        "d"
+      ],
+      "explanation": "Private DNS controls how the app resolves the data-service name. Browser entry failure belongs earlier in the public path."
+    }
+  ]
+}

@@ -1,0 +1,61 @@
+{
+  "passThreshold": 0.75,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A health endpoint returns 200 before the app has connected to the database or loaded required secrets. What risk does this create?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Azure may send traffic to a copy that can answer the health path but fails real checkout requests."
+        },
+        {
+          "id": "b",
+          "text": "The app will never scale out."
+        },
+        {
+          "id": "c",
+          "text": "DNS records will be deleted."
+        },
+        {
+          "id": "d",
+          "text": "The subscription will change region."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Health checks should prove enough readiness for the traffic the service will receive. A shallow check can hide dependency failures."
+    },
+    {
+      "id": "q2",
+      "type": "multiple",
+      "scenario": "The team wants to change the health endpoint for `devpolaris-orders-api`. The reviewer wants the check to prove real readiness and to understand how Azure reacts when it fails. Which facts should be included when reviewing a health check change?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The path Azure checks and what the application does on that path."
+        },
+        {
+          "id": "b",
+          "text": "Whether the check covers required dependencies or only process liveness."
+        },
+        {
+          "id": "c",
+          "text": "How failed checks affect traffic or revision health."
+        },
+        {
+          "id": "d",
+          "text": "The color of the portal status icon only."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "A health check is an operating contract. The team should know what it proves and how Azure acts on it."
+    }
+  ]
+}

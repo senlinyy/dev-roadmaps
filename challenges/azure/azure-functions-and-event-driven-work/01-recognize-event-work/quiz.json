@@ -1,0 +1,61 @@
+{
+  "passThreshold": 0.75,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "After checkout succeeds, the system needs to send a receipt when a queue message arrives. The job does not need a public API endpoint. Which Azure compute shape fits first?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Azure Functions with a queue trigger."
+        },
+        {
+          "id": "b",
+          "text": "A public App Service app with a polling loop."
+        },
+        {
+          "id": "c",
+          "text": "A VM that runs only when someone signs in."
+        },
+        {
+          "id": "d",
+          "text": "A DNS zone because the job has a name."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The work starts from an event, so a function trigger is a good fit."
+    },
+    {
+      "id": "q2",
+      "type": "multiple",
+      "scenario": "The orders product has the main checkout API plus several smaller jobs that run because something happened elsewhere. The team wants to choose Functions only where the work naturally starts from an event. Which jobs are reasonable Azure Functions candidates around the orders API?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Send a receipt from an orders queue message."
+        },
+        {
+          "id": "b",
+          "text": "Clean old export files on a timer."
+        },
+        {
+          "id": "c",
+          "text": "Run the always-on checkout API that users call all day."
+        },
+        {
+          "id": "d",
+          "text": "Handle a storage event when a new invoice export appears."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "d"
+      ],
+      "explanation": "Functions fit small pieces of work that start from events. An always-on API may use another runtime even if it shares code with functions."
+    }
+  ]
+}

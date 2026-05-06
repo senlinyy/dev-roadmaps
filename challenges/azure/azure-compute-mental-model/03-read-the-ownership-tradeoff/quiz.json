@@ -1,0 +1,88 @@
+{
+  "passThreshold": 0.75,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A teammate says App Service and Container Apps are both managed, so the operational work is identical. Which answer is most accurate?",
+      "options": [
+        {
+          "id": "a",
+          "text": "They are identical once the code reaches Azure."
+        },
+        {
+          "id": "b",
+          "text": "App Service starts from a web app runtime, while Container Apps starts from a container image and revision model. Both are managed, but the deployment and debugging evidence differs."
+        },
+        {
+          "id": "c",
+          "text": "Container Apps removes the need for health checks because Azure controls the replicas."
+        },
+        {
+          "id": "d",
+          "text": "App Service cannot use managed identity, so it needs copied secrets."
+        }
+      ],
+      "correct": [
+        "b"
+      ],
+      "explanation": "The course compares what Azure manages with what the team still needs to understand. Managed does not mean identical evidence or identical release behavior."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "The team wants the least server maintenance for a small queue job that sends receipts after orders. It should run when events arrive and stay idle otherwise. Which compute choice best fits the article?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Azure Functions, because the work starts from an event."
+        },
+        {
+          "id": "b",
+          "text": "Azure Virtual Machines, because queue jobs need a full operating system."
+        },
+        {
+          "id": "c",
+          "text": "Azure App Service, because all Node.js code should run as a web app."
+        },
+        {
+          "id": "d",
+          "text": "Azure Container Registry, because it stores the job image."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "A function app is a natural first choice when the job starts from an event and does not need to behave like an always-on API."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "Which questions belong in a practical runtime decision record before the team chooses a compute service?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Does the workload need to answer user traffic continuously, react to events, or run as a controlled machine?"
+        },
+        {
+          "id": "b",
+          "text": "What logs, health checks, deployment model, and rollback path will the team use?"
+        },
+        {
+          "id": "c",
+          "text": "Can every workload use the same resource type so the diagram is shorter?"
+        },
+        {
+          "id": "d",
+          "text": "What configuration and identity will the runtime need after it starts?"
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "d"
+      ],
+      "explanation": "A useful decision record describes the job, evidence, and operating path. Fewer boxes on a diagram are helpful only when they still match the workload."
+    }
+  ]
+}

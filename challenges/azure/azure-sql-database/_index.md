@@ -1,9 +1,9 @@
 ---
 title: "Azure SQL Database"
-description: "Practice relational business records for Azure by reading production evidence, choosing safe first checks, and avoiding broad changes."
+description: "Practice SQL database evidence for order records, private access, retention, and schema-sensitive releases."
 articleId: article-cloud-providers-azure-storage-databases-azure-sql-database
 articleSlug: azure-sql-database
 difficulty: medium
 order: 26
-tags: ["azure","storage","database","data","recovery"]
+tags: ["azure", "sql", "database", "transactions", "retention"]
 ---
