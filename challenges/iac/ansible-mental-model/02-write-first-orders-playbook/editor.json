@@ -1,0 +1,74 @@
+{
+  "language": "yaml",
+  "completionProfile": "ansible-playbook",
+  "activeFile": "site.yml",
+  "files": [
+    {
+      "filename": "inventory/prod.yml",
+      "initialValue": "all:\n  children:\n    orders_web:\n      hosts:\n        orders-web-01:\n          ansible_host: 10.0.10.21\n        orders-web-02:\n          ansible_host: 10.0.10.22\n"
+    },
+    {
+      "filename": "site.yml",
+      "initialValue": "- name: Configure orders web hosts\n  hosts: all\n  tasks: []\n"
+    }
+  ],
+  "grader": {
+    "strategy": "yaml-paths",
+    "expected": [
+      {
+        "file": "site.yml",
+        "path": [
+          0,
+          "hosts"
+        ],
+        "equals": "orders_web",
+        "label": "play targets orders_web"
+      },
+      {
+        "file": "site.yml",
+        "path": [
+          0,
+          "become"
+        ],
+        "equals": true,
+        "label": "play uses become"
+      },
+      {
+        "file": "site.yml",
+        "path": [
+          0,
+          "tasks",
+          0,
+          "ansible.builtin.apt",
+          "name"
+        ],
+        "equals": "nginx",
+        "label": "apt task installs nginx"
+      },
+      {
+        "file": "site.yml",
+        "path": [
+          0,
+          "tasks",
+          0,
+          "ansible.builtin.apt",
+          "state"
+        ],
+        "equals": "present",
+        "label": "nginx package is present"
+      },
+      {
+        "file": "site.yml",
+        "path": [
+          0,
+          "tasks",
+          0,
+          "ansible.builtin.apt",
+          "update_cache"
+        ],
+        "equals": true,
+        "label": "apt cache updates"
+      }
+    ]
+  }
+}

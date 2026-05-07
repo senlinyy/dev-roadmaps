@@ -1,0 +1,59 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A customer reports checkout failed once at 09:42 UTC. Application Insights has operation ID `checkout-5001`, request `POST /checkout`, result `500`, and a SQL dependency timeout. What is the best way to explain the incident?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Follow the operation ID through request, dependency, exception, and trace evidence."
+        },
+        {
+          "id": "b",
+          "text": "Read only the final exception text, because the exception is always the full story."
+        },
+        {
+          "id": "c",
+          "text": "Start with dashboard colors, because a red chart explains one customer request."
+        },
+        {
+          "id": "d",
+          "text": "Ignore dependencies, because backend APIs fail only inside their own process."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Application Insights is strongest when the team follows one operation across requests, dependencies, exceptions, and traces. The final exception is useful, but it is only one part of the story."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "The request succeeded, but users say checkout felt slow. Application Insights shows `POST /checkout` took 1400 ms and the receipt Blob write took 90 ms. Which evidence should the team compare next?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Dependency durations for the same operation, because a slow downstream call can make a successful request feel slow."
+        },
+        {
+          "id": "b",
+          "text": "Action group email receivers, because receiver names explain slow calls."
+        },
+        {
+          "id": "c",
+          "text": "The resource group location only, because location fully explains every slow request."
+        },
+        {
+          "id": "d",
+          "text": "The current article title, because the UI route might be stale."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Dependency timing helps explain where request time went. The request can succeed while one downstream call consumes most of the latency."
+    }
+  ]
+}

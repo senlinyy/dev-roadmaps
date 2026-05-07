@@ -1,0 +1,39 @@
+{
+  "language": "yaml",
+  "completionProfile": "ansible-playbook",
+  "activeFile": "site.yml",
+  "files": [
+    {
+      "filename": "site.yml",
+      "initialValue": "- name: Configure orders web hosts\n  hosts: orders_web\n  become: true\n\n  tasks:\n    - name: Install nginx on Debian hosts\n      ansible.builtin.apt:\n        name: nginx\n        state: present\n"
+    }
+  ],
+  "grader": {
+    "strategy": "yaml-paths",
+    "expected": [
+      {
+        "file": "site.yml",
+        "path": [
+          0,
+          "tasks",
+          0,
+          "ansible.builtin.apt",
+          "name"
+        ],
+        "equals": "nginx",
+        "label": "apt task installs nginx"
+      },
+      {
+        "file": "site.yml",
+        "path": [
+          0,
+          "tasks",
+          0,
+          "when"
+        ],
+        "equals": "ansible_facts.os_family == \"Debian\"",
+        "label": "task is gated by fact"
+      }
+    ]
+  }
+}

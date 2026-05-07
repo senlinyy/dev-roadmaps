@@ -1,0 +1,61 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "The failure-rate alert for `devpolaris-orders-api` currently sends to `ag-orders-oncall`. A platform team also wants every checkout alert. What should the team decide before adding them?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Whether the platform team owns an action for this alert, or whether they only need dashboard visibility."
+        },
+        {
+          "id": "b",
+          "text": "Whether the platform team has a shorter email address, because shorter receivers reduce alert noise."
+        },
+        {
+          "id": "c",
+          "text": "Whether the alert can be made critical so everyone treats it seriously."
+        },
+        {
+          "id": "d",
+          "text": "Whether the action group name appears in Application Insights traces."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Action groups should match ownership. Adding receivers who cannot act increases noise without improving response."
+    },
+    {
+      "id": "q2",
+      "type": "multiple",
+      "scenario": "A latency alert triggers every morning during a known batch window, but users are not affected. Which changes could improve the alert without hiding real incidents?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Adjust the threshold or evaluation window to match user-impacting latency."
+        },
+        {
+          "id": "b",
+          "text": "Add a dashboard note or separate batch metric so the pattern is visible."
+        },
+        {
+          "id": "c",
+          "text": "Review whether the alert should use failed requests, duration, or both."
+        },
+        {
+          "id": "d",
+          "text": "Delete the action group so no one is notified about any checkout incident."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "Alert tuning should reduce noise while preserving important signals. Removing all receivers hides real incidents instead of improving the alert."
+    }
+  ]
+}

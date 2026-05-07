@@ -1,0 +1,32 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A second playbook run against `orders-web-01` ends with this recap:\n\n```text\norders-web-01 : ok=7 changed=0 unreachable=0 failed=0\n```\n\nWhat does this most likely mean?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The host was reachable, every task finished, and the desired state was already present."
+        },
+        {
+          "id": "b",
+          "text": "Ansible skipped the host because no inventory matched."
+        },
+        {
+          "id": "c",
+          "text": "The playbook failed but hid the error because `changed=0`."
+        },
+        {
+          "id": "d",
+          "text": "`ok` means the run was only a dry run."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "`changed=0` on a repeat run is a useful idempotency signal. The host was reachable and tasks completed without failure."
+    }
+  ]
+}

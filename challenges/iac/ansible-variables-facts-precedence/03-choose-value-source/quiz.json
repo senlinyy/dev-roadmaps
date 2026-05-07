@@ -1,0 +1,32 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "Both `orders-web-01` and `orders-web-02` use the same API port. Where should `orders_api_port: 8080` normally live?",
+      "options": [
+        {
+          "id": "a",
+          "text": "`group_vars/orders_web.yml`, because the value describes the whole group."
+        },
+        {
+          "id": "b",
+          "text": "Inside every task that needs the port."
+        },
+        {
+          "id": "c",
+          "text": "Only in a handler, because handlers run late."
+        },
+        {
+          "id": "d",
+          "text": "In the inventory group name itself."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "A group variable keeps shared values close to the scope they describe and avoids repeated literals across tasks."
+    }
+  ]
+}

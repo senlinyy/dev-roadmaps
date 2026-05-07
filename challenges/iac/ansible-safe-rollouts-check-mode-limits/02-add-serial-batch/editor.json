@@ -1,0 +1,43 @@
+{
+  "language": "yaml",
+  "completionProfile": "ansible-playbook",
+  "activeFile": "site.yml",
+  "files": [
+    {
+      "filename": "site.yml",
+      "initialValue": "- name: Configure orders web hosts\n  hosts: orders_web\n  become: true\n\n  roles:\n    - orders_web\n"
+    }
+  ],
+  "grader": {
+    "strategy": "yaml-paths",
+    "expected": [
+      {
+        "file": "site.yml",
+        "path": [
+          0,
+          "hosts"
+        ],
+        "equals": "orders_web",
+        "label": "play targets orders_web"
+      },
+      {
+        "file": "site.yml",
+        "path": [
+          0,
+          "serial"
+        ],
+        "equals": 1,
+        "label": "serial is one host"
+      },
+      {
+        "file": "site.yml",
+        "path": [
+          0,
+          "roles"
+        ],
+        "includes": "orders_web",
+        "label": "role remains orders_web"
+      }
+    ]
+  }
+}

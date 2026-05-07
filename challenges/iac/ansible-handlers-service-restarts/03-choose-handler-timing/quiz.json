@@ -1,0 +1,32 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A template task notifies `Reload nginx`. A later task immediately checks the new Nginx route. Without extra steps, when will the handler normally run?",
+      "options": [
+        {
+          "id": "a",
+          "text": "At the handler point near the end of the play, after normal tasks finish."
+        },
+        {
+          "id": "b",
+          "text": "Before the next task, because handlers always run immediately."
+        },
+        {
+          "id": "c",
+          "text": "Only on the next playbook run."
+        },
+        {
+          "id": "d",
+          "text": "Never, because template tasks cannot notify handlers."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Handlers normally run after the normal task list for the play. Use `meta: flush_handlers` only when later tasks truly need the change active earlier."
+    }
+  ]
+}

@@ -1,0 +1,32 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A vaulted variable file is committed to Git. During a playbook run, a task renders the secret into `/etc/default/devpolaris-orders-api`. Which statement is most accurate?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Vault protects the value at rest in the repository, but the decrypted value still exists during the run and can leak through logs or rendered files."
+        },
+        {
+          "id": "b",
+          "text": "Vault means the secret can never appear on a managed host."
+        },
+        {
+          "id": "c",
+          "text": "Vault removes the need for file permissions on the rendered destination."
+        },
+        {
+          "id": "d",
+          "text": "Vault encrypts every Ansible log automatically, even without `no_log`."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Vault is an at-rest protection for stored variable files. Runtime output, rendered files, and destination permissions still need careful handling."
+    }
+  ]
+}

@@ -1,0 +1,496 @@
+{
+  "cwd": "/home/dev",
+  "env": {
+    "USER": "dev",
+    "HOME": "/home/dev"
+  },
+  "fs": {
+    "/home/dev": {
+      "type": "dir"
+    }
+  },
+  "commandModules": [
+    "azure"
+  ],
+  "cloud": {
+    "azure": {
+      "tenantId": "tenant-devpolaris",
+      "subscriptionId": "sub-devpolaris-training",
+      "currentSubscription": "sub-devpolaris-training",
+      "defaultLocation": "eastus",
+      "resourceGroups": [
+        {
+          "name": "rg-devpolaris-observability-prod",
+          "location": "eastus",
+          "tags": {
+            "team": "platform",
+            "env": "prod"
+          }
+        },
+        {
+          "name": "rg-devpolaris-app-prod",
+          "location": "eastus",
+          "tags": {
+            "team": "orders",
+            "env": "prod"
+          }
+        },
+        {
+          "name": "rg-devpolaris-network-prod",
+          "location": "eastus",
+          "tags": {
+            "team": "network",
+            "env": "prod"
+          }
+        }
+      ],
+      "roleAssignments": [],
+      "managedIdentities": [],
+      "appServicePlans": [],
+      "webApps": [],
+      "containerApps": [
+        {
+          "name": "ca-devpolaris-orders-prod",
+          "resourceGroup": "rg-devpolaris-app-prod",
+          "location": "eastus",
+          "environmentName": "cae-devpolaris-prod",
+          "image": "devpolaris/orders-api:2026.05.07.2",
+          "activeRevisionsMode": "Multiple",
+          "latestRevisionName": "ca-devpolaris-orders-prod--00042",
+          "ingress": {
+            "external": true,
+            "targetPort": 8080,
+            "transport": "auto",
+            "fqdn": "orders.devpolaris.example"
+          },
+          "scale": {
+            "minReplicas": 3,
+            "maxReplicas": 12
+          },
+          "revisions": [],
+          "identity": {
+            "type": "SystemAssigned",
+            "principalId": "principal-orders-prod"
+          }
+        }
+      ],
+      "functionApps": [],
+      "virtualMachines": [],
+      "keyVaults": [],
+      "storageAccounts": [],
+      "sqlServers": [],
+      "sqlDatabases": [],
+      "cosmosDbAccounts": [],
+      "managedDisks": [],
+      "logAnalyticsWorkspaces": [
+        {
+          "name": "law-devpolaris-prod",
+          "resourceGroup": "rg-devpolaris-observability-prod",
+          "location": "eastus",
+          "customerId": "law-customer-devpolaris-prod",
+          "retentionInDays": 30,
+          "dailyQuotaGb": 5,
+          "tables": [
+            {
+              "name": "ContainerAppConsoleLogs_CL",
+              "retentionInDays": 30,
+              "plan": "Analytics"
+            },
+            {
+              "name": "AzureDiagnostics",
+              "retentionInDays": 30,
+              "plan": "Analytics"
+            },
+            {
+              "name": "AppRequests",
+              "retentionInDays": 30,
+              "plan": "Analytics"
+            },
+            {
+              "name": "AppDependencies",
+              "retentionInDays": 30,
+              "plan": "Analytics"
+            },
+            {
+              "name": "AppExceptions",
+              "retentionInDays": 30,
+              "plan": "Analytics"
+            }
+          ],
+          "records": [
+            {
+              "table": "ContainerAppConsoleLogs_CL",
+              "timeGenerated": "2026-05-07T09:42:11Z",
+              "message": "checkout failed while calling sql-devpolaris-orders-prod.database.windows.net",
+              "severityLevel": "Error",
+              "operationId": "checkout-5001",
+              "resourceId": "/subscriptions/sub-devpolaris-training/resourceGroups/rg-devpolaris-app-prod/providers/Microsoft.App/containerApps/ca-devpolaris-orders-prod",
+              "category": "ConsoleLogs",
+              "resultCode": "500",
+              "durationMs": 1420,
+              "customDimensions": {
+                "revisionName": "ca-devpolaris-orders-prod--00042",
+                "correlationId": "corr-checkout-5001"
+              }
+            },
+            {
+              "table": "ContainerAppConsoleLogs_CL",
+              "timeGenerated": "2026-05-07T09:40:02Z",
+              "message": "checkout completed",
+              "severityLevel": "Information",
+              "operationId": "checkout-4999",
+              "resourceId": "/subscriptions/sub-devpolaris-training/resourceGroups/rg-devpolaris-app-prod/providers/Microsoft.App/containerApps/ca-devpolaris-orders-prod",
+              "category": "ConsoleLogs",
+              "resultCode": "200",
+              "durationMs": 184
+            },
+            {
+              "table": "AzureDiagnostics",
+              "timeGenerated": "2026-05-07T09:42:12Z",
+              "message": "Application Gateway backend ca-devpolaris-orders-prod returned 500 for POST /checkout",
+              "severityLevel": "Warning",
+              "operationId": "checkout-5001",
+              "resourceId": "/subscriptions/sub-devpolaris-training/resourceGroups/rg-devpolaris-network-prod/providers/Microsoft.Network/applicationGateways/agw-devpolaris-prod",
+              "category": "ApplicationGatewayAccessLog",
+              "resultCode": "500",
+              "durationMs": 1510
+            },
+            {
+              "table": "AppRequests",
+              "timeGenerated": "2026-05-07T09:42:11Z",
+              "message": "POST /checkout failed",
+              "severityLevel": "Error",
+              "operationId": "checkout-5001",
+              "resourceId": "/subscriptions/sub-devpolaris-training/resourceGroups/rg-devpolaris-observability-prod/providers/Microsoft.Insights/components/appi-devpolaris-orders-prod",
+              "resultCode": "500",
+              "durationMs": 1420
+            },
+            {
+              "table": "AppDependencies",
+              "timeGenerated": "2026-05-07T09:42:11Z",
+              "message": "SQL dependency timed out",
+              "severityLevel": "Error",
+              "operationId": "checkout-5001",
+              "resourceId": "/subscriptions/sub-devpolaris-training/resourceGroups/rg-devpolaris-observability-prod/providers/Microsoft.Insights/components/appi-devpolaris-orders-prod",
+              "resultCode": "Timeout",
+              "durationMs": 1180
+            },
+            {
+              "table": "AppExceptions",
+              "timeGenerated": "2026-05-07T09:42:11Z",
+              "message": "SqlException: Timeout expired while connecting to sql-devpolaris-orders-prod",
+              "severityLevel": "Error",
+              "operationId": "checkout-5001",
+              "resourceId": "/subscriptions/sub-devpolaris-training/resourceGroups/rg-devpolaris-observability-prod/providers/Microsoft.Insights/components/appi-devpolaris-orders-prod",
+              "resultCode": "Exception"
+            }
+          ],
+          "tags": {
+            "service": "shared-observability",
+            "env": "prod"
+          }
+        }
+      ],
+      "diagnosticSettings": [
+        {
+          "name": "send-containerapp-logs-to-law",
+          "resourceId": "/subscriptions/sub-devpolaris-training/resourceGroups/rg-devpolaris-app-prod/providers/Microsoft.App/containerApps/ca-devpolaris-orders-prod",
+          "workspaceName": "law-devpolaris-prod",
+          "enabledLogs": [
+            "ContainerAppConsoleLogs",
+            "ContainerAppSystemLogs"
+          ],
+          "metrics": [
+            "AllMetrics"
+          ]
+        },
+        {
+          "name": "send-appgateway-logs-to-law",
+          "resourceId": "/subscriptions/sub-devpolaris-training/resourceGroups/rg-devpolaris-network-prod/providers/Microsoft.Network/applicationGateways/agw-devpolaris-prod",
+          "workspaceName": "law-devpolaris-prod",
+          "enabledLogs": [
+            "ApplicationGatewayAccessLog",
+            "ApplicationGatewayPerformanceLog",
+            "ApplicationGatewayFirewallLog"
+          ],
+          "metrics": [
+            "AllMetrics"
+          ]
+        }
+      ],
+      "metricSeries": [
+        {
+          "resourceId": "/subscriptions/sub-devpolaris-training/resourceGroups/rg-devpolaris-app-prod/providers/Microsoft.App/containerApps/ca-devpolaris-orders-prod",
+          "metricName": "Requests",
+          "unit": "Count",
+          "aggregation": "total",
+          "points": [
+            {
+              "timeStamp": "2026-05-07T09:55:00Z",
+              "value": 1260
+            }
+          ]
+        },
+        {
+          "resourceId": "/subscriptions/sub-devpolaris-training/resourceGroups/rg-devpolaris-app-prod/providers/Microsoft.App/containerApps/ca-devpolaris-orders-prod",
+          "metricName": "FailedRequests",
+          "unit": "Count",
+          "aggregation": "total",
+          "points": [
+            {
+              "timeStamp": "2026-05-07T09:55:00Z",
+              "value": 18
+            }
+          ]
+        },
+        {
+          "resourceId": "/subscriptions/sub-devpolaris-training/resourceGroups/rg-devpolaris-app-prod/providers/Microsoft.App/containerApps/ca-devpolaris-orders-prod",
+          "metricName": "RequestDuration",
+          "unit": "Milliseconds",
+          "aggregation": "average",
+          "points": [
+            {
+              "timeStamp": "2026-05-07T09:55:00Z",
+              "value": 920
+            }
+          ]
+        },
+        {
+          "resourceId": "/subscriptions/sub-devpolaris-training/resourceGroups/rg-devpolaris-app-prod/providers/Microsoft.App/containerApps/ca-devpolaris-orders-prod",
+          "metricName": "Replicas",
+          "unit": "Count",
+          "aggregation": "average",
+          "points": [
+            {
+              "timeStamp": "2026-05-07T09:55:00Z",
+              "value": 6
+            }
+          ]
+        },
+        {
+          "resourceId": "/subscriptions/sub-devpolaris-training/resourceGroups/rg-devpolaris-network-prod/providers/Microsoft.Network/applicationGateways/agw-devpolaris-prod",
+          "metricName": "UnhealthyHostCount",
+          "unit": "Count",
+          "aggregation": "average",
+          "points": [
+            {
+              "timeStamp": "2026-05-07T09:55:00Z",
+              "value": 1
+            }
+          ]
+        },
+        {
+          "resourceId": "/subscriptions/sub-devpolaris-training/resourceGroups/rg-devpolaris-network-prod/providers/Microsoft.Network/applicationGateways/agw-devpolaris-prod",
+          "metricName": "FailedRequests",
+          "unit": "Count",
+          "aggregation": "total",
+          "points": [
+            {
+              "timeStamp": "2026-05-07T09:55:00Z",
+              "value": 24
+            }
+          ]
+        }
+      ],
+      "actionGroups": [
+        {
+          "name": "ag-orders-oncall",
+          "resourceGroup": "rg-devpolaris-observability-prod",
+          "location": "global",
+          "shortName": "orders",
+          "enabled": true,
+          "emailReceivers": [
+            "orders-oncall@devpolaris.example"
+          ],
+          "smsReceivers": [
+            "+15550101000"
+          ],
+          "tags": {
+            "team": "orders",
+            "env": "prod"
+          }
+        },
+        {
+          "name": "ag-platform-watch",
+          "resourceGroup": "rg-devpolaris-observability-prod",
+          "location": "global",
+          "shortName": "platform",
+          "enabled": true,
+          "emailReceivers": [
+            "platform-watch@devpolaris.example"
+          ],
+          "tags": {
+            "team": "platform",
+            "env": "prod"
+          }
+        }
+      ],
+      "metricAlerts": [
+        {
+          "name": "alert-orders-api-failure-rate",
+          "resourceGroup": "rg-devpolaris-observability-prod",
+          "location": "global",
+          "scopes": [
+            "/subscriptions/sub-devpolaris-training/resourceGroups/rg-devpolaris-app-prod/providers/Microsoft.App/containerApps/ca-devpolaris-orders-prod"
+          ],
+          "metricName": "FailedRequests",
+          "operator": "GreaterThan",
+          "threshold": 10,
+          "aggregation": "Total",
+          "severity": 2,
+          "enabled": true,
+          "evaluationFrequency": "PT1M",
+          "windowSize": "PT5M",
+          "actionGroupNames": [
+            "ag-orders-oncall"
+          ],
+          "tags": {
+            "service": "orders-api",
+            "env": "prod"
+          }
+        },
+        {
+          "name": "alert-orders-api-latency",
+          "resourceGroup": "rg-devpolaris-observability-prod",
+          "location": "global",
+          "scopes": [
+            "/subscriptions/sub-devpolaris-training/resourceGroups/rg-devpolaris-app-prod/providers/Microsoft.App/containerApps/ca-devpolaris-orders-prod"
+          ],
+          "metricName": "RequestDuration",
+          "operator": "GreaterThan",
+          "threshold": 1000,
+          "aggregation": "Average",
+          "severity": 3,
+          "enabled": true,
+          "evaluationFrequency": "PT5M",
+          "windowSize": "PT15M",
+          "actionGroupNames": [
+            "ag-orders-oncall"
+          ],
+          "tags": {
+            "service": "orders-api",
+            "env": "prod"
+          }
+        }
+      ],
+      "applicationInsightsComponents": [
+        {
+          "name": "appi-devpolaris-orders-prod",
+          "resourceGroup": "rg-devpolaris-observability-prod",
+          "location": "eastus",
+          "appId": "appi-orders-prod-appid",
+          "applicationType": "web",
+          "workspaceName": "law-devpolaris-prod",
+          "connectionString": "InstrumentationKey=00000000-1111-2222-3333-444444444444;IngestionEndpoint=https://eastus-0.in.applicationinsights.azure.com/",
+          "requestRate": 21,
+          "failureRate": 1.4,
+          "requests": [
+            {
+              "timestamp": "2026-05-07T09:42:11Z",
+              "id": "req-checkout-5001",
+              "operationId": "checkout-5001",
+              "name": "POST /checkout",
+              "url": "https://orders.devpolaris.example/checkout",
+              "success": false,
+              "resultCode": "500",
+              "durationMs": 1420
+            },
+            {
+              "timestamp": "2026-05-07T09:40:02Z",
+              "id": "req-checkout-4999",
+              "operationId": "checkout-4999",
+              "name": "POST /checkout",
+              "url": "https://orders.devpolaris.example/checkout",
+              "success": true,
+              "resultCode": "200",
+              "durationMs": 184
+            }
+          ],
+          "dependencies": [
+            {
+              "timestamp": "2026-05-07T09:42:11Z",
+              "operationId": "checkout-5001",
+              "name": "SQL SELECT orders",
+              "target": "sql-devpolaris-orders-prod.database.windows.net",
+              "type": "SQL",
+              "success": false,
+              "resultCode": "Timeout",
+              "durationMs": 1180
+            },
+            {
+              "timestamp": "2026-05-07T09:42:10Z",
+              "operationId": "checkout-5001",
+              "name": "Blob receipt write",
+              "target": "stdevpolarisordersprod.blob.core.windows.net",
+              "type": "Azure blob",
+              "success": true,
+              "resultCode": "201",
+              "durationMs": 90
+            }
+          ],
+          "exceptions": [
+            {
+              "timestamp": "2026-05-07T09:42:11Z",
+              "operationId": "checkout-5001",
+              "type": "SqlException",
+              "message": "Timeout expired while connecting to sql-devpolaris-orders-prod"
+            }
+          ],
+          "traces": [
+            {
+              "timestamp": "2026-05-07T09:42:10Z",
+              "operationId": "checkout-5001",
+              "severityLevel": "Information",
+              "message": "checkout started",
+              "customDimensions": {
+                "correlationId": "corr-checkout-5001"
+              }
+            },
+            {
+              "timestamp": "2026-05-07T09:42:11Z",
+              "operationId": "checkout-5001",
+              "severityLevel": "Error",
+              "message": "checkout failed after dependency timeout",
+              "customDimensions": {
+                "correlationId": "corr-checkout-5001"
+              }
+            }
+          ],
+          "tags": {
+            "service": "orders-api",
+            "env": "prod"
+          }
+        }
+      ],
+      "virtualNetworks": [],
+      "subnets": [],
+      "routeTables": [],
+      "networkSecurityGroups": [],
+      "privateEndpoints": [],
+      "privateDnsARecords": [],
+      "dnsARecords": [],
+      "dnsCnameRecords": [],
+      "dnsTxtRecords": [],
+      "applicationGateways": []
+    }
+  },
+  "grader": {
+    "strategy": "contains",
+    "source": "all-stdout",
+    "expected": [
+      "Requests",
+      "FailedRequests",
+      "RequestDuration",
+      "Replicas",
+      "1260",
+      "18",
+      "920",
+      "6"
+    ],
+    "loose": true,
+    "requireCommands": [
+      "az"
+    ],
+    "minCommandCount": 1
+  }
+}

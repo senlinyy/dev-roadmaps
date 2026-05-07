@@ -1,0 +1,40 @@
+{
+  "language": "yaml",
+  "completionProfile": "ansible-playbook",
+  "activeFile": "roles/orders_web/defaults/main.yml",
+  "files": [
+    {
+      "filename": "roles/orders_web/defaults/main.yml",
+      "initialValue": "orders_service_name: orders-api\n"
+    }
+  ],
+  "grader": {
+    "strategy": "yaml-paths",
+    "expected": [
+      {
+        "file": "roles/orders_web/defaults/main.yml",
+        "path": [
+          "orders_service_name"
+        ],
+        "equals": "devpolaris-orders-api",
+        "label": "default service name"
+      },
+      {
+        "file": "roles/orders_web/defaults/main.yml",
+        "path": [
+          "orders_api_port"
+        ],
+        "equals": 8080,
+        "label": "default API port"
+      },
+      {
+        "file": "roles/orders_web/defaults/main.yml",
+        "path": [
+          "orders_server_name"
+        ],
+        "equals": "orders.devpolaris.internal",
+        "label": "default server name"
+      }
+    ]
+  }
+}

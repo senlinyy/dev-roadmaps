@@ -1,0 +1,32 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A proposed `common_everything` role installs nginx, creates database users, edits SSH settings, deploys the app, and restarts unrelated services. Many plays call it because it is convenient. What is the best review concern?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The role hides too much unrelated behavior, so callers cannot easily understand the blast radius."
+        },
+        {
+          "id": "b",
+          "text": "A role may contain only one task by Ansible syntax."
+        },
+        {
+          "id": "c",
+          "text": "Roles cannot contain handlers."
+        },
+        {
+          "id": "d",
+          "text": "Roles are only for local development, not production."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "A role should package cohesive work. If it hides unrelated changes, reuse becomes harder to review and target safely."
+    }
+  ]
+}

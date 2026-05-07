@@ -1,0 +1,32 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A task copies a static README file for operators. The pull request also restarts `nginx` unconditionally after that task. What is the best review comment?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Ask why a documentation file should restart nginx, and prefer notifications only from config tasks that affect the service."
+        },
+        {
+          "id": "b",
+          "text": "Approve because every file task should restart every service."
+        },
+        {
+          "id": "c",
+          "text": "Move the restart into inventory."
+        },
+        {
+          "id": "d",
+          "text": "Use `ignore_errors` so the restart cannot fail the play."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Restarts should follow real service-affecting changes. Unconditional restarts create avoidable disruption and make reviews noisier."
+    }
+  ]
+}

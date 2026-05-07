@@ -1,0 +1,32 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "The group vars file says `orders_api_port: 8080`. A host var for `orders-web-02` says `orders_api_port: 8081`. A play targets `orders-web-02` and does not override the value. Which port should the template use for that host?",
+      "options": [
+        {
+          "id": "a",
+          "text": "8081, because the host-specific variable is more specific than the group variable."
+        },
+        {
+          "id": "b",
+          "text": "8080, because group vars always override host vars."
+        },
+        {
+          "id": "c",
+          "text": "Both values, because templates render every matching variable."
+        },
+        {
+          "id": "d",
+          "text": "Neither value, because variables cannot be used in templates."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "More specific host variables override broader group variables when the same name is defined in both places."
+    }
+  ]
+}

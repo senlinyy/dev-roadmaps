@@ -1,0 +1,61 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "The app logs contain correlation ID `corr-checkout-5001`, while Application Insights uses operation ID `checkout-5001`. The team sees both values on the failed checkout path. How should they use them?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Use them to connect app logs, traces, dependencies, and exceptions that describe the same customer request."
+        },
+        {
+          "id": "b",
+          "text": "Pick one value and delete the other from future logs because two IDs always create confusion."
+        },
+        {
+          "id": "c",
+          "text": "Treat the IDs as proof that the database caused the failure without reading dependency evidence."
+        },
+        {
+          "id": "d",
+          "text": "Use the action group name as the correlation value because alerts are the entry point."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Correlation values are connectors between evidence sources. They do not prove cause by themselves, but they help the team follow the same request across tools."
+    },
+    {
+      "id": "q2",
+      "type": "multiple",
+      "scenario": "A review of operation `checkout-5001` shows request result 500, a SQL dependency timeout, a SqlException, and an error trace from the same operation. Which conclusions are safe?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The request failed from the user point of view."
+        },
+        {
+          "id": "b",
+          "text": "A SQL dependency on that request failed or timed out."
+        },
+        {
+          "id": "c",
+          "text": "The exception evidence should be read with the dependency and trace evidence."
+        },
+        {
+          "id": "d",
+          "text": "The team can ignore metrics because one trace always proves incident size."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "The trace explains one request. Metrics are still needed to understand how many users or requests were affected."
+    }
+  ]
+}

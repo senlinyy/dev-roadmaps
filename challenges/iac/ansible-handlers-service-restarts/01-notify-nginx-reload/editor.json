@@ -1,0 +1,30 @@
+{
+  "language": "yaml",
+  "completionProfile": "ansible-playbook",
+  "activeFile": "roles/orders_web/tasks/main.yml",
+  "files": [
+    {
+      "filename": "roles/orders_web/tasks/main.yml",
+      "initialValue": "- name: Render nginx configuration\n  ansible.builtin.template:\n    src: nginx.conf.j2\n    dest: /etc/nginx/nginx.conf\n"
+    },
+    {
+      "filename": "roles/orders_web/handlers/main.yml",
+      "initialValue": "[]\n"
+    }
+  ],
+  "grader": {
+    "strategy": "regex-all",
+    "expected": [
+      {
+        "file": "roles/orders_web/tasks/main.yml",
+        "pattern": "ansible\\.builtin\\.template:[\\s\\S]*notify:\\s*Reload nginx",
+        "label": "template task notifies Reload nginx"
+      },
+      {
+        "file": "roles/orders_web/handlers/main.yml",
+        "pattern": "-\\s*name:\\s*Reload nginx[\\s\\S]*ansible\\.builtin\\.service:[\\s\\S]*name:\\s*nginx[\\s\\S]*state:\\s*reloaded",
+        "label": "Reload nginx handler reloads nginx"
+      }
+    ]
+  }
+}

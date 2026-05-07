@@ -1,0 +1,66 @@
+{
+  "language": "yaml",
+  "completionProfile": "ansible-playbook",
+  "activeFile": "roles/orders_web/tasks/main.yml",
+  "files": [
+    {
+      "filename": "roles/orders_web/tasks/main.yml",
+      "initialValue": "- name: Set orders API port\n  ansible.builtin.shell: echo \"ORDERS_API_PORT=8080\" >> /etc/default/devpolaris-orders-api\n"
+    }
+  ],
+  "grader": {
+    "strategy": "yaml-paths",
+    "expected": [
+      {
+        "file": "roles/orders_web/tasks/main.yml",
+        "path": [
+          0,
+          "ansible.builtin.lineinfile",
+          "path"
+        ],
+        "equals": "/etc/default/devpolaris-orders-api",
+        "label": "lineinfile path"
+      },
+      {
+        "file": "roles/orders_web/tasks/main.yml",
+        "path": [
+          0,
+          "ansible.builtin.lineinfile",
+          "regexp"
+        ],
+        "equals": "^ORDERS_API_PORT=",
+        "label": "lineinfile regexp"
+      },
+      {
+        "file": "roles/orders_web/tasks/main.yml",
+        "path": [
+          0,
+          "ansible.builtin.lineinfile",
+          "line"
+        ],
+        "equals": "ORDERS_API_PORT={{ orders_api_port }}",
+        "label": "lineinfile desired line"
+      },
+      {
+        "file": "roles/orders_web/tasks/main.yml",
+        "path": [
+          0,
+          "ansible.builtin.lineinfile",
+          "create"
+        ],
+        "equals": true,
+        "label": "lineinfile can create file"
+      },
+      {
+        "file": "roles/orders_web/tasks/main.yml",
+        "path": [
+          0,
+          "ansible.builtin.lineinfile",
+          "mode"
+        ],
+        "equals": "0644",
+        "label": "lineinfile manages mode"
+      }
+    ]
+  }
+}

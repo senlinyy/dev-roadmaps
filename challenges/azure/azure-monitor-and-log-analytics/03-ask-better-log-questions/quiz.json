@@ -1,0 +1,59 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A teammate searches all logs for the word `error` and finds too much noise. The incident has operation ID `checkout-5001` and started around 09:42 UTC. What makes the search more useful?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Target the relevant table and filter by operation ID or time window before reading individual messages."
+        },
+        {
+          "id": "b",
+          "text": "Search every table without filters so no possible log line is missed."
+        },
+        {
+          "id": "c",
+          "text": "Ignore logs and only use tags, because tags are easier to read during incidents."
+        },
+        {
+          "id": "d",
+          "text": "Delete old tables so the workspace has fewer rows to search."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "KQL is useful because it narrows evidence by table, time, operation, status, or resource. A broad word search is usually too noisy for incident work."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "The workspace keeps logs for 30 days. Support asks for a request from six months ago, but the order record still exists in SQL. What should the team explain?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The database record and observability evidence have different retention rules, so the team may still have business data without the old logs."
+        },
+        {
+          "id": "b",
+          "text": "The logs must exist somewhere because Azure keeps every workspace table forever by default."
+        },
+        {
+          "id": "c",
+          "text": "The request can be recreated by changing the operation ID in a query."
+        },
+        {
+          "id": "d",
+          "text": "The action group should be updated because notification routing controls historical log retention."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Application data and observability data are retained for different reasons and different durations. The team should set retention based on support, cost, and compliance needs."
+    }
+  ]
+}

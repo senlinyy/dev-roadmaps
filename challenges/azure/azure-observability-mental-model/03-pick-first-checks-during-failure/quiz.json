@@ -1,0 +1,59 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "An alert says failed checkout requests are above threshold. A teammate wants to change the SQL firewall immediately because the latest exception mentions SQL. What should the on-call person check first?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Confirm the failed request rate, inspect recent request traces, and verify whether the SQL dependency is failing for the same operation IDs."
+        },
+        {
+          "id": "b",
+          "text": "Open the firewall first, because observability is only useful after the app is fixed."
+        },
+        {
+          "id": "c",
+          "text": "Disable the alert, because repeated notifications slow down the incident response."
+        },
+        {
+          "id": "d",
+          "text": "Restart the Container App before checking evidence, because restarts are faster than querying logs."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The first response should connect metric scope, request evidence, and dependency evidence. A firewall change may be needed, but it should follow evidence."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A dashboard shows high latency but no increase in failed requests. Users report slow checkout, not broken checkout. Which next evidence is most useful?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Dependency timing for checkout operations, because latency can come from a downstream call even when requests still succeed."
+        },
+        {
+          "id": "b",
+          "text": "Action group email addresses, because notification routing explains request duration."
+        },
+        {
+          "id": "c",
+          "text": "The storage account SKU, because every latency incident starts with object storage."
+        },
+        {
+          "id": "d",
+          "text": "The resource group tag list, because tags show which code path is slow."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Latency without failures often points to a slow dependency or internal path. Dependency timing is the next useful evidence for that request story."
+    }
+  ]
+}

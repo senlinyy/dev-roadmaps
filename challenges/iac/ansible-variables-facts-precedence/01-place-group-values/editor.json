@@ -1,0 +1,40 @@
+{
+  "language": "yaml",
+  "completionProfile": "ansible-playbook",
+  "activeFile": "group_vars/orders_web.yml",
+  "files": [
+    {
+      "filename": "group_vars/orders_web.yml",
+      "initialValue": "orders_service_name: orders-api\n"
+    }
+  ],
+  "grader": {
+    "strategy": "yaml-paths",
+    "expected": [
+      {
+        "file": "group_vars/orders_web.yml",
+        "path": [
+          "orders_service_name"
+        ],
+        "equals": "devpolaris-orders-api",
+        "label": "service name"
+      },
+      {
+        "file": "group_vars/orders_web.yml",
+        "path": [
+          "orders_api_port"
+        ],
+        "equals": 8080,
+        "label": "API port"
+      },
+      {
+        "file": "group_vars/orders_web.yml",
+        "path": [
+          "orders_owner"
+        ],
+        "equals": "devpolaris",
+        "label": "owner"
+      }
+    ]
+  }
+}

@@ -1,0 +1,32 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "The production group has `orders-web-01` and `orders-web-02`. You want the first run to touch only `orders-web-01` while still using the production inventory. Which target choice is safest?",
+      "options": [
+        {
+          "id": "a",
+          "text": "`--limit orders-web-01` with the normal production inventory."
+        },
+        {
+          "id": "b",
+          "text": "`--limit all` because the playbook has only one role."
+        },
+        {
+          "id": "c",
+          "text": "Remove `orders-web-02` from inventory and put it back after the run."
+        },
+        {
+          "id": "d",
+          "text": "Run against `localhost` first because that proves the remote hosts will work."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "`--limit orders-web-01` keeps the inventory honest and narrows only this run. Editing production inventory to create a canary hides the real fleet shape."
+    }
+  ]
+}

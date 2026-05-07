@@ -1,0 +1,21 @@
+{
+  "language": "yaml",
+  "completionProfile": "ansible-playbook",
+  "activeFile": "site.yml",
+  "files": [
+    {
+      "filename": "site.yml",
+      "initialValue": "- name: Configure orders web hosts\n  hosts: orders_web\n  become: true\n  serial: 1\n\n  roles:\n    - orders_web\n\n  tasks: []\n"
+    }
+  ],
+  "grader": {
+    "strategy": "regex-all",
+    "expected": [
+      {
+        "file": "site.yml",
+        "pattern": "ansible\\.builtin\\.uri:[\\s\\S]*url:\\s*http://127\\.0\\.0\\.1/health[\\s\\S]*status_code:\\s*200[\\s\\S]*register:\\s*orders_health[\\s\\S]*retries:\\s*5[\\s\\S]*delay:\\s*3[\\s\\S]*until:\\s*orders_health\\.status == 200",
+        "label": "play checks local health with retries"
+      }
+    ]
+  }
+}

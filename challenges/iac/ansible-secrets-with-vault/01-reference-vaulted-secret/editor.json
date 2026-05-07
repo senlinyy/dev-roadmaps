@@ -1,0 +1,36 @@
+{
+  "language": "yaml",
+  "completionProfile": "ansible-playbook",
+  "activeFile": "group_vars/prod/main.yml",
+  "files": [
+    {
+      "filename": "group_vars/prod/main.yml",
+      "initialValue": "orders_api_token: plain-prod-token\norders_api_port: 8080\n"
+    },
+    {
+      "filename": "group_vars/prod/vault.yml",
+      "initialValue": "{}\n"
+    }
+  ],
+  "grader": {
+    "strategy": "regex-all",
+    "expected": [
+      {
+        "file": "group_vars/prod/main.yml",
+        "pattern": "orders_api_token:\\s*[\"']\\{\\{\\s*vault_orders_api_token\\s*\\}\\}[\"']",
+        "label": "public vars reference vaulted token"
+      },
+      {
+        "file": "group_vars/prod/vault.yml",
+        "pattern": "vault_orders_api_token:",
+        "label": "vault file defines vaulted token variable"
+      },
+      {
+        "file": "group_vars/prod/main.yml",
+        "pattern": "plain-prod-token",
+        "label": "plaintext token remains in public vars",
+        "negate": true
+      }
+    ]
+  }
+}

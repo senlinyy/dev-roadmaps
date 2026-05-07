@@ -1,0 +1,55 @@
+{
+  "language": "yaml",
+  "completionProfile": "ansible-playbook",
+  "activeFile": "roles/orders_web/tasks/main.yml",
+  "files": [
+    {
+      "filename": "roles/orders_web/tasks/main.yml",
+      "initialValue": "- name: Install orders API environment\n  ansible.builtin.template:\n    src: orders-api.env.j2\n    dest: /etc/default/devpolaris-orders-api\n    mode: \"0644\"\n"
+    }
+  ],
+  "grader": {
+    "strategy": "yaml-paths",
+    "expected": [
+      {
+        "file": "roles/orders_web/tasks/main.yml",
+        "path": [
+          0,
+          "ansible.builtin.template",
+          "src"
+        ],
+        "equals": "orders-api.env.j2",
+        "label": "environment template source"
+      },
+      {
+        "file": "roles/orders_web/tasks/main.yml",
+        "path": [
+          0,
+          "ansible.builtin.template",
+          "dest"
+        ],
+        "equals": "/etc/default/devpolaris-orders-api",
+        "label": "environment file destination"
+      },
+      {
+        "file": "roles/orders_web/tasks/main.yml",
+        "path": [
+          0,
+          "ansible.builtin.template",
+          "mode"
+        ],
+        "equals": "0640",
+        "label": "restricted mode"
+      },
+      {
+        "file": "roles/orders_web/tasks/main.yml",
+        "path": [
+          0,
+          "no_log"
+        ],
+        "equals": true,
+        "label": "task hides secret output"
+      }
+    ]
+  }
+}

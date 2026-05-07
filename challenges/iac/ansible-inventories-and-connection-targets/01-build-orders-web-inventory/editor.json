@@ -1,0 +1,42 @@
+{
+  "language": "yaml",
+  "completionProfile": "ansible-playbook",
+  "activeFile": "inventory/prod.yml",
+  "files": [
+    {
+      "filename": "inventory/prod.yml",
+      "initialValue": "all:\n  children:\n    orders_web:\n      hosts: {}\n"
+    }
+  ],
+  "grader": {
+    "strategy": "yaml-paths",
+    "expected": [
+      {
+        "file": "inventory/prod.yml",
+        "path": [
+          "all",
+          "children",
+          "orders_web",
+          "hosts",
+          "orders-web-01",
+          "ansible_host"
+        ],
+        "equals": "10.0.10.21",
+        "label": "orders-web-01 address"
+      },
+      {
+        "file": "inventory/prod.yml",
+        "path": [
+          "all",
+          "children",
+          "orders_web",
+          "hosts",
+          "orders-web-02",
+          "ansible_host"
+        ],
+        "equals": "10.0.10.22",
+        "label": "orders-web-02 address"
+      }
+    ]
+  }
+}

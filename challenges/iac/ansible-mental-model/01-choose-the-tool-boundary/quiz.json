@@ -1,0 +1,32 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "Terraform already created two Linux VMs. The next pull request must install nginx, write `/etc/nginx/nginx.conf`, and keep a systemd service running inside those VMs. Which tool owns this change best?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Ansible, because the change configures packages, files, and services inside existing machines."
+        },
+        {
+          "id": "b",
+          "text": "Terraform, because every line inside a Linux VM should be managed as a cloud resource."
+        },
+        {
+          "id": "c",
+          "text": "Manual SSH, because service configuration is too small to review as code."
+        },
+        {
+          "id": "d",
+          "text": "DNS, because nginx receives web traffic."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Terraform is a good fit for infrastructure objects. Ansible is the better fit for repeatable operating system configuration inside existing machines."
+    }
+  ]
+}

@@ -1,0 +1,32 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A production API token must rotate. Which workflow is safest for a reviewed Ansible repository?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Edit the encrypted file with the Vault workflow, review variable names and affected tasks, and run with the approved vault password source."
+        },
+        {
+          "id": "b",
+          "text": "Temporarily commit the plaintext token, run Ansible, then delete it in a later commit."
+        },
+        {
+          "id": "c",
+          "text": "Paste the token into a debug task so reviewers can confirm the exact value."
+        },
+        {
+          "id": "d",
+          "text": "Store the token in inventory host aliases because aliases are not rendered to logs."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Secret rotation should keep plaintext out of Git and logs. Reviewers can check the variable wiring and blast radius without seeing the secret value itself."
+    }
+  ]
+}

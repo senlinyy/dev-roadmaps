@@ -1,0 +1,35 @@
+{
+  "language": "yaml",
+  "completionProfile": "ansible-playbook",
+  "activeFile": "roles/orders_web/tasks/main.yml",
+  "files": [
+    {
+      "filename": "roles/orders_web/tasks/main.yml",
+      "initialValue": "- name: Render nginx configuration\n  ansible.builtin.copy:\n    src: nginx.conf\n    dest: /etc/nginx/nginx.conf\n"
+    },
+    {
+      "filename": "roles/orders_web/templates/nginx.conf.j2",
+      "initialValue": "server {\n    listen 80;\n    server_name localhost;\n}\n"
+    }
+  ],
+  "grader": {
+    "strategy": "regex-all",
+    "expected": [
+      {
+        "file": "roles/orders_web/tasks/main.yml",
+        "pattern": "ansible\\.builtin\\.template:[\\s\\S]*src:\\s*nginx\\.conf\\.j2[\\s\\S]*dest:\\s*/etc/nginx/nginx\\.conf[\\s\\S]*mode:\\s*[\"']0644[\"'][\\s\\S]*validate:\\s*[\"']nginx -t -c %s[\"']",
+        "label": "nginx config is rendered through template with validation"
+      },
+      {
+        "file": "roles/orders_web/templates/nginx.conf.j2",
+        "pattern": "\\{\\{\\s*orders_api_port\\s*\\}\\}",
+        "label": "template uses orders_api_port"
+      },
+      {
+        "file": "roles/orders_web/templates/nginx.conf.j2",
+        "pattern": "\\{\\{\\s*orders_server_name\\s*\\}\\}",
+        "label": "template uses orders_server_name"
+      }
+    ]
+  }
+}

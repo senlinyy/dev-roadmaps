@@ -1,0 +1,32 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A tiny reusable web role needs tasks, defaults, a template, and a handler. Which shape is most useful?",
+      "options": [
+        {
+          "id": "a",
+          "text": "`roles/orders_web/tasks/main.yml`, `defaults/main.yml`, `templates/nginx.conf.j2`, and `handlers/main.yml`."
+        },
+        {
+          "id": "b",
+          "text": "One giant `site.yml` with every environment copied into it."
+        },
+        {
+          "id": "c",
+          "text": "Only `handlers/main.yml` because handlers can install packages."
+        },
+        {
+          "id": "d",
+          "text": "A role with no defaults so callers must read task internals."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "A small role should put each kind of artifact in a predictable place. That makes review and reuse easier."
+    }
+  ]
+}

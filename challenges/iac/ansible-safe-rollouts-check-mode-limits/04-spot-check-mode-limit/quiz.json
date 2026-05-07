@@ -1,0 +1,32 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A check-mode run shows that a template would change, but a later command-style migration task is skipped because it does not support check mode well. What should the reviewer conclude?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The preview is useful but incomplete, so the unsupported task still needs a rollout plan and evidence from a real limited run."
+        },
+        {
+          "id": "b",
+          "text": "The skipped task is guaranteed safe because check mode skipped it."
+        },
+        {
+          "id": "c",
+          "text": "The template change is invalid because another task skipped."
+        },
+        {
+          "id": "d",
+          "text": "Check mode means no review is needed."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Check mode is a preview, not proof that every task was simulated. Unsupported or skipped tasks need extra care, usually through a narrow real run with monitoring."
+    }
+  ]
+}

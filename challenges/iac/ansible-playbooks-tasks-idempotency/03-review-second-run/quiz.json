@@ -1,0 +1,32 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A playbook installed packages and files on the first run. Which second-run recap is the healthiest idempotency signal?",
+      "options": [
+        {
+          "id": "a",
+          "text": "`ok=6 changed=0 unreachable=0 failed=0`."
+        },
+        {
+          "id": "b",
+          "text": "`ok=6 changed=6 unreachable=0 failed=0` every time."
+        },
+        {
+          "id": "c",
+          "text": "`ok=0 changed=0 unreachable=1 failed=0`."
+        },
+        {
+          "id": "d",
+          "text": "`ok=6 changed=0 unreachable=0 failed=1`."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "A clean repeat run should usually show the host reachable, no failures, and no changes when state already matches."
+    }
+  ]
+}

@@ -1,0 +1,27 @@
+{
+  "language": "yaml",
+  "completionProfile": "ansible-playbook",
+  "activeFile": "site.yml",
+  "files": [
+    {
+      "filename": "site.yml",
+      "initialValue": "- name: Configure orders web hosts\n  hosts: orders_web\n  become: true\n\n  tasks:\n    - name: Install nginx\n      ansible.builtin.shell: apt-get update && apt-get install -y nginx\n"
+    }
+  ],
+  "grader": {
+    "strategy": "regex-all",
+    "expected": [
+      {
+        "file": "site.yml",
+        "pattern": "ansible\\.builtin\\.apt:[\\s\\S]*name:\\s*nginx[\\s\\S]*state:\\s*present[\\s\\S]*update_cache:\\s*true",
+        "label": "nginx is installed with apt desired state"
+      },
+      {
+        "file": "site.yml",
+        "pattern": "ansible\\.builtin\\.shell:\\s*apt-get",
+        "label": "package install still uses shell",
+        "negate": true
+      }
+    ]
+  }
+}

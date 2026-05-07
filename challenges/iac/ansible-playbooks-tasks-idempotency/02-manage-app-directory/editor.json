@@ -1,0 +1,76 @@
+{
+  "language": "yaml",
+  "completionProfile": "ansible-playbook",
+  "activeFile": "site.yml",
+  "files": [
+    {
+      "filename": "site.yml",
+      "initialValue": "- name: Configure orders web hosts\n  hosts: orders_web\n  become: true\n\n  tasks:\n    - name: Install nginx\n      ansible.builtin.apt:\n        name: nginx\n        state: present\n"
+    }
+  ],
+  "grader": {
+    "strategy": "yaml-paths",
+    "expected": [
+      {
+        "file": "site.yml",
+        "path": [
+          0,
+          "tasks",
+          1,
+          "ansible.builtin.file",
+          "path"
+        ],
+        "equals": "/opt/devpolaris-orders",
+        "label": "directory path"
+      },
+      {
+        "file": "site.yml",
+        "path": [
+          0,
+          "tasks",
+          1,
+          "ansible.builtin.file",
+          "state"
+        ],
+        "equals": "directory",
+        "label": "directory state"
+      },
+      {
+        "file": "site.yml",
+        "path": [
+          0,
+          "tasks",
+          1,
+          "ansible.builtin.file",
+          "owner"
+        ],
+        "equals": "root",
+        "label": "directory owner"
+      },
+      {
+        "file": "site.yml",
+        "path": [
+          0,
+          "tasks",
+          1,
+          "ansible.builtin.file",
+          "group"
+        ],
+        "equals": "root",
+        "label": "directory group"
+      },
+      {
+        "file": "site.yml",
+        "path": [
+          0,
+          "tasks",
+          1,
+          "ansible.builtin.file",
+          "mode"
+        ],
+        "equals": "0755",
+        "label": "directory mode"
+      }
+    ]
+  }
+}

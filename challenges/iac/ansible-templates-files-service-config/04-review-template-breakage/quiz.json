@@ -1,0 +1,32 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A template task uses `validate: \"nginx -t -c %s\"`, and Ansible reports that the candidate file failed validation. What is the safest conclusion?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The old remote config should remain in place, and the template needs to be fixed before rollout continues."
+        },
+        {
+          "id": "b",
+          "text": "Ansible replaced the config anyway because validation is only informational."
+        },
+        {
+          "id": "c",
+          "text": "The failure means the inventory group is empty."
+        },
+        {
+          "id": "d",
+          "text": "The fix is to remove validation so the task can complete."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Validation is there to stop a bad candidate file before replacement. Removing validation hides the risk rather than fixing the template."
+    }
+  ]
+}

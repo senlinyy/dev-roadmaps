@@ -1,0 +1,61 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "Checkout is failing for some users in `devpolaris-orders-api`. The team knows the failure rate rose from normal levels, but they do not yet know which request path or dependency is involved. Which observability signal should they use first to confirm the size and timing of the problem?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Metrics, because they show how often and how much before the team reads individual events."
+        },
+        {
+          "id": "b",
+          "text": "Logs, because every metric problem should start by reading all text lines from the app."
+        },
+        {
+          "id": "c",
+          "text": "Traces, because they always replace the need for high-level rate and latency signals."
+        },
+        {
+          "id": "d",
+          "text": "Alerts, because an alert notification contains every detail needed for root cause."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Metrics give the first shape of the incident: rate, latency, errors, and timing. Logs and traces add detail after the team understands the scope."
+    },
+    {
+      "id": "q2",
+      "type": "multiple",
+      "scenario": "A request with operation ID `checkout-5001` failed after a SQL timeout. The team wants a complete evidence path, not only a final error line. Which pieces belong together in the review?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The request result and duration from Application Insights requests."
+        },
+        {
+          "id": "b",
+          "text": "The SQL dependency result for the same operation ID."
+        },
+        {
+          "id": "c",
+          "text": "The exception message tied to the same operation ID."
+        },
+        {
+          "id": "d",
+          "text": "Only the action group name, because alert routing proves what failed."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "A single failed request is easiest to understand when request, dependency, and exception evidence share the same operation ID. Alert routing tells humans to look, but it is not the request story."
+    }
+  ]
+}

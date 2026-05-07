@@ -1,0 +1,32 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A task currently runs `echo \"ORDERS_API_PORT=8080\" >> /etc/default/devpolaris-orders-api`. What is the best Ansible replacement?",
+      "options": [
+        {
+          "id": "a",
+          "text": "`ansible.builtin.lineinfile` with a `regexp` for `^ORDERS_API_PORT=` and one desired `line`."
+        },
+        {
+          "id": "b",
+          "text": "`ansible.builtin.shell` with the same echo command but a clearer task name."
+        },
+        {
+          "id": "c",
+          "text": "`ansible.builtin.command` with `changed_when: true` so every run looks changed."
+        },
+        {
+          "id": "d",
+          "text": "`ansible.builtin.debug` because debug output changes the file safely."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "`lineinfile` can enforce one matching line. A repeated append can duplicate the setting every time the playbook runs."
+    }
+  ]
+}

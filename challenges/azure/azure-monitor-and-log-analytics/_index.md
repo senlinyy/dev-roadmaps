@@ -1,9 +1,9 @@
 ---
 title: "Azure Monitor and Log Analytics"
-description: "Practice searchable logs for Azure by reading production evidence, choosing safe first checks, and avoiding broad changes."
+description: "Practice workspace, diagnostic setting, table, query, and retention decisions for Azure logs."
 articleId: article-cloud-providers-azure-observability-azure-monitor-log-analytics
 articleSlug: azure-monitor-and-log-analytics
 difficulty: medium
 order: 32
-tags: ["azure","observability","logs","metrics","alerts"]
+tags: ["azure", "monitor", "log-analytics", "diagnostic-settings", "kql"]
 ---

@@ -1,0 +1,30 @@
+{
+  "language": "yaml",
+  "completionProfile": "ansible-playbook",
+  "activeFile": "roles/orders_web/tasks/main.yml",
+  "files": [
+    {
+      "filename": "roles/orders_web/tasks/main.yml",
+      "initialValue": "- name: Install orders environment file\n  ansible.builtin.template:\n    src: orders-api.env.j2\n    dest: /etc/default/devpolaris-orders-api\n"
+    },
+    {
+      "filename": "roles/orders_web/handlers/main.yml",
+      "initialValue": "- name: Reload nginx\n  ansible.builtin.service:\n    name: nginx\n    state: reloaded\n"
+    }
+  ],
+  "grader": {
+    "strategy": "regex-all",
+    "expected": [
+      {
+        "file": "roles/orders_web/tasks/main.yml",
+        "pattern": "orders-api\\.env\\.j2[\\s\\S]*notify:\\s*Restart orders API",
+        "label": "environment template notifies app restart"
+      },
+      {
+        "file": "roles/orders_web/handlers/main.yml",
+        "pattern": "-\\s*name:\\s*Restart orders API[\\s\\S]*ansible\\.builtin\\.systemd_service:[\\s\\S]*name:\\s*devpolaris-orders-api[\\s\\S]*state:\\s*restarted[\\s\\S]*daemon_reload:\\s*true",
+        "label": "Restart orders API handler restarts systemd service"
+      }
+    ]
+  }
+}

@@ -1,0 +1,61 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "The Container App `ca-devpolaris-orders-prod` is running, but the team cannot find runtime logs in `law-devpolaris-prod`. Which Azure configuration should they check before changing application code?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Diagnostic settings on the Container App that send console and system logs to the workspace."
+        },
+        {
+          "id": "b",
+          "text": "The SQL database retention policy, because database backup settings control app logs."
+        },
+        {
+          "id": "c",
+          "text": "The action group, because alert receivers decide which logs are collected."
+        },
+        {
+          "id": "d",
+          "text": "The storage lifecycle policy, because log search depends on blob tiering."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Diagnostic settings decide which resource logs and metrics leave a resource and arrive in the workspace. Application code may be fine even when collection is missing."
+    },
+    {
+      "id": "q2",
+      "type": "multiple",
+      "scenario": "A production workspace review needs to explain cost and search behavior for `law-devpolaris-prod`. Which details belong in the review?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Workspace retention in days."
+        },
+        {
+          "id": "b",
+          "text": "Which tables are used for app logs, resource logs, requests, dependencies, and exceptions."
+        },
+        {
+          "id": "c",
+          "text": "Daily quota or ingestion limit if the team uses one."
+        },
+        {
+          "id": "d",
+          "text": "The exact screen size of the dashboard where the logs are viewed."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "Retention, tables, and quota affect how long evidence stays searchable and how much it costs. Dashboard screen size does not change log ingestion or retention."
+    }
+  ]
+}

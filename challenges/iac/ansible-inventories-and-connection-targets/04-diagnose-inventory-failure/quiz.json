@@ -1,0 +1,32 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A play targets `orders_web`, but the recap says no hosts matched. The inventory contains a group named `order_web` without the `s`. What is the best fix?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Rename the inventory group to `orders_web` or update the play so both names match."
+        },
+        {
+          "id": "b",
+          "text": "Add `ignore_errors: true` to the play."
+        },
+        {
+          "id": "c",
+          "text": "Set `become: true` because unmatched hosts are a privilege issue."
+        },
+        {
+          "id": "d",
+          "text": "Add a handler because handlers repair missing groups."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "A target mismatch happens before tasks run. The play and inventory need to agree on the group name."
+    }
+  ]
+}

@@ -1,0 +1,44 @@
+{
+  "language": "yaml",
+  "completionProfile": "ansible-playbook",
+  "activeFile": "group_vars/orders_web.yml",
+  "files": [
+    {
+      "filename": "inventory/prod.yml",
+      "initialValue": "all:\n  children:\n    orders_web:\n      hosts:\n        orders-web-01:\n          ansible_host: 10.0.10.21\n        orders-web-02:\n          ansible_host: 10.0.10.22\n"
+    },
+    {
+      "filename": "group_vars/orders_web.yml",
+      "initialValue": "orders_environment: staging\n"
+    }
+  ],
+  "grader": {
+    "strategy": "yaml-paths",
+    "expected": [
+      {
+        "file": "group_vars/orders_web.yml",
+        "path": [
+          "ansible_user"
+        ],
+        "equals": "ubuntu",
+        "label": "remote user is ubuntu"
+      },
+      {
+        "file": "group_vars/orders_web.yml",
+        "path": [
+          "ansible_become"
+        ],
+        "equals": true,
+        "label": "become is enabled"
+      },
+      {
+        "file": "group_vars/orders_web.yml",
+        "path": [
+          "orders_environment"
+        ],
+        "equals": "prod",
+        "label": "environment is prod"
+      }
+    ]
+  }
+}
