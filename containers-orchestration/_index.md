@@ -1,7 +1,7 @@
 ---
-title: "Containers & Orchestration"
-description: "Packaging applications so they run identically everywhere, and systems to manage thousands of these packages."
-tags: ["Docker", "Kubernetes", "Microservices"]
+title: "Containers & Kubernetes"
+description: "Package applications into containers, run them locally with Docker, then operate them in Kubernetes."
+tags: ["Containers", "Docker", "Kubernetes"]
 icon: "Box"
 order: 5
 ---
