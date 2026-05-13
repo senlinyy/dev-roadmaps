@@ -1,6 +1,6 @@
 ---
 title: "Azure Foundations"
-description: "Understand Azure tenants, subscriptions, resource groups, regions, names, IDs, and core services before learning individual services."
+description: "Learn the first Azure map in two steps: how Azure organises resources, then where workloads run and which core services do common jobs."
 tags: ["Tenants", "Subscriptions", "Resources"]
 order: 1
 ---

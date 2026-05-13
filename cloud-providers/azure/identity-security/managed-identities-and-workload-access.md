@@ -1,450 +1,242 @@
 ---
 title: "Managed Identities and Workload Access"
 description: "Use managed identities so Azure workloads can reach Blob Storage and Key Vault without storing passwords, keys, or client secrets in app config."
-overview: "Managed identities let Azure workloads prove who they are without carrying long-lived credentials. Learn how system-assigned and user-assigned identities work with RBAC, runtime access, and deployment pipelines."
+overview: "Managed identities give Azure-hosted apps a first-party workload identity. Learn how runtime code proves who it is, receives short-lived tokens, and still needs narrow RBAC access to the services it calls."
 tags: ["managed-identities", "rbac", "key-vault", "blob-storage"]
-order: 4
+order: 2
 id: article-cloud-providers-azure-identity-security-managed-identities-and-workload-access
 ---
 
 ## Table of Contents
 
 1. [The Key You Should Not Ship](#the-key-you-should-not-ship)
-2. [If You Know AWS Roles](#if-you-know-aws-roles)
-3. [The Orders API Access Path](#the-orders-api-access-path)
-4. [System-Assigned And User-Assigned Identities](#system-assigned-and-user-assigned-identities)
-5. [The Token Flow In Plain English](#the-token-flow-in-plain-english)
-6. [RBAC Is The Permission, Identity Is The Caller](#rbac-is-the-permission-identity-is-the-caller)
+2. [The Workload Gets Its Own Identity](#the-workload-gets-its-own-identity)
+3. [System-Assigned And User-Assigned Identities](#system-assigned-and-user-assigned-identities)
+4. [The Temporary Token Flow](#the-temporary-token-flow)
+5. [RBAC Is The Permission, Identity Is The Caller](#rbac-is-the-permission-identity-is-the-caller)
+6. [Blob Storage And Key Vault Access](#blob-storage-and-key-vault-access)
 7. [Runtime Identity Is Not Pipeline Identity](#runtime-identity-is-not-pipeline-identity)
-8. [App Identity Lifecycle](#app-identity-lifecycle)
+8. [Identity Lifecycle During Rebuilds](#identity-lifecycle-during-rebuilds)
 9. [Evidence From A Working Setup](#evidence-from-a-working-setup)
-10. [Failure Modes You Will Actually See](#failure-modes-you-will-actually-see)
+10. [When Workload Access Fails](#when-workload-access-fails)
 11. [A Review Habit Before Release](#a-review-habit-before-release)
 
 ## The Key You Should Not Ship
 
-Every backend eventually needs to call something else.
-A checkout API reads a secret, stores an invoice file, writes a message, or downloads a certificate.
-The old habit was to give the app a password, an access key, or a client secret and place that value in an environment variable.
-That feels simple at first because the app starts and the request works.
-The trouble begins later, when the key is copied into a wiki, pasted into a pipeline variable, leaked in logs, forgotten during rotation, or reused by a second service that should not have the same access.
+Every backend eventually calls another service. `devpolaris-thumbnail-worker` reads original images from Blob Storage, writes generated thumbnails back to Blob Storage, and reads one image-processing license token from Key Vault. The first version often works by putting a storage key, password, or client secret into an environment variable.
 
-A managed identity is an Azure-managed workload identity for code running on Azure.
-Workload identity means an identity used by software, not a human user.
-The app does not store a password for that identity.
-Instead, Azure creates and protects the identity in Microsoft Entra ID, then lets the Azure runtime prove that the running workload is allowed to request tokens for it.
+That can be enough for a local demo. In production, the key starts spreading. Someone copies it into a pipeline variable. Someone pastes it into a local `.env` file to debug a bug. A support script prints the environment. An old Container App revision keeps the previous value. Now rotation is no longer a simple change. We have to hunt every copy.
 
-Managed identity exists to remove stored credentials from the runtime path.
-Your application still authenticates, which means it proves who it is.
-Your application still needs authorization, which means it needs permission to do the specific action.
-The difference is that your app no longer carries a long-lived secret in its own config.
+The core problem is ownership. If the worker uses a copied client secret, that secret becomes a second thing we have to protect, rotate, audit, and remove during cleanup. If the secret leaks, Azure cannot tell whether the real workload is calling or someone else copied the credential.
 
-This fits between your runtime and the Azure services your runtime calls.
-For this article, the runtime is an Azure Container Apps app named `ca-devpolaris-orders-api-prod`.
-The app runs the `devpolaris-orders-api` container.
-It needs to read order export templates from Blob Storage and read one database connection setting from Key Vault.
-The managed identity is the app's way to say, "Azure, I am this workload. Please give me a token for the service I am calling."
+Managed identity gives the workload its own Azure identity. Azure creates and protects the credential material behind that identity. The app asks Azure for short-lived tokens at runtime instead of storing a long-lived credential. The app still needs permission at the target service, but it no longer carries the secret used to prove who it is.
 
-Before managed identity, a risky container configuration might look like this:
+The risky shape looks like this:
 
 ```text
-Container App: ca-devpolaris-orders-api-prod
-
-Environment variables:
-  STORAGE_ACCOUNT_KEY=Ee3f...copied-secret...
-  KEY_VAULT_CLIENT_SECRET=7QZ...copied-secret...
-  EXPORT_CONTAINER=invoices
-  KEY_VAULT_NAME=kv-devpolaris-orders-prod
+Container App: ca-devpolaris-thumbnail-worker-prod
+STORAGE_ACCOUNT_KEY=<do-not-store-storage-key-here>
+KEY_VAULT_CLIENT_SECRET=<do-not-store-client-secret-here>
+INPUT_CONTAINER=raw-images
+KEY_VAULT_NAME=kv-devpolaris-media-prod
 ```
 
-Those two secret-looking values are the problem.
-They are not bad because environment variables are always bad.
-They are bad because they are long-lived credentials that now need storage, rotation, audit, and cleanup.
-If the same key appears in a pipeline, local `.env` file, and production container revision, nobody feels fully sure which copy is still active.
-
-With managed identity, the useful target is more specific:
+The safer shape keeps identifiers and URLs in config, not secrets:
 
 ```text
-Container App: ca-devpolaris-orders-api-prod
-
-Environment variables:
-  EXPORT_CONTAINER=invoices
-  STORAGE_ACCOUNT_URL=https://stdevpolarisordersprod.blob.core.windows.net
-  KEY_VAULT_URL=https://kv-devpolaris-orders-prod.vault.azure.net
-  AZURE_CLIENT_ID=8a77b7f5-1111-4444-9999-4f2a11111111
+Container App: ca-devpolaris-thumbnail-worker-prod
+INPUT_CONTAINER=raw-images
+OUTPUT_CONTAINER=thumbnails
+STORAGE_ACCOUNT_URL=https://stdevpolarismediaprod.blob.core.windows.net
+KEY_VAULT_URL=https://kv-devpolaris-media-prod.vault.azure.net
+AZURE_CLIENT_ID=<managed-identity-client-id>
 ```
 
-The `AZURE_CLIENT_ID` value is not a password.
-It is an identifier that helps the Azure SDK choose the right user-assigned managed identity when more than one identity is attached.
-An identifier can appear in config.
-A secret should not.
+`AZURE_CLIENT_ID` is not a password. It tells the SDK which user-assigned identity to use. The permission still lives in Azure RBAC, and the target service still decides whether the identity can read or write data.
 
-> Managed identity does not mean "no identity." It means "no app-owned password for this identity."
+## The Workload Gets Its Own Identity
 
-## If You Know AWS Roles
+A managed identity is an Azure-managed identity for code running on Azure. It is a workload identity, which means the identity belongs to software, not to a person. The app uses that identity when it calls Azure services.
 
-If you have learned some AWS before, bring one habit with you:
-do not hardcode cloud keys into workloads.
-On AWS, you may have learned to attach an IAM role to an EC2 instance, ECS task, Lambda function, or another workload.
-The workload uses temporary credentials from the platform instead of carrying a permanent access key.
+Let's make the story concrete. The thumbnail worker starts inside Azure Container Apps. It needs to read an uploaded image from Blob Storage, write the resized image to another container, and fetch a license token from Key Vault. Instead of reading a storage key from app settings, the app asks Azure for a token that represents `mi-devpolaris-thumbnail-worker-prod`.
 
-Azure managed identity serves that same broad habit.
-It is the Azure way for a workload to have a cloud identity without a stored secret.
-But the Azure words and lifecycle choices are different enough that you should not translate them too quickly.
+That token is temporary proof that the request came from the workload identity. It is not broad permission. Blob Storage still checks whether the identity has a data role such as `Storage Blob Data Contributor`. Key Vault still checks whether the identity can read secret values.
 
-Here is the useful bridge:
-
-| AWS habit | Azure idea | What to watch |
-|-----------|------------|---------------|
-| Attach a role to the workload instead of storing keys | Attach a managed identity to the Azure resource | Identity and RBAC are separate steps |
-| Use short-lived credentials issued by the platform | Request a Microsoft Entra token from the Azure runtime | The token proves the workload identity, not broad access |
-| Scope IAM permissions to the target resource | Assign Azure RBAC roles at the smallest useful scope | Storage and Key Vault data access need data-plane roles |
-| Reuse a role only when the workloads truly share access | Use a user-assigned managed identity for shared or precreated access | A shared identity can also spread mistakes |
-
-The first Azure-specific name is **system-assigned managed identity**.
-This identity is created directly on one Azure resource.
-For Container Apps, that means the identity belongs to one container app.
-When the app is deleted, Azure deletes the identity too.
-That lifecycle is tidy for a single workload.
-
-The second Azure-specific name is **user-assigned managed identity**.
-This identity is its own Azure resource.
-You create it, grant permissions to it, and then attach it to one or more workloads.
-It survives if one attached app is deleted.
-That lifecycle is useful when permissions need to exist before the app is created, or when multiple runtime resources need the same identity.
-
-For `devpolaris-orders-api`, a careful production setup often uses a user-assigned identity:
-
-```text
-Managed identity resource:
-  mi-devpolaris-orders-api-prod
-
-Attached to:
-  ca-devpolaris-orders-api-prod
-
-Allowed to read:
-  Blob container invoices
-  Key Vault secrets in kv-devpolaris-orders-prod
-```
-
-That shape feels close to the AWS role habit:
-the workload gets an identity from the platform, then permissions are granted to that identity.
-The learner mistake is to stop at "identity exists."
-In Azure, an identity with no role assignment is like an employee badge with no door access.
-It proves who the app is, but it does not open Blob Storage or Key Vault.
-
-## The Orders API Access Path
-
-The running service is small on purpose.
-`devpolaris-orders-api` accepts order requests.
-It runs in Azure Container Apps.
-Once a day, it reads invoice template files from Blob Storage.
-At startup, it reads the `OrdersDbConnection` secret from Key Vault.
-The app should not store a storage account key.
-The app should not store a Key Vault client secret.
-
-Read this top to bottom.
-The plain-English label comes first, and the Azure term appears in parentheses.
-
-```mermaid
-flowchart TD
-    CODE["Running code<br/>(devpolaris-orders-api container)"]
-    HOST["Where code runs<br/>(Azure Container Apps)"]
-    IDENTITY["App login badge<br/>(managed identity)"]
-    TOKEN["Short-lived proof<br/>(Microsoft Entra token)"]
-    STORAGE_ROLE["File permission<br/>(Storage Blob Data Reader)"]
-    VAULT_ROLE["Secret permission<br/>(Key Vault Secrets User)"]
-    BLOB["Invoice files<br/>(Blob Storage container)"]
-    VAULT["Database setting<br/>(Key Vault secret)"]
-
-    CODE --> HOST
-    HOST --> IDENTITY
-    IDENTITY --> TOKEN
-    TOKEN --> STORAGE_ROLE
-    TOKEN --> VAULT_ROLE
-    STORAGE_ROLE --> BLOB
-    VAULT_ROLE --> VAULT
-```
-
-The diagram separates identity from permission because Azure separates them.
-The managed identity is the caller.
-The token is short-lived proof of that caller.
-The role assignment says what that caller can do at a target scope.
-Blob Storage and Key Vault still make their own authorization decisions when the request arrives.
-
-This is also why the app code does not need a storage account key.
-The SDK can use the Azure identity library to request a token.
-Then the Blob Storage SDK sends that token to Blob Storage.
-Blob Storage checks whether the identity behind the token has a data role such as `Storage Blob Data Reader` or `Storage Blob Data Contributor`.
-
-In a Node service, the code shape can stay small:
-
-```js
-import { DefaultAzureCredential } from "@azure/identity";
-import { BlobServiceClient } from "@azure/storage-blob";
-import { SecretClient } from "@azure/keyvault-secrets";
-
-const credential = new DefaultAzureCredential({
-  managedIdentityClientId: process.env.AZURE_CLIENT_ID
-});
-
-const blobClient = new BlobServiceClient(
-  process.env.STORAGE_ACCOUNT_URL,
-  credential
-);
-
-const secretClient = new SecretClient(
-  process.env.KEY_VAULT_URL,
-  credential
-);
-```
-
-This snippet only shows the important identity pattern.
-The code passes a credential object to Azure SDK clients.
-Locally, that credential may use a developer login.
-In Azure Container Apps, it should use the attached managed identity.
+This is the non-obvious truth: managed identity solves credential handling, not authorization by itself. It removes the stored password from the app, but we still have to grant the identity the right access at the right scope.
 
 ## System-Assigned And User-Assigned Identities
 
-The system-assigned choice is the simplest lifecycle.
-You turn identity on for one Azure resource.
-Azure creates a service principal in Microsoft Entra ID for that resource.
-Only that resource can use that identity to request tokens.
-When the resource is deleted, Azure removes the identity.
+Azure gives us two managed identity lifecycles. The choice is not "secure" versus "insecure." The choice is what owns the identity and what happens when the app is rebuilt.
 
-That makes system-assigned identity good for a workload that is clearly one resource and should not share access.
-If `ca-devpolaris-orders-api-prod` is the only thing that ever needs to read the invoice templates, a system-assigned identity can be enough.
-The access story is easy to inspect because the identity name follows the resource.
+A system-assigned managed identity belongs to one Azure resource. If we enable it on `ca-devpolaris-thumbnail-worker-prod`, Azure creates an identity tied to that Container App. Only that resource can use it. If we delete the Container App, Azure deletes the identity too.
 
-The user-assigned choice is a separate lifecycle.
-You create an identity resource such as `mi-devpolaris-orders-api-prod`.
-You grant RBAC roles to that identity.
-Then you attach it to the Container App.
-If the Container App is recreated, the identity can stay in place with the same permissions.
+That feels tidy when one stable app needs one private runtime identity. The evidence path is also straightforward: inspect the Container App, find its principal ID, then inspect role assignments for that principal.
 
-That makes user-assigned identity good when the identity needs to be prepared before the runtime exists.
-It also helps when the deployment process recreates compute resources often, but the access contract should stay stable.
-For example, the platform team may create the identity and role assignments first, then the application team can deploy the Container App later without asking for fresh Key Vault access.
+A user-assigned managed identity is its own Azure resource. We create `mi-devpolaris-thumbnail-worker-prod`, grant roles to that identity, and attach it to the Container App. If we delete and recreate the app, we can attach the same identity again. The access contract survives the compute rebuild.
 
-Here is the practical comparison:
+That stability is useful for production platforms, but it has a tradeoff. A user-assigned identity can outlive the app. If no one owns it, it can keep access after the workload disappears. We should tag it, review its roles, and remove it when the app retires.
 
-| Choice | Lifecycle | Good fit | Main risk |
-|--------|-----------|----------|-----------|
-| System-assigned | Created and deleted with one Azure resource | One app needs its own identity | Recreating the app changes the identity |
-| User-assigned | Separate Azure resource | Access must survive app recreation or be shared carefully | Sharing can hide which workload used the access |
+For the thumbnail worker, we use a user-assigned identity because we want the production access contract to be stable while the worker revisions change often. The identity can be created and reviewed before the app revision rolls out. A smaller app can use a system-assigned identity and still be designed well.
 
-Do not treat user-assigned as always better.
-The separate lifecycle is useful, but it is also something you must manage.
-If three apps share one identity, a log line may show the identity but not immediately tell you which app made the call.
-Shared access also means one broad role assignment can affect more than one workload.
+## The Temporary Token Flow
 
-For `devpolaris-orders-api`, this article uses a user-assigned identity because it teaches the full operating shape:
-create the identity, attach it to the app, grant it Blob Storage access, grant it Key Vault access, and point the SDK at the correct client ID.
-In a smaller project, system-assigned identity may be the right answer.
+Managed identity feels strange at first because the app settings no longer show the credential. That missing credential is the point. The proof comes from the Azure runtime and Microsoft Entra ID instead of a copied password.
 
-## The Token Flow In Plain English
+```mermaid
+flowchart TD
+    APP["Running worker<br/>devpolaris-thumbnail-worker"]
+    HOST["Azure host<br/>Container Apps"]
+    IDENTITY["Workload identity<br/>managed identity"]
+    TOKEN["Short-lived token<br/>Microsoft Entra ID"]
+    SERVICE["Target service<br/>Blob Storage or Key Vault"]
+    CHECK["Permission check<br/>RBAC or service rule"]
 
-Managed identity can sound mysterious because the secret is gone.
-The missing secret is the point, but the app still needs a way to prove itself.
-The proof comes from the Azure runtime and Microsoft Entra ID.
-
-At a high level, the flow looks like this:
-
-1. The app starts inside Azure Container Apps.
-2. The app creates an Azure SDK credential.
-3. The SDK asks the Azure hosting environment for a token for a target service.
-4. Azure checks that the running app is allowed to use the attached managed identity.
-5. Microsoft Entra issues a short-lived token for that identity.
-6. The SDK sends the token to Blob Storage or Key Vault.
-7. The target service checks RBAC or its own data-plane permission model before allowing the operation.
-
-The app does not see the credential that backs the managed identity.
-The app receives a token.
-That token expires.
-The SDK can request another one when needed.
-That is a very different risk shape from a storage account key copied into app settings.
-
-Think of a managed identity token like a temporary visitor sticker at an office.
-The sticker proves the front desk checked you in.
-It does not mean you can enter every room.
-The room still has its own access list.
-In Azure, RBAC is the access list.
-
-This matters during debugging.
-If the token request fails, the app may not have a usable identity attached.
-If the token request succeeds but Blob Storage returns `AuthorizationPermissionMismatch`, the identity exists but lacks the data permission for that blob operation.
-Those are different problems, and they send you to different fixes.
-
-Here is a realistic app log when token acquisition works but Blob Storage blocks the operation:
-
-```text
-2026-04-18T09:14:27.913Z orders-api info  Loading invoice template container=invoices
-2026-04-18T09:14:28.226Z orders-api error Blob download failed
-status=403
-code=AuthorizationPermissionMismatch
-message="This request is not authorized to perform this operation using this permission."
-identityClientId=8a77b7f5-1111-4444-9999-4f2a11111111
-storageAccount=stdevpolarisordersprod
-container=invoices
+    APP --> HOST
+    HOST --> IDENTITY
+    IDENTITY --> TOKEN
+    TOKEN --> SERVICE
+    SERVICE --> CHECK
 ```
 
-The useful clue is the status and code. The target service understood
-the request and rejected the caller because the identity lacks the
-required data permission. Start with the role assignment and scope for
-that managed identity.
+Step by step, the Node app creates a credential object. The Azure SDK asks the Azure runtime for a token for the managed identity. Azure checks that the running Container App can use that identity. Microsoft Entra ID issues a short-lived token. The SDK sends that token to Blob Storage or Key Vault. The target service checks permissions before returning data.
+
+For production, we make the user-assigned identity explicit:
+
+```js
+import { ManagedIdentityCredential } from "@azure/identity";
+import { BlobServiceClient } from "@azure/storage-blob";
+import { SecretClient } from "@azure/keyvault-secrets";
+
+const clientId = process.env.AZURE_CLIENT_ID;
+const storageAccountUrl = process.env.STORAGE_ACCOUNT_URL;
+const keyVaultUrl = process.env.KEY_VAULT_URL;
+
+if (!clientId || !storageAccountUrl || !keyVaultUrl) {
+  throw new Error("Managed identity client ID and service URLs must be configured");
+}
+
+const credential = new ManagedIdentityCredential({ clientId });
+
+const blobClient = new BlobServiceClient(storageAccountUrl, credential);
+const secretClient = new SecretClient(keyVaultUrl, credential);
+```
+
+Notice what the code does not contain. There is no storage account key. There is no Key Vault client secret. There is no developer login. The app has directions and an identity selector, then Azure handles token acquisition at runtime.
+
+For local development, many teams use a separate helper or environment-specific path against non-production resources. That can use developer sign-in. The important point is that a laptop test with Sam's identity does not prove the production managed identity has access.
+
+A good startup check proves the identity path without exposing a token:
+
+```text
+thumbnail-worker dependency check
+credential=ManagedIdentityCredential
+requestedClientId=8a77b7f5-1111-4444-9999-4f2a11111111
+storageAccount=stdevpolarismediaprod
+keyVault=kv-devpolaris-media-prod
+tokenLogged=false
+secretValueLogged=false
+```
+
+This kind of log helps because managed identity failures often happen before the target service does anything useful. If `requestedClientId` is empty, the SDK may choose a system-assigned identity when we expected a user-assigned identity. If the client ID is correct but the service returns `403`, the next check is RBAC at the target scope.
+
+Keep this evidence close to the release record. When a new revision rolls out, the team should be able to compare the configured client ID, the identity attached to the Container App, and the role assignments on Blob Storage and Key Vault. If those three pieces disagree, the app is using the wrong identity or the identity is missing the right data role.
 
 ## RBAC Is The Permission, Identity Is The Caller
 
-Managed identity answers "who is the app?"
-Azure RBAC answers "what can that identity do here?"
-The word **here** means scope, such as a management group, subscription, resource group, storage account, blob container, Key Vault, or secret.
+Managed identity answers who is calling. RBAC answers what that identity can do at the target. If we mix those up, we end up saying "the app has managed identity" as if that means the app can read everything. It does not.
 
-An Azure role assignment has three practical pieces:
-the principal, the role, and the scope.
-The principal is the identity getting access.
-The role is the permission set.
-The scope is where that permission applies.
+For `devpolaris-thumbnail-worker`, the runtime identity needs narrow data access. It needs to read uploaded images from one blob container, write thumbnails to another container, and read one license token from Key Vault. It does not need Contributor on the app resource group. It does not need Owner on the subscription. It does not need permission to assign roles.
 
-For the orders API, the intended access could be:
+The access story should sound like this: `mi-devpolaris-thumbnail-worker-prod` can read blob data from `raw-images`, write blob data to `thumbnails`, and read secret values from `kv-devpolaris-media-prod`. That is much clearer than saying "the app has Azure access."
 
-| Principal | Role | Scope | Why |
-|-----------|------|-------|-----|
-| `mi-devpolaris-orders-api-prod` | `Storage Blob Data Reader` | Blob container `invoices` | Read invoice templates |
-| `mi-devpolaris-orders-api-prod` | `Key Vault Secrets User` | Key Vault `kv-devpolaris-orders-prod` | Read the database connection secret |
+The hidden lesson is that control-plane access and data-plane access are different. Managing a Storage account resource is not the same as reading blobs. Managing a Key Vault resource is not the same as reading secret values. Runtime code usually needs data-plane access, not broad resource-management power.
 
-Notice the data-plane roles.
-Blob data access is not the same as managing the Storage account resource.
-Key Vault secret access is not the same as managing the Key Vault resource.
-This is one of the most common Azure permission surprises.
+## Blob Storage And Key Vault Access
 
-The control plane is the management side.
-It includes operations like creating a Storage account, changing tags, or configuring a Key Vault.
-The data plane is the stored data side.
-It includes operations like reading a blob or getting a secret value.
-Many Azure services make this split because managing the container for data is not the same risk as reading the data itself.
+Blob Storage and Key Vault make the split visible. The app needs a token for its managed identity, then each service checks whether that identity has a data role at the right scope.
 
-That split protects teams from accidental overreach.
-An engineer might need to view a Storage account resource in the portal without reading customer invoice files.
-The orders API might need to read blobs without being able to delete the Storage account.
-Those are different jobs, so they should be different roles.
+For Blob Storage, the evidence should show a data role, not a management role:
 
-The fix direction follows the job:
-if the app cannot read Blob Storage data, check for a Storage Blob Data role at the right scope.
-If the app cannot read Key Vault secret values, check for a Key Vault data role or the vault's access model.
-If the app cannot update the Container App resource, that is a control-plane permission issue for the deployer, not a runtime managed identity issue.
+```bash
+$ az role assignment list \
+  --assignee 9ed1d69b-2222-4555-8888-2c9b22222222 \
+  --scope /subscriptions/11111111-2222-3333-4444-555555555555/resourceGroups/rg-devpolaris-media-prod/providers/Microsoft.Storage/storageAccounts/stdevpolarismediaprod/blobServices/default/containers/thumbnails \
+  --query "[].{role:roleDefinitionName,scope:scope}" \
+  --output table
+Role                           Scope
+-----------------------------  ------------------------------------------------------------------------------------------------
+Storage Blob Data Contributor  /subscriptions/.../containers/thumbnails
+```
+
+For Key Vault, the same idea applies. If the vault uses Azure RBAC for data-plane access, the runtime identity needs a role such as `Key Vault Secrets User` scoped to the vault or a suitable narrower boundary.
+
+```bash
+$ az role assignment list \
+  --assignee 9ed1d69b-2222-4555-8888-2c9b22222222 \
+  --scope /subscriptions/11111111-2222-3333-4444-555555555555/resourceGroups/rg-devpolaris-media-prod/providers/Microsoft.KeyVault/vaults/kv-devpolaris-media-prod \
+  --query "[].{role:roleDefinitionName,scope:scope}" \
+  --output table
+Role                    Scope
+----------------------  ------------------------------------------------------------------------------------------------
+Key Vault Secrets User  /subscriptions/.../vaults/kv-devpolaris-media-prod
+```
+
+The evidence should prove access without revealing data. We can show the vault name, secret name, managed identity client ID, and role scope. We should not show the secret value, token, storage key, or connection string.
 
 ## Runtime Identity Is Not Pipeline Identity
 
-A deployment pipeline and a running application are different actors.
-They may touch some of the same Azure resources, but they should not be the same identity by default.
-This distinction saves teams from giving runtime code deployment power or giving deployment automation data access it does not need.
+The deployment pipeline and the running app are different actors. The pipeline builds an image, pushes it to the registry, and updates the Container App revision. The running app serves traffic, reads dependencies, and writes app-owned data.
 
-The pipeline identity is used before and during deployment.
-It may build the image, push to Azure Container Registry, update the Container App revision, set environment variables, and assign a user-assigned identity to the app.
-Depending on team shape, this identity may be a service principal, a federated workload identity from GitHub Actions, or another Microsoft Entra workload identity.
+If both actors share one identity, we lose clarity. Runtime code might inherit deployment power. The pipeline might inherit data access. Audit logs no longer tell us which part of the system acted. During an incident, that confusion costs time.
 
-The runtime identity is used after the app starts.
-It reads Blob Storage and Key Vault while serving real traffic.
-It should not need permission to create resource groups, update RBAC assignments, or replace production container revisions.
-
-For `devpolaris-orders-api`, the split can look like this:
-
-| Actor | Example identity | Needs | Should not need |
-|-------|------------------|-------|-----------------|
-| Pipeline | `sp-devpolaris-orders-deploy-prod` | Update Container App, set image, attach identity | Read invoice blobs or secret values |
-| Runtime | `mi-devpolaris-orders-api-prod` | Read Blob Storage and Key Vault data | Deploy new revisions or assign roles |
-
-This split is the cloud version of not using your personal admin account inside application code.
-The app should have the access it needs while it runs.
-The deployment system should have the access it needs to ship changes.
-Those two jobs overlap less than people first assume.
-
-A clean release record can make the split visible:
+The release record should show the split:
 
 ```text
-Release: orders-api-prod-2026.04.18.3
-
-Pipeline identity:
-  sp-devpolaris-orders-deploy-prod
-
-Runtime identity attached:
-  mi-devpolaris-orders-api-prod
-
-Runtime roles expected:
-  Storage Blob Data Reader on stdevpolarisordersprod/invoices
-  Key Vault Secrets User on kv-devpolaris-orders-prod
-
-Runtime roles not expected:
-  Contributor on rg-devpolaris-orders-prod
-  Owner on sub-devpolaris-prod
+Release: thumbnail-worker-prod-2026.05.10.3
+Pipeline identity: sp-devpolaris-media-ci
+Runtime identity attached: mi-devpolaris-thumbnail-worker-prod
+Runtime can read: raw image blobs and Key Vault license token
+Runtime can write: thumbnail blobs
+Runtime should not have: Contributor on resource group, Owner on subscription
 ```
 
-The "not expected" lines give the reviewer a quick way to catch dangerous shortcuts.
-If the runtime identity has `Contributor` on the whole resource group, the app may be able to manage resources it only needed to read.
+Notice how the "should not have" line is part of the design. We are not only proving the app can work. We are proving the app cannot do unrelated production work.
 
-## App Identity Lifecycle
+## Identity Lifecycle During Rebuilds
 
-Identity lifecycle is the part that tends to surprise people during rebuilds.
-An app name can stay the same while the identity behind it changes.
-Or an identity can survive while a broken app revision is replaced.
-You need to know which lifecycle you chose before a repair.
+Identity lifecycle becomes interesting when we rebuild infrastructure. An app name can stay the same while the underlying identity changes. An identity can also survive after an app disappears. Both cases matter for access reviews.
 
-With a system-assigned identity, the identity belongs to the resource.
-If you delete and recreate the Container App, Azure creates a new identity with a new principal ID.
-Any old RBAC assignments pointed at the old principal.
-The recreated app may look correct by name but fail at runtime because the new identity has no access yet.
+With a system-assigned identity, deleting and recreating the Container App creates a new principal. Old role assignments point at the old principal, so the new app may fail even though the app name looks familiar. The fix is to inspect the new principal ID and update assignments deliberately.
 
-With a user-assigned identity, the identity is separate.
-If you delete and recreate the Container App, you can attach the same identity again.
-The RBAC assignments stay attached to the identity.
-That is helpful during rebuilds, blue-green style replacements, or infrastructure refactors where the compute resource may change but the workload's access contract should remain steady.
+With a user-assigned identity, the identity is separate from the app. We can recreate the Container App and attach the same identity. That keeps RBAC stable, which is useful in production. The tradeoff is cleanup: if the app retires and the identity remains, the identity can keep its roles.
 
-The tradeoff is ownership.
-A user-assigned identity needs its own naming, tags, access review, and deletion process.
-If nobody owns it, it can outlive the application and keep access that no running workload needs.
-That is not a reason to avoid it.
-It is a reason to treat it as a real resource.
+For the thumbnail worker, a useful inventory row looks like this:
 
-For the orders API, a good identity inventory row includes:
+```text
+Identity resource: mi-devpolaris-thumbnail-worker-prod
+Client ID: 8a77b7f5-1111-4444-9999-4f2a11111111
+Principal ID: 9ed1d69b-2222-4555-8888-2c9b22222222
+Attached workload: ca-devpolaris-thumbnail-worker-prod
+Owner: media platform team
+Expected roles: Blob data contributor, Key Vault secrets user
+```
 
-| Field | Example |
-|-------|---------|
-| Identity resource | `mi-devpolaris-orders-api-prod` |
-| Resource group | `rg-devpolaris-orders-prod` |
-| Attached workload | `ca-devpolaris-orders-api-prod` |
-| Client ID | `8a77b7f5-1111-4444-9999-4f2a11111111` |
-| Principal ID | `9ed1d69b-2222-4555-8888-2c9b22222222` |
-| Intended roles | Blob reader, Key Vault secrets user |
-| Owner tag | `team=orders-platform` |
-
-The client ID and principal ID are easy to mix up.
-The client ID helps applications and SDK configuration choose an identity.
-The principal ID is commonly used when creating role assignments because Azure RBAC grants access to the principal.
-When a command asks for an assignee, check which identifier it expects.
-
-During cleanup, do not only delete the Container App and walk away.
-Check whether the identity was system-assigned or user-assigned.
-If it was user-assigned and the app is retired, remove role assignments and delete the identity resource too.
-Otherwise you leave behind an identity with no obvious workload but real permissions.
+The client ID and principal ID have different jobs. The client ID helps the SDK choose the user-assigned identity. The principal ID is often what role assignment commands use as the assignee. Mixing them up is a common source of confusing failures.
 
 ## Evidence From A Working Setup
 
-A working setup should leave evidence in Azure that a teammate can inspect.
-You do not need to memorize every command.
-You need to know what proof looks like.
-The first proof is that the Container App has the intended identity attached.
+A working managed identity setup should leave evidence at three layers. First, the Container App should show the identity attached. Second, Azure RBAC should show the expected roles for the identity. Third, the app should log that it used the expected identity without printing sensitive values.
 
 ```bash
 $ az containerapp identity show \
->   --name ca-devpolaris-orders-api-prod \
->   --resource-group rg-devpolaris-orders-prod \
->   --query "{type:type,principalId:principalId,userAssigned:userAssignedIdentities}" \
->   --output json
+  --name ca-devpolaris-thumbnail-worker-prod \
+  --resource-group rg-devpolaris-media-prod \
+  --query "{type:type,userAssigned:userAssignedIdentities}" \
+  --output json
 {
   "type": "UserAssigned",
-  "principalId": null,
   "userAssigned": {
-    "/subscriptions/11111111-2222-3333-4444-555555555555/resourceGroups/rg-devpolaris-orders-prod/providers/Microsoft.ManagedIdentity/userAssignedIdentities/mi-devpolaris-orders-api-prod": {
+    "/subscriptions/11111111-2222-3333-4444-555555555555/resourceGroups/rg-devpolaris-media-prod/providers/Microsoft.ManagedIdentity/userAssignedIdentities/mi-devpolaris-thumbnail-worker-prod": {
       "clientId": "8a77b7f5-1111-4444-9999-4f2a11111111",
       "principalId": "9ed1d69b-2222-4555-8888-2c9b22222222"
     }
@@ -452,148 +244,59 @@ $ az containerapp identity show \
 }
 ```
 
-The useful clues are `type`, `clientId`, and `principalId`.
-Because this app uses a user-assigned identity, the top-level `principalId` is null and the attached identity appears under `userAssignedIdentities`.
-That is expected.
-If the app was using a system-assigned identity, you would expect `type` to include `SystemAssigned` and a top-level principal ID.
+The top-level type tells us this app uses a user-assigned identity. The nested `clientId` is what our app config should select. The `principalId` is what we inspect for role assignments.
 
-The second proof is that RBAC has been granted to the principal at the target scope.
-This example shows the assigned roles for the runtime identity.
-
-```bash
-$ az role assignment list \
->   --assignee 9ed1d69b-2222-4555-8888-2c9b22222222 \
->   --all \
->   --query "[].{role:roleDefinitionName,scope:scope}" \
->   --output table
-Role                       Scope
--------------------------  -------------------------------------------------------------------------------
-Storage Blob Data Reader   /subscriptions/11111111-2222-3333-4444-555555555555/resourceGroups/rg-devpolaris-orders-prod/providers/Microsoft.Storage/storageAccounts/stdevpolarisordersprod/blobServices/default/containers/invoices
-Key Vault Secrets User      /subscriptions/11111111-2222-3333-4444-555555555555/resourceGroups/rg-devpolaris-orders-prod/providers/Microsoft.KeyVault/vaults/kv-devpolaris-orders-prod
-```
-
-This output proves only role assignment state.
-It does not prove the app used the identity successfully.
-For that, look at app logs or a health check that actually reaches the dependency.
-
-A useful startup log might look like this:
+The app log then proves runtime behavior:
 
 ```text
-2026-04-18T09:21:42.105Z orders-api info  Starting revision=orders-api--7m9vp5 image=crdevpolarisprod.azurecr.io/orders-api:2026.04.18.3
-2026-04-18T09:21:42.384Z orders-api info  Azure credential selected managedIdentityClientId=8a77b7f5-1111-4444-9999-4f2a11111111
-2026-04-18T09:21:43.018Z orders-api info  Key Vault secret loaded name=OrdersDbConnection vault=kv-devpolaris-orders-prod
-2026-04-18T09:21:43.247Z orders-api info  Blob container reachable account=stdevpolarisordersprod container=invoices
-2026-04-18T09:21:43.255Z orders-api info  Startup dependency check passed
+thumbnail-worker startup revision=thumbnail-worker--7m9vp5
+credential=ManagedIdentityCredential
+managedIdentityClientId=8a77b7f5-1111-4444-9999-4f2a11111111
+keyVault=kv-devpolaris-media-prod
+inputContainer=raw-images
+outputContainer=thumbnails
+secretValueLogged=false
+startupDependencyCheck=passed
 ```
 
-This log is better than a vague "started" line.
-It tells the operator which identity client ID the app selected and which dependencies were checked.
-It still avoids printing secret values.
-Never log the database connection string or a token.
+That log gives us useful evidence without leaking the secret. If the release fails later, we can compare the logged client ID with the identity assignment and RBAC records.
 
-## Failure Modes You Will Actually See
+## When Workload Access Fails
 
-Managed identity failures are usually plain once you separate identity, token, role, and target service.
-The noisy part is that every layer can return a different error shape.
-Your job is to ask which layer is complaining.
+Managed identity failures become easier when we separate the layers. If the app cannot get a token, the identity may not be attached or the client ID may be wrong. If the app gets a token but Blob Storage returns `AuthorizationPermissionMismatch`, the identity exists but lacks the needed blob data role. If Key Vault returns `Forbidden`, the vault access model, data role, or scope may be wrong.
 
-Here are the common beginner failures for the orders API:
-
-| Failure | What it looks like | Likely cause | Fix direction |
-|---------|--------------------|--------------|---------------|
-| Identity missing | `ManagedIdentityCredential authentication unavailable` | No managed identity is attached to the Container App | Attach system-assigned or user-assigned identity, then redeploy or restart if needed |
-| Identity exists but no role assignment | Token request works, Blob or Key Vault returns `403` | The identity has no data role on the target | Assign the smallest useful RBAC role at the right scope |
-| Wrong identity attached | Logs show a different `managedIdentityClientId` than expected | App config points at the wrong client ID, or the wrong identity was attached | Check `AZURE_CLIENT_ID`, attached identities, and release record |
-| Token works but data-plane permission missing | Storage account is visible, blob read fails | Control-plane role exists but data role is missing | Add `Storage Blob Data Reader` or another data role for the needed operation |
-| Local developer auth confusion | Works on laptop but fails in Azure, or the reverse | `DefaultAzureCredential` uses local Azure CLI login locally and managed identity in Azure | Test both paths and log the selected credential context without printing tokens |
-
-The first failure usually appears before the target service sees a request.
-The app asks for a token and cannot get one.
-In that case, do not start by changing Blob Storage roles.
-First prove the app has an identity attached.
-
-The second and fourth failures look similar because they both return `403`.
-The difference is what access exists.
-If the identity has no role assignments, the fix is to add the missing role.
-If the identity has a broad management role but no data role, the fix is not "make it Owner."
-The fix is to grant the right data-plane role for Blob Storage or Key Vault.
-
-The wrong identity failure is common when a Container App has more than one user-assigned identity.
-The SDK needs to know which identity to use.
-For Node.js, setting `managedIdentityClientId` from `AZURE_CLIENT_ID` is a common way to make that choice explicit.
-If `AZURE_CLIENT_ID` points to staging while the app runs in production, Azure may issue a token for an identity that has no production data access.
-
-Local developer confusion deserves extra patience.
-On a laptop, `DefaultAzureCredential` may use your Azure CLI login, Visual Studio Code sign-in, Azure Developer CLI login, or environment variables.
-In Azure, it should use managed identity.
-That is useful because the same app code can run in both places, but it can hide which identity is being tested.
-
-For local testing, a good habit is to write down the expected actor:
+Here is a realistic storage failure:
 
 ```text
-Local actor:
-  maya@devpolaris.example through Azure CLI
-
-Azure runtime actor:
-  mi-devpolaris-orders-api-prod
-
-Local test target:
-  non-production Key Vault and Storage account
-
-Production runtime target:
-  production Key Vault and Storage account
+thumbnail-worker error Blob upload failed
+status=403
+code=AuthorizationPermissionMismatch
+identityClientId=8a77b7f5-1111-4444-9999-4f2a11111111
+storageAccount=stdevpolarismediaprod
+container=thumbnails
 ```
 
-That small record prevents a false sense of safety.
-A local test passing with Maya's human account does not prove the production managed identity has access.
-A production app working with managed identity does not mean every developer should get direct access to production secrets.
+This points us to the blob data role and scope. It does not tell us to add a storage account key to app settings. That would make the symptom disappear while reintroducing the credential problem managed identity was meant to remove.
+
+Local development can create false confidence. A developer may test with `DefaultAzureCredential` and succeed because their own account has access to a development vault. Production still fails because the Container App's managed identity lacks access to the production vault. The fix is to test the production runtime identity, or at least log and verify the identity selected in Azure.
 
 ## A Review Habit Before Release
 
-Managed identity is not only a setup task.
-It becomes part of release review and incident debugging.
-Before a production release, the reviewer should be able to answer a few concrete questions without searching old chat messages.
+Before a release, let's review managed identity like we review code. Which workload identity will the app use? Which client ID does the code select? Which target services will it call? Which data roles exist at which scopes? Which permissions are deliberately absent?
 
-Start with the runtime:
-which Container App revision will run the code, which managed identity is attached, and which client ID will the SDK select?
-If the answer depends on "whatever Azure picks," make it explicit.
-Production identity should be boring and inspectable.
+For `devpolaris-thumbnail-worker`, a healthy answer sounds like this: the production Container App attaches `mi-devpolaris-thumbnail-worker-prod`, the Node code selects that identity with `AZURE_CLIENT_ID`, the identity can read raw image blobs, write thumbnail blobs, read Key Vault secrets, and cannot deploy the app or assign roles.
 
-Then check the permissions:
-which role assignments exist for the runtime identity, at which scopes, and why are those scopes no broader than needed?
-For the orders API, reading one blob container should not require access to every storage account in the subscription.
-Reading one app's secrets should not require Key Vault Administrator.
+If the app needs new access, we should add the narrow role and update the release evidence. If the app no longer needs access, we should remove the role. Managed identity makes credential handling simpler, but access still needs ownership.
 
-Then check the pipeline:
-which identity deploys the Container App, and does it have runtime data access it does not need?
-If the pipeline can both deploy production and read production secrets, ask whether that is truly required.
-Sometimes it is.
-Often it is only a shortcut left over from early setup.
-
-Here is a compact review checklist:
-
-| Question | Healthy answer for `devpolaris-orders-api` |
-|----------|--------------------------------------------|
-| Which runtime identity is attached? | `mi-devpolaris-orders-api-prod` |
-| Is the app selecting that identity explicitly? | `AZURE_CLIENT_ID` matches the user-assigned identity client ID |
-| Can it read Blob Storage data? | `Storage Blob Data Reader` scoped to `invoices` |
-| Can it read Key Vault secrets? | `Key Vault Secrets User` scoped to the app vault |
-| Can it deploy itself? | No, deployment belongs to the pipeline identity |
-| Can the pipeline read runtime data? | No, unless a documented release step needs it |
-
-The tradeoff is worth naming.
-Managed identity removes long-lived credentials from the app, but it does not remove access design.
-You still choose identity type, role, scope, ownership, and lifecycle.
-That is a good trade.
-It moves the problem from "where did we copy this secret?" to "which identity has which access?"
-The second question is much easier to inspect, review, and fix.
+The mental shift is the real win. We stop asking, "Where did we copy the secret?" and start asking, "Which workload identity has which access, and can we prove it?" That second question is easier to operate safely.
 
 ---
 
 **References**
 
-- [What is managed identities for Azure resources?](https://learn.microsoft.com/en-us/entra/identity/managed-identities-azure-resources/overview) - Microsoft Learn explains managed identity types, lifecycle differences, and how Azure workloads get Microsoft Entra tokens without stored credentials.
-- [Managed identities in Azure Container Apps](https://learn.microsoft.com/en-us/azure/container-apps/managed-identity) - Microsoft Learn shows how Container Apps support system-assigned and user-assigned identities.
-- [Understand Azure role assignments](https://learn.microsoft.com/en-us/azure/role-based-access-control/role-assignments) - Microsoft Learn defines the principal, role, and scope model used by Azure RBAC.
-- [Provide access to Key Vault keys, certificates, and secrets with Azure role-based access control](https://learn.microsoft.com/en-us/azure/key-vault/general/rbac-guide) - Microsoft Learn explains Key Vault control-plane and data-plane access and the Key Vault data roles.
-- [Authorize access to blobs using Microsoft Entra ID](https://learn.microsoft.com/en-us/azure/storage/common/storage-auth-aad-app) - Microsoft Learn explains Blob Storage data access with Microsoft Entra ID and storage data roles.
+- [Managed identities for Azure resources](https://learn.microsoft.com/en-us/entra/identity/managed-identities-azure-resources/overview) - Used for managed identity types, lifecycle behavior, and token-based access without stored credentials.
+- [Managed identities in Azure Container Apps](https://learn.microsoft.com/en-us/azure/container-apps/managed-identity) - Used for Container Apps identity attachment and evidence patterns.
+- [ManagedIdentityCredential class](https://learn.microsoft.com/en-us/javascript/api/@azure/identity/managedidentitycredential?view=azure-node-latest) - Used for the JavaScript credential pattern and user-assigned identity client ID selection.
+- [Authenticate Azure-hosted JavaScript apps using a user-assigned managed identity](https://learn.microsoft.com/en-us/azure/developer/javascript/sdk/authentication/user-assigned-managed-identity) - Used for the JavaScript SDK example with `AZURE_CLIENT_ID`.
+- [Provide access to Key Vault keys, certificates, and secrets with Azure RBAC](https://learn.microsoft.com/en-us/azure/key-vault/general/rbac-guide) - Used for Key Vault data-plane RBAC role guidance.
+- [Authorize access to blobs using Microsoft Entra ID](https://learn.microsoft.com/en-us/azure/storage/common/storage-auth-aad-app) - Used for Blob Storage data access through Microsoft Entra ID and storage data roles.

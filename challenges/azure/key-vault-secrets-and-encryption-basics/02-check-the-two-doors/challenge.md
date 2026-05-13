@@ -1,6 +1,6 @@
 ---
-title: "Check The Two Doors"
-sectionSlug: vault-access-has-two-doors
+title: "Check The Two Access Paths"
+sectionSlug: vault-access-has-two-paths
 order: 2
 ---
 

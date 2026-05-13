@@ -203,30 +203,28 @@ That does not mean the side job is unimportant.
 Receipt emails, export files, cleanup, and partner support jobs still need ownership and monitoring.
 They simply do not need to live inside the request path.
 
-Here is the shape for `devpolaris-orders-api`:
+Here is the work shape for `devpolaris-orders-api`:
 
 ```mermaid
 flowchart TD
-    API["Orders API<br/>(long-running service)"]
-    QUEUE["Receipt work<br/>(storage queue)"]
-    RECEIPT["Send receipt<br/>(queue function)"]
-    BLOB["Export file lands<br/>(Blob Storage)"]
-    EXPORT["Validate export<br/>(blob event function)"]
-    TIMER["Nightly schedule<br/>(timer trigger)"]
-    CLEANUP["Delete old exports<br/>(cleanup function)"]
-    MONITOR["Evidence<br/>(Application Insights)"]
-
-    API --> QUEUE
-    QUEUE --> RECEIPT
-    API --> BLOB
-    BLOB --> EXPORT
-    TIMER --> CLEANUP
-    RECEIPT -.-> MONITOR
-    EXPORT -.-> MONITOR
-    CLEANUP -.-> MONITOR
+    API["Orders API"] --> QUEUE["Receipt queue"]
+    QUEUE --> RECEIPT["Receipt function"]
+    API --> BLOB["Export blob"]
+    BLOB --> EXPORT["Export function"]
+    TIMER["Timer trigger"] --> CLEANUP["Cleanup function"]
 ```
 
-The diagram has one main lesson:
+The evidence path is separate.
+Each function needs logs, metrics, and failures in Application Insights.
+
+```mermaid
+flowchart TD
+    RECEIPT["Receipt function"] --> MONITOR["App Insights"]
+    EXPORT["Export function"] --> MONITOR
+    CLEANUP["Cleanup function"] --> MONITOR
+```
+
+The diagrams have one main lesson:
 the API is still the center of the product workflow, but it does not carry every support task in its own process.
 The jobs wake up when their input appears.
 

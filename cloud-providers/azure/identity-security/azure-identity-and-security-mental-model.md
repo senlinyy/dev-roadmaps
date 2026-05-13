@@ -1,722 +1,582 @@
 ---
-title: "Azure Identity and Security Mental Model"
-description: "Separate identity, Azure RBAC, scope, managed identities, and Key Vault so you can reason about who can do what in Azure."
-overview: "Azure security gets easier when you separate who or what is acting, what action is allowed, where that permission applies, and where sensitive values live. Use one orders API to build the first mental model."
-tags: ["identity", "rbac", "managed-identity", "key-vault"]
+title: "Azure Identity and Access Control"
+description: "Learn how Azure decides who is making a request, what action they want, and where that action is allowed."
+overview: "Azure access control becomes much easier when we stop treating security as one big switch. This article shows how Microsoft Entra ID, service principals, groups, Azure RBAC, roles, scopes, and review evidence fit into one request check."
+tags: ["identity", "entra-id", "rbac", "service-principals"]
 order: 1
 id: article-cloud-providers-azure-identity-security-azure-identity-and-security-mental-model
+aliases:
+  - azure-identity-and-security-mental-model
+  - microsoft-entra-id-users-groups-and-service-principals
+  - azure-rbac-roles-and-scopes
 ---
 
 ## Table of Contents
 
 1. [The Permission Questions Before Production](#the-permission-questions-before-production)
-2. [If You Know AWS IAM](#if-you-know-aws-iam)
-3. [One Request Has Several Checks](#one-request-has-several-checks)
-4. [Identity Answers Who Or What](#identity-answers-who-or-what)
-5. [Azure RBAC Answers What Action And Where](#azure-rbac-answers-what-action-and-where)
-6. [Scope Is The Size Of The Permission](#scope-is-the-size-of-the-permission)
-7. [Managed Identity Removes Stored App Passwords](#managed-identity-removes-stored-app-passwords)
-8. [Key Vault Protects Sensitive Values](#key-vault-protects-sensitive-values)
-9. [Evidence You Can Inspect](#evidence-you-can-inspect)
-10. [Failure Modes And Fix Directions](#failure-modes-and-fix-directions)
-11. [The Operating Checklist](#the-operating-checklist)
+2. [One Request Has Several Checks](#one-request-has-several-checks)
+3. [A Compact AWS Bridge](#a-compact-aws-bridge)
+4. [The Identity Check Before Access](#the-identity-check-before-access)
+5. [Identity Answers Who Or What](#identity-answers-who-or-what)
+6. [App Registrations And Service Principals](#app-registrations-and-service-principals)
+7. [Signed In Does Not Mean Allowed](#signed-in-does-not-mean-allowed)
+8. [Object IDs Beat Display Names](#object-ids-beat-display-names)
+9. [A Review Habit Before Granting Access](#a-review-habit-before-granting-access)
+10. [The Three Parts Of Access](#the-three-parts-of-access)
+11. [Azure RBAC Answers What Action And Where](#azure-rbac-answers-what-action-and-where)
+12. [Scopes Decide How Far Access Travels](#scopes-decide-how-far-access-travels)
+13. [Scope Is The Size Of The Permission](#scope-is-the-size-of-the-permission)
+14. [Reading Access Evidence](#reading-access-evidence)
+15. [Evidence You Can Inspect](#evidence-you-can-inspect)
+16. [Least Privilege For The Orders API](#least-privilege-for-the-orders-api)
+17. [Managed Identity Removes Stored App Passwords](#managed-identity-removes-stored-app-passwords)
+18. [Key Vault Protects Sensitive Values](#key-vault-protects-sensitive-values)
+19. [Failure Modes And Fix Directions](#failure-modes-and-fix-directions)
+20. [A Review Habit Before You Assign Access](#a-review-habit-before-you-assign-access)
+21. [The Operating Checklist](#the-operating-checklist)
 
 ## The Permission Questions Before Production
 
-Before a backend service can touch production data, Azure asks a small set of permission questions.
-The questions are not only for humans.
-They are also for pipelines, scripts, virtual machines, container apps, and any other workload that tries to read, write, deploy, or delete something.
+Let's use a smaller model than the usual cloud-security diagram. Every Azure access decision can be read as one sentence:
 
-Use five connected questions for Azure identity work. Identity answers
-who or what is acting. Azure RBAC answers what action that identity can
-perform and where it can perform it. Scope answers where a permission
-applies. Managed identity gives an Azure-hosted app its own cloud
-identity without storing a password in code or settings. Key Vault
-protects sensitive values such as secrets, keys, and certificates.
+```text
+caller wants to perform action on target at scope, under current sign-in context
+```
 
-Those pieces exist because cloud systems are shared.
-One subscription may hold many teams.
-One resource group may hold a production app, a database, a secret store, and logs.
-One engineer may need read access everywhere but write access only in staging.
-One app may need to read a database password from a vault, but it should not be able to delete the vault.
+That sentence is the whole game. The caller might be a human developer, a deployment pipeline, or a running application. The action might be "read a secret", "restart a web app", "create a role assignment", or "upload a blob". The target is the thing being touched. The scope is how wide the permission reaches. The sign-in context matters mostly for people, because a human signing in from a trusted laptop is not the same risk as the same account signing in from an unknown device.
 
-Azure identity and security fit into the larger Azure map you learned in foundations.
-A tenant is the identity home.
-A subscription is the operating boundary for resources and billing.
-A resource group collects related resources.
-Inside those boxes, Azure needs a way to decide whether a person, group, app, or managed identity can perform a specific operation.
+This is clearer than trying to picture Azure through a physical-place analogy. Azure is not checking one global access switch called "production". It is evaluating a request. If we can write the request sentence, we can usually debug the access problem.
 
-This article follows `devpolaris-orders-api`.
-It is a Node backend for checkout traffic.
-The production version runs in Azure Container Apps, stores order records in Azure SQL, writes receipts to Blob Storage, sends logs to Azure Monitor, and reads sensitive settings from Key Vault.
+Let's make it concrete. Suppose `devpolaris-support-portal` is an internal app used by support agents. The web app reads a database password from Key Vault, writes uploaded attachments into Blob Storage, and sends diagnostic logs to Azure Monitor. Three different targets are involved, so three access decisions happen. The app might be allowed to write blobs but not read secrets. That is not inconsistent. It is exactly what least privilege means.
 
-The running problem is practical:
-the app needs enough access to run, developers need enough access to debug, and nobody should receive broad production power by accident.
+The same pattern applies to humans. A developer might be allowed to read production logs but not restart the production app. A platform engineer might be allowed to deploy infrastructure in a development subscription but not grant themselves access in production. A CI/CD pipeline might be allowed to update one resource group but not create subscription-wide role assignments.
 
-Keep this short sentence near you:
+Notice the shift in thinking. We are no longer asking, "Does this account have Azure access?" That question is too vague. We ask, "Which identity is making which request against which target, and what evidence proves the permission is narrow enough?"
 
-> Identity says who or what. RBAC says what action and where. Scope says how far the permission reaches.
+For a review, a useful access note looks like this:
 
-## If You Know AWS IAM
+```text
+Access question:
+  The production support portal needs to read the database password.
 
-If you have learned AWS before, the closest bridge is AWS IAM. The
-bridge helps, but Azure splits identity, roles, scopes, and secret
-storage more visibly than AWS often feels at first.
+Caller:
+  mi-devpolaris-support-portal-prod
 
-Microsoft Entra ID is the identity system.
-It knows users, groups, app registrations, service principals, and managed identities.
-Azure RBAC is the authorization system for Azure resources.
-It decides what an identity can do at a scope such as a subscription, resource group, or resource.
+Action:
+  Read secret value
 
-Here is the careful translation:
+Target:
+  kv-devpolaris-support-prod/secrets/support-db-password
 
-| AWS idea you may know | Azure idea to learn | Careful difference |
-|-----------------------|---------------------|--------------------|
-| IAM user or group | Microsoft Entra user or group | Entra ID is the identity home, not the resource container |
-| IAM role assumed by a workload | Managed identity or service principal | Managed identity is created and managed by Azure for supported Azure resources |
-| IAM policy permissions | Azure role definition | Azure roles describe allowed actions, but assignment happens at an Azure scope |
-| Attaching a role to an EC2 instance, ECS task, or Lambda | Assigning a managed identity to an Azure compute resource | Similar job, different mechanics and lifecycle |
-| AWS account boundary | Azure subscription plus tenant context | Azure separates identity home from resource boundary |
-| Secrets Manager or Parameter Store | Key Vault | Similar secret-storage job, but Key Vault also handles keys and certificates |
+Scope:
+  Production Key Vault, not the whole subscription
 
-The important difference is this:
-Azure does not ask only "what IAM policy is attached?"
-Azure asks "which identity is this, which Azure role is assigned, and at what scope?"
+Evidence:
+  Key Vault Secrets User assignment for the managed identity
+```
 
-That means you should avoid fake translations like "Microsoft Entra ID equals IAM."
-Entra ID handles identity.
-Azure RBAC handles authorization to Azure resources.
-Managed identities are workload identities.
-Key Vault is a protected place for sensitive values.
-Those pieces cooperate, but they are not the same object.
+That note does not expose a secret. It gives us the exact shape of the permission. If the app fails in production, we already know where to look.
 
-For `devpolaris-orders-api`, the AWS-style question might be:
-"Which role does the app use when it reads secrets?"
-
-The Azure version is more exact:
-"Which managed identity is assigned to the Container App, which role does that identity have, and is the role scoped to the Key Vault or wider?"
-
-That extra precision helps once you get used to it.
-It helps you grant access narrowly and debug failures from the right identity.
+The non-obvious truth is that most Azure access mistakes are not caused by engineers forgetting what a role is called. They are caused by fuzzy boundaries. The caller is not the caller we thought. The role is assigned at a wider scope than anyone meant. The app has a token but the token is for the wrong identity. The permission grants management access but the operation needs data access. Good security work turns those fuzzy statements into inspectable facts.
 
 ## One Request Has Several Checks
 
-Let us follow one simple production path.
-`devpolaris-orders-api` starts a new container revision.
-During startup, it reads `DATABASE_PASSWORD` from Key Vault.
-Then it connects to Azure SQL and starts answering requests.
+A real request rarely passes through one gate. When `devpolaris-support-portal` reads `support-db-password`, Azure has to establish the caller, issue a token, check the resource's authorization model, and then evaluate whether the requested action is allowed. If any layer says no, the app sees a failure.
 
-That sounds like one app action, but Azure sees several questions:
-
-1. What is the app's identity?
-2. Is that identity allowed to read this Key Vault secret?
-3. Is the request aimed at the correct vault?
-4. Is the secret enabled and current?
-5. Is the app using the value safely after it receives it?
-
-Read the diagram from top to bottom.
-Plain-English labels come first.
-Azure terms follow in parentheses.
+Here is the request as a small flow:
 
 ```mermaid
 flowchart TD
-    APP["Running orders API<br/>(Azure Container App)"]
-    MI["Cloud identity for the app<br/>(managed identity)"]
-    TOKEN["Proof of identity<br/>(Microsoft Entra token)"]
-    RBAC["Permission check<br/>(Azure RBAC role assignment)"]
-    SCOPE["Where permission applies<br/>(scope)"]
-    VAULT["Sensitive value store<br/>(Key Vault)"]
-    SECRET["Database password value<br/>(secret)"]
-    SQL["Order records<br/>(Azure SQL)"]
-
-    APP --> MI
-    MI --> TOKEN
-    TOKEN --> RBAC
-    RBAC --> SCOPE
-    SCOPE --> VAULT
-    VAULT --> SECRET
-    SECRET --> APP
-    APP --> SQL
+  A["App code"] --> B["SDK asks for token"]
+  B --> C["Entra ID"]
+  C --> D["Key Vault request"]
+  D --> E["Access check"]
+  E --> F["Secret or denial"]
 ```
 
-Notice what is not in the diagram:
-there is no password stored in the app container image.
-There is no developer's personal Azure login inside the app.
-There is no broad "production admin" identity just because the app needs one secret.
+The useful part of this diagram is not the boxes. It is the diagnostic order. If the SDK cannot get a token, we have an identity attachment or credential-selection problem. If the SDK gets a token but Key Vault returns `Forbidden`, identity worked and authorization failed. If Key Vault access works but the app still cannot connect to the database, the secret may be stale, malformed, or pointing to the wrong database.
 
-The app receives a cloud identity from Azure.
-The app asks Microsoft Entra ID for a token.
-Azure checks whether that identity has a suitable role assignment at a scope that includes the Key Vault.
-If the check passes, the app can read the secret value it needs.
+That order saves time during incidents. Without it, people tend to bounce between random fixes: rotate the secret, add a role, restart the app, change a firewall rule, and hope one of them sticks. A senior review keeps the request sentence intact and checks one layer at a time.
 
-This is the core security rhythm you will see again and again:
-authenticate first, authorize second, then access the resource.
-Authentication means proving who or what you are.
-Authorization means deciding what that proven identity can do.
+The same request can also involve conditional access for human sign-ins. Conditional Access policies in Microsoft Entra ID evaluate signals such as user, device, location, application, and risk before allowing access, requiring multi-factor authentication, or blocking the sign-in. That affects the human getting into the Azure portal or CLI. It does not replace Azure RBAC on the resource. A developer can pass Conditional Access and still lack permission to change a production resource.
+
+This is where it gets interesting. Azure has several security systems that are all real, but they answer different questions. Microsoft Entra ID proves identity. Conditional Access can put conditions on human sign-ins. Azure RBAC evaluates management-plane actions and many data-plane actions. Some services also have their own access models. Key Vault, for example, can use Azure RBAC or legacy access policies. Storage has management roles and separate blob data roles. The article will keep coming back to the request sentence so these systems do not blur together.
+
+## A Compact AWS Bridge
+
+If you learned AWS first, the safest bridge is conceptual, not word-for-word. AWS Identity and Access Management (IAM) and Azure access control both care about principal, action, resource, and conditions, but the objects are shaped differently.
+
+In AWS, you often attach policies directly to IAM roles, and a workload assumes a role to receive temporary credentials. In Azure, identity is rooted in Microsoft Entra ID, and permissions are commonly expressed as Azure role assignments: a security principal gets a role definition at a scope. A managed identity is Azure's built-in way to give an Azure-hosted workload an identity without storing credentials.
+
+The translation table is useful only after we understand the behavior:
+
+| Access idea | Common AWS shape | Common Azure shape |
+|-------------|------------------|--------------------|
+| Human identity | IAM Identity Center user or federated identity | Microsoft Entra user |
+| Workload identity | IAM role assumed by service or workload | Managed identity or service principal |
+| Permission document | IAM policy statement | Azure role definition plus role assignment |
+| Resource boundary | ARN and policy resource | Azure scope: resource, resource group, subscription, or management group |
+| Extra request conditions | IAM condition keys | Conditions in some Azure role assignments plus sign-in controls such as Conditional Access |
+
+Do not force the mapping too hard. Azure separates the role definition from the assignment. The same role can be assigned to different principals at different scopes. Azure also has a strong distinction between management-plane operations, such as changing a storage account, and data-plane operations, such as reading blobs. AWS has similar ideas, but Azure role names make this split very visible.
+
+The practical habit transfers well: always read the denial message as a request sentence. Who is the principal? What action failed? Which resource rejected it? Which policy or role assignment was expected to allow it?
+
+## The Identity Check Before Access
+
+Before Azure can decide whether a request is allowed, it has to know who or what is asking. Microsoft Entra ID is the identity system behind that answer. It stores users, groups, applications, service principals, and managed identities, and it issues tokens that Azure services can trust.
+
+Let's look at a normal day. Maya signs in to the Azure portal to check why a deployment failed. She is a user in Microsoft Entra ID. The deployment pipeline that actually ran the release is not Maya, and it should not use Maya's password. It has its own non-human identity. The support portal running in production is not the pipeline either. It has a runtime identity attached to the Azure resource that hosts it.
+
+Those distinctions matter because access follows the identity that made the request, not the person who wrote the code. If the pipeline deploys a web app, Azure evaluates the pipeline identity. If the web app later reads a secret, Azure evaluates the app's managed identity. If Maya opens the portal to inspect logs, Azure evaluates Maya's user identity.
+
+A quick identity map might look like this:
+
+```text
+Human operator:
+  maya@devpolaris.example
+
+Team access group:
+  grp-support-portal-operators
+
+Deployment pipeline:
+  sp-support-portal-github-actions
+
+Runtime application:
+  mi-support-portal-prod
+
+Production resource group:
+  rg-support-portal-prod
+```
+
+The map is not busywork. It prevents the classic mistake where a developer tests successfully with their own account, then production fails because the running app has a different identity. It also prevents the opposite mistake, where a pipeline gets broad permissions because the team never wrote down the exact deployment identity.
 
 ## Identity Answers Who Or What
 
-Identity is the answer to "who or what is making this request?"
-For a human, that might be `maya@devpolaris.example`.
-For a team, it might be a Microsoft Entra group named `orders-api-deployers`.
-For a pipeline, it might be a service principal or workload identity.
-For an Azure-hosted app, it is often a managed identity.
+Every Azure operation has a security principal behind it. A security principal is the directory object Azure can evaluate for access. A user is a security principal for a person. A group is a security principal used to manage many identities together. A service principal is a security principal for an application or automation. A managed identity is a service-principal-shaped identity that Azure creates and rotates credentials for.
 
-Microsoft Entra ID is the Azure identity home.
-It is the directory that stores and verifies these identities.
-The old name Azure Active Directory still appears in older posts, tickets, and screenshots, but the current product name is Microsoft Entra ID.
+The names sound abstract, so let's attach them to behavior. When a support agent opens the internal support portal, that agent signs in as a user. When the platform team grants every support lead read-only access to production logs, they should grant the role to a group, then manage membership in that group. When GitHub Actions deploys infrastructure, it needs an application identity, not a human password. When the running Azure Container App reads a secret at runtime, it should use a managed identity instead of a copied client secret.
 
-For a beginner, separate these identity types:
+Groups are not just a convenience. They preserve intent. If a role assignment says `grp-support-portal-operators` can read logs, we know the permission belongs to an operational role in the organization. If the same role is assigned to twelve individual users, we have to reverse-engineer why each person was added.
 
-| Identity Type | Plain Meaning | Example In The Orders API |
-|---------------|---------------|----------------------------|
-| User | One person who signs in | `maya@devpolaris.example` |
-| Group | A set of users managed together | `orders-api-readers` |
-| Service principal | Software identity used by an app or automation | `sp-devpolaris-orders-ci` |
-| Managed identity | Azure-managed workload identity for an Azure resource | `mi-devpolaris-orders-api-prod` |
+Service principals also preserve intent when named well. A display name like `deploy` tells us almost nothing. A display name like `sp-support-portal-prod-deploy` tells us the identity is automation, not a person, and that it probably belongs to a production deployment workflow. We still need the object ID for evidence, but a good name makes review possible.
 
-The identity only proves who or what is asking.
-It does not automatically grant access to every resource.
-That is a common beginner trap.
+The tricky part is that display names are not unique. Two groups can have similar names. Apps can be recreated with the same display name but a new object ID. Human-readable names are good for conversation. Object IDs are good for proof.
 
-Maya can sign in successfully and still fail to restart the production Container App.
-The CI pipeline can authenticate successfully and still fail to assign roles.
-The managed identity can get a token successfully and still receive `403 Forbidden` from Key Vault.
+## App Registrations And Service Principals
 
-Those failures feel annoying, but they are good signs.
-They mean Azure can tell the difference between "this identity is real" and "this identity may do this action here."
+When an application needs to sign in to Microsoft Entra ID, Azure uses two related objects: an app registration and a service principal. The app registration is the application definition. The service principal is the instance of that application in a tenant that can actually receive permissions.
 
-Here is a realistic identity snapshot for the app.
-This is the kind of inventory a platform team might include in a deployment record:
+For a beginner, the important behavior is simpler than the terminology. If our GitHub Actions workflow deploys `devpolaris-support-portal`, it cannot click the Azure portal and type a password. It needs an application identity that can authenticate non-interactively. That identity appears in the tenant as a service principal, and Azure RBAC role assignments are granted to that service principal.
 
-```text
-Workload: devpolaris-orders-api
-Environment: production
-
-Human deploy group:
-  orders-api-deployers
-
-Read-only support group:
-  orders-api-readers
-
-Pipeline identity:
-  sp-devpolaris-orders-ci
-
-Runtime identity:
-  mi-devpolaris-orders-api-prod
-
-Secret store:
-  kv-devpolaris-orders-prod
-```
-
-Name the runtime identity separately from the human and pipeline
-identities. The app has its own actor with its own permissions, separate
-from Maya and separate from the CI pipeline.
-
-That separation gives you cleaner incident evidence.
-If a secret was read at 10:14, you want to know whether the reader was the app, a developer, or a pipeline.
-
-## Azure RBAC Answers What Action And Where
-
-Azure RBAC means Azure role-based access control.
-It is the authorization system built on Azure Resource Manager for managing access to Azure resources.
-In plain English, Azure RBAC decides what an identity can do and where it can do it.
-
-A role assignment has three beginner parts:
-the principal, the role, and the scope.
-The principal is the identity receiving permission.
-The role is the set of allowed actions.
-The scope is the place where those allowed actions apply.
-
-You can read it like a sentence:
-
-```text
-Principal: mi-devpolaris-orders-api-prod
-Role:      Key Vault Secrets User
-Scope:     /subscriptions/.../resourceGroups/rg-devpolaris-orders-prod/providers/Microsoft.KeyVault/vaults/kv-devpolaris-orders-prod
-
-Meaning:
-The orders API managed identity can read secret values from this one production vault.
-```
-
-That sentence is much safer than:
-
-```text
-The app has Contributor in production.
-```
-
-`Contributor` is a broad role for managing many resource types.
-It is useful for humans or automation in some controlled cases, but it is far too broad for an app that only needs to read a secret.
-The app should receive the narrow role that matches its job.
-
-Here is a small RBAC plan for `devpolaris-orders-api`:
-
-| Identity | Role | Scope | Why |
-|----------|------|-------|-----|
-| `orders-api-readers` | Reader | Production resource group | Let support inspect resources without changing them |
-| `orders-api-deployers` | Contributor | Production resource group | Let maintainers deploy app changes |
-| `sp-devpolaris-orders-ci` | AcrPush | Container registry | Let CI push the image |
-| `mi-devpolaris-orders-api-prod` | Key Vault Secrets User | Production Key Vault | Let the app read secret values |
-| `mi-devpolaris-orders-api-prod` | Storage Blob Data Contributor | Receipts container or storage account | Let the app write receipt files |
-
-The exact role names can change by service and by your team standards.
-The pattern should not change.
-Match the identity to the job.
-Match the role to the action.
-Match the scope to the smallest useful place.
-
-This is where Azure differs from a simple app permission table.
-The app may need one role on Key Vault, another role on Storage, and no role at all on the subscription.
-Each assignment should have a reason a reviewer can understand.
-
-If you cannot explain why a role exists in one sentence, slow down before you grant it.
-Many production security problems start as "temporary" broad access that nobody removes.
-
-## Scope Is The Size Of The Permission
-
-Scope answers "where does this permission apply?"
-It is one of the most important Azure security words because the same role can be safe or risky depending on scope.
-
-Azure RBAC scopes form a parent-child hierarchy.
-The common levels are management group, subscription, resource group, and resource.
-A role assigned higher up can apply to everything below it.
-A role assigned lower down is more specific.
-
-For a beginner, think about the size of the permission:
-
-| Scope Level | Size | Beginner Risk |
-|-------------|------|---------------|
-| Management group | Many subscriptions | A mistake can affect many environments |
-| Subscription | One Azure operating boundary | A mistake can affect many resource groups |
-| Resource group | One workload or environment grouping | A mistake can affect related resources |
-| Resource | One specific Azure resource | Narrowest common scope |
-
-For `devpolaris-orders-api`, the managed identity should not receive Key Vault secret access at subscription scope.
-That would let the app read secrets from other vaults in the same subscription if the role and vault settings allow it.
-The app only needs the production orders vault.
-
-The safer role assignment reads like this:
-
-```text
-Identity:
-  mi-devpolaris-orders-api-prod
-
-Role:
-  Key Vault Secrets User
-
-Scope:
-  /subscriptions/11111111-2222-3333-4444-555555555555/resourceGroups/rg-devpolaris-orders-prod/providers/Microsoft.KeyVault/vaults/kv-devpolaris-orders-prod
-```
-
-The risky version reads like this:
-
-```text
-Identity:
-  mi-devpolaris-orders-api-prod
-
-Role:
-  Key Vault Secrets User
-
-Scope:
-  /subscriptions/11111111-2222-3333-4444-555555555555
-```
-
-Both examples use the same identity and role.
-Only the scope changes.
-That one change decides whether the app can read one vault or many vaults.
-
-Least privilege depends on both role names and scope.
-A narrow role at a broad scope can still be too much.
-A broad role at a narrow scope may be acceptable for a deploy group, but not for runtime code.
-
-Use this practical rule:
-grant at the resource when one resource is enough.
-Grant at the resource group when the identity truly needs the related set.
-Grant at the subscription only when the job is subscription-wide and reviewed.
-
-## Managed Identity Removes Stored App Passwords
-
-The most common secret problem is not that developers are careless.
-It is that applications need to talk to other systems, and teams need some way to prove the app is allowed.
-Without a better model, people put passwords, API keys, or client secrets into `.env` files, CI variables, app settings, or config maps.
-
-Those values spread.
-They get copied into tickets.
-They land in old logs.
-They sit in backups.
-They survive after the developer who created them leaves the team.
-
-Managed identity exists to remove that stored-password pattern for Azure-hosted workloads.
-A managed identity is a Microsoft Entra workload identity that Azure creates and manages for an Azure resource.
-Your app uses the identity to request tokens.
-Your code does not need to store a password for that identity.
-
-There are two common types:
-
-| Type | Lifecycle | Good Fit |
-|------|-----------|----------|
-| System-assigned managed identity | Tied to one Azure resource | One app resource needs its own identity |
-| User-assigned managed identity | Separate Azure resource that can be attached to one or more resources | Several app instances need the same identity or permissions should survive app replacement |
-
-For `devpolaris-orders-api`, a user-assigned managed identity is a clean starting point:
-
-```text
-Managed identity:
-  mi-devpolaris-orders-api-prod
-
-Assigned to:
-  ca-devpolaris-orders-api-prod
-
-Allowed to read:
-  secrets in kv-devpolaris-orders-prod
-
-Not allowed to:
-  delete the vault
-  assign roles
-  manage the subscription
-```
-
-The app configuration then points to the vault, not to the secret value itself:
-
-```text
-KEY_VAULT_URI=https://kv-devpolaris-orders-prod.vault.azure.net/
-DATABASE_PASSWORD_SECRET_NAME=orders-db-password
-```
-
-That is the big shift.
-The app can know where to ask.
-It should not carry the password around before it needs it.
-
-In Node, the code often uses the Azure Identity library and a Key Vault client.
-The exact package details belong in a service-specific article, but the shape looks like this:
-
-```javascript
-import { DefaultAzureCredential } from "@azure/identity";
-import { SecretClient } from "@azure/keyvault-secrets";
-
-const credential = new DefaultAzureCredential();
-const vaultUri = process.env.KEY_VAULT_URI;
-const client = new SecretClient(vaultUri, credential);
-
-const secret = await client.getSecret(process.env.DATABASE_PASSWORD_SECRET_NAME);
-const databasePassword = secret.value;
-```
-
-The important thing to see is what is missing.
-There is no client secret string.
-There is no hardcoded password.
-The credential object asks the environment for the right identity.
-In Azure, that can be the managed identity assigned to the app.
-
-This has a tradeoff.
-Managed identity removes stored credentials, but it does not remove authorization work.
-You still must assign the identity to the app.
-You still must grant it the right role at the right scope.
-You still must inspect failures when the token works but authorization does not.
-
-## Key Vault Protects Sensitive Values
-
-Key Vault is the protected Azure service for secrets, keys, and certificates.
-A secret is a sensitive value such as a password, API key, or connection string.
-A key is cryptographic material used for encryption or signing.
-A certificate is a TLS or identity certificate with lifecycle needs such as renewal.
-
-For this first mental model, focus on secrets.
-`devpolaris-orders-api` may need a database password during the first version of the system.
-Storing that password in Key Vault is safer than storing it in a container image, source code, or a shared document.
-
-Key Vault gives you three useful things:
-one place to store sensitive values, access checks before a caller can read them, and logs that show access activity when diagnostics are enabled.
-
-Here is a small secret inventory:
-
-| Secret Name | Used By | Stored In | Expected Reader |
-|-------------|---------|-----------|-----------------|
-| `orders-db-password` | Orders API database connection | `kv-devpolaris-orders-prod` | `mi-devpolaris-orders-api-prod` |
-| `stripe-webhook-secret` | Payment webhook validation | `kv-devpolaris-orders-prod` | `mi-devpolaris-orders-api-prod` |
-| `orders-reporting-token` | Finance export job | `kv-devpolaris-orders-prod` | Reporting job identity |
-
-The value should not appear in the inventory.
-The inventory names the secret, the vault, and the reader.
-That is enough for review without leaking the protected value.
-
-Key Vault also has a management plane and a data plane.
-The management plane is about managing the vault resource itself, such as creating the vault or changing configuration.
-The data plane is about reading or changing objects inside the vault, such as secrets and keys.
-
-This distinction matters during debugging.
-A person may be allowed to view the Key Vault resource in the portal but not allowed to read secret values.
-That is normal.
-Seeing the vault and reading the secret are different actions.
-
-For the orders API, a healthy access decision might look like this:
-
-```text
-Resource visible:
-  kv-devpolaris-orders-prod
-
-Secret value readable by app:
-  yes, through mi-devpolaris-orders-api-prod
-
-Secret value readable by every developer:
-  no
-
-Secret value logged by app:
-  no
-```
-
-Key Vault does not remove every secret-handling risk.
-If you grant broad access, people and apps can still read values they should not read.
-If your app prints the secret into logs, Key Vault cannot pull that value back out of the log stream.
-The service protects storage and access, but your application still has to handle the value carefully after it receives it.
-
-## Evidence You Can Inspect
-
-Good security work leaves evidence.
-When access fails, do not guess.
-Inspect the identity, role assignment, scope, and target resource.
-
-A first check is the active Azure context.
-This prevents you from debugging the wrong tenant or subscription:
+Here is the evidence shape we want during review:
 
 ```bash
-$ az account show --query "{tenant:tenantId, subscription:name, subscriptionId:id}" --output table
-Tenant                                Subscription              SubscriptionId
-------------------------------------  ------------------------  ------------------------------------
-72f988bf-86f1-41af-91ab-2d7cd011db47  sub-devpolaris-prod       11111111-2222-3333-4444-555555555555
+$ az ad sp show --id 00000000-1111-2222-3333-444444444444 --query "{displayName:displayName, appId:appId, id:id}"
+{
+  "displayName": "sp-support-portal-github-actions",
+  "appId": "00000000-1111-2222-3333-444444444444",
+  "id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+}
 ```
 
-The exact IDs here are examples.
-The habit is real.
-Check the tenant and subscription before you explain an access result.
+The `appId` is the application or client ID. The `id` in this output is the service principal object ID. That distinction is easy to miss because both are GUIDs. Role assignments usually need the principal's object ID. SDK configuration often needs the client ID. Mixing them up creates failures that look mysterious until you know which ID each command expects.
 
-Next, inspect role assignments for the managed identity at the vault scope:
+For workloads running inside Azure, managed identities are usually the better option because Azure handles credential creation and rotation. Service principals still matter for external automation, cross-tenant application scenarios, and tools that are not running on an Azure resource with managed identity support.
+
+## Signed In Does Not Mean Allowed
+
+Let's say Maya signs in to the Azure portal successfully. That proves Entra ID accepted her authentication. It does not prove Maya can restart a production app. Authentication answers, "Is this really Maya?" Authorization answers, "Can Maya perform this action on this target?"
+
+That difference sounds obvious, but it is one of the most common beginner traps. A successful sign-in feels like access. In Azure, it is only the start of the access check.
+
+The same thing happens with applications. If `mi-support-portal-prod` receives a token from Entra ID, the identity exists and authentication worked. If Blob Storage then returns `AuthorizationPermissionMismatch`, the managed identity is real, but it does not have the blob data action it requested. We should not fix that by copying a storage account key into app settings. We should fix the role assignment or the scope.
+
+Here is a short denial message:
+
+```text
+Status: 403
+Code: AuthorizationFailed
+Message: The client 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
+with object id 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
+does not have authorization to perform action
+'Microsoft.Web/sites/restart/action'
+over scope
+'/subscriptions/sub-prod/resourceGroups/rg-support-portal-prod/providers/Microsoft.Web/sites/app-support-portal-prod'
+```
+
+The message already gives us the request sentence. We have the caller object ID, the action, and the scope. The next move is not guessing. We look up which principal owns that object ID, then check whether an appropriate role assignment exists at that scope or an inherited parent scope.
+
+## Object IDs Beat Display Names
+
+Display names are for humans. Object IDs are for evidence. We can talk about `grp-support-portal-operators` in a design meeting, but when we approve access, we should capture the object ID Azure will actually evaluate.
+
+This matters during churn. A group can be deleted and recreated with the same display name. A service principal can be replaced during a migration. A user can have a renamed account. The old name may still look familiar in a screenshot, but the object ID tells us whether the assignment belongs to the same directory object.
+
+For role assignments, capture both:
 
 ```bash
 $ az role assignment list \
-    --assignee 99999999-aaaa-bbbb-cccc-dddddddddddd \
-    --scope /subscriptions/11111111-2222-3333-4444-555555555555/resourceGroups/rg-devpolaris-orders-prod/providers/Microsoft.KeyVault/vaults/kv-devpolaris-orders-prod \
-    --output table
-Principal                             Role                     Scope
-------------------------------------  -----------------------  ------------------------------------------------------------
-99999999-aaaa-bbbb-cccc-dddddddddddd  Key Vault Secrets User   /subscriptions/.../vaults/kv-devpolaris-orders-prod
+  --assignee aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee \
+  --scope /subscriptions/sub-prod/resourceGroups/rg-support-portal-prod \
+  --query "[].{principalId:principalId, principalType:principalType, role:roleDefinitionName, scope:scope}" \
+  --output table
+
+PrincipalId                           PrincipalType     Role                      Scope
+------------------------------------  ----------------  ------------------------  ----------------------------------------------------
+aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee  ServicePrincipal  Website Contributor       /subscriptions/sub-prod/resourceGroups/rg-support-portal-prod
 ```
 
-The principal ID should be the managed identity's object ID.
-The role should match the action.
-The scope should include the target vault, ideally no wider than needed.
+The display name helps a reviewer understand intent. The object ID prevents accidental approval of the wrong thing. A good pull request includes enough of both that someone can verify the identity without exposing credentials.
 
-If the app cannot read the secret, the error may look like this:
+The same habit helps with incident response. If logs say object ID `aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee` made a change, we can trace the exact principal even if a display name later changed. Names are memory. IDs are audit evidence.
+
+## A Review Habit Before Granting Access
+
+Before granting Azure access, let's ask for the smallest complete story. Who is asking? Is it a user, group, service principal, or managed identity? What job are they doing? Which resource do they need to touch? Which role grants exactly that job? Which scope keeps the permission from spreading?
+
+This turns access review from a vibe into an engineering check. "Give the pipeline Contributor" is not enough. "Give `sp-support-portal-github-actions` Website Contributor at `rg-support-portal-prod` so the release can update the web app, but do not grant Owner or subscription-level access" is much better.
+
+We also need an exit plan. Human access should usually flow through groups, so onboarding and offboarding happen through membership. Automation access should have a named owner and a rotation or federation story. Runtime access should use managed identity when possible. If the permission is temporary, the request should say when it will be removed.
+
+The review habit is not meant to slow everyone down. It keeps future debugging cheap. When the next failure happens, we can read the access note, compare it with Azure evidence, and find the mismatch.
+
+## The Three Parts Of Access
+
+Azure RBAC, short for role-based access control, is easiest to understand as three fields joined together:
 
 ```text
-GET https://kv-devpolaris-orders-prod.vault.azure.net/secrets/orders-db-password
-Status: 403 Forbidden
-Error: Forbidden
-Message: The user, group or application does not have secrets get permission on key vault.
-Caller: appid=99999999-aaaa-bbbb-cccc-dddddddddddd
+principal + role definition + scope = role assignment
 ```
 
-The useful line is the caller.
-It tells you which identity Azure saw.
-If the caller is not the managed identity you expected, fix the app identity assignment or credential selection first.
-If the caller is correct, inspect the role assignment and scope.
+The principal is the caller. The role definition is the set of allowed actions. The scope is the boundary where those actions apply. A role assignment connects all three.
 
-For management actions, the error may look different:
+Let's say a pipeline needs to restart a staging web app during deployment. If we assign the pipeline's service principal the Website Contributor role at the staging resource group, Azure now has enough information to evaluate that restart request. The service principal is the principal. Website Contributor is the role definition. The staging resource group is the scope.
+
+The role definition alone does nothing. A principal alone proves identity but grants no access. A scope alone is just a target boundary. Access appears only when the three are connected.
+
+This is the mental model that prevents over-granting. If a request fails, we do not immediately search for a bigger role. We inspect which of the three fields is wrong. Maybe the role is fine but assigned to the wrong identity. Maybe the identity is fine but the role is scoped to a development resource group. Maybe the scope is fine but the role only grants management actions while the app needs data actions.
+
+## Azure RBAC Answers What Action And Where
+
+Azure RBAC is Azure's main authorization system for management-plane access and many service data-plane operations. Management-plane means changing Azure resources themselves: creating a web app, changing a storage account, assigning a role, restarting a VM. Data-plane means working with the data inside a service: reading a Key Vault secret, uploading a blob, or querying data.
+
+That split is not trivia. A person with Contributor on a storage account can manage the storage account resource, but that does not automatically mean they can read every blob. Blob data access uses roles such as Storage Blob Data Reader, Storage Blob Data Contributor, and Storage Blob Data Owner. Key Vault has its own data roles such as Key Vault Secrets User and Key Vault Crypto User when it uses Azure RBAC.
+
+Notice how this explains many confusing errors. "I am Contributor on the resource group, why can't I read the secret?" Because managing the vault and reading secret values are different actions. "I can deploy the storage account, why can't my app upload a blob?" Because the app's managed identity needs a blob data role. "I can read logs in the portal, why can't I assign a role?" Because role assignment is a privileged action, usually requiring Owner or User Access Administrator.
+
+Here is the safe debugging move:
 
 ```text
-AuthorizationFailed:
-The client 'maya@devpolaris.example' with object id '22222222-3333-4444-5555-666666666666'
-does not have authorization to perform action
-'Microsoft.App/containerApps/write'
-over scope
-'/subscriptions/11111111-2222-3333-4444-555555555555/resourceGroups/rg-devpolaris-orders-prod/providers/Microsoft.App/containerApps/ca-devpolaris-orders-api-prod'.
+1. Identify the caller object ID.
+2. Identify the failed action from the error message.
+3. Identify the resource scope in the error message.
+4. Find the smallest role that includes that action.
+5. Check whether the role is assigned to the caller at that scope or an inherited parent scope.
 ```
 
-Read that message slowly.
-It gives you the identity, action, and scope.
-That is the whole mental model in error form.
+The list is short because the model is short. The hard part is discipline: do not skip straight to broad roles.
+
+## Scopes Decide How Far Access Travels
+
+Scope is where Azure permissions become powerful or dangerous. A role assigned at a resource affects one resource. A role assigned at a resource group affects every resource in that group. A role assigned at a subscription affects every resource group in that subscription. A role assigned at a management group can affect multiple subscriptions.
+
+This hierarchy is useful because organizations need broad policy in some places. A central security team may need Reader across production subscriptions. A platform automation identity may need to deploy shared networking resources in a platform subscription. Those are legitimate broad scopes when the job is broad.
+
+Most application permissions are not broad. If `mi-support-portal-prod` only needs to read secrets from `kv-support-portal-prod`, assigning a secret-reading role at the whole subscription makes future mistakes more likely. Another vault added later might become readable by accident. A support portal should not inherit access to a payroll vault because both live in the same subscription.
+
+Here is the scope ladder:
+
+```text
+Management group
+  /providers/Microsoft.Management/managementGroups/mg-platform
+
+Subscription
+  /subscriptions/sub-prod
+
+Resource group
+  /subscriptions/sub-prod/resourceGroups/rg-support-portal-prod
+
+Resource
+  /subscriptions/sub-prod/resourceGroups/rg-support-portal-prod/providers/Microsoft.KeyVault/vaults/kv-support-portal-prod
+```
+
+Inherited access is helpful when intentional. It is painful when invisible. During review, always ask, "If someone creates another resource under this scope tomorrow, should this principal automatically get the same access?" If the answer is no, the scope is too high.
+
+## Scope Is The Size Of The Permission
+
+It helps to think of scope as the blast radius of a role assignment. The role says what kind of power we are granting. Scope says how far that power travels.
+
+The same role can be safe or risky depending on scope. Reader at one resource group may be normal for an on-call team. Reader at every subscription may expose sensitive metadata across the company. Contributor on a development resource group may be appropriate for a feature team. Contributor at a production subscription is a very different decision.
+
+This is why "least privilege" is not only about picking a smaller role. A narrow role at a huge scope can still be too much. A powerful role at a tiny scope may be acceptable for a break-glass workflow with strong controls. We need to reason about role and scope together.
+
+The most useful review question is simple: what future thing does this grant accidentally include? If we assign access at `rg-shared-prod`, the answer might be "every new secret store the platform team adds there". If we assign access at a single vault, the answer is "only new objects inside this vault, depending on the role." That difference changes the risk conversation.
+
+For long-lived application access, start as close to the target as the service supports. For team access, use groups and resource-group scopes when the team owns the whole application boundary. For platform or security access, document why a broader scope matches the job.
+
+## Reading Access Evidence
+
+Good Azure access review uses the CLI, portal, logs, and infrastructure code as evidence. Screenshots can help, but they should not be the only source of truth. We want repeatable commands that show the principal, role, and scope.
+
+For example, this command checks assignments for a service principal at a resource group:
+
+```bash
+$ az role assignment list \
+  --assignee aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee \
+  --scope /subscriptions/sub-prod/resourceGroups/rg-support-portal-prod \
+  --include-inherited \
+  --query "[].{role:roleDefinitionName, principal:principalId, scope:scope}" \
+  --output table
+
+Role                         Principal                             Scope
+---------------------------  ------------------------------------  ----------------------------------------------------
+Website Contributor          aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee  /subscriptions/sub-prod/resourceGroups/rg-support-portal-prod
+Log Analytics Reader         aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee  /subscriptions/sub-prod/resourceGroups/rg-shared-observability-prod
+```
+
+Notice the `--include-inherited` flag. Without inherited assignments, we might miss access granted at a parent scope. That is a common source of false confidence. A resource may show no direct assignments, but the principal can still act because access flows down from the subscription or management group.
+
+Role definition evidence matters too. Built-in role names are easier to read, but custom roles need extra care. A custom role called `Support Portal Operator` might sound narrow while containing broad actions. Always inspect the actions and data actions in the definition before trusting the name.
+
+```bash
+$ az role definition list \
+  --name "Support Portal Operator" \
+  --query "[0].{actions:permissions[0].actions, dataActions:permissions[0].dataActions}" \
+  --output json
+{
+  "actions": [
+    "Microsoft.Web/sites/read",
+    "Microsoft.Web/sites/restart/action"
+  ],
+  "dataActions": []
+}
+```
+
+The output tells us whether the role matches the job. If the operator role contains `*/write` or role-assignment actions, the name is misleading and the review should stop.
+
+## Evidence You Can Inspect
+
+Access evidence should answer the same request sentence from different angles. The application evidence says which identity the workload selected. The Azure RBAC evidence says which roles exist for that identity. The service evidence says which resource rejected or accepted the request. The audit evidence says who changed access.
+
+For a running app, log the selected identity without logging tokens or secrets:
+
+```text
+support-portal startup
+environment=prod
+managedIdentityClientId=11111111-2222-3333-4444-555555555555
+keyVaultName=kv-support-portal-prod
+storageAccount=stsupportportalprod
+```
+
+For a denied request, keep the error code and action:
+
+```text
+Azure request failed
+status=403
+code=Forbidden
+service=KeyVault
+callerObjectId=aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee
+vault=kv-support-portal-prod
+operation=secrets/get
+```
+
+For the access review, keep the assignment:
+
+```text
+Principal:
+  mi-support-portal-prod
+Role:
+  Key Vault Secrets User
+Scope:
+  /subscriptions/sub-prod/resourceGroups/rg-support-portal-prod/providers/Microsoft.KeyVault/vaults/kv-support-portal-prod
+Reason:
+  Runtime app reads database connection secret at startup.
+```
+
+Those three artifacts make incidents calmer. If production fails after a deployment, we can compare the runtime identity, the role assignment, and the failed operation. If the identity changed during a resource rebuild, the startup log exposes it. If the role assignment was removed, Azure Activity Log can show the access-change event.
+
+## Least Privilege For The Orders API
+
+Let's keep one orders example because it makes least privilege tangible. Suppose `devpolaris-orders-api` runs on Azure App Service, writes order export files to Blob Storage, and reads one payment-provider token from Key Vault. The app does not deploy infrastructure. It does not assign roles. It does not read every vault in production.
+
+The access story should sound boring:
+
+```text
+Caller:
+  mi-orders-api-prod
+
+Allowed:
+  Read secret values from kv-orders-prod
+  Write blobs to container exports in stordersprod
+  Send telemetry to the configured monitoring workspace
+
+Not allowed:
+  Assign Azure roles
+  Read unrelated Key Vaults
+  Delete the storage account
+  Read payroll or support attachments
+```
+
+The role assignments should follow that story. Key Vault access should be scoped to the production orders vault if the app only needs that vault. Blob write access should use a storage data role at the right storage account or container scope where supported. App deployment access should belong to the pipeline identity, not the runtime identity.
+
+This separation is one of the most important production habits. Runtime identity and deployment identity are different jobs. The runtime app needs to serve requests. The deployment pipeline needs to update the app. If we give the runtime app deployment permissions, a compromised application process can start changing its own infrastructure. If we give the deployment pipeline secret-read permissions it does not need, a CI incident can expose runtime secrets.
+
+Here is a healthier split:
+
+| Identity | Job | Example permission |
+|----------|-----|--------------------|
+| `sp-orders-api-github-actions` | Deploy the app | Website Contributor on `rg-orders-prod` |
+| `mi-orders-api-prod` | Run the app | Key Vault Secrets User on `kv-orders-prod` |
+| `grp-orders-oncall` | Investigate incidents | Reader on `rg-orders-prod` and log-reader access |
+
+The table supports the story. It should not replace the story. The reviewer should still ask why each permission exists and whether the scope matches the job.
+
+## Managed Identity Removes Stored App Passwords
+
+Managed identity is the Azure answer to a very practical problem: applications need to call Azure services, but we do not want to ship app passwords. If the app runs on a supported Azure service, Azure can attach an identity to the resource and issue tokens at runtime. The app code asks for a token. Azure handles the credential behind the scenes.
+
+In this article, managed identity matters because it gives us a clean caller for runtime requests. Instead of `devpolaris-support-portal` storing a client secret so it can read Key Vault, the web app uses `mi-support-portal-prod`. Azure RBAC then grants that managed identity the exact data access it needs.
+
+Managed identity does not grant permission by itself. This is the subtle part. Attaching an identity answers "who is the caller?" Role assignments still answer "what can the caller do?" If a Container App gets a managed identity token and Blob Storage rejects the upload, identity may be working perfectly while authorization is missing.
+
+We cover the runtime patterns, system-assigned versus user-assigned identity, SDK behavior, and failure modes in the managed identities article. Keep the short rule here: use managed identity for Azure-hosted workloads when possible, and still review role and scope like any other access grant.
+
+## Key Vault Protects Sensitive Values
+
+Key Vault enters the story when the target is a secret, key, or certificate. App settings are fine for ordinary configuration, but they are a bad home for values that would cause damage if printed in logs, copied into a ticket, or leaked from a deployment file.
+
+The access-control lesson is narrow but important. Reading a secret value is a data-plane action. Managing a vault resource is a management-plane action. A principal can be allowed to configure the vault without being allowed to read secret values, and a running app can be allowed to read one class of secret without being allowed to change vault settings.
+
+For `devpolaris-payments-webhook`, the app configuration should point to Key Vault names or secret URIs. The secret values themselves should stay in Key Vault. The app's managed identity should receive the vault data role it needs, and review evidence should show the vault, object, version behavior, and role scope without printing the value.
+
+We cover secrets, keys, certificates, versioning, rotation, soft delete, and encryption basics in the Key Vault article. Keep the short rule here: Key Vault protects sensitive material, but Azure still evaluates the same caller/action/target/scope sentence when someone tries to use it.
 
 ## Failure Modes And Fix Directions
 
-The best way to learn Azure access is to connect each failure to the missing question.
-Do not treat every `403` as the same problem.
-Ask which part of the model failed.
+When access fails, read the symptom as a layer hint. A sign-in failure points to authentication, Conditional Access, tenant, or credential configuration. A token acquisition failure in a workload points to identity attachment or SDK credential selection. A `403` from a service usually means the caller exists but lacks the requested action at the target scope. A `404` can mean the resource name is wrong, but some services also hide resources the caller cannot access, so check carefully.
 
-The first failure is wrong identity.
-The app starts, tries to read Key Vault, and the caller in the error is a developer identity or a CI service principal instead of the managed identity.
+Here are common examples:
 
 ```text
 Symptom:
-  Key Vault returns 403.
+  GitHub Actions cannot deploy the web app.
 
-Evidence:
-  Caller: appid=sp-devpolaris-orders-ci
-
-Likely cause:
-  The app is not using the managed identity at runtime.
-
-Fix direction:
-  Check the Container App identity assignment.
-  Check which credential path the app uses in Azure.
-  Confirm the caller becomes mi-devpolaris-orders-api-prod.
+Likely first checks:
+  Which service principal is the workflow using?
+  Is federated credential or client secret configuration valid?
+  Does that service principal have the deployment role at the app or resource-group scope?
 ```
-
-The second failure is missing role assignment.
-The caller is correct, but the identity has no data-plane permission to read secrets.
 
 ```text
 Symptom:
-  The app has a valid token but cannot get orders-db-password.
+  The running app gets a token but Key Vault returns Forbidden.
 
-Evidence:
-  Caller matches mi-devpolaris-orders-api-prod.
-  No Key Vault Secrets User assignment exists at the vault scope.
-
-Fix direction:
-  Assign the narrow secret-reading role to the managed identity.
-  Scope it to kv-devpolaris-orders-prod unless a wider scope is justified.
+Likely first checks:
+  Which managed identity did the app select?
+  Does the vault use Azure RBAC or access policies?
+  Is the required data role assigned at the vault or narrower object scope?
 ```
-
-The third failure is scope too narrow or aimed at the wrong resource.
-This happens when the role assignment exists, but it is attached to the staging vault or a different resource group.
 
 ```text
 Symptom:
-  Role assignment exists, but production access still fails.
+  A developer can see the resource group but cannot assign access.
 
-Evidence:
-  Scope points to rg-devpolaris-orders-staging.
-  App requests kv-devpolaris-orders-prod.
-
-Fix direction:
-  Create the role assignment at the production vault scope.
-  Remove stale staging access if the production app does not need it.
+Likely first checks:
+  Is the developer authenticated as the expected user?
+  Does the user or group have Owner or User Access Administrator at the needed scope?
+  Is Privileged Identity Management activation required?
 ```
 
-The fourth failure is scope too broad.
-This one may not fail loudly.
-The app works, but the access review shows a subscription-scope assignment.
+The fix direction should match the failed layer. Do not rotate secrets when the role is missing. Do not add Contributor when the app needs a blob data role. Do not grant a human direct permanent access when the real need is temporary group membership or a Privileged Identity Management activation.
+
+The best incident notes say what changed and why:
 
 ```text
-Symptom:
-  The app can read its secret, but it may also read other vaults.
+Fix:
+  Assigned Key Vault Secrets User to mi-support-portal-prod
+  at scope kv-support-portal-prod.
 
-Evidence:
-  Role: Key Vault Secrets User
-  Scope: /subscriptions/11111111-2222-3333-4444-555555555555
+Why:
+  Runtime app had identity token but lacked secrets/get data action.
 
-Fix direction:
-  Replace the subscription-scope assignment with a vault-scope assignment.
-  Re-test the app.
-  Confirm other vaults are not readable by the app identity.
+Not changed:
+  No subscription Contributor assignment.
+  No client secret added to app settings.
 ```
 
-The fifth failure is secret handling after retrieval.
-Key Vault protects the stored value, but the app can still leak it after reading it.
+That last part matters. It records the risky shortcut we deliberately avoided.
+
+## A Review Habit Before You Assign Access
+
+Before assigning access, write the sentence in plain English. If the sentence is vague, the role assignment will probably be vague too.
+
+Good:
 
 ```text
-Symptom:
-  A production log line includes part of a connection string.
-
-Evidence:
-  Application Insights shows:
-  Database connection failed for Server=tcp:sql-devpolaris-prod;User Id=orders_app;Password=...
-
-Fix direction:
-  Redact connection strings and secret values before logging.
-  Log secret names and configuration status, not secret values.
-  Rotate the exposed secret because logs may already be copied.
+The production support portal runtime identity needs to read secret values from
+the production support Key Vault during startup.
 ```
 
-The sixth failure is confusing management access with secret access.
-A developer can open the vault resource but cannot view a secret value.
-That may be correct.
+Risky:
 
 ```text
-Symptom:
-  A support engineer can see kv-devpolaris-orders-prod but cannot reveal orders-db-password.
-
-Evidence:
-  Reader role exists on the resource group.
-  No secret-reading role exists on the vault.
-
-Fix direction:
-  Decide whether the person really needs secret value access.
-  Prefer giving the app access, not every human.
-  For human break-glass access, use a reviewed, time-limited process.
+The support portal needs access to Azure.
 ```
 
-Each fix direction starts with evidence.
-That is the discipline.
-In Azure access work, guessing often creates a second problem while you are trying to fix the first one.
+The good version tells us the caller, action, target, timing, and likely scope. The risky version could turn into almost anything. It invites broad roles because no one has defined the job.
+
+Then check five things. Who is the principal, by object ID? Which role definition grants the exact required action? Which scope is the smallest workable boundary? How will we know the assignment still exists during an incident? Who owns removing or changing the access later?
+
+Those questions sound procedural, but they are really design questions. Access is part of architecture. It defines what a system can damage when compromised and what an engineer can change during stress.
 
 ## The Operating Checklist
 
-When you design access for a new Azure workload, write the access story before you click through the portal.
-The story does not need to be long.
-It needs to answer the right questions.
+For each Azure application, keep a small access map close to the deployment docs or infrastructure code. It should name the human groups, deployment identities, runtime identities, important targets, and evidence commands.
 
-For `devpolaris-orders-api`, the access story could be:
+For `devpolaris-support-portal`, the map might read like this:
 
 ```text
-Runtime identity:
-  mi-devpolaris-orders-api-prod
+Human operators:
+  grp-support-portal-operators
+  Reader on rg-support-portal-prod
+  Log reader access on law-devpolaris-prod
 
-Runtime needs:
-  Read selected secrets from kv-devpolaris-orders-prod.
-  Write receipt objects to the production storage account.
-  Send logs and telemetry through configured Azure services.
+Deployment:
+  sp-support-portal-github-actions
+  Website Contributor on rg-support-portal-prod
 
-Runtime does not need:
-  Contributor on the resource group.
-  Owner on the subscription.
-  Secret access to unrelated vaults.
+Runtime:
+  mi-support-portal-prod
+  Key Vault Secrets User on kv-support-portal-prod
+  Storage Blob Data Contributor on stsupportportalprod attachments container
 
-Human access:
-  orders-api-readers can inspect production resources.
-  orders-api-deployers can deploy the app through reviewed release flow.
-  Secret value access is limited and reviewed.
-
-Pipeline access:
-  sp-devpolaris-orders-ci can push images and update the app deployment.
-  It does not receive broad subscription ownership.
+Break-glass:
+  Privileged access workflow required for Owner or User Access Administrator
 ```
 
-Then turn that story into role assignments:
+During review, compare the desired map with Azure evidence. During incidents, compare error messages with the map. During cleanup, remove assignments that no longer match a real job.
 
-| Question | Good Beginner Answer |
-|----------|----------------------|
-| Who or what is acting? | Name the user, group, service principal, or managed identity |
-| What action is needed? | Choose the narrow role that matches the job |
-| Where should it apply? | Choose the smallest useful scope |
-| Does the app need a stored password? | Prefer managed identity where the Azure service supports it |
-| Where do sensitive values live? | Store secrets, keys, and certificates in Key Vault |
-| What proves it works? | Inspect caller identity, role assignment, scope, and target resource |
-| What proves it is not too broad? | Test that unrelated resources are not accessible |
+The mental model stays small:
 
-The tradeoff is worth naming.
-Narrow access takes more thought at setup time.
-Broad access is faster in the moment.
-But broad access makes incidents harder to understand, reviews harder to trust, and secret leaks more damaging.
+```text
+Who or what is the caller?
+What action are they trying to perform?
+Which target are they touching?
+At what scope is permission granted?
+What context or service-specific rule also applies?
+What evidence proves the answer?
+```
 
-The senior habit is to give each actor enough access for its job, then
-keep evidence that proves the boundary. That protects production without
-turning every deployment into a permissions puzzle.
-
-For an Azure beginner, that habit is the whole first security model:
-identity says who or what.
-Azure RBAC says what action and where.
-Scope says how far.
-Managed identity keeps app credentials out of code and settings.
-Key Vault protects sensitive values, while your app still has to handle them carefully after reading.
+If we can answer those questions, Azure identity and access control stops feeling like a pile of product names. It becomes a request check we can reason about, test, review, and debug.
 
 ---
 
 **References**
 
-- [What is Azure role-based access control (Azure RBAC)?](https://learn.microsoft.com/en-us/azure/role-based-access-control/overview) - Defines Azure RBAC as the authorization system for managing who can access Azure resources, what they can do, and what areas they can access.
-- [Understand Azure role assignments](https://learn.microsoft.com/en-us/azure/role-based-access-control/role-assignments) - Explains the principal, role, and scope parts of a role assignment.
-- [Understand scope for Azure RBAC](https://learn.microsoft.com/en-us/azure/role-based-access-control/scope-overview) - Shows how management group, subscription, resource group, and resource scopes affect where permissions apply.
-- [Application and service principal objects in Microsoft Entra ID](https://learn.microsoft.com/en-us/entra/identity-platform/app-objects-and-service-principals) - Explains application objects, service principals, and how managed identities relate to service principals.
-- [What is managed identities for Azure resources?](https://learn.microsoft.com/en-us/entra/identity/managed-identities-azure-resources/overview) - Describes managed identities, their lifecycle types, and why they remove stored credentials from supported Azure workloads.
-- [About Azure Key Vault](https://learn.microsoft.com/en-us/azure/key-vault/general/overview) - Introduces Key Vault for protecting secrets, keys, and certificates with authentication and authorization checks.
+- [What is Microsoft Entra ID?](https://learn.microsoft.com/en-us/entra/fundamentals/whatis) - Used for Entra ID's role as the identity system for users, groups, applications, service principals, and authentication.
+- [Understand Azure role-based access control](https://learn.microsoft.com/en-us/azure/role-based-access-control/overview) - Used for the principal, role definition, role assignment, and scope model.
+- [Understand scope for Azure RBAC](https://learn.microsoft.com/en-us/azure/role-based-access-control/scope-overview) - Used for the management group, subscription, resource group, and resource scope hierarchy.
+- [Azure RBAC built-in roles](https://learn.microsoft.com/en-us/azure/role-based-access-control/built-in-roles) - Used for built-in role behavior and the distinction between management actions and data actions.
+- [Application and service principal objects in Microsoft Entra ID](https://learn.microsoft.com/en-us/entra/identity-platform/app-objects-and-service-principals) - Used for the app registration and service principal relationship.
+- [What is Conditional Access?](https://learn.microsoft.com/en-us/entra/identity/conditional-access/overview) - Used for the description of sign-in context evaluation and access decisions for human sign-ins.

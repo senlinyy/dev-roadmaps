@@ -161,25 +161,23 @@ It gives you a first candidate, then the rest of the article teaches when to adj
 ```mermaid
 flowchart TD
     EVENT["Event-driven and short?"]
-    OS["Needs server control?"]
-    CONTAINER["Container image is the package?"]
-    WEB["Managed web app fits?"]
-    FUNCTIONS["Azure Functions"]
-    CONTAINERAPPS["Azure Container Apps"]
-    APPSERVICE["Azure App Service"]
-    VM["Azure Virtual Machines"]
-
-    EVENT -- "yes" --> FUNCTIONS
-    EVENT -- "no" --> OS
-    OS -- "yes" --> VM
-    OS -- "no" --> CONTAINER
-    CONTAINER -- "yes" --> CONTAINERAPPS
-    CONTAINER -- "no" --> WEB
-    WEB -- "yes" --> APPSERVICE
-    WEB -- "no" --> VM
+    EVENT --> FUNCTIONS["Yes: Functions"]
+    EVENT --> OS["No: server control?"]
+    OS --> VM["Yes: VMs"]
+    OS --> PACKAGE["No: package shape"]
 ```
 
-Read the diagram as a first-pass decision, not a law.
+```mermaid
+flowchart TD
+    PACKAGE["Package shape"]
+    PACKAGE --> CONTAINER["Container image?"]
+    CONTAINER --> CONTAINERAPPS["Yes: Container Apps"]
+    CONTAINER --> WEB["No: managed web?"]
+    WEB --> APPSERVICE["Yes: App Service"]
+    WEB --> VM["No: VM fallback"]
+```
+
+Read the diagrams as a first-pass decision, not a law.
 For example, Azure Functions can also serve HTTP requests, and App Service can run custom containers.
 Azure Container Apps can run event-driven jobs and host functions in some patterns.
 VMs can run almost anything.

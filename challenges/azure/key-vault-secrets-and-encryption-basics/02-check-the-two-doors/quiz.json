@@ -26,7 +26,7 @@
       "correct": [
         "a"
       ],
-      "explanation": "Network reachability and authorization are separate doors. If network evidence is healthy and the response is `Forbidden`, identity and permission deserve the next look."
+      "explanation": "Network reachability and authorization are separate paths. If network evidence is healthy and the response is `Forbidden`, identity and permission deserve the next look."
     },
     {
       "id": "q2",
@@ -80,7 +80,7 @@
       "correct": [
         "a"
       ],
-      "explanation": "Disabling public access changes the network door. Production needs the private endpoint and DNS path. Secret version and public website certificate may be separate concerns."
+      "explanation": "Disabling public access changes the network path. Production needs the private endpoint and DNS path. Secret version and public website certificate may be separate concerns."
     },
     {
       "id": "q4",
@@ -109,7 +109,7 @@
         "b",
         "c"
       ],
-      "explanation": "DNS and connection symptoms help with the network door. Identity and access evidence help with authorization. A name is not enough proof."
+      "explanation": "DNS and connection symptoms help with the network path. Identity and access evidence help with authorization. A name is not enough proof."
     },
     {
       "id": "q5",

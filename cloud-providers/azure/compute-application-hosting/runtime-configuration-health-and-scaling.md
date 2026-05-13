@@ -96,30 +96,26 @@ It should say which revision is live, which settings are attached, whether Key V
 ## The Runtime Shape For devpolaris-orders-api
 
 Here is the runtime picture without trying to draw every Azure detail.
-The main path is the app receiving traffic.
-The side inputs are grouped so the diagram stays readable.
+The first view shows what is attached to the running app.
 
 ```mermaid
 flowchart TD
-    IMAGE["Built package<br/>(container image)"]
-    APP["Running backend<br/>(Container App revision)"]
-    SETTINGS["Runtime inputs<br/>(app settings)"]
-    IDENTITY["Cloud login<br/>(managed identity)"]
-    VAULT["Private values<br/>(Key Vault)"]
-    LOGS["Runtime evidence<br/>(Azure Monitor logs)"]
-    HEALTH["Traffic trust check<br/>(health probe)"]
-    TRAFFIC["Customer requests<br/>(orders.devpolaris.com)"]
-
-    IMAGE --> APP
-    SETTINGS -.-> APP
-    IDENTITY -.-> VAULT
-    VAULT -.-> APP
-    APP --> LOGS
-    HEALTH --> APP
-    TRAFFIC --> HEALTH
+    IMAGE["Container image"] --> APP["Running revision"]
+    SETTINGS["App settings"] --> APP
+    IDENTITY["Managed identity"] --> VAULT["Key Vault"]
+    VAULT --> APP
 ```
 
-Read the dotted lines as support around the app, not as customer traffic.
+The second view shows whether traffic can trust that running app.
+
+```mermaid
+flowchart TD
+    TRAFFIC["Customer requests"] --> HEALTH["Health probe"]
+    HEALTH --> APP["Running revision"]
+    APP --> LOGS["Monitor logs"]
+```
+
+Read the first view as support around the app, not as customer traffic.
 The container image gives Azure something to run.
 App settings tell the app how this environment behaves.
 Managed identity lets the app prove who it is.

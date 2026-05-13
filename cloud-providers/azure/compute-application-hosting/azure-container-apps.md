@@ -141,24 +141,16 @@ Ingress is the door where traffic enters.
 Logs are the evidence when a copy fails.
 
 Read this top to bottom.
-The plain-English label comes first, and the Azure term appears in parentheses.
+Each node stays short, then the prose below explains the Azure term.
 
 ```mermaid
 flowchart TD
-    IMAGE["App package<br/>(container image)"]
-    ENV["Managed runtime boundary<br/>(Container Apps environment)"]
-    APP["Desired service<br/>(container app)"]
-    REV["Versioned contract<br/>(revision)"]
-    REPLICA["Running copies<br/>(replicas)"]
-    INGRESS["Traffic door<br/>(ingress)"]
-    LOGS["Runtime evidence<br/>(logs and metrics)"]
-
-    IMAGE --> ENV
-    ENV --> APP
-    APP --> REV
-    REV --> REPLICA
-    INGRESS --> REPLICA
-    REPLICA --> LOGS
+    IMAGE["Container image"] --> ENV["Apps environment"]
+    ENV --> APP["Container app"]
+    APP --> REV["Revision"]
+    REV --> REPLICA["Replicas"]
+    INGRESS["Ingress"] --> REPLICA
+    REPLICA --> LOGS["Logs and metrics"]
 ```
 
 The image is the package.

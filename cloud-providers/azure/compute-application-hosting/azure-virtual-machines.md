@@ -113,35 +113,30 @@ Traffic reaches a Linux VM in an app subnet.
 On that VM, systemd keeps the Node.js API running on port `3000`.
 The legacy payment agent watches `/var/spool/devpolaris/payments`.
 The app uses a managed identity when it talks to Azure services.
+The request path and Azure access path are easier to read separately.
 
 ```mermaid
 flowchart TD
-    USER["Customer request<br/>(orders.devpolaris.com)"]
-    ENTRY["Public HTTPS entry<br/>(load balancer or gateway)"]
-    VNET["Private network<br/>(Virtual Network)"]
-    VM["Linux server<br/>(Azure VM)"]
-    API["Orders API<br/>(systemd on port 3000)"]
-    AGENT["Partner agent<br/>(local spool files)"]
-    IDENTITY["Azure access<br/>(managed identity)"]
-    AZURE["Supporting resources<br/>(Key Vault, Storage, Monitor)"]
-
-    USER --> ENTRY
-    ENTRY --> VNET
-    VNET --> VM
-    VM --> API
-    VM --> AGENT
-    API -.-> IDENTITY
-    AGENT -.-> IDENTITY
-    IDENTITY -.-> AZURE
+    USER["Customer request"] --> ENTRY["HTTPS entry"]
+    ENTRY --> VNET["Private network"]
+    VNET --> VM["Linux VM"]
+    VM --> API["Orders API"]
+    VM --> AGENT["Partner agent"]
 ```
 
-Read the solid path first.
-That is the request path.
+```mermaid
+flowchart TD
+    API["Orders API"] --> IDENTITY["Managed identity"]
+    AGENT["Partner agent"] --> IDENTITY
+    IDENTITY --> AZURE["Azure resources"]
+```
+
+Read the first diagram as the request path.
 The user does not need to know about the VM.
 The public entry point forwards traffic into the private network and toward the server.
 The server runs the API and the local agent.
 
-Now read the dotted path.
+Now read the second path.
 That is not public web traffic.
 That is workload access.
 The API and agent should use a managed identity when they call Azure APIs.
@@ -317,7 +312,7 @@ It also gives operators one familiar command to inspect state.
 
 ```bash
 $ systemctl status devpolaris-orders-api --no-pager
-● devpolaris-orders-api.service - DevPolaris Orders API
+* devpolaris-orders-api.service - DevPolaris Orders API
      Loaded: loaded (/etc/systemd/system/devpolaris-orders-api.service; enabled)
      Active: active (running) since Sun 2026-05-03 09:14:22 UTC; 8min ago
    Main PID: 1842 (node)
@@ -479,7 +474,7 @@ First prove the service exists on the VM.
 
 ```bash
 $ systemctl status devpolaris-orders-api --no-pager
-× devpolaris-orders-api.service - DevPolaris Orders API
+x devpolaris-orders-api.service - DevPolaris Orders API
      Loaded: loaded (/etc/systemd/system/devpolaris-orders-api.service; enabled)
      Active: failed (Result: exit-code) since Sun 2026-05-03 10:03:11 UTC; 2min ago
     Process: 2419 ExecStart=/usr/bin/node server.js (code=exited, status=203/EXEC)

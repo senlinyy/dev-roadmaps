@@ -1,546 +1,525 @@
 ---
 title: "AWS Mental Model"
-description: "Understand AWS as accounts, regions, APIs, resources, permissions, and managed services before learning individual services."
-overview: "AWS becomes easier when you stop seeing it as a giant product list. Learn the few mental boxes that make later services feel connected: accounts, regions, APIs, resources, identity, and responsibility."
-tags: ["aws", "accounts", "regions", "apis"]
+description: "Understand AWS by mapping a familiar local app to the cloud jobs it needs: runtime, data, traffic, access, evidence, and ownership."
+overview: "AWS becomes easier when you stop starting from the service catalog. Start from the app you already understand, then ask what job each AWS resource is doing for that app."
+tags: ["aws", "accounts", "regions", "arns"]
 order: 1
 id: article-cloud-providers-aws-foundations-aws-mental-model
+aliases:
+  - accounts-regions-and-availability-zones
+  - resource-names-tags-and-arns
+  - article-cloud-providers-aws-foundations-accounts-regions-availability-zones
+  - article-cloud-providers-aws-foundations-resource-names-tags-arns
+  - cloud-providers/aws/foundations/accounts-regions-availability-zones.md
+  - cloud-providers/aws/foundations/resource-names-tags-and-arns.md
 ---
 
 ## Table of Contents
 
-1. [What AWS Is Trying To Give You](#what-aws-is-trying-to-give-you)
-2. [The Example: One Team, One Orders API](#the-example-one-team-one-orders-api)
-3. [Accounts Are The Boundary](#accounts-are-the-boundary)
-4. [Regions And Availability Zones Are The Map](#regions-and-availability-zones-are-the-map)
-5. [Every Button Is An API Call](#every-button-is-an-api-call)
-6. [Resources Have Names, Tags, And ARNs](#resources-have-names-tags-and-arns)
-7. [Managed Services Still Need Owners](#managed-services-still-need-owners)
-8. [The First Small AWS Architecture](#the-first-small-aws-architecture)
-9. [Failure Modes For Beginners](#failure-modes-for-beginners)
-10. [What This Mental Model Prepares You For](#what-this-mental-model-prepares-you-for)
+1. [What AWS Gives Your App](#what-aws-gives-your-app)
+2. [The Example: One Orders API](#the-example-one-orders-api)
+3. [The Beginner Questions](#the-beginner-questions)
+4. [What Job Moves To AWS?](#what-job-moves-to-aws)
+5. [Which Resource Does The Job?](#which-resource-does-the-job)
+6. [Where Does It Live?](#where-does-it-live)
+7. [How Do We Recognize It Later?](#how-do-we-recognize-it-later)
+8. [Who Can Change Or Use It?](#who-can-change-or-use-it)
+9. [What Evidence Says It Works?](#what-evidence-says-it-works)
+10. [What Is Still Our Job?](#what-is-still-our-job)
+11. [Common Beginner Confusions](#common-beginner-confusions)
+12. [Quick Recap: The AWS Questions](#quick-recap-the-aws-questions)
 
-## What AWS Is Trying To Give You
+## What AWS Gives Your App
 
-Your laptop can run an app, store files, listen on a port, and write logs.
-That is enough for learning.
-It is not enough for a real service that many people use.
+Start with the question a new AWS learner can actually feel:
 
-A real service needs machines that stay on when your laptop sleeps.
-It needs storage that survives a restart.
-It needs networking so users can reach it.
-It needs permissions so not every teammate can delete production.
-It needs logs and metrics so the team can understand what happened when something breaks.
+> I built something on my laptop. What exactly am I moving into AWS, and how will I know it is really there?
 
-AWS gives you those building blocks as rented infrastructure.
-You do not buy the physical servers.
-You ask AWS to create resources for you.
-A resource is one thing AWS manages, such as a virtual machine, a load balancer, a database, a storage bucket, or a log group.
+That is a better question than "Which AWS service should I learn first?"
+On your laptop, an app can feel like one object.
+You run a command.
+The process starts.
+The browser opens `localhost`.
+Logs print in the terminal.
+Environment variables come from your shell or a `.env` file.
+Data may live in a local database, a folder, or a file.
 
-The beginner mistake is trying to memorize service names too early.
-EC2, S3, IAM, VPC, RDS, ECS, Lambda, CloudWatch, Route 53, and dozens more can start to feel like a long list of service names.
-The better first move is to learn the shape of the place.
+AWS separates those hidden jobs into resources.
+A resource is one thing AWS creates or manages for you: a server, container service, function, bucket, database, network, role, secret, log group, or alarm.
+That is why AWS feels crowded at first.
+It is not one big replacement for your laptop.
+It is a set of managed places where each app job can live.
 
-AWS is a set of APIs (application programming interfaces, meaning controlled entry points that software can call).
-The AWS Console, AWS CLI, SDKs, Terraform, and CI/CD pipelines all talk to those APIs.
-When you click a button in the Console, something similar to an API request happens behind the scenes.
-When Terraform creates a VPC, it also calls AWS APIs.
+The first learning move is to translate the app before memorizing services.
 
-That means AWS is not mainly a website.
-The website is one doorway.
-The real system is a small set of places, things, and rules:
-an account is the workspace, a Region is the real-world location, a resource is something you created, a permission is a rule about who can do what, and an API call is one request sent to AWS.
+| Local App Need | Cloud Job | AWS Words You Will Meet |
+|----------------|-----------|-------------------------|
+| Start the process | Run code | EC2, ECS, Lambda |
+| Save uploads or exports | Store files | S3 |
+| Keep records | Store structured data | RDS, DynamoDB |
+| Answer a URL | Receive traffic | Route 53, load balancers, VPC |
+| Read a password or token | Protect access | IAM, Secrets Manager |
+| Print logs and errors | Keep evidence | CloudWatch |
+| Know what belongs together | Organize resources | accounts, Regions, names, tags, ARNs |
 
-This article uses one running example:
-the `devpolaris-orders-api` team is preparing to run its checkout service on AWS.
-We will not build the full system yet.
-We will learn how to look at the AWS map before we start placing things on it.
+The service names matter later.
+The jobs matter first.
+If you can name the job, you have a place to put the service name when you learn it.
 
-> AWS feels less confusing when you ask, "which account, which Region, which resource, and who is allowed to touch it?"
+## The Example: One Orders API
 
-## The Example: One Team, One Orders API
+Let's follow one small app.
+`devpolaris-orders-api` is a Node.js backend for checkout.
+Locally, it receives HTTP requests, validates carts, writes order records, creates finance exports, reads secrets, and prints logs.
 
-Imagine a small team owns a Node.js backend called `devpolaris-orders-api`.
-The service handles checkout requests.
-It validates carts, checks discount codes, writes order records, and emits order events.
+A local development setup might look like this:
 
-In the CI/CD module, this service already showed up as a deployment target.
-Now we are zooming out.
-Before a pipeline can deploy the service, the team needs a cloud home for it.
+```text
+developer laptop
+  -> node server.js
+  -> http://localhost:3000
+  -> local database
+  -> ./exports/orders.csv
+  -> terminal logs
+  -> .env values
+```
 
-The team wants a simple production shape:
+That setup is good for learning and development.
+It is not a production home.
+If the laptop sleeps, the app stops.
+If the disk fails, the local data may disappear.
+If a teammate needs to debug the service, your terminal scrollback is not shared evidence.
+If customers need to reach it, `localhost` is not enough.
+
+Moving to AWS does not change what the app needs.
+It changes which resource handles each need.
+
+```mermaid
+flowchart TD
+    APP["orders API"] --> RUN["run code"]
+    APP --> DATA["store records"]
+    APP --> FILES["store exports"]
+    APP --> TRAFFIC["receive traffic"]
+    APP --> ACCESS["control access"]
+    APP --> SIGNALS["keep evidence"]
+```
+
+In AWS words, a first rough shape might be:
 
 ```text
 users
   -> public DNS name
   -> load balancer
-  -> backend service
+  -> running backend service
   -> database
+  -> export bucket
   -> logs and metrics
+  -> permissions around each action
 ```
 
-That shape is familiar even if the AWS names are not.
-A DNS name points users to the service.
-A load balancer spreads traffic across running app tasks.
-A backend service runs the code.
-A database stores orders.
-Logs and metrics show whether the service is healthy.
+Do not treat that as the final architecture.
+Treat it as an orientation note.
+It tells us which jobs exist before we argue about the best service for each job.
 
-In AWS, those pieces may become Route 53, an Application Load Balancer, ECS, RDS, and CloudWatch.
-You do not need to master those services yet.
-For now, treat them as named rooms in a building.
-Later articles will walk into each room.
+## The Beginner Questions
 
-Before the AWS names feel natural, translate them into ordinary questions.
-You do not need to love the vocabulary yet.
-You only need to know what each word is trying to protect you from.
+The rest of this article answers one loop of questions.
+These are the questions to keep in your head when AWS starts to feel like a wall of product names.
 
-| Plain Question | AWS Word | What It Means |
-|----------------|----------|---------------|
-| Where does this team's cloud work live? | Account | A separate workspace for resources, billing, and access |
-| Where in the world should it run? | Region | A geographic AWS area, like `us-east-1` or `eu-west-1` |
-| Who can change it? | Permission | A rule that allows or blocks an action |
-| What private space does traffic use? | Network boundary | The app's cloud network area, usually a VPC later |
-| What did we create? | Resource | A thing AWS runs or stores for you |
+- What job am I moving from my laptop, repo, shell, or app to AWS?
+- Which AWS resource does that job?
+- Where does that resource live?
+- How do I recognize it later?
+- Who can change or use it?
+- What evidence tells me it is working?
+- Which part is AWS handling, and which part is still my team's job?
 
-With that translation in mind, the first AWS mental model looks like this:
+Notice what is missing.
+We are not starting with every service category, every billing detail, or every identity feature.
+Those topics matter, but they land better after you know what you are trying to place.
 
-```mermaid
-graph TD
-    TEAM["Team owns an app"] --> ACCOUNT["Workspace<br/>(AWS account)"]
-    ACCOUNT --> REGION["Where it runs<br/>(Region)"]
-    REGION --> NETWORK["Private traffic area<br/>(network boundary)"]
-    NETWORK --> RESOURCES["Things the team creates<br/>(AWS resources)"]
-    RESOURCES --> APP["App<br/>(DevPolaris Orders API)"]
-    RESOURCES --> DATA["Data<br/>(orders database)"]
-    RESOURCES --> SIGNALS["Signals<br/>(logs and metrics)"]
-    IAM["Access check<br/>Who can touch it?<br/>(IAM permissions)"] -.-> RESOURCES
+For `devpolaris-orders-api`, a small resource note might look like this:
+
+```text
+service: devpolaris-orders-api
+environment: prod
+public name: orders.devpolaris.com
+runtime: orders-api-prod
+database: orders-prod
+exports: devpolaris-orders-exports-prod
+logs: /aws/ecs/orders-api-prod
+owner: checkout
 ```
 
-Read the main line from top to bottom.
-The team does not throw the app into a vague cloud.
-The team gets a workspace, chooses where the service runs, puts traffic inside a network boundary, then creates the things the service needs.
+This note is not fancy.
+It is useful because it connects the app to the resources that support it.
+When a deploy, bug report, or access request appears, the team has something concrete to inspect.
 
-The side box is different.
-`IAM permissions` are not another place where the app runs.
-They are the rules AWS checks when a person, script, or service tries to touch a resource.
-That is why the side box points at resources with a dotted arrow.
+## What Job Moves To AWS?
 
-That is all the diagram is saying.
-It is not trying to teach every AWS service at once.
-It is giving you a place to put the words before the product names start piling up.
+The first question is about the job, not the product.
+If you skip this step, every AWS service looks equally possible.
+If you name the job, many services become obviously irrelevant.
 
-That is the map you need before the service names start to matter.
+For the orders API, the first jobs are ordinary software jobs:
+run the backend code, receive HTTP traffic, keep order records, write export files, read secrets, and keep logs.
+Those are not AWS ideas yet.
+They are app needs.
 
-## Accounts Are The Boundary
+Now the cloud translation becomes easier:
 
-An AWS account is the first big boundary.
-For a beginner, it helps to think of it as a separate cloud workspace.
-The account is where resources live, where bills collect, and where access rules start.
+| App Job | What We Need From AWS |
+|---------|-----------------------|
+| Run the backend | A compute resource that starts and keeps code running |
+| Receive requests | A name and traffic entry point |
+| Store records | A database resource |
+| Store exports | A file or object storage resource |
+| Read secrets | A secure place for sensitive values plus permission to read them |
+| Debug behavior | Logs, metrics, health checks, and alarms |
 
-If your company has a staging account and a production account, those accounts are like two separate workrooms.
-Both workrooms may contain similar things: a load balancer, an app service, a database, and logs.
-The point of separating them is that a mistake in the staging room should not automatically touch the production room.
+This is why "AWS has too many services" is a normal beginner feeling.
+AWS has many services because production systems have many jobs.
+The trick is not to learn every service at once.
+The trick is to keep asking which job you are solving right now.
 
-AWS assigns each account a 12-digit account ID.
-That ID appears inside many resource identifiers.
-It helps distinguish "this load balancer in the production account" from "a similar load balancer in the staging account."
+There is also an important tradeoff hiding here.
+One local process is simple because everything is close together.
+Cloud resources are more explicit, which adds setup work.
+The benefit is that each job can get the right durability, scaling, security, and operational evidence.
 
-A realistic account check looks like this:
+## Which Resource Does The Job?
+
+Once the job is clear, we can ask which AWS resource is responsible.
+The word "resource" matters because AWS is not only a website you click through.
+Behind the Console, CLI, SDKs, and infrastructure tools are API calls that create, read, update, and delete resources.
+
+For a first version of the orders API, the resource map might look like this:
+
+| Job | Example Resource | What It Does |
+|-----|------------------|--------------|
+| Public name | Route 53 record | Gives users a stable name |
+| HTTP entry | Application Load Balancer | Receives HTTP or HTTPS traffic |
+| Backend runtime | ECS service | Keeps backend tasks running |
+| Order records | RDS database | Stores structured order data |
+| Export files | S3 bucket | Stores generated CSV exports |
+| Runtime secret | Secrets Manager secret | Holds private configuration |
+| Runtime access | IAM role | Lets the app call only approved AWS APIs |
+| Evidence | CloudWatch log group | Keeps logs after the process exits |
+
+This table is intentionally small.
+The next AWS Foundations article goes deeper into the service map.
+Here, the mental model is the point:
+every resource should have a job.
+
+If a teammate says, "Why do we have this bucket?", a good answer sounds like this:
+
+```text
+The orders API writes finance export files there.
+The bucket is in prod.
+The checkout team owns it.
+The app role can write exports.
+Finance can read the final files.
+```
+
+That answer is much stronger than "S3 stores stuff."
+It connects the resource to the app, the environment, the owner, and the permission story.
+
+## Where Does It Live?
+
+The next question is where the resource lives.
+AWS has several boundaries, but beginners only need the first two right away:
+the account and the Region.
+
+An AWS account is the workspace that contains resources, permissions, billing records, and audit history.
+Many teams use separate accounts for development, staging, and production so a mistake in one workspace is less likely to become a production incident.
+
+A Region is a geographic AWS area, such as `us-east-1` or `eu-west-1`.
+Many application resources live in one Region.
+If you create an ECS service in `us-east-1` and look for it in `us-west-2`, the Console can look empty even though the resource exists.
+
+That mistake is common enough that the first AWS CLI habit should be an orientation check:
 
 ```bash
 $ aws sts get-caller-identity
 {
-  "UserId": "AIDAEXAMPLEUSERID",
-  "Account": "123456789012",
-  "Arn": "arn:aws:iam::123456789012:user/maya"
+  "UserId": "AROAXAMPLE:maya",
+  "Account": "333333333333",
+  "Arn": "arn:aws:sts::333333333333:assumed-role/devpolaris-prod-admin/maya"
 }
+
+$ aws configure get region
+us-east-1
 ```
 
-This output answers a quiet but important question:
-"which AWS account am I touching right now?"
-
-That matters because many AWS mistakes are not complicated.
-They are simple boundary mistakes.
-A person thinks they are in staging but creates a resource in production.
-A script points to the wrong account.
-A dashboard shows the wrong environment.
-A permission policy grants access to a whole account instead of one resource.
-
-For `devpolaris-orders-api`, the team might use separate accounts:
-
-| Account | Purpose | Example Risk |
-|---------|---------|--------------|
-| `devpolaris-dev` | Experiments and early testing | Someone deletes a test database |
-| `devpolaris-staging` | Release checks before production | Bad config blocks a release |
-| `devpolaris-prod` | Real checkout traffic | Mistake can affect customers |
-
-This separation gives mistakes a smaller place to land.
-If a junior engineer experiments in the dev account, they should not be able to delete the production database by accident.
-
-Accounts also make cost and ownership easier to understand.
-If production spend jumps, the team can look at the production account.
-If a staging resource is left running, the staging account carries the bill.
-
-Use this rule:
-
-> Before you change AWS, know the account.
-
-## Regions And Availability Zones Are The Map
-
-After the account, the next question is location.
-AWS is not one giant data center and a Region is not a language setting.
-A Region is a real geographic AWS area where resources can run, such as `us-east-1` in Northern Virginia or `eu-west-1` in Ireland.
-
-Think of it like choosing the city where your rented workshop will sit.
-If your app, database, and logs all live in the same city, they can usually talk to each other with low delay.
-If you accidentally look in a different city, it may seem like your resources disappeared.
-
-Most resources live in one Region.
-If you create a database in `us-east-1`, you will not see that same database when your Console is set to `eu-west-1`.
-This is one of the first confusing AWS moments for beginners:
-"I created it, but now I cannot find it."
-
-Often, the resource is not gone.
-You are looking in the wrong Region.
-
-Inside a Region are Availability Zones.
-An Availability Zone is an isolated location inside a Region.
-You can think of it as a failure boundary.
-If one Availability Zone has trouble, the goal is that another Availability Zone in the same Region can keep running.
-
-AWS connects Availability Zones in a Region with low-latency networking.
-That is why production systems often spread across multiple Availability Zones.
-You are trying to avoid a service shape where one local failure can stop everything.
-
-For `devpolaris-orders-api`, a first production plan might look like this:
-
-| Layer | Region | Availability Zone Choice |
-|-------|--------|--------------------------|
-| Load balancer | `us-east-1` | Spans two or more AZs |
-| App tasks | `us-east-1` | Run in at least two AZs |
-| Database | `us-east-1` | Primary plus standby pattern later |
-| Logs | `us-east-1` | Stored with the service signals |
-
-That table does not mean every system must start huge.
-It means the team should know what failure it is accepting.
-
-If every app task runs in one Availability Zone, a zone problem can take down the whole backend.
-If the app runs in two Availability Zones but the database is single-AZ, the database is still a single point of failure.
-If the service runs in `us-east-1` but the team checks logs in `us-west-2`, debugging becomes confusing fast.
-
-The location question appears again and again:
+Read this as:
 
 ```text
-Where is the resource?
-Which Region?
-Which Availability Zone?
-Is the service regional, zonal, or global?
+account: 333333333333
+Region: us-east-1
+identity: devpolaris-prod-admin/maya
 ```
 
-You do not need to memorize every AWS service today.
-But you should build the habit of asking where a resource lives.
+That is enough to prevent a lot of early confusion.
+If the expected production account is `333333333333`, the account looks right.
+If the command says `222222222222`, you are pointed at a different workspace.
+If the expected Region is `us-east-1` and your CLI says `us-west-2`, fix the context before changing resources.
 
-## Every Button Is An API Call
+Availability Zones, often shortened to AZs, are local failure boundaries inside a Region.
+They matter for resilient production designs, but they do not need to dominate the first mental model.
+For now, remember the simple version:
+account answers "which workspace?"
+Region answers "which AWS location?"
+AZ answers "which local failure boundary inside that Region?"
 
-The AWS Console is useful.
-It lets you click through resources, inspect state, and learn what exists.
-But the Console can hide the real model if you treat it like the only way AWS works.
+## How Do We Recognize It Later?
 
-The better mental model is:
-AWS is controlled through APIs.
+After a few weeks, an AWS account can contain many resources.
+Recognition becomes part of engineering, not paperwork.
+When someone opens the Console or reads a CLI response, they need to know whether they are looking at the right target.
 
-Several tools can call those APIs:
+AWS gives you several clues.
+A human name helps teammates talk.
+A generated ID helps AWS track the resource.
+Tags group resources by owner, environment, service, or cost purpose.
+An Amazon Resource Name, or ARN, is AWS's precise reference for a resource.
 
-| Tool | How It Feels | What It Really Does |
-|------|--------------|---------------------|
-| AWS Console | Click buttons in a browser | Sends API requests |
-| AWS CLI | Run terminal commands | Sends API requests |
-| SDK | Call AWS from code | Sends API requests |
-| Terraform | Review and apply infrastructure code | Sends API requests |
-| CI/CD pipeline | Deploy from automation | Sends API requests |
-
-That is why the same resource can be created in many ways.
-You can create a storage bucket in the Console.
-You can create it with the AWS CLI.
-You can create it with Terraform.
-You can create it from a deployment workflow.
-
-The resource does not care which doorway you used.
-AWS receives an API request, checks whether the caller has permission, and then creates, updates, reads, or deletes the resource.
-
-This mental model helps later when you learn Infrastructure as Code.
-Terraform is not a separate cloud.
-Terraform is a careful way to decide which AWS API calls should happen.
-It compares desired state in code with real state in AWS, then calls AWS APIs to close the gap.
-
-It also helps with debugging permissions.
-In AWS, permissions usually live in IAM (Identity and Access Management, AWS's system for users, roles, and access rules).
-A permission is very literal.
-It says one identity can perform one action on one resource, or it says that action is blocked.
-
-That is different from how people talk in a team.
-A manager might say, "Maya is allowed to manage staging."
-AWS needs the machine-readable version:
-Maya can call this API action, against these resources, in this account.
-
-When a CLI command fails, it is usually not because the terminal is special.
-It is because the API request was denied, malformed, or sent to the wrong account or Region.
-
-A permission failure may look like this:
+One ECS service might be recorded like this:
 
 ```text
-An error occurred (AccessDenied) when calling the CreateBucket operation:
-User arn:aws:iam::123456789012:user/maya is not authorized
-to perform s3:CreateBucket on resource arn:aws:s3:::devpolaris-orders-exports
+human name:
+  orders-api-prod
+
+account:
+  333333333333
+
+Region:
+  us-east-1
+
+ARN:
+  arn:aws:ecs:us-east-1:333333333333:service/devpolaris-prod/orders-api-prod
+
+tags:
+  service=devpolaris-orders-api
+  env=prod
+  owner=checkout
 ```
 
-The message is dense, but it gives you the facts you need.
-It tells you four things:
-the API call, the caller, the action, and the resource.
+Use those fields for different kinds of certainty.
+The name is a clue for humans.
+The tags tell the team what the resource belongs to.
+The account and Region place it.
+The ARN or generated ID gives AWS an exact target.
 
-Start with the fields in the error message.
-Which action was denied?
-Who made the request?
-Which resource did they try to touch?
-Which account is in the ARN?
+Tags should not contain secrets or personal data.
+They appear in too many inventory, cost, and operational views to be treated as private storage.
+Use tags to organize resources, not to hide sensitive values.
 
-That is AWS giving you the shape of the problem.
+The practical habit is simple:
+before changing or deleting a resource, find at least two pieces of evidence that it is the right one.
+For production, that usually means account and Region, plus a name, tag, ARN, or owner record that matches the app story.
 
-## Resources Have Names, Tags, And ARNs
+## Who Can Change Or Use It?
 
-AWS resources need identifiers.
-Humans need names.
-Teams need tags.
-Policies often need ARNs.
+Now ask who is allowed to touch the resource.
+On your laptop, the answer may be whoever has your shell.
+In AWS, humans, pipelines, and running applications all act through identities.
+Permissions decide which actions those identities can take on which resources.
 
-An ARN is an Amazon Resource Name.
-It is a string that identifies a resource across AWS.
-The exact shape changes by service, but many ARNs follow this pattern:
+This is why an AWS permission error is more readable than it first appears.
 
 ```text
-arn:partition:service:region:account-id:resource
+An error occurred (AccessDeniedException) when calling the GetSecretValue operation:
+User: arn:aws:sts::333333333333:assumed-role/orders-api-task-role/task
+is not authorized to perform: secretsmanager:GetSecretValue
+on resource: arn:aws:secretsmanager:us-east-1:333333333333:secret:orders/prod/database-url
 ```
 
-For example:
+Read it as one request:
 
 ```text
-arn:aws:ecs:us-east-1:123456789012:service/devpolaris-prod/orders-api-prod
-arn:aws:logs:us-east-1:123456789012:log-group:/ecs/orders-api
-arn:aws:iam::123456789012:role/orders-api-task-role
+caller:   orders-api-task-role
+action:   secretsmanager:GetSecretValue
+resource: orders/prod/database-url
+result:   denied
 ```
 
-Read those from left to right.
-They tell you the partition, service, Region, account, and resource.
-IAM ARNs often have an empty Region field because IAM is a global service.
-That blank spot is not a typo.
-It is part of how the service identifies resources.
+The error is not saying "AWS does not like the app."
+It says one identity tried one action on one resource and the permission check failed.
+That gives you a smaller debugging path.
 
-Names help humans.
-Tags help teams.
-ARNs help AWS policies and APIs point at the exact thing.
+For a beginner, the permission question should stay plain:
 
-For `devpolaris-orders-api`, a small naming and tagging plan might be:
+- Which identity is making the request?
+- Which action is it trying?
+- Which resource is the target?
+- Should that identity be allowed to do that action?
 
-| Resource | Name | Important Tags |
-|----------|------|----------------|
-| ECS service | `orders-api-prod` | `service=orders-api`, `env=prod`, `owner=checkout` |
-| Log group | `/ecs/orders-api` | `service=orders-api`, `env=prod` |
-| Database | `orders-prod` | `service=orders-api`, `data=customer-orders` |
-| S3 bucket | `devpolaris-orders-exports` | `service=orders-api`, `purpose=exports` |
+The safer direction is usually to grant the smallest permission that lets the job work.
+For the orders API, the runtime role may need to read one database secret and write to one export bucket.
+It probably does not need every action on every bucket.
 
-This may sound like housekeeping.
-It becomes important during real work.
+## What Evidence Says It Works?
 
-If an alarm fires, tags help you find the owner.
-If a bill jumps, tags help you find the service.
-If a security review asks which resources store customer orders, tags help you answer without guessing.
-If an IAM policy is too broad, ARNs help you narrow it.
+The next question is evidence.
+Local development often gives you immediate feedback.
+You see the terminal.
+You refresh the browser.
+You edit and restart.
 
-The failure mode is messy resources.
-Someone creates `test-bucket-2`.
-Someone else creates `new-prod-db`.
-A month later, nobody knows which service owns them.
-The team becomes afraid to delete anything.
+Cloud systems need shared evidence because the app no longer lives inside one person's laptop.
+The useful evidence depends on the job.
 
-Good names and tags are not about being tidy.
-They make cloud work easier to inspect.
+| Job | Evidence To Check |
+|-----|-------------------|
+| Traffic reaches the app | DNS record, load balancer listener, healthy targets |
+| Code is running | service status, running task or instance count, deployment status |
+| Records are stored | database connection, query result, backup status |
+| Files are written | object path, timestamp, size, access result |
+| Secrets are readable | app startup logs, permission result, secret version |
+| Users are not broken | logs, metrics, alarms, error rate, latency |
 
-## Managed Services Still Need Owners
-
-AWS has many managed services.
-A managed service is a service where AWS runs part of the operation for you.
-For example, with Amazon RDS, AWS manages much of the database infrastructure.
-With S3, AWS manages the storage service.
-With ECS on Fargate, AWS manages the server capacity behind your containers.
-
-Managed does not mean ownerless.
-It means the responsibility is shared.
-
-AWS is responsible for the security and operation of the cloud itself.
-You are responsible for how you use it:
-which data you store, which permissions you grant, which network paths are public, which backups you configure, and which alerts you watch.
-
-For a beginner, this is the most important safety mindset.
-AWS can make it easy to create infrastructure.
-That does not mean the infrastructure is automatically safe.
-
-Here is the practical split:
-
-| Area | AWS Handles | Your Team Handles |
-|------|-------------|-------------------|
-| Physical data centers | Buildings, power, hardware | Choosing safe architecture |
-| Managed database service | Database infrastructure | Schema, data, access, backups |
-| Object storage service | Storage platform | Bucket access, data lifecycle |
-| IAM service | Permission system | Policies, roles, credentials |
-| Monitoring tools | Signal collection tools | Useful alarms and response |
-
-This is why a cloud engineer asks boring questions that matter:
+For the orders API, a small health note might say:
 
 ```text
-Who can delete this?
-Is this public?
-Where are backups?
-Which account owns the bill?
-Which team receives the alarm?
-What happens if one Availability Zone fails?
+public name: orders.devpolaris.com
+health path: /health
+load balancer targets: healthy
+running tasks: 2
+latest deploy: 2026-05-12 14:10 UTC
+error rate: below alarm threshold
+logs: /aws/ecs/orders-api-prod
 ```
 
-Those questions are not advanced.
-They are the cloud version of checking whether a Linux service starts after reboot.
-They keep the system from depending on luck.
+This evidence does not prove the app has no bugs.
+It proves the basic cloud path exists:
+traffic has an entry point, the runtime has healthy copies, and the team has logs to inspect.
 
-## The First Small AWS Architecture
+The failure version is also useful.
+If DNS points to the wrong load balancer, the app can be healthy and still unreachable.
+If the load balancer has no healthy targets, DNS may be correct but traffic has nowhere safe to go.
+If logs are missing, the app may be failing before it reaches the logging path or the runtime may lack permission to write them.
 
-Now we can sketch a first AWS architecture without going deep into every service.
+Evidence keeps debugging grounded.
+It helps you ask "Which job is failing?" instead of "Which AWS screen should I click next?"
 
-For `devpolaris-orders-api`, a basic production shape might be:
+## What Is Still Our Job?
 
-```mermaid
-graph TD
-    USER["User browser"] --> DNS["Public service name<br/>(Route 53 DNS)"]
-    DNS --> ALB["Public traffic entry<br/>(Application Load Balancer)"]
-    ALB --> ECS["Running backend<br/>(ECS service orders-api-prod)"]
-    ECS --> RDS["Order records<br/>(RDS database orders-prod)"]
-    ECS --> S3["Order exports<br/>(S3 bucket)"]
-    ECS --> CW["Logs and metrics<br/>(CloudWatch)"]
-    IAM["IAM roles"] --> ECS
-```
+Managed services can make AWS sound as if the team has less responsibility.
+That is partly true.
+If you use a managed database, AWS operates much of the database platform.
+If you run containers on Fargate, AWS handles the underlying container infrastructure.
+If you use S3, AWS handles object storage durability at a scale a small team would not build itself.
 
-Read it slowly.
-Route 53 gives users a name to call.
-The load balancer receives HTTP traffic.
-The ECS service runs the backend.
-The database stores order data.
-The S3 bucket stores exported files.
-CloudWatch receives logs and metrics.
-IAM roles decide what the service is allowed to do.
+But "managed" does not mean "unowned."
+Your team still owns the app code, data model, access choices, network exposure, backup decisions, alarms, cost habits, and release process.
 
-Treat this architecture as a useful first map, not as the only possible design.
+Use this split:
 
-The same map also gives you a debugging path.
-If users cannot reach checkout, ask where the request stops.
-Does DNS resolve?
-Does the load balancer have healthy targets?
-Is the ECS service running tasks?
-Can the app reach the database?
-Are logs arriving?
-Did a permission change block the service from reading a secret or writing an export?
+| Area | AWS Helps With | Your Team Still Owns |
+|------|----------------|----------------------|
+| Runtime | Managed infrastructure options | App code, image, config, health |
+| Data | Managed storage and database services | Schema, access, lifecycle, backups |
+| Access | IAM policy engine | Which permissions are appropriate |
+| Traffic | Networking and load balancing services | Public/private design and target health |
+| Signals | Metrics, logs, and alarms services | Useful log content and alert choices |
 
-The map turns "AWS is broken" into smaller questions.
+The beginner question is:
 
-```text
-symptom:
-  checkout returns 503
+> Which part did AWS take off our plate, and which part is still ours?
 
-first questions:
-  does the load balancer have healthy targets?
-  is the ECS service running the expected task count?
-  did the app fail readiness?
-  are logs arriving in /ecs/orders-api?
-```
+That question prevents two opposite mistakes.
+One mistake is treating AWS as raw servers and rebuilding everything yourself.
+The other is assuming AWS will make an unsafe design safe.
+Good cloud engineering lives between those extremes.
 
-That is the habit you want.
-Do not debug "the cloud."
-Debug one boundary at a time.
+## Common Beginner Confusions
 
-## Failure Modes For Beginners
+Most early AWS confusion comes from losing one of the questions.
+The fix is often less dramatic than it feels.
 
-AWS beginner mistakes often come from losing the mental model.
-The good news is that the mistakes are understandable.
-They usually trace back to account, Region, permissions, naming, or responsibility.
-
-Here are the common failure shapes.
-
-| Failure | What It Feels Like | Better First Question |
-|---------|--------------------|-----------------------|
-| Wrong account | "I changed it, but prod did not change" | Which account did the tool use? |
-| Wrong Region | "The resource disappeared" | Which Region is selected? |
-| Missing permission | "AWS says AccessDenied" | Which action and resource were denied? |
-| Bad name or tag | "Nobody knows what owns this" | Which service, env, and owner tags are missing? |
-| Public by accident | "Why is this reachable from the internet?" | Which network or resource policy allows access? |
-| Managed service confusion | "AWS should handle this" | Which part is AWS's job, and which part is ours? |
-
-Let us take the wrong Region mistake.
-
-A teammate creates an ECS service in `us-east-1`.
-Later, they open the AWS Console while the selected Region is `us-west-2`.
-They do not see the service.
-They think the deploy failed.
-They start changing the pipeline.
-
-The fix is not to rewrite the pipeline.
-The fix is to check the Region.
-
-The same thing happens with the CLI.
-If your CLI is configured for `us-west-2`, and the service lives in `us-east-1`, your command may show nothing useful.
+Here is the wrong Region mistake:
 
 ```text
 expected service:
-  account: 123456789012
-  region: us-east-1
+  account: 333333333333
+  Region: us-east-1
   service: orders-api-prod
 
-CLI context:
-  account: 123456789012
-  region: us-west-2
+current view:
+  account: 333333333333
+  Region: us-west-2
 
 result:
-  you are looking in the right account but the wrong region
+  right account, wrong Region
 ```
 
-That is why senior engineers often ask simple questions first.
-They are not trying to slow you down.
-They have learned that cloud mistakes often hide in plain sight.
+The app did not disappear.
+The learner is looking in the wrong place.
+Fix the Region before redeploying or recreating anything.
 
-## What This Mental Model Prepares You For
+Here is the unclear-resource mistake:
 
-This article gives you a map so later service details have a place to land.
+```text
+resource review:
+  name: temp-export-bucket
+  tags: env=dev
+  owner: missing
+  data: unknown
+```
 
-When you learn compute, you will know to ask which account and Region the server or container lives in.
-When you learn networking, you will understand why location and boundaries matter.
-When you learn IAM, you will recognize the caller, action, resource, and account inside an error.
-When you learn storage and databases, you will ask who owns access, backups, and data lifecycle.
-When you learn Terraform, you will understand that it is calling AWS APIs to manage resources in a controlled way.
+The safe move is not to delete it because the name says `temp`.
+First identify the owner, data risk, account, Region, and creation path.
+Then remove it through the workflow that owns it.
 
-For now, keep these five questions close:
+Here is the broad-permission mistake:
 
-1. Which account am I touching?
-2. Which Region am I using?
-3. Which resource is involved?
-4. Which identity is making the request?
-5. Which part is AWS responsible for, and which part is our team responsible for?
+```text
+requested action:
+  s3:*
 
-Those questions will save you a lot of confusion.
-They are simple, but they are not small.
-They are the foundation for almost every AWS conversation that comes next.
+requested resource:
+  arn:aws:s3:::devpolaris-orders-*
+```
+
+The review question is not "Does this policy work?"
+It probably works too broadly.
+The better question is whether the caller needs every S3 action on every matching bucket.
+If the app only writes finance exports, narrow the action and resource to that job.
+
+These examples all point back to the same habit:
+keep the app job visible, then check resource, location, identity, evidence, and ownership.
+
+## Quick Recap: The AWS Questions
+
+When AWS feels too large, return to the questions from the beginning.
+
+| Question | Short Answer Habit |
+|----------|--------------------|
+| What job am I moving to AWS? | Name the app need before naming the service. |
+| Which AWS resource does that job? | Point to the resource responsible for runtime, data, traffic, access, or evidence. |
+| Where does it live? | Check account and Region before assuming a resource is missing. |
+| How do I recognize it later? | Use name and tags for humans, ARN or ID for precision. |
+| Who can change or use it? | Read permission problems as caller, action, resource, result. |
+| What evidence says it works? | Look for health, logs, metrics, status, and real output. |
+| What is still our job? | Separate what AWS operates from what the team configures and owns. |
+
+You do not need to answer every question perfectly on day one.
+The goal is to stop treating AWS as a menu of mysterious services.
+Start with the familiar app.
+Ask what job moved.
+Find the resource doing that job.
+Check where it lives, who can touch it, how it is recognized, and what evidence proves it works.
+
+That loop is the foundation for the rest of the AWS roadmap.
+Compute, networking, storage, identity, observability, deployment operations, cost, and resilience all become easier when you can keep the app job in view.
 
 ---
 
 **References**
 
-- [AWS Regions and Availability Zones](https://docs.aws.amazon.com/global-infrastructure/latest/regions/aws-regions-availability-zones.html) - Explains Regions, Availability Zones, regional resources, and why multi-AZ design matters.
-- [View AWS account identifiers](https://docs.aws.amazon.com/accounts/latest/reference/manage-acct-identifiers.html) - Documents AWS account IDs and why account identifiers appear in resource names.
-- [Identify AWS resources with Amazon Resource Names](https://docs.aws.amazon.com/IAM/latest/UserGuide/reference-arns.html) - Explains ARN format and why ARNs are used to point at resources unambiguously.
-- [AWS CLI User Guide](https://docs.aws.amazon.com/cli/latest/userguide/cli-chap-welcome.html) - Shows how the AWS CLI provides terminal access to AWS services through API calls.
-- [AWS Shared Responsibility Model](https://aws.amazon.com/compliance/shared-responsibility-model/) - Explains the split between what AWS operates and what customers must configure and protect.
+- [AWS Regions and Availability Zones](https://docs.aws.amazon.com/global-infrastructure/latest/regions/aws-regions-availability-zones.html) - Used for the account, Region, and Availability Zone orientation model.
+- [AWS CLI get-caller-identity](https://docs.aws.amazon.com/cli/latest/reference/sts/get-caller-identity.html) - Used for the caller-identity orientation check.
+- [Identify AWS resources with Amazon Resource Names](https://docs.aws.amazon.com/IAM/latest/UserGuide/reference-arns.html) - Used for the ARN explanation and resource identity examples.
+- [IAM JSON policy elements: Resource](https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_elements_resource.html) - Used for the permission examples that connect actions to exact resources.
+- [What is Tag Editor?](https://docs.aws.amazon.com/tag-editor/latest/userguide/tagging.html) - Used for tag behavior and the warning not to store sensitive data in tags.
+- [AWS Shared Responsibility Model](https://aws.amazon.com/compliance/shared-responsibility-model/) - Used for the split between what AWS operates and what customers still configure and monitor.

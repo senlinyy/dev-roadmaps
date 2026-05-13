@@ -1,8 +1,8 @@
 ---
 title: "Azure Networking Mental Model"
-description: "Understand public and private Azure traffic paths, VNets, subnets, routes, DNS, NSGs, and private endpoints before designing a production service."
-overview: "Azure networking becomes easier when you separate where traffic enters, where private resources live, how names resolve, which route traffic follows, and which rule allows or blocks the connection."
-tags: ["azure", "vnet", "dns", "nsgs", "private-link"]
+description: "Shrink an Azure connectivity problem into a request path you can inspect: public entry, private network, DNS answer, route, rule, service gate, and identity."
+overview: "Azure networking is easier when you stop asking whether the network is broken and start asking which part of one request path disagrees with the design."
+tags: ["azure", "networking", "vnet", "dns", "private-link"]
 order: 1
 id: article-cloud-providers-azure-networking-connectivity-azure-networking-mental-model
 ---
@@ -10,353 +10,245 @@ id: article-cloud-providers-azure-networking-connectivity-azure-networking-menta
 ## Table of Contents
 
 1. [The Traffic Questions Before Production](#the-traffic-questions-before-production)
-2. [If You Know AWS Networking](#if-you-know-aws-networking)
-3. [The Orders API Request Path](#the-orders-api-request-path)
-4. [Public Internet And Private Network Are Different Paths](#public-internet-and-private-network-are-different-paths)
-5. [Virtual Networks Are Private Traffic Areas](#virtual-networks-are-private-traffic-areas)
-6. [Subnets Are Placement Areas](#subnets-are-placement-areas)
-7. [Routes Tell Traffic Where To Go Next](#routes-tell-traffic-where-to-go-next)
-8. [DNS Turns Names Into Destinations](#dns-turns-names-into-destinations)
-9. [Network Security Rules Allow Or Deny New Connections](#network-security-rules-allow-or-deny-new-connections)
-10. [Private Endpoints Bring Azure Services Into The Private Path](#private-endpoints-bring-azure-services-into-the-private-path)
-11. [Service Endpoints And Private Endpoints Are Not The Same](#service-endpoints-and-private-endpoints-are-not-the-same)
-12. [Failure Modes And Fix Directions](#failure-modes-and-fix-directions)
-13. [A Beginner Network Review Habit](#a-beginner-network-review-habit)
+2. [The Orders API Request Path](#the-orders-api-request-path)
+3. [The Seven Checks In Order](#the-seven-checks-in-order)
+4. [Evidence From A Broken Checkout](#evidence-from-a-broken-checkout)
+5. [Failure Modes And Fix Directions](#failure-modes-and-fix-directions)
+6. [A Beginner Network Review Habit](#a-beginner-network-review-habit)
+7. [What The Later Articles Own](#what-the-later-articles-own)
 
 ## The Traffic Questions Before Production
 
-Before a backend service can serve real users, the team needs to answer one plain question:
-how does traffic get from a caller to the thing it needs?
+The phrase "the network is broken" is too large to debug.
+It can mean a browser reached the wrong public endpoint.
+It can mean a backend resolved a database name to a public address when it expected a private one.
+It can mean Azure chose a route through a firewall that did not allow the destination.
+It can mean a network security group blocked a new connection.
+It can mean the target service accepted the network path and then rejected the caller's identity.
 
-That sounds simple on a laptop.
-You run `npm run dev`.
-The app listens on `localhost:3000`.
-The database is a local container.
-The browser, API, database, and logs all feel close together.
+A beginner's first win is not memorizing every Azure networking service.
+The first win is learning to shrink the vague complaint into a path question:
+from which caller, to which name, to which resolved address, over which route, through which rule, into which service gate, using which identity?
 
-Azure separates those pieces.
-That separation is useful because each piece can be managed, scaled, secured, and observed on its own.
-It also means a working application can fail for reasons that have nothing to do with JavaScript.
-The name might point to the wrong place.
-The app might sit in the wrong subnet.
-A route might send traffic to a firewall.
-A network security group might block a port.
-A private endpoint might exist, but DNS might still resolve to a public address.
+That question gives every layer a job.
+The public entry decides where customer traffic first arrives.
+The private area decides where internal resources live or connect.
+DNS decides what destination address the caller tries.
+Routes decide the next hop for that address.
+Network security rules decide whether a new connection may pass.
+The target service's own network gate decides whether this path is accepted.
+Identity and authorization decide whether the caller can use the service after reachability works.
 
-Azure networking is the set of services and rules that control those paths.
-For a beginner, the first mental model has six parts:
-public internet, private network, placement areas, routes, DNS, and allow or deny checks.
-The Azure names are Virtual Network, subnet, route table, Azure DNS, network security group, Private Link, and private endpoint.
+Those checks are separate on purpose.
+Separation lets a team expose one public API without exposing every database, vault, queue, and storage account behind it.
+Separation also creates failure modes that look confusing when you read only the application error.
+An application log may say `ETIMEDOUT`, but that does not tell you whether DNS, routing, an NSG, a firewall, or a private endpoint is the first wrong layer.
 
-This article follows one running example:
-`devpolaris-orders-api` is a Node backend for checkout traffic.
-The production version receives HTTPS requests at `orders.devpolaris.com`, runs in Azure, stores order records, writes receipt files to Blob Storage, and sends signals to monitoring.
-The team wants users to reach the public API, but it does not want the database or storage account exposed as open public targets.
+This article follows one operational story.
+The DevPolaris team runs `orders.devpolaris.com` for customer checkout.
+Behind that public name is `orders-api`, a backend that accepts order requests, stores order records in Azure SQL, writes invoice exports to Blob Storage, and reads secrets from Key Vault.
+Customers must reach the API over HTTPS.
+The database, storage account, and vault should not become general public targets just because the API needs them.
 
-Read a simple system by asking better networking questions: where does
-traffic enter, what stays private, what name resolves to what address,
-which route is used, and which rule allows or denies the connection?
+That is the shape most production services eventually need.
+One side is public because users have to call it.
+The other side is private because dependencies hold data, secrets, or operational control.
+The design work is deciding where the public path stops and where the private paths begin.
 
-> A network problem is often a path problem. Find the name, the destination, the route, and the rule check.
+If you already know some cloud networking, keep the broad ideas.
+Azure has private address spaces, subnets, route tables, packet filters, DNS, private service access, and public entry services.
+The exact Azure names matter later, but the overview mental model is simpler:
+follow the request, then ask what evidence proves each hop.
 
-## If You Know AWS Networking
+Here is the smallest useful incident sentence:
 
-If you have learned some AWS before, bring the basic map with you.
-You already know that cloud networking is about private address space, subnets, routing, security rules, DNS, and service access.
-Azure uses the same operating ideas, but the labels and service boundaries are not identical.
+```text
+Caller:
+  customer browser
 
-The closest bridge is this:
-an Azure Virtual Network, often shortened to VNet, is the Azure private network area that feels closest to an AWS VPC.
-That comparison is useful, but you should handle it carefully.
-A VNet and a VPC both give you a private address space, subnets, routing, and private communication between resources.
-They are not identical products, and you should not assume every AWS feature has the same Azure name or behavior.
+Name:
+  orders.devpolaris.com
 
-Here is the careful bridge:
+Expected path:
+  public HTTP entry -> orders-api -> private SQL endpoint
 
-| AWS idea you may know | Azure idea to learn | Careful difference |
-|-----------------------|---------------------|--------------------|
-| VPC | Virtual Network, or VNet | Similar private network area, but Azure integration details differ |
-| Subnet | Subnet | Same placement idea, but Azure services have their own subnet rules |
-| Route table | Route table | Same traffic direction idea, with Azure system routes and optional custom routes |
-| Security group | Network security group, or NSG | Similar allow or deny check, but NSGs attach to subnets or network interfaces |
-| Route 53 public DNS | Azure DNS public zones | Same public name job, different service |
-| Route 53 private hosted zone | Azure DNS private zones | Same private name job, often important with private endpoints |
-| VPC endpoint | Private Link and private endpoint, or service endpoint | Azure has two different service access patterns you must not blur |
-| ALB or CloudFront depending on the job | Application Gateway or Front Door | Pick by traffic job, not by a fake one-name match |
+Symptom:
+  checkout returns 502 during payment confirmation
+```
 
-Front Door and Application Gateway deserve a slow comparison.
-Front Door is usually part of a global public HTTP entry pattern.
-Application Gateway is a regional HTTP load balancer that can sit with a VNet-connected design.
-Neither one is "the Azure ALB" in every case.
-Ask what job the entry point must do:
-global edge routing, regional HTTP routing, TLS termination, private backend access, web application firewall rules, or health probes.
+That sentence is already better than "network broken."
+It names the caller.
+It names the public hostname.
+It names the first expected path.
+It also leaves room for a second path, because the customer request can reach the API while the API fails to reach SQL.
 
-The AWS habit still helps:
-do not expose a database just because the app needs to connect to it.
-Do not trust a friendly DNS name without checking what it resolves to.
-Do not assume a route exists because two resources are in the same cloud provider.
-Translate the vocabulary, then inspect the actual Azure path.
+The tradeoff begins here.
+A wide-open network is faster to test because fewer gates can block you.
+A narrow network is easier to defend and review because every path has to be named.
+Production teams usually accept the setup cost of narrow paths because the alternative is a system where nobody can answer a simple audit question: from where can order data be reached?
 
 ## The Orders API Request Path
 
-The `devpolaris-orders-api` team wants a first production network shape that is easy to explain.
-Customers call a public HTTPS name.
-The public entry point forwards only the intended web traffic to the API.
-The API talks privately to data services where possible.
-Developers and pipelines can inspect evidence without opening every resource to the internet.
+Let's give the running example a concrete shape.
+The public request starts outside Azure.
+A customer browser calls `https://orders.devpolaris.com/orders`.
+Public DNS answers with the public HTTP entry point.
+That entry point could be Azure Front Door, Application Gateway, App Service ingress, Container Apps ingress, or another approved entry pattern.
+This overview does not choose the entry product for you.
+It asks you to name the entry and prove that it forwards only the traffic you intended.
 
-In plain words, the request path looks like this:
+After the public entry, the request reaches `orders-api`.
+The API may run in a service that is directly integrated with a virtual network, or it may run on compute resources placed inside a subnet.
+The detail differs by runtime service.
+The mental model does not.
+The API needs a private path to dependencies that should not be exposed as public application surfaces.
 
-```text
-customer browser
-  -> public name
-  -> public HTTP entry point
-  -> private app placement area
-  -> private access to database and storage
-  -> logs and metrics for evidence
-```
+The most useful overview is not a full architecture diagram.
+It is a set of request path diagrams.
+Read these as the path of one checkout request and the API's dependency calls, not as a list of Azure products to buy.
+Splitting the view keeps each question visible.
 
-In Azure words, that might become this:
-
-```text
-internet client
-  -> Azure DNS
-  -> Azure Front Door or Application Gateway
-  -> Virtual Network and subnets
-  -> Azure Container Apps, App Service, or virtual machines
-  -> Private Link private endpoints for Azure SQL and Storage
-  -> Azure Monitor and related signals
-```
-
-Read this diagram from top to bottom.
-The plain-English label comes first.
-The Azure term follows in parentheses.
-The dotted lines are checks or supporting systems, not the main customer request path.
+First, there is the public path that lets a customer reach the API.
 
 ```mermaid
 flowchart TD
-    USER["Customer request<br/>(browser or mobile app)"]
-    PUBLICDNS["Public name lookup<br/>(Azure DNS public zone)"]
-    EDGE["Public HTTP entry<br/>(Front Door or Application Gateway)"]
-    VNET["Private traffic area<br/>(Virtual Network)"]
-    APP["Running orders API<br/>(app subnet)"]
-    SERVICE["Private service access<br/>(Private DNS and private endpoint)"]
-    DATA["Data dependency<br/>(Azure SQL or Blob Storage)"]
-    GUARDRAILS["Traffic guardrails<br/>(routes and network security groups)"]
-
-    USER --> PUBLICDNS
-    PUBLICDNS --> EDGE
-    EDGE --> VNET
-    VNET --> APP
-    APP --> SERVICE
-    SERVICE --> DATA
-    GUARDRAILS -. "shape and filter traffic" .-> VNET
+    USER["Customer browser"] --> DNS["Public DNS"]
+    DNS --> ENTRY["Public HTTP entry"]
+    ENTRY --> API["orders-api"]
 ```
 
-The diagram does not show every valid Azure design.
-That is intentional.
-The point is the mental path.
-A public user should not need to know where the database lives.
-The app needs a controlled path to data.
-DNS must point names to the intended destinations.
-Routes and security rules must agree with the design.
+Next, there is the private path the API uses when it calls managed services.
+The API still uses normal service hostnames in connection strings.
+Private DNS and private endpoints change where those names land from inside the right network.
 
-Here is a small network inventory for the example.
-This kind of table is useful in a pull request or design review because it separates purpose from service name.
+```mermaid
+flowchart TD
+    API["orders-api"] --> PATH["Private path"]
+    PATH --> PDNS["Private DNS"]
+    PDNS --> PE["Private endpoint"]
+    PE --> SERVICE["SQL, Blob, Key Vault"]
+```
 
-| Job | Example Resource | Azure Concept |
-|-----|------------------|---------------|
-| Public API name | `orders.devpolaris.com` | Azure DNS public record |
-| Public HTTP entry | `fd-devpolaris-prod` or `agw-orders-prod` | Front Door or Application Gateway |
-| Private address area | `vnet-devpolaris-prod` | Virtual Network |
-| App placement | `snet-orders-app-prod` | Subnet |
-| Private SQL access | `pe-sql-orders-prod` | Private endpoint |
-| Private Blob access | `pe-blob-orders-prod` | Private endpoint |
-| Private name resolution | `privatelink.database.windows.net` and `privatelink.blob.core.windows.net` | Azure DNS private zones |
-| Network filtering | `nsg-orders-app-prod` | Network security group |
+Finally, there are the checks around that path.
+Network controls decide whether the flow can reach the target.
+Identity and service permissions decide whether the reached target will accept the operation.
 
-The inventory gives the team a starting map.
-When checkout fails, they can follow the path instead of clicking through unrelated services.
+```mermaid
+flowchart TD
+    RULES["Routes, NSGs, firewalls"] --> REACH["Reach target"]
+    IDENTITY["Identity and RBAC"] --> USE["Use target"]
+    REACH --> SUCCESS["Service call succeeds"]
+    USE --> SUCCESS
+```
 
-## Public Internet And Private Network Are Different Paths
+Notice the split across the three views.
+The public path exists so customers can place orders.
+The private path exists so the API can use dependencies without turning those dependencies into public application entry points.
+This is why the word "endpoint" can be slippery in Azure conversations.
+The API has a public endpoint for users.
+SQL, Blob Storage, and Key Vault may have private endpoints for the API.
+Those are different jobs.
 
-The public internet is the shared network path that normal clients use to reach public services.
-Your customer's browser uses it when it calls `https://orders.devpolaris.com`.
-A public path is correct for public web APIs.
-The important choice is where that public entry stops.
+Now turn the diagram into a review record.
+This is the kind of small artifact a team can put in a design issue before production.
 
-A private network is the address area you control for internal traffic.
-In Azure, the main private network area is a Virtual Network.
-Resources inside or connected to that VNet can use private IP addresses, such as `10.42.1.20`, instead of public internet addresses.
+| Path piece | Expected evidence | Why it matters |
+|------------|-------------------|----------------|
+| Public name | `orders.devpolaris.com` resolves to the approved HTTP entry | Users follow DNS before they ever reach the app |
+| Public entry | HTTPS listener, route, backend health, and TLS binding are configured on the chosen entry service | The public door should be intentional and observable |
+| Private area | `orders-api` runs in, or integrates with, the production virtual network path | Private dependencies are reachable only if the runtime has a private network path |
+| DNS answer | SQL, Blob, and Key Vault hostnames resolve to private endpoint IPs from the app environment | DNS chooses the destination address before routes or rules can help |
+| Route and next hop | The app subnet or integration path has an effective route to that destination | Routes decide where traffic goes next |
+| NSG or rule | The relevant rule allows the source, destination, protocol, and port | Packet filters decide whether new flows may pass |
+| Service gate | The target service allows the private endpoint, subnet, or firewall path | Managed services have their own network access controls |
+| Identity | The runtime identity, database login, or token is authorized | Network reachability does not grant data access |
 
-For `devpolaris-orders-api`, the healthy beginner shape is:
-public traffic reaches the HTTP entry point, not every backend dependency.
-The API runtime talks to Azure SQL and Blob Storage over controlled service paths.
-The database and storage account should not be treated like public web servers.
+The table is not a replacement for the later articles.
+It is the overview contract.
+The public entry article will spend more time on records, validation, TLS, health probes, and cutovers.
+The VNet article will spend more time on address planning, subnets, and route tables.
+The NSG article will spend more time on priorities, default rules, and application security groups.
+The private access article will spend more time on Private Link, private endpoints, service endpoints, resource firewalls, and private DNS.
+This article gives you the order in which to think when a real request fails.
 
-This distinction prevents a common beginner mistake.
-Someone sees that Azure SQL has a public hostname such as `sql-devpolaris-orders-prod.database.windows.net`.
-They assume it must be safe to allow public network access because the app can connect.
-That may make the first test pass, but it also expands the places a request can come from.
+## The Seven Checks In Order
 
-The safer question is:
-can the app reach the service through a private path, and can the service reject traffic that does not come through the intended path?
+Start with the public entry.
+If the caller is a customer browser, the first question is not "which subnet is wrong?"
+The first question is "what public name did the browser call, and where did that name send it?"
+For `orders.devpolaris.com`, a healthy public lookup should land on the approved entry service for production.
 
-Here is a simple before and after:
+```bash
+$ nslookup orders.devpolaris.com
+Server:  resolver.devpolaris.net
+Address: 10.10.0.10
 
-| Design Choice | What Works | What You Risk |
-|---------------|------------|---------------|
-| Database allows broad public access | The app connects quickly during early testing | Mistyped firewall rules can expose a data service wider than intended |
-| Database allows only a private endpoint path | App traffic stays on the private path | DNS and private endpoint setup must be correct |
-| API has a public HTTP entry | Customers can call the service | Entry point must be protected, monitored, and routed to healthy backends |
-| Every backend resource gets public access | Debugging may feel easier at first | The network boundary becomes unclear and harder to review |
+Non-authoritative answer:
+orders.devpolaris.com canonical name = fd-devpolaris-prod.azurefd.net.
+Name:    fd-devpolaris-prod.azurefd.net
+Address: 203.0.113.42
+```
 
-The tradeoff is convenience versus clear boundaries.
-Early public access is easy to test.
-Private access takes more setup.
-But private access gives the team a cleaner story when someone asks, "from where can production data be reached?"
+The important fact is not the example IP.
+The important fact is that the public name points at the production entry target the team intended.
+If this lookup points at staging, an old gateway, or a deleted provider hostname, no subnet rule inside the app network will fix the customer path.
 
-## Virtual Networks Are Private Traffic Areas
+Then check the public HTTP response.
+DNS can be correct while the entry route is wrong.
+The entry can answer HTTPS while forwarding to the wrong backend pool.
+A small `curl` check can tell you whether the public door and the app agree on the environment.
 
-An Azure Virtual Network is the main private traffic area for Azure resources.
-It gives you private address space, such as `10.42.0.0/16`, and lets compatible Azure resources communicate privately.
-Microsoft Learn describes Virtual Network as the fundamental building block for private networks in Azure.
-That phrase is accurate, but the beginner meaning is easier:
-a VNet is the private area where your Azure resources can have private addresses and controlled paths.
+```bash
+$ curl -i https://orders.devpolaris.com/health
+HTTP/2 200
+content-type: application/json
+x-entry: fd-devpolaris-prod
+x-backend: orders-api-prod
 
-The address range matters because every subnet inside the VNet takes a slice of it.
-For example, the orders production VNet might use:
+{"status":"ok","service":"orders-api","environment":"prod"}
+```
+
+Headers like these are examples, not Azure defaults.
+Many teams add lightweight diagnostic headers or health response fields during controlled checks.
+The point is to prove that the friendly name, HTTP entry, and backend environment line up before you chase private dependencies.
+
+Next, name the private area.
+In Azure, the main private network boundary is a Virtual Network, usually shortened to VNet.
+Microsoft describes Azure Virtual Network as the fundamental building block for private networks in Azure.
+For our purposes, the VNet is the controlled private area where resources can use private addresses, apply routes, apply network filtering, and integrate with Azure services.
+
+For `orders-api`, the private area review might be this simple:
 
 ```text
-Virtual network:
-  name: vnet-devpolaris-prod
-  address space: 10.42.0.0/16
+Runtime:
+  orders-api-prod
 
-Subnets:
-  snet-orders-app-prod: 10.42.1.0/24
-  snet-private-endpoints-prod: 10.42.20.0/24
-  snet-shared-gateway-prod: 10.42.40.0/24
+Network path:
+  vnet-devpolaris-prod
+
+App placement or integration:
+  snet-orders-app-prod
+
+Private endpoint placement:
+  snet-orders-private-endpoints-prod
+
+Private dependency targets:
+  sql-devpolaris-orders-prod
+  stdevpolarisordersprod
+  kv-devpolaris-orders-prod
 ```
 
-The exact ranges are examples.
-The important point is that the VNet is planned as a private address space.
-You do not want random overlapping ranges if this network might later connect to another VNet, an on-premises network, or a VPN.
-Overlapping address ranges make routing hard because two places claim the same destination.
+Do not overread this inventory.
+It does not prove the app can connect.
+It only names the network area and the dependencies that should use private paths.
+That naming step still matters because it stops the team from inspecting the wrong resource group, subscription, environment, or VNet.
 
-Azure also creates default system routes so resources can communicate with other resources in the VNet and reach the internet outbound when allowed.
-That does not mean every connection is safe or intended.
-It means Azure gives the network a default path, and you add stricter routing or filtering when the system needs it.
+Now check DNS from the same kind of place where the app runs.
+DNS is not a global truth for every caller.
+A public laptop and an app inside a VNet can receive different answers for the same service hostname when private DNS is configured.
+That is useful, but it can also hide the bug.
 
-For readers coming from AWS, this is close to the first VPC lesson:
-choose private address space carefully because future connections depend on it.
-The Azure version adds Azure-specific integration choices such as Private Link, service endpoints, VNet integration for some platform services, and private DNS zones.
-
-## Subnets Are Placement Areas
-
-A subnet is a smaller address range inside a VNet.
-It is where certain resources or network interfaces are placed.
-For a beginner, think of a subnet as a placement area with shared network rules.
-
-Subnets matter because Azure attaches many networking choices at the subnet level.
-A subnet can have a route table.
-A subnet can have an NSG.
-Some Azure services need their own delegated subnet, which means the subnet is assigned for that service's use.
-Private endpoints are also placed into a subnet because each private endpoint gets a private IP address from that subnet.
-
-The orders team might start with three subnets:
-
-| Subnet | Address Range | Main Job |
-|--------|---------------|----------|
-| `snet-orders-app-prod` | `10.42.1.0/24` | Place the API runtime or integration path |
-| `snet-private-endpoints-prod` | `10.42.20.0/24` | Hold private endpoints for SQL and Blob Storage |
-| `snet-shared-gateway-prod` | `10.42.40.0/24` | Hold a regional entry component such as Application Gateway when used |
-
-This shape keeps jobs separate.
-The app subnet has app traffic rules.
-The private endpoint subnet has private service doorway addresses.
-The gateway subnet has HTTP entry behavior when the team chooses Application Gateway.
-
-Do not split subnets just to make the diagram look serious.
-Every subnet should have a reason:
-different placement requirement, different route table, different NSG rule set, different service delegation, or cleaner operational ownership.
-Too many subnets can make a small service harder to understand.
-Too few can force unrelated traffic to share the same controls.
-
-Here is the review question:
-what is placed in this subnet, and what traffic should be allowed in and out?
-
-If nobody can answer that in one or two sentences, the subnet design is probably not ready.
-
-## Routes Tell Traffic Where To Go Next
-
-Routes are traffic directions.
-When a packet leaves the app, Azure needs to decide the next hop.
-The next hop might be another subnet in the same VNet, the internet, a virtual network gateway, a peered VNet, or a network virtual appliance such as a firewall.
-
-Azure creates system routes by default.
-Those routes handle common paths such as traffic inside the VNet and outbound internet paths.
-You can add custom routes with route tables when you need to change the default path.
-For example, a platform team might force outbound traffic from the app subnet through an Azure Firewall before it reaches the internet.
-
-For `devpolaris-orders-api`, route thinking starts with three questions:
-
-1. Should app-to-database traffic stay on a private path?
-2. Should app-to-internet traffic go directly out, through NAT Gateway, or through a firewall?
-3. Should this VNet connect to other VNets or on-premises networks?
-
-A route table snapshot might look like this:
-
-```text
-Route table: rt-orders-app-prod
-Associated subnet: snet-orders-app-prod
-
-Address prefix       Next hop type            Purpose
-10.42.0.0/16         Virtual network          Keep VNet traffic local
-10.80.0.0/16         Virtual network peering  Reach shared platform services
-0.0.0.0/0            Virtual appliance        Send internet-bound traffic to firewall
-```
-
-Read this block as evidence of routing intent. The `0.0.0.0/0` route
-means "when no more specific route matches, send the traffic here." That
-default route can affect a large amount of traffic, so treat it
-carefully. If it points to a firewall, the firewall must know how to
-forward the traffic. If it points nowhere useful, the app can lose
-outbound access.
-
-The most common route debugging habit is to ask:
-what destination IP did the app try to reach, and which route matched that destination?
-
-That is why DNS and routes must be debugged together.
-If `sql-devpolaris-orders-prod.database.windows.net` resolves to a public IP, routing follows a public destination.
-If it resolves to a private endpoint IP such as `10.42.20.4`, routing follows the private VNet path.
-The route cannot fix the wrong name resolution.
-It only routes the destination it receives.
-
-## DNS Turns Names Into Destinations
-
-DNS, the Domain Name System, turns a name into a destination.
-That sounds small, but DNS often decides whether a request uses the public path or the private path.
-
-Azure DNS can host public DNS zones for internet-facing names.
-It can also support private DNS zones for names that should resolve inside virtual networks.
-For `devpolaris-orders-api`, both jobs matter.
-
-The public name might be:
-
-```text
-orders.devpolaris.com
-  -> public entry point for HTTPS traffic
-```
-
-That public name should resolve to the public HTTP entry service, such as Front Door or Application Gateway with a public frontend.
-Customers do not need to know the private address of the API runtime.
-They need a stable public name.
-
-The private service names are different.
-When the app connects to Azure SQL or Blob Storage through private endpoints, the service hostname should resolve inside the VNet to the private endpoint IP.
-That usually involves Azure private DNS zones linked to the VNet.
-
-Here is the kind of evidence a developer might collect from inside the app environment or a test host in the VNet:
+Here is the kind of SQL lookup the orders team wants from the app network:
 
 ```bash
 $ nslookup sql-devpolaris-orders-prod.database.windows.net
@@ -369,11 +261,11 @@ Name:    sql-devpolaris-orders-prod.privatelink.database.windows.net
 Address: 10.42.20.4
 ```
 
-The important line is the private address.
-`10.42.20.4` tells you the name is resolving to something inside the VNet address space.
-The `privatelink` name tells you private endpoint DNS is involved.
+The `privatelink` name and the `10.42.20.4` private address tell a clear story.
+The normal SQL hostname resolves, inside this network context, to the private endpoint address.
+That is the DNS steering the design expects.
 
-Now compare that with a failure shape:
+Compare it with a broken private path:
 
 ```bash
 $ nslookup sql-devpolaris-orders-prod.database.windows.net
@@ -385,337 +277,479 @@ Name:    sql-devpolaris-orders-prod.database.windows.net
 Address: 20.49.104.18
 ```
 
-This does not automatically prove the connection is unsafe, but it does prove the name did not resolve to the private endpoint IP.
-If the design requires private endpoint access, the next checks are the private DNS zone, the VNet link, the private endpoint connection, and whether the app is using the expected DNS resolver.
+This does not prove the database is reachable or unreachable by itself.
+It proves the app did not get the private endpoint destination.
+If the target service has public network access disabled, this DNS answer is enough to explain a timeout.
+The fix direction is private DNS, VNet links, endpoint DNS zone groups, or custom DNS forwarding, not a random NSG change.
 
-DNS is easy to underestimate because it feels like a phone book.
-In cloud networking, DNS is often a steering wheel.
-It tells the app which destination to try before routes and rules get involved.
+After DNS, inspect the route.
+Routes do not decide the name.
+They route the destination IP address produced by DNS.
+Azure creates system routes for subnets in a virtual network, and custom route tables can change selected next hops.
+The beginner question is always concrete:
+for this destination IP, which next hop wins?
 
-## Network Security Rules Allow Or Deny New Connections
-
-A network security group, or NSG, is an Azure rule set that filters network traffic.
-It contains inbound and outbound security rules.
-Each rule has a direction, priority, source, destination, protocol, port range, and action.
-The action is allow or deny.
-
-A common beginner mistake is treating an NSG as the whole firewall
-story. An NSG is important, but application authentication, TLS, Azure
-RBAC, service firewalls, Web Application Firewall rules, and private
-endpoint approval can all matter too. The NSG answers one network-level
-question: is this traffic allowed through this subnet or network
-interface rule set?
-
-Azure processes NSG rules by priority.
-Lower numbers are processed first.
-When traffic matches a rule, processing stops.
-That means a high-priority deny can block traffic before a later allow has a chance to help.
-
-For the orders app subnet, a simplified NSG design might look like this:
+For the SQL private endpoint address, a healthy route picture might be:
 
 ```text
-NSG: nsg-orders-app-prod
-Associated subnet: snet-orders-app-prod
+Effective route check from orders-api network path
 
-Priority  Direction  Source             Destination          Port  Action  Purpose
-100       Inbound    AppGatewaySubnet   snet-orders-app-prod 443   Allow   Let regional gateway reach API
-200       Inbound    VirtualNetwork     snet-orders-app-prod 443   Allow   Let approved VNet callers reach API
-300       Inbound    Internet           snet-orders-app-prod *     Deny    Block direct internet access
-100       Outbound   snet-orders-app-prod 10.42.20.0/24      443   Allow   Reach private endpoints
-200       Outbound   snet-orders-app-prod Internet           443   Allow   Reach approved external APIs through route path
+Destination tested:
+  10.42.20.4
+
+Winning route:
+  address prefix: 10.42.0.0/16
+  next hop type: Virtual network
+  source: Default
+
+Meaning:
+  traffic to the SQL private endpoint stays inside the VNet path
 ```
 
-This table is simplified on purpose.
-Real NSG rules may use service tags, application security groups, and different source or destination shapes.
-The teaching point is the evaluation habit:
-find the direction, priority, source, destination, port, protocol, and action.
+For an external payment API, the route might intentionally be different:
 
-NSGs are stateful.
-If outbound traffic is allowed for a connection, you do not need a matching inbound rule just for the response traffic.
-That does not mean inbound traffic is open.
-It means Azure tracks the flow for that connection.
+```text
+Effective route check from orders-api network path
 
-Here is a realistic failure clue from an app log:
+Destination tested:
+  198.51.100.25
+
+Winning route:
+  address prefix: 0.0.0.0/0
+  next hop type: Virtual appliance
+  next hop IP: 10.42.40.4
+  source: User
+
+Meaning:
+  internet-bound traffic is sent through the approved firewall path
+```
+
+That route can be correct and still cause a failure.
+If the firewall path is intentional, the firewall must allow the destination and know how to forward the traffic.
+Removing the route may restore a test quickly, but it also bypasses the inspection design the platform team chose.
+That is the tradeoff: direct outbound access is simpler, while centralized inspection gives the team a stronger control point and another operational dependency to maintain.
+
+After route, inspect the rule.
+In Azure, a network security group, or NSG, contains inbound and outbound rules that allow or deny traffic.
+The rule has a direction, source, destination, protocol, port, priority, and action.
+Lower priority numbers are processed before higher numbers, and NSG changes affect new connections.
+
+For a beginner, the right question is not "does an allow rule exist somewhere?"
+The right question is "which rule matches this new flow first?"
+
+Here is a compact route and rule evidence table for `orders-api`:
+
+| Flow | DNS answer | Winning route | Rule evidence | First conclusion |
+|------|------------|---------------|---------------|------------------|
+| Browser to `orders.devpolaris.com:443` | Public entry address | Public internet path to entry service | Entry listener allows HTTPS | Public door is reachable |
+| Entry to `orders-api:443` | Backend private or service address | Entry service route to backend | Backend access rule allows entry source on 443 | Public entry can forward to API |
+| API to SQL `1433` | `10.42.20.4` | VNet route | Outbound app rule and service gate allow SQL path | Network path is likely correct |
+| API to Blob `443` | `10.42.20.7` | VNet route | Outbound app rule and storage gate allow private endpoint path | Export path is likely correct |
+| API to payment provider `443` | Public provider address | Firewall next hop | Firewall rule allows provider host or IP range | Outbound internet path is controlled |
+
+The table forces precision.
+It separates the DNS answer from the route.
+It separates the route from the packet filter.
+It separates network reachability from the service's own gate.
+When a column is unknown, that is the next check.
+
+Now check the service gate.
+Managed Azure services can have their own network access controls.
+Storage accounts, SQL servers, and Key Vaults can restrict public access, allow selected virtual networks, use private endpoints, and require private endpoint approval depending on the service and configuration.
+A private endpoint is a network interface with a private IP address in your VNet that connects privately to a specific service resource through Azure Private Link.
+
+The private endpoint is not the same thing as permission to read data.
+It is also not the same thing as disabling every public path automatically.
+For a production review, write the service gate as a small record:
+
+```text
+SQL service gate
+
+Private endpoint:
+  pe-sql-orders-prod
+
+Private IP:
+  10.42.20.4
+
+Connection state:
+  Approved
+
+Public network access:
+  Disabled
+
+Expected DNS from app network:
+  sql-devpolaris-orders-prod.database.windows.net -> 10.42.20.4
+```
+
+That record says the private access path is intentional.
+If public network access is disabled and DNS still points to a public address, the app will fail even if the identity is perfect.
+If the private endpoint is pending approval, the DNS answer may look promising while the service still rejects the connection path.
+
+Finally, inspect identity after reachability.
+This is where many beginners lose time because a `403` feels like a network block.
+It usually is not.
+A `403` means something answered and refused the caller.
+That can happen after the private path works.
+
+```text
+2026-05-03T10:22:15Z ERROR secret lookup failed
+service=orders-api
+vault=https://kv-devpolaris-orders-prod.vault.azure.net
+resolvedAddress=10.42.20.9
+httpStatus=403
+message="Caller is not authorized to perform action on resource"
+```
+
+The private address is a clue that DNS probably used the private endpoint.
+The HTTP status is a clue that the network path reached Key Vault far enough for the service to make an authorization decision.
+The next fix is not to open the network wider.
+The next fix is to check the app's managed identity, role assignment, access policy model, or secret permission, depending on how that vault is configured.
+
+## Evidence From A Broken Checkout
+
+Now put the order into a small incident.
+At 09:12, support reports that customers can open the checkout page, but placing an order returns a generic failure.
+The frontend call to `POST /orders` returns `502`.
+The API logs show timeouts to SQL.
+
+Start with the public path, because users are involved.
+
+```bash
+$ nslookup orders.devpolaris.com
+Server:  resolver.devpolaris.net
+Address: 10.10.0.10
+
+Non-authoritative answer:
+orders.devpolaris.com canonical name = fd-devpolaris-prod.azurefd.net.
+Name:    fd-devpolaris-prod.azurefd.net
+Address: 203.0.113.42
+```
+
+The public name points at the production entry.
+That does not close the incident, but it keeps the team from editing a DNS record that already matches the design.
+
+Next, test the entry health endpoint.
+
+```bash
+$ curl -i https://orders.devpolaris.com/health
+HTTP/2 200
+content-type: application/json
+x-entry: fd-devpolaris-prod
+x-backend: orders-api-prod
+
+{"status":"ok","database":"degraded","service":"orders-api"}
+```
+
+This is a better clue than a red dashboard tile.
+The public entry can reach the API.
+The API is alive enough to return health.
+The API itself says the database dependency is degraded.
+The incident moves from "public entry problem" toward "API to SQL path problem."
+
+The application log agrees:
 
 ```text
 2026-05-03T09:17:42Z WARN checkout dependency failed
+service=orders-api
+operation=createOrder
+dependency=sql
+host=sql-devpolaris-orders-prod.database.windows.net
+resolvedAddress=20.49.104.18
+port=1433
+error="connect ETIMEDOUT 20.49.104.18:1433"
+```
+
+That log line is valuable because it includes the resolved address.
+The app is trying a public SQL address.
+If the production design requires a private endpoint, the first suspicious layer is DNS.
+
+Run the lookup from the app network context or from a controlled test host that uses the same resolver path.
+
+```bash
+$ nslookup sql-devpolaris-orders-prod.database.windows.net
+Server:  custom-dns.devpolaris.internal
+Address: 10.42.10.10
+
+Non-authoritative answer:
+Name:    sql-devpolaris-orders-prod.database.windows.net
+Address: 20.49.104.18
+```
+
+The custom DNS server is returning the public address.
+The Azure private DNS zone may exist, but this resolver path is not using it.
+For example, the private zone may not be linked to the VNet, or the custom DNS server may lack a conditional forwarder for the `privatelink.database.windows.net` zone.
+
+At this point, changing an NSG would be noise.
+The destination is wrong before routing and NSG evaluation become useful.
+The fix direction is to repair private DNS resolution, then retest the same name from the same network context.
+
+After the DNS fix, the evidence should change:
+
+```bash
+$ nslookup sql-devpolaris-orders-prod.database.windows.net
+Server:  custom-dns.devpolaris.internal
+Address: 10.42.10.10
+
+Non-authoritative answer:
+sql-devpolaris-orders-prod.database.windows.net canonical name = sql-devpolaris-orders-prod.privatelink.database.windows.net.
+Name:    sql-devpolaris-orders-prod.privatelink.database.windows.net
+Address: 10.42.20.4
+```
+
+Only now does it make sense to inspect route and rule evidence for `10.42.20.4`.
+
+| Check | Observed evidence | Meaning | Next action |
+|-------|-------------------|---------|-------------|
+| DNS answer | SQL hostname resolves to `10.42.20.4` | App is targeting the private endpoint | Continue to route check |
+| Effective route | `10.42.0.0/16 -> Virtual network` | Destination stays on the VNet path | Continue to rule check |
+| NSG outbound | App subnet allows TCP `1433` to private endpoint subnet | New SQL connection should pass app subnet filter | Continue to service gate |
+| Private endpoint | `pe-sql-orders-prod` is `Approved` | Private Link connection is ready | Continue to identity or SQL logs |
+| SQL auth | Login succeeds for app identity or configured credential | Network and auth agree | Verify order write path |
+
+The table is intentionally boring.
+Good incident evidence should become boring as you narrow it.
+Each row either agrees with the design or points at the next layer.
+
+After recovery, the app log should also change from timeout to either success or a more specific service response.
+
+```text
+2026-05-03T09:31:08Z INFO checkout dependency recovered
+service=orders-api
+operation=createOrder
 dependency=sql
 host=sql-devpolaris-orders-prod.database.windows.net
 resolvedAddress=10.42.20.4
 port=1433
-error="connect ETIMEDOUT 10.42.20.4:1433"
+latencyMs=18
 ```
 
-The resolved address is private, so DNS probably found the private endpoint.
-The timeout points to a path or rule problem, not a bad password.
-The next checks are the route from the app subnet to `10.42.20.4`, any NSG on the app subnet, service-specific network settings, and the private endpoint connection state.
-
-If the error were `Login failed for user`, the network likely got far enough to reach SQL.
-That would move the investigation toward identity or database credentials.
-Good network debugging separates "could not reach the destination" from "destination rejected the caller."
-
-## Private Endpoints Bring Azure Services Into The Private Path
-
-Many Azure services are platform services.
-Azure SQL Database and Blob Storage are not normally "inside your subnet" in the same way a virtual machine network interface is.
-They are managed services with service hostnames and Azure-managed infrastructure.
-
-Private Link gives you a private access pattern for supported Azure services.
-A private endpoint is a network interface in your VNet with a private IP address.
-That private endpoint connects privately to a specific Azure service resource through Private Link.
-For a beginner, it feels like adding a private doorway inside your VNet for one service instance.
-
-For `devpolaris-orders-api`, the database private endpoint might look like this:
-
-```text
-Private endpoint:
-  name: pe-sql-orders-prod
-  subnet: snet-private-endpoints-prod
-  private IP: 10.42.20.4
-  target service: sql-devpolaris-orders-prod
-  target subresource: sqlServer
-  connection status: Approved
-```
-
-Several details matter.
-The private endpoint has a private IP from the subnet.
-It targets a specific service resource, not every Azure SQL server in the world.
-The connection must be approved.
-DNS should send the app to the private endpoint IP when the app uses the normal service hostname.
-
-That last point is worth repeating.
-Private endpoint setup is not only the private endpoint resource.
-It is also DNS.
-If the app still resolves the SQL hostname to a public address, it will not use the private endpoint path.
-
-Private endpoints also change the review conversation.
-Instead of asking "which public IPs can reach this database?", the team can ask:
-which VNets have a private endpoint for this database, which private DNS zones resolve the name, and which identities can authenticate after the network path works?
-
-Private network access does not replace authentication.
-The app still needs valid database credentials or token-based access where configured.
-The private endpoint only controls the network path.
-That separation is healthy.
-Network path says "can you reach this service endpoint?"
-Identity says "are you allowed to use the service?"
-
-## Service Endpoints And Private Endpoints Are Not The Same
-
-Azure also has service endpoints.
-The names are close enough to cause confusion, so slow down here.
-
-A service endpoint extends a subnet's identity and private address space to supported Azure services over the Azure backbone.
-The Azure service can then be configured to allow traffic from that VNet or subnet.
-The service's DNS name can still resolve to a public service address.
-The service endpoint helps the service recognize traffic from the allowed subnet.
-
-A private endpoint is different.
-It creates a private IP address in your VNet that maps to a specific service resource.
-DNS normally points the service hostname to that private IP from inside the VNet.
-The app connects to the private IP.
-
-Here is the beginner comparison:
-
-| Question | Service Endpoint | Private Endpoint |
-|----------|------------------|------------------|
-| Does it create a private IP in my VNet? | No | Yes |
-| Does it usually need private DNS setup? | Usually less central | Yes, DNS is central |
-| What does the service see? | Traffic from allowed VNet or subnet | Traffic through a private endpoint for a specific resource |
-| What is the common beginner risk? | Thinking the service has moved into your VNet | Creating the endpoint but forgetting DNS |
-| When might you see it? | Older or simpler VNet-restricted service access patterns | Private access to Azure SQL, Storage, Key Vault, and many other services |
-
-Microsoft recommends Private Link and private endpoints for secure private access to many Azure platform services.
-That does not mean every old service endpoint design is automatically wrong.
-It means a new learner should understand the difference and avoid saying "endpoint" as if it always means the same thing.
-
-For the orders API, the team chooses private endpoints for Azure SQL and Blob Storage because it wants the clearest private path.
-The app should resolve the normal service names to private endpoint IPs inside the VNet.
-The service firewall should reject public paths that are not part of the approved design.
+That line proves more than "green now."
+It proves the app is using the private endpoint address during the recovered path.
 
 ## Failure Modes And Fix Directions
 
-Networking failures can look vague from the application side.
-The app usually knows that a connection timed out, a DNS lookup failed, or a TLS connection could not be made.
-It may not know which Azure rule caused the problem.
-That is why the fix begins by classifying the failure.
+A good networking overview should make common failures feel recognizable.
+The point is not to memorize every Azure setting.
+The point is to classify the symptom before you change the system.
 
-The first failure is wrong public DNS.
-Customers call `orders.devpolaris.com`, but the name points to an old staging entry point.
-The app might be healthy in production while users keep reaching the wrong backend.
+The first failure mode is wrong public entry.
+Users call `orders.devpolaris.com`, and the name resolves, but it points to the wrong environment.
 
 ```bash
-$ nslookup orders.devpolaris.com
-Name:    orders.devpolaris.com
-Address: 52.160.18.25
-
-$ curl -I https://orders.devpolaris.com/health
+$ curl -i https://orders.devpolaris.com/health
 HTTP/2 200
-x-environment: staging
+content-type: application/json
+x-entry: fd-devpolaris-staging
+x-backend: orders-api-staging
+
+{"status":"ok","environment":"staging"}
 ```
 
-The fix direction is to check the Azure DNS public zone record, the CNAME or A record target, and the entry point configuration.
-The `x-environment: staging` header is the evidence.
-The service answered, but it was the wrong environment.
+The fix direction is the public DNS record or the entry service custom domain route.
+Do not start by changing private endpoint DNS.
+The public request has already landed on the wrong public door.
 
-The second failure is private endpoint DNS missing.
-The app tries to connect to Azure SQL, but the SQL hostname resolves to a public IP instead of the private endpoint IP.
+The second failure mode is private DNS drift.
+The app reaches for SQL, but the hostname resolves to a public address while the design expects a private endpoint.
 
 ```text
 Symptom:
-  The SQL server public network access is disabled.
+  checkout writes time out
 
-App log:
+App evidence:
+  resolvedAddress=20.49.104.18
   error="connect ETIMEDOUT 20.49.104.18:1433"
 
-DNS evidence:
-  sql-devpolaris-orders-prod.database.windows.net -> 20.49.104.18
-
-Expected private path:
+Expected:
   sql-devpolaris-orders-prod.database.windows.net -> 10.42.20.4
 ```
 
-The fix direction is to check the private DNS zone, the VNet link, the private endpoint DNS zone group, and the resolver used by the app environment.
-Do not start by opening public access.
-First prove whether the private name path is correct.
+The fix direction is the private DNS zone, VNet link, endpoint DNS zone group, or custom DNS forwarding path.
+Opening SQL public access may make a test pass, but it changes the security shape.
+Use that only as an explicit emergency decision with rollback, not as a quiet fix.
 
-The third failure is an NSG rule blocking a new connection.
-DNS resolves to the right private IP, but the connection times out.
-
-```text
-Symptom:
-  API cannot reach Blob Storage private endpoint.
-
-Evidence:
-  blob hostname resolves to 10.42.20.7
-  app subnet route includes 10.42.0.0/16 as Virtual network
-  NSG outbound rule priority 150 denies destination 10.42.20.0/24 port 443
-
-Likely cause:
-  The deny rule is processed before the intended allow rule.
-```
-
-The fix direction is to adjust the NSG priorities or rule scope so the intended app-to-private-endpoint traffic is allowed.
-Remember that lower priority numbers run first.
-Do not add a broad allow to everything if the narrow allow is the real requirement.
-
-The fourth failure is a route table sending traffic to a firewall that does not know the return path.
-This can happen when a default route sends outbound traffic to a network virtual appliance, but the firewall rules or routing are incomplete.
+The third failure mode is a route that sends traffic to a control point that is not ready.
+For example, a route table sends all unknown destinations to a firewall, but the firewall does not allow the payment provider.
 
 ```text
 Route evidence:
-  destination: 0.0.0.0/0
-  next hop: Virtual appliance
+  destination: 198.51.100.25
+  matching prefix: 0.0.0.0/0
+  next hop type: Virtual appliance
   next hop IP: 10.42.40.4
 
-App symptom:
-  external payment provider calls fail with timeout
-
 Firewall evidence:
-  no allow rule for api.payments.example:443
+  action=deny
+  source=10.42.1.18
+  destination=198.51.100.25
+  destinationPort=443
+  reason="no matching application rule"
 ```
 
-Before removing the firewall, decide whether this app should call that
-external host. Then add the right firewall allow rule, DNS rule, or
-route exception according to the platform team's pattern.
+The fix direction is not automatically "remove the route."
+First decide whether `orders-api` should call that external service.
+If yes, add the narrow firewall rule or approved outbound pattern.
+If no, the deny is doing its job and the app configuration needs correction.
 
-The fifth failure is mixing network access and identity access.
-The app reaches Key Vault over a private endpoint, but Key Vault returns `403`.
+The fourth failure mode is an NSG priority mistake.
+DNS and route evidence look correct, but a deny rule is evaluated before the intended allow rule.
+
+```text
+Flow:
+  orders-api subnet -> Blob private endpoint
+
+Destination:
+  10.42.20.7:443
+
+NSG evidence:
+  priority 140 Deny TCP from snet-orders-app-prod to 10.42.20.0/24
+  priority 220 Allow TCP from snet-orders-app-prod to 10.42.20.7:443
+
+Result:
+  deny wins because lower priority numbers are processed first
+```
+
+The fix direction is to correct the priority or scope of the rules.
+Do not add a broad allow for the whole VNet if the intended flow is only app to Blob over `443`.
+The specific rule is easier to review later.
+
+The fifth failure mode is mixing reachability with authorization.
+The app reaches Key Vault over the private path, but Key Vault returns `403`.
 
 ```text
 2026-05-03T10:22:15Z ERROR secret lookup failed
+service=orders-api
 vault=https://kv-devpolaris-orders-prod.vault.azure.net
 resolvedAddress=10.42.20.9
-status=403
+httpStatus=403
 message="Caller is not authorized to perform action on resource"
 ```
 
-The private address says the network path probably worked.
-The `403` says the service rejected the caller.
-The fix direction moves to identity and authorization:
-check the managed identity, role assignment, scope, and Key Vault access model.
+The fix direction is identity and permission.
+Check which managed identity the runtime uses.
+Check whether that identity has the right role assignment or access policy for the secret operation.
+The private endpoint did not replace authentication.
+It only shaped the network path.
 
-The beginner pattern is:
-DNS failure means the name did not become the expected destination.
-Timeout often means a route or rule path problem.
-Connection refused means something answered but the port or listener may not be ready.
-`403` means the caller reached a service that denied access.
-`401` usually means authentication failed or no valid identity was presented.
+The sixth failure mode is an approved private endpoint with a still-open public service path.
+This is not always visible as an outage.
+It is often a review finding.
+
+```text
+Review finding:
+  pe-blob-orders-prod exists and resolves to 10.42.20.7 from the app network
+  storage account public network access still allows all networks
+
+Risk:
+  production app uses the private path, but the storage account still accepts public network attempts
+```
+
+The fix direction is to align the service firewall or public network access setting with the design.
+Do this carefully because other jobs, data pipelines, or admin workflows might still rely on public access.
+The tradeoff is real:
+closing public access improves the boundary, but it can break unmanaged callers that were never documented.
+The right answer is not to keep public access forever.
+The right answer is to find the callers, give them an approved path, and then close the wider door.
 
 ## A Beginner Network Review Habit
 
-Before you create or change Azure networking for a service, write the traffic story in plain English.
-If you cannot explain the path, Azure will not make it clearer for you.
+Before you create or change Azure networking for a service, write the path in plain English.
+If the path sounds vague in English, it will become vague in Azure.
 
-For `devpolaris-orders-api`, a healthy first review might read like this:
+For `orders-api`, a healthy review note might look like this:
 
 ```text
-Traffic story for devpolaris-orders-api production
+Network review: orders-api production
 
-Public users:
-  orders.devpolaris.com resolves through Azure DNS to the public HTTP entry.
-  The public HTTP entry forwards only HTTPS traffic to the orders API backend.
+Public request:
+  Customers call https://orders.devpolaris.com.
+  The public name resolves to the approved production HTTP entry.
+  The entry forwards HTTPS traffic to orders-api only after its backend health check passes.
 
-Private app traffic:
-  The orders API runs in or integrates with vnet-devpolaris-prod.
-  App traffic that needs Azure SQL resolves the SQL hostname to 10.42.20.4.
-  App traffic that needs Blob Storage resolves the blob hostname to 10.42.20.7.
+Private dependencies:
+  orders-api uses the production VNet path.
+  SQL resolves to 10.42.20.4 from the app network.
+  Blob Storage resolves to 10.42.20.7 from the app network.
+  Key Vault resolves to 10.42.20.9 from the app network.
 
 Routes:
-  VNet traffic stays inside the VNet route.
-  Internet-bound traffic follows the approved outbound route.
+  Private endpoint traffic stays on the VNet path.
+  External payment traffic goes through the approved outbound firewall path.
 
-Rules:
-  NSGs allow only the required inbound and outbound ports.
-  Azure service firewalls accept the private endpoint path.
+Rules and gates:
+  NSGs allow only the required app flows.
+  Service firewalls and private endpoint approvals match the private access design.
 
 Identity:
-  Network access does not grant data access by itself.
-  The managed identity still needs the correct Azure role or service permission.
+  The runtime identity still needs permission to read secrets, write order records, and write export blobs.
 ```
 
-That review is short, but it catches many problems before deployment.
-It separates public and private paths.
-It names the expected DNS results.
-It says where routes should send traffic.
-It says which rule layer should allow the request.
-It reminds the team that private networking and identity are partners, not replacements for each other.
+That note is short enough to keep current.
+It also creates a debugging map.
+When a checkout fails, the team can move through the same rows instead of changing whichever setting looks familiar.
 
-Use this checklist when you feel lost:
+Use this incident checklist when the symptom is still vague:
 
-| Check | Question | Evidence |
-|-------|----------|----------|
-| Public entry | What public name do users call? | Azure DNS record, `nslookup`, entry point config |
-| Private area | Which VNet and subnet does the app use? | Resource networking settings |
-| Destination | What IP does the service name resolve to? | `nslookup` or resolver logs |
-| Route | Which next hop matches that destination? | Effective routes or route table |
-| Rule | Which NSG rule allows or denies the flow? | Effective security rules or NSG config |
-| Service gate | Does the target service allow this network path? | Service firewall, private endpoint state |
-| Identity | Is the caller authorized after reaching the service? | RBAC, managed identity, service logs |
+| Step | Question | Evidence to collect | Common wrong turn |
+|------|----------|---------------------|-------------------|
+| 1 | Who is the caller? | Browser, entry service, app runtime, job, or admin workstation | Debugging the app-to-SQL path when the customer never reached the entry |
+| 2 | What name did it call? | Hostname in request, config, log, or connection string | Assuming the app used the hostname you expected |
+| 3 | What address did DNS return from that caller's context? | `nslookup`, resolver logs, or app log field | Testing DNS from a laptop when the app uses a different resolver |
+| 4 | Which route matches that address? | Effective route or route table evidence | Blaming NSGs before proving the next hop |
+| 5 | Which rule matches the new flow? | Effective security rule, NSG rule, firewall rule | Seeing an allow rule but missing an earlier deny |
+| 6 | Does the service accept that network path? | Private endpoint state, service firewall, public access setting | Forgetting that managed services have their own gates |
+| 7 | Is the caller authorized after it arrives? | `401`, `403`, RBAC, database login, token, or service audit log | Opening the network wider for an identity failure |
 
-The order matters.
-Start with the name and destination.
-Then inspect routes.
-Then inspect allow or deny rules.
-Then inspect the service's own network gate.
-Then inspect identity.
-If you jump straight to changing random rules, you may make the system wider without fixing the real break.
+The order protects you from accidental widening.
+If DNS is wrong, fix DNS.
+If the route is wrong, fix the route or the intended next hop.
+If the NSG blocks the required flow, fix the narrow rule.
+If the service gate rejects the path, fix the service network setting or private endpoint state.
+If the service returns `401` or `403`, move to identity.
 
-Azure networking feels much less mysterious once you keep the layers separate.
-Public internet gets users to the entry point.
-The VNet gives private address space.
-Subnets place resources and attach shared controls.
-Routes choose the next hop.
-DNS chooses the destination address.
-NSGs filter connections.
-Private endpoints give selected Azure services a private doorway in your VNet.
+This habit also helps during design reviews.
+Ask each owner to prove one row.
+The DNS owner proves the answers.
+The platform networking owner proves routes and rules.
+The service owner proves the app uses the intended names and ports.
+The security or identity owner proves the caller has only the permissions it needs.
+The review becomes a shared path story instead of a debate over scattered settings.
+
+The practical tradeoff is speed versus certainty.
+For a throwaway prototype, broad public access and simple defaults may be acceptable for a short time.
+For production checkout, the team usually pays the extra cost of private endpoints, private DNS, route review, and narrow rules because the evidence is stronger.
+You can explain where traffic enters, where private data is reachable, what must be allowed, and what should be impossible.
+
+## What The Later Articles Own
+
+This overview gives you the diagnostic order.
+It should not be your only source for every Azure networking detail.
+The rest of the module exists so each part can be learned without turning this overview into a glossary.
+
+The VNet, subnet, and route article owns address planning, subnet placement, system routes, user-defined routes, and the evidence you check before blaming the app.
+Return there when the question is about CIDR ranges, route table association, next hop behavior, or hub-and-spoke traffic.
+
+The Azure Public Entry Points article owns the public side: DNS records, custom domain validation, TLS, Front Door, Application Gateway, Load Balancer, backend health, and cutover evidence.
+Return there when the question is how browsers find `orders.devpolaris.com`, where HTTPS terminates, or why the public entry reports a bad gateway.
+
+The NSG and ASG article owns packet filtering.
+Return there when the question is rule priority, default rules, subnet versus network interface association, or how to make rules readable without hardcoding every private IP.
+
+The Private Access to Azure Services article owns private managed-service access.
+Return there when the question is whether Azure SQL, Blob Storage, Key Vault, or another managed service is reachable through Private Link, service endpoints, private DNS, and resource firewalls before authorization is checked.
+
+Keep this article as the starting map.
+When someone says "the network is broken," translate it into the path:
+public entry, private area, DNS answer, route and next hop, NSG or rule, service gate, then identity.
+That order will not solve every Azure incident by itself, but it will keep your first fix pointed at the layer that actually disagrees with the design.
 
 ---
 
 **References**
 
-- [What is Azure Virtual Network?](https://learn.microsoft.com/en-us/azure/virtual-network/virtual-networks-overview) - Use this for the official VNet overview, including private communication, traffic filtering, routing, and Azure service integration.
-- [What is Azure Private Link?](https://learn.microsoft.com/en-us/azure/private-link/private-link-overview) - Use this to understand how Private Link provides private access to supported Azure services through private endpoints.
-- [What is a private endpoint?](https://learn.microsoft.com/en-us/azure/private-link/private-endpoint-overview) - Use this for the private endpoint properties, connection states, and private IP behavior.
-- [Azure DNS overview](https://learn.microsoft.com/en-us/azure/dns/dns-overview) - Use this for the official DNS hosting and resolution model, including public DNS and private DNS zones.
-- [Azure network security groups overview](https://learn.microsoft.com/en-us/azure/virtual-network/network-security-groups-overview) - Use this for NSG rule properties, priority evaluation, stateful behavior, and default rules.
-- [Azure Virtual Network integration for Azure services](https://learn.microsoft.com/en-us/azure/virtual-network/virtual-network-for-azure-services) - Use this to compare service endpoints, private endpoints, and other Azure service integration patterns.
+- [What is Azure Virtual Network?](https://learn.microsoft.com/en-us/azure/virtual-network/virtual-networks-overview) - Used for the VNet role as Azure's private network building block, including traffic filtering, routing, and Azure service integration.
+- [Azure virtual network traffic routing](https://learn.microsoft.com/en-us/azure/virtual-network/virtual-networks-udr-overview) - Used for system routes, custom routes, subnet route tables, next hop behavior, and the `0.0.0.0/0` routing discussion.
+- [Azure network security groups overview](https://learn.microsoft.com/en-us/azure/virtual-network/network-security-groups-overview) - Used for NSG rule fields, allow and deny behavior, priority ordering, default rules, and how NSG changes affect new connections.
+- [Azure Private DNS zone overview](https://learn.microsoft.com/en-us/azure/dns/private-dns-privatednszone) - Used for private DNS zones, VNet links, and the custom DNS warning that private zones are not queried automatically when custom DNS overrides the resolver path.
+- [What is a private endpoint?](https://learn.microsoft.com/en-us/azure/private-link/private-endpoint-overview) - Used for the private endpoint model: a private IP network interface in a VNet, connection to a Private Link resource, approval flow, and service-specific target.
+- [Azure Virtual Network integration for Azure services](https://learn.microsoft.com/en-us/azure/virtual-network/vnet-integration-for-azure-services) - Used for the comparison between Private Link/private endpoints and service endpoints, including DNS behavior and the recommendation to use Private Link for private PaaS access.

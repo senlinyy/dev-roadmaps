@@ -101,11 +101,11 @@ Here is a small mental picture.
 
 ```mermaid
 flowchart TD
-    App["Orders backend<br/>(devpolaris-orders-api)"]
-    Account["Storage namespace<br/>(storage account)"]
-    Container["Receipt files<br/>(blob container)"]
-    Blob["One receipt PDF<br/>(blob)"]
-    Rules["Access and network checks<br/>(RBAC and firewall)"]
+    App["Orders backend"]
+    Account["Storage account"]
+    Container["Blob container"]
+    Blob["Receipt PDF"]
+    Rules["Access rules"]
 
     App --> Account
     Account --> Container

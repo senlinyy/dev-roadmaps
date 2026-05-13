@@ -65,10 +65,10 @@ details get noisy.
 flowchart TD
     Feature["Backend feature needs storage"]
     Shape["What shape is the data?"]
-    File["Whole files<br/>(Blob Storage)"]
-    Records["Related records<br/>(Azure SQL Database)"]
-    Items["Known-key items<br/>(Cosmos DB)"]
-    Disk["VM or shared filesystem<br/>(Managed Disks or Azure Files)"]
+    File["Blob files"]
+    Records["SQL records"]
+    Items["Cosmos DB items"]
+    Disk["Disk or file share"]
 
     Feature --> Shape
     Shape --> File

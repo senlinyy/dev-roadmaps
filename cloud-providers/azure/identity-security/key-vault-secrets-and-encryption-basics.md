@@ -1,677 +1,471 @@
 ---
 title: "Key Vault, Secrets, and Encryption Basics"
-description: "Store application secrets, keys, and certificates in Azure Key Vault, give apps narrow access with managed identity, and understand encryption basics without leaking sensitive values."
-overview: "Azure Key Vault is where an application team keeps sensitive values and cryptographic objects away from source code and plain configuration. Learn how secrets, keys, certificates, managed identities, rotation, and customer-managed keys fit together for one orders API."
+description: "Store application secrets, keys, and certificates in Azure Key Vault, give apps narrow vault access, and read evidence without exposing sensitive values."
+overview: "Azure Key Vault keeps sensitive application values and cryptographic objects away from source code and plain configuration. Learn how secrets, keys, certificates, versions, rotation, encryption at rest, and customer-managed keys fit together for one payments webhook service."
 tags: ["key-vault", "secrets", "encryption", "managed-identity"]
-order: 5
+order: 3
 id: article-cloud-providers-azure-identity-security-key-vault-secrets-and-encryption-basics
 ---
 
 ## Table of Contents
 
 1. [The Safe Place For Dangerous Values](#the-safe-place-for-dangerous-values)
-2. [If You Know AWS Secrets Manager, Parameter Store, And KMS](#if-you-know-aws-secrets-manager-parameter-store-and-kms)
-3. [The Orders API Secret Map](#the-orders-api-secret-map)
-4. [Secret, Key, And Certificate Are Different Objects](#secret-key-and-certificate-are-different-objects)
-5. [App Configuration Is Not Secret Storage](#app-configuration-is-not-secret-storage)
-6. [Vault Access Has Two Doors](#vault-access-has-two-doors)
-7. [Managed Identity Lets The App Read Without A Password](#managed-identity-lets-the-app-read-without-a-password)
-8. [Versions And Rotation Keep Old Values From Living Forever](#versions-and-rotation-keep-old-values-from-living-forever)
-9. [Encryption At Rest And Customer-Managed Keys](#encryption-at-rest-and-customer-managed-keys)
-10. [Evidence You Can Trust During A Review](#evidence-you-can-trust-during-a-review)
-11. [Failure Modes You Will Actually See](#failure-modes-you-will-actually-see)
-12. [A Beginner Operating Checklist](#a-beginner-operating-checklist)
+2. [The Payments Webhook Vault Map](#the-payments-webhook-vault-map)
+3. [Secrets, Keys, And Certificates](#secrets-keys-and-certificates)
+4. [Config Points To Secrets, It Does Not Become Secrets](#config-points-to-secrets-it-does-not-become-secrets)
+5. [Vault Access Has Two Paths](#vault-access-has-two-paths)
+6. [Managed Identity Lets The App Read Without A Password](#managed-identity-lets-the-app-read-without-a-password)
+7. [Versions And Rotation Keep Old Values From Living Forever](#versions-and-rotation-keep-old-values-from-living-forever)
+8. [Encryption At Rest And Customer-Managed Keys](#encryption-at-rest-and-customer-managed-keys)
+9. [Evidence You Can Trust During A Review](#evidence-you-can-trust-during-a-review)
+10. [Common Failures](#common-failures)
+11. [A Small AWS Bridge](#a-small-aws-bridge)
+12. [Review Checklist](#review-checklist)
 
 ## The Safe Place For Dangerous Values
 
-Most applications need values that are useful only because they are private.
-A database connection string can let code read and write order data.
-A webhook secret can prove that a payment notification really came from the payment provider.
-A TLS certificate can let browsers trust the HTTPS endpoint.
-An encryption key can protect stored data or let an Azure service wrap another key.
+Some values should never live in ordinary configuration. A production database connection string, a payment webhook signing value, a TLS certificate, and a key used to protect stored data all create real damage if they leak through a log, a screenshot, a pipeline variable, or a copied `.env` file.
 
-Those values do not belong in Git.
-They do not belong in a Dockerfile.
-They do not belong in a Slack message.
-They do not belong in a wiki page called "production notes."
-Once a secret value spreads into normal team tools, it becomes hard to answer the basic safety question:
-who can read it?
+Key Vault gives those values one controlled home. That matters less because the name sounds secure and more because the operating story becomes inspectable. When someone asks, "who can read this database password?", we can check the vault object, the workload identity, and the data-plane permission instead of searching source code, app settings, pipeline variables, chat messages, and old deployment logs.
 
-Azure Key Vault is Azure's service for storing and using sensitive application objects.
-It stores secrets, keys, and certificates in one service family.
-A **secret** is a sensitive value you retrieve, such as a password or connection string.
-A **key** is cryptographic key material that Key Vault can use for operations such as wrapping, unwrapping, signing, verifying, encrypting, or decrypting.
-A **certificate** is an X.509 certificate object, usually for TLS, with lifecycle information and often a related key and secret behind it.
+For this article, the service is `devpolaris-payments-webhook`. It is a small Node.js API that receives payment provider callbacks. The app needs to connect to Azure SQL, verify webhook signatures, serve HTTPS through the platform, and use an Azure service that stores payment evidence with a customer-managed key. Those jobs all touch sensitive material, but they do not all touch the same kind of material.
 
-Key Vault exists because application teams need a shared place for
-sensitive values that is separate from code and ordinary configuration.
-It provides controlled access, audit history, versions, recovery after
-accidental deletion, and a cleaner way for applications to get secrets
-without carrying their own long-lived password.
+Keep the object behavior in your head as we go. A secret is a value the app may need to read. A key is a cryptographic object a service may use for operations such as wrap, unwrap, sign, or verify, often without the app ever seeing raw key material. A certificate is an identity document for TLS and related trust flows, with its own expiry and renewal lifecycle.
 
-This article follows one running example:
-`devpolaris-orders-api` is a Node backend running in Azure.
-It needs four sensitive things:
-a database connection string, a webhook secret, a TLS certificate, and an encryption key.
-We will place those values in Key Vault and teach the operating habits around them.
+The first goal is not to memorize every Azure option. The first goal is to keep dangerous values out of ordinary places and to make the access story readable. When the next review or outage happens, you want to answer five plain questions: which vault, which object, which identity, which permission, and which version?
 
-The larger system looks like this:
-your Azure subscription contains a resource group, the resource group contains the app and the vault, Microsoft Entra ID proves identities, and Azure RBAC or Key Vault access policies decide what each identity can do.
-That may sound like several moving parts, but the day-to-day question stays small:
+## The Payments Webhook Vault Map
 
-> Which app identity needs which secret, key, or certificate, in which vault, for which environment?
-
-## If You Know AWS Secrets Manager, Parameter Store, And KMS
-
-If you have learned a little AWS before, you may already know three
-separate ideas: AWS Secrets Manager for sensitive values with rotation
-workflows, Systems Manager Parameter Store for named configuration
-parameters, and AWS KMS for cryptographic keys. Azure Key Vault overlaps
-with all three, but its secrets, keys, and certificates have their own
-Azure permission and lifecycle model.
-
-The beginner-friendly way to compare them is by job:
-
-| Job | Common AWS service | Azure service shape | Careful translation |
-|-----|--------------------|---------------------|---------------------|
-| Store a database password or API token | Secrets Manager | Key Vault secret | Good mental bridge, but Azure calls it one object type inside Key Vault |
-| Store a named config value | Parameter Store | App Configuration, app settings, or a Key Vault secret if sensitive | Do not put every config value in Key Vault |
-| Store and use encryption keys | KMS | Key Vault key or Managed HSM key | Key Vault keys can back customer-managed key setups for Azure services |
-| Manage TLS certificates | ACM or imported certs in service-specific places | Key Vault certificate | Azure groups cert lifecycle close to keys and secrets |
-
-The biggest Azure difference is grouping.
-Azure Key Vault stores secrets, keys, and certificates in the same service family.
-That is convenient, but it also means you must keep the object types clear in your head.
-A secret is not a key just because the value looks random.
-A certificate is not only a secret, even though a certificate with a private key may have an addressable secret behind it.
-A Key Vault key is not usually something your app reads into memory as a string.
-
-AWS comparisons are a bridge, not a dictionary.
-If you know Secrets Manager, carry over the habit of keeping passwords out of code and rotating them.
-If you know Parameter Store, carry over the habit of naming configuration clearly.
-If you know KMS, carry over the habit that services can use keys without exposing raw key material to your app.
-Then slow down and learn the Azure-specific permission model, because access is where many Key Vault mistakes happen.
-
-## The Orders API Secret Map
-
-The `devpolaris-orders-api` production environment has a small but realistic set of sensitive objects.
-The team uses an Azure Container App for the API, Azure SQL for order storage, a payment provider webhook, and HTTPS for public traffic.
-The production vault is named `kv-devpolaris-orders-prod`.
-The staging vault is named `kv-devpolaris-orders-staging`.
-
-Here is the map before we look at commands:
+Start with two small maps.
+The production app uses a production vault named `kv-devpolaris-payments-prod`.
+Staging should use a separate vault such as `kv-devpolaris-payments-staging`.
+That split matters because the staging app should not accidentally read production values, and a staging operator should not need production secret access to test a change.
 
 ```mermaid
 flowchart TD
-    APP["Running backend<br/>(devpolaris-orders-api)"]
-    IDENTITY["App login with no password<br/>(managed identity)"]
-    VAULT["Secret and crypto store<br/>(Azure Key Vault)"]
-    DBSECRET["Database password value<br/>(secret)"]
-    WEBHOOK["Payment proof value<br/>(secret)"]
-    CERT["HTTPS trust bundle<br/>(certificate)"]
-    KEY["Data protection handle<br/>(key)"]
-
-    APP --> IDENTITY
-    IDENTITY --> VAULT
-    VAULT --> DBSECRET
-    VAULT --> WEBHOOK
-    VAULT --> CERT
-    VAULT --> KEY
+    APP["Payments webhook"] --> ID["Managed identity"]
+    ID --> VAULT["Key Vault"]
 ```
 
-Read the diagram from top to bottom.
-The running app has an identity.
-That identity is allowed to ask the vault for only the objects it needs.
-The app can retrieve secret values such as the database connection string and webhook secret.
-The TLS certificate and encryption key are different object types in the same vault.
-The certificate may be consumed by the platform or imported into a service that terminates HTTPS.
-The key is different:
-an Azure service may use the key for key operations, while the raw key should not become a normal application environment variable.
-The database, payment provider, browser, and storage service are outside systems that use the result, so they do not need their own boxes in the first picture.
+```mermaid
+flowchart TD
+    VAULT["Key Vault"] --> DB["DB secret"]
+    VAULT --> WEBHOOK["Webhook secret"]
+    VAULT --> CERT["TLS certificate"]
+    VAULT --> KEY["Ledger key"]
+    KEY --> SERVICE["Encrypted storage"]
+```
 
-This is a healthier shape than a deployment pipeline that pushes all sensitive values directly into the app.
-The pipeline can deploy the app and assign permissions.
-The vault holds the sensitive objects.
-The app identity reads what it is allowed to read at runtime.
+The maps are intentionally boring.
+Boring names help during real work.
+`payments-db-connection-string` tells you which app and which purpose without showing the connection string.
+`payments-ledger-key` tells you this is a key object, not a password copied into Node config.
 
-The production inventory might look like this:
-
-| Object name | Object type | Example purpose |
-|-------------|-------------|-----------------|
-| `orders-db-connection-string` | Secret | Connection string for the production orders database |
-| `orders-webhook-secret` | Secret | Shared secret used to verify payment webhooks |
-| `orders-api-tls` | Certificate | TLS certificate for `api.devpolaris.example` |
-| `orders-data-key` | Key | Key used by an Azure service for customer-managed encryption |
-
-The names are boring on purpose.
-They describe the app, the job, and the environment through the vault name.
-You do not need the secret value to know what the object is for.
-That is exactly the balance you want.
-
-## Secret, Key, And Certificate Are Different Objects
-
-The words secret, key, and certificate are easy to blur because all three are sensitive.
-Azure separates them because they behave differently.
-That separation matters when you assign permissions, rotate values, debug failures, and review evidence.
-
-A secret is a value that comes back to the caller.
-For `devpolaris-orders-api`, the database connection string is a secret because the app needs the full string to connect:
+The object inventory keeps the full names where they are easier to scan.
 
 ```text
-Server=tcp:sql-devpolaris-orders-prod.database.windows.net,1433;Database=orders;User ID=orders_app;Password=<hidden>;Encrypt=True
+kv-devpolaris-payments-prod
+|-- payments-db-connection-string
+|-- payments-webhook-signing-secret
+|-- payments-webhook-tls
+`-- payments-ledger-key
 ```
 
-The webhook secret is also a secret.
-The app uses it to check a signature from the payment provider.
-If the value leaks, someone may be able to fake webhook calls.
-That means the value should be stored in Key Vault, rotated when needed, and kept out of logs.
+Here is the first inventory for `devpolaris-payments-webhook`:
 
-A key is different. A Key Vault key is usually used through
-cryptographic operations. For example, an Azure service may ask Key
-Vault to wrap or unwrap a data encryption key. The service proves that
-it is allowed to use the key, and Key Vault performs the operation
-without handing the raw private key to the app as an environment
-variable.
+| Object name | Object type | What uses it |
+|-------------|-------------|--------------|
+| `payments-db-connection-string` | Secret | The webhook API reads it to connect to Azure SQL |
+| `payments-webhook-signing-secret` | Secret | The webhook API reads it to verify payment callbacks |
+| `payments-webhook-tls` | Certificate | The platform or gateway uses it for HTTPS |
+| `payments-ledger-key` | Key | An Azure service uses it for customer-managed encryption |
 
-That distinction helps with customer-managed keys.
-When the orders team says `orders-data-key`, they should not picture a long base64 string copied into Node.
-They should picture a Key Vault key object with a key identifier, permissions, versions, and operations.
-The app or Azure service uses the key through the Key Vault data plane.
+This table is not busywork. It prevents a common review problem: everyone says "the secret is in Key Vault", but nobody knows whether they mean a readable string, a cryptographic key, or a TLS certificate. The object type decides which permissions, commands, logs, and rotation plan you need.
 
-A certificate is another shape again.
-A TLS certificate proves that a public key belongs to a name such as `api.devpolaris.example`.
-In Key Vault, certificate management can include metadata, lifecycle policy, issuer information, and related key and secret objects.
-That is why certificate permissions are not exactly the same as secret permissions.
+## Secrets, Keys, And Certificates
 
-Here is the beginner table to keep close:
+Key Vault stores several kinds of protected objects. Beginners often call all of them "secrets" because they all need protection. That shortcut is fine in a hallway conversation, but it becomes a problem when you assign roles or debug a failure.
 
-| Object type | Plain-English meaning | Does the app usually read the value? | Example for `devpolaris-orders-api` |
-|-------------|-----------------------|--------------------------------------|-------------------------------------|
-| Secret | Sensitive string or bytes | Yes, for many app secrets | Database connection string, webhook secret |
-| Key | Crypto object used for operations | Usually no raw key read | Customer-managed encryption key |
-| Certificate | X.509 identity and trust object | Sometimes by platform, sometimes as secret material | TLS certificate for HTTPS |
+A **secret** is a sensitive value the caller can retrieve. For the payments webhook service, the database connection string is a secret because the app needs the actual string to open a database connection. The payment webhook signing value is also a secret because the app reads it and compares it with signatures on incoming payment callbacks.
 
-The tradeoff is clarity versus convenience.
-It may feel easier to call every sensitive thing a secret.
-That shortcut breaks down when you need a role that can read secrets but not use keys, or a service that needs `wrapKey` and `unwrapKey` but should never see a database password.
+```text
+payments-db-connection-string
+  Stored in Key Vault as a secret
+  Read by devpolaris-payments-webhook at runtime
+  Used by the database client to connect to Azure SQL
 
-## App Configuration Is Not Secret Storage
+payments-webhook-signing-secret
+  Stored in Key Vault as a secret
+  Read by devpolaris-payments-webhook at runtime
+  Used to verify payment callback signatures
+```
 
-Applications need both ordinary configuration and secret values.
-Treating them as the same thing leads to messy deployments and unsafe reviews.
-Configuration is how you tell the app what shape to use.
-Secrets are values that would create risk if the wrong person could read them.
+The important part is that the app receives the value after Azure authorizes the app identity. The value should not be printed in startup logs, copied into pull requests, or pasted into app settings. Once a secret leaves Key Vault and spreads through normal tools, rotation becomes harder because you do not know which copies still exist.
 
-For the orders API, these are ordinary configuration values:
+A **key** is a cryptographic object. It can be used for operations such as encrypt, decrypt, sign, verify, wrap, or unwrap. In a customer-managed key setup, the app often does not read raw key material at all. An Azure service points at the Key Vault key and uses a permitted key operation while Key Vault keeps the key object under its own access rules.
+
+```text
+payments-ledger-key
+  Stored in Key Vault as a key
+  Identified by a /keys/ URL
+  Used by an Azure service for encryption-related operations
+```
+
+A **certificate** is an X.509 certificate object, usually used for TLS. In plain English, it helps a browser or client trust that it really reached the service it meant to reach. Key Vault certificate management is connected to key and secret material, but the certificate still has its own lifecycle, expiry dates, issuer information, and permissions.
+
+```text
+payments-webhook-tls
+  Stored in Key Vault as a certificate
+  Identified by a /certificates/ URL
+  Used by the platform or gateway for HTTPS
+```
+
+Use the object path as a clue when you inspect evidence:
+
+| Path segment | Object type | Main question to ask |
+|--------------|-------------|----------------------|
+| `/secrets/` | Secret | Who can read the value? |
+| `/keys/` | Key | Who can use key operations or manage the key? |
+| `/certificates/` | Certificate | Who can manage the certificate lifecycle and related material? |
+
+That one clue prevents a lot of confusion. A role that can read secret values should not automatically manage keys. A service that needs a key operation for encryption should not automatically receive the database connection string.
+
+## Config Points To Secrets, It Does Not Become Secrets
+
+Applications still need configuration. The safe pattern is to put directions in normal config and keep sensitive values in Key Vault. Normal config should tell the app which vault and object names to use, but it should not contain the protected value.
+
+For `devpolaris-payments-webhook`, ordinary app config can look like this:
 
 ```text
 APP_ENV=prod
 AZURE_REGION=uksouth
 LOG_LEVEL=info
-FEATURE_NEW_CHECKOUT=false
-KEY_VAULT_URI=https://kv-devpolaris-orders-prod.vault.azure.net/
+KEY_VAULT_URI=https://kv-devpolaris-payments-prod.vault.azure.net/
+DATABASE_SECRET_NAME=payments-db-connection-string
+WEBHOOK_SECRET_NAME=payments-webhook-signing-secret
 ```
 
-None of those values grants access by itself.
-They can still be wrong, and wrong config can break production.
-But they are not passwords.
-A developer can read `APP_ENV=prod` without gaining access to the database.
+Those settings can still be wrong. A typo in `KEY_VAULT_URI` can send the app to the wrong vault. A wrong secret name can fail startup. But these settings do not grant database access by themselves, and they do not reveal the webhook signing value.
 
-These values are secrets:
+This is the shape you are trying to avoid:
 
 ```text
-DATABASE_URL=Server=tcp:sql-devpolaris-orders-prod.database.windows.net,1433;Database=orders;User ID=orders_app;Password=<real-password>;Encrypt=True
-WEBHOOK_SECRET=whsec_4yLz...
-TLS_CERT_PFX_BASE64=MIIK...
-ORDERS_ENCRYPTION_KEY=3f8d...
+Plain app setting: production database connection string with password
+Plain app setting: payment webhook signing value
+Plain app setting: certificate private material
+Plain app setting: raw encryption key material
 ```
 
-This second block is the smell you should learn to notice.
-If these values are stored directly as plain app settings, anyone who can read app settings can read production secrets.
-If the app logs its environment during startup, the secret values may land in logs.
-If a support script prints process environment variables, the secrets spread again.
+The placeholders above are written as placeholders on purpose. Do not put real values like that in app settings, Dockerfiles, `.env` files, wiki pages, or screenshots. Anyone who can read those places can read the secret. If the app prints its environment during startup, the secret may also move into logs.
 
-The safer shape is to keep config as pointers and policy decisions, then let the app or platform retrieve the sensitive value through Key Vault:
+Key Vault does not mean the running process never sees a secret. The Node database client may still need the connection string in memory. Key Vault improves the storage path and the access path: one protected home, a short reader list, object versions, deletion recovery, and evidence that can be reviewed without exposing the value.
+
+## Vault Access Has Two Paths
+
+Key Vault access has two paths, and mixing them up causes a lot of wasted debugging. One path manages the Azure resource. The other path works with the protected objects inside the vault.
+
+The **management plane** is used to create the vault, delete the vault, update tags, configure networking, or choose the permission model. These requests go through Azure Resource Manager, the Azure management layer for resources.
+
+The **data plane** is used to get a secret, set a secret version, list keys, import a certificate, or use a key operation. These requests go to the vault endpoint:
 
 ```text
-KEY_VAULT_URI=https://kv-devpolaris-orders-prod.vault.azure.net/
-DATABASE_SECRET_NAME=orders-db-connection-string
-WEBHOOK_SECRET_NAME=orders-webhook-secret
-TLS_CERT_NAME=orders-api-tls
-ENCRYPTION_KEY_NAME=orders-data-key
+https://kv-devpolaris-payments-prod.vault.azure.net/
 ```
 
-This does not make secrets safe by itself.
-The app still receives the database connection string at some point if it needs to connect.
-But it narrows where the value is stored, who can read it, how it is audited, and how rotation happens.
+This split explains a surprising beginner bug. A person can have permission to manage the Key Vault resource and still be blocked from reading secret values inside the vault. That is useful. A teammate who updates tags for cost reporting does not automatically need the production database password.
 
-A good review question is:
-can I understand the app setup without seeing the secret values?
-If the answer is yes, configuration and secrets are separated well.
-If the answer is no, the deployment probably has secret values mixed into ordinary config.
-
-## Vault Access Has Two Doors
-
-Key Vault access is confusing until you learn that there are two doors.
-The first door is the management plane.
-The second door is the data plane.
-They sound abstract, but the difference is very practical.
-
-The **management plane** is where you manage the vault resource itself.
-Creating a vault, deleting a vault, changing tags, configuring networking, and choosing the permission model are management actions.
-These requests go through Azure Resource Manager, the same management layer used for other Azure resources.
-
-The **data plane** is where you work with what is inside the vault.
-Getting a secret value, setting a new secret version, listing keys, importing a certificate, wrapping a key, or recovering a deleted secret are data actions.
-These requests go to the vault endpoint, such as:
-
-```text
-https://kv-devpolaris-orders-prod.vault.azure.net/
-```
-
-This split explains a common beginner surprise:
-someone can have permission to view or manage the vault resource and still be blocked from reading the secret values inside it.
-That is good.
-The person who tags the vault for cost reporting does not automatically need the database password.
-
-Modern Azure guidance favors Azure RBAC for Key Vault access.
-RBAC means you assign a role to an identity at a scope.
-For example, the orders API managed identity can receive `Key Vault Secrets User` at the production vault scope so it can read secret values from that vault.
-An older vault may use Key Vault access policies instead.
-Access policies are legacy, but you will still see them in real environments, so do not be surprised by both models.
-
-The permission model should be checked before debugging:
+Before you fix access, check which data-plane permission model the vault uses:
 
 ```bash
 $ az keyvault show \
-  --name kv-devpolaris-orders-prod \
-  --resource-group rg-devpolaris-orders-prod \
+  --name kv-devpolaris-payments-prod \
+  --resource-group rg-devpolaris-payments-prod \
   --query "{name:name, enableRbacAuthorization:properties.enableRbacAuthorization}" \
   -o json
 {
-  "name": "kv-devpolaris-orders-prod",
+  "name": "kv-devpolaris-payments-prod",
   "enableRbacAuthorization": true
 }
 ```
 
-If `enableRbacAuthorization` is true, look for Azure RBAC role assignments.
-If it is false, look for Key Vault access policies.
-Do not fix an RBAC problem by editing access policies on an RBAC vault, and do not fix an access-policy vault by staring only at the IAM tab.
+If `enableRbacAuthorization` is `true`, inspect Azure RBAC role assignments for Key Vault data access. If it is `false`, inspect Key Vault access policies. Editing access policies on an RBAC vault will not fix a missing data-plane role, and adding a management role will not automatically let the app read a secret.
 
-For beginners, the safest default shape is one vault per app per environment, with role assignments at the vault scope.
-That keeps `devpolaris-orders-api` production secrets away from staging and away from unrelated applications.
-It also keeps the permission story readable during an incident.
+A narrow role assignment for the payments webhook service reads like a permission sentence:
+
+```text
+Principal:
+  mi-devpolaris-payments-webhook-prod
+
+Role:
+  Key Vault Secrets User
+
+Scope:
+  /subscriptions/<subscription-id>/resourceGroups/rg-devpolaris-payments-prod/providers/Microsoft.KeyVault/vaults/kv-devpolaris-payments-prod
+
+Meaning:
+  The runtime identity can read secret values from this production vault.
+```
+
+Notice the scope. The app does not need every vault in the subscription. It needs the production payments vault. If a reviewer asks why the role is at subscription scope, you should have a strong reason. Most app runtime access should be smaller.
 
 ## Managed Identity Lets The App Read Without A Password
 
-The old pattern for app-to-service access was to create a service password, store it somewhere, and teach the app to use it.
-That moves the problem around.
-Now you have a password whose job is to fetch other passwords.
-If that credential leaks, the vault becomes reachable from outside the intended runtime.
+Now connect the app runtime to the vault. The running `devpolaris-payments-webhook` should not carry a long-lived client secret whose only job is to fetch other secrets. In Azure, the cleaner path is a managed identity. A managed identity is an identity Azure creates for a workload so the workload can authenticate without storing its own password.
 
-A managed identity is an Azure identity attached to a workload.
-For a Container App, VM, Function App, or similar Azure resource, Azure can issue an identity from Microsoft Entra ID.
-The app can then ask Azure for a token as itself.
-No client secret has to be copied into the app.
+The app still has to prove who it is. It just does not prove that with a copied credential in config. The Azure runtime gives the SDK a way to request a token for the managed identity. Key Vault receives the token, checks the data-plane permission, and then returns the requested secret if the identity is allowed.
 
-For `devpolaris-orders-api`, the flow is:
-
-1. Turn on a managed identity for the production app.
-2. Assign that identity a narrow Key Vault data-plane role.
-3. Let the app use that identity to read the secret names it needs.
-
-The role assignment is the important evidence.
-It says which identity can read from which vault:
-
-```bash
-$ az role assignment create \
-  --assignee-object-id 6b3b1111-2222-4333-9444-555555555555 \
-  --assignee-principal-type ServicePrincipal \
-  --role "Key Vault Secrets User" \
-  --scope /subscriptions/11111111-2222-3333-4444-555555555555/resourceGroups/rg-devpolaris-orders-prod/providers/Microsoft.KeyVault/vaults/kv-devpolaris-orders-prod
-{
-  "principalId": "6b3b1111-2222-4333-9444-555555555555",
-  "roleDefinitionName": "Key Vault Secrets User",
-  "scope": "/subscriptions/11111111-2222-3333-4444-555555555555/resourceGroups/rg-devpolaris-orders-prod/providers/Microsoft.KeyVault/vaults/kv-devpolaris-orders-prod"
-}
-```
-
-That role lets the app read secrets.
-It does not make the app a vault administrator.
-It does not automatically let the app purge deleted secrets.
-It does not give access to every vault in every subscription unless you assign it at a broad scope.
-
-Application code can then use the Azure SDK with the managed identity.
-This small Node example shows the shape, not a full application design:
+In production code, keep the credential choice explicit:
 
 ```js
-import { DefaultAzureCredential } from "@azure/identity";
+import { ManagedIdentityCredential } from "@azure/identity";
 import { SecretClient } from "@azure/keyvault-secrets";
 
 const vaultUrl = process.env.KEY_VAULT_URI;
-const credential = new DefaultAzureCredential();
+const clientId = process.env.AZURE_CLIENT_ID;
+
+if (!vaultUrl || !clientId) {
+  throw new Error("Key Vault URI and managed identity client ID must be configured");
+}
+
+const credential = new ManagedIdentityCredential({ clientId });
 const secrets = new SecretClient(vaultUrl, credential);
 
-const database = await secrets.getSecret("orders-db-connection-string");
-const webhook = await secrets.getSecret("orders-webhook-secret");
+const database = await secrets.getSecret("payments-db-connection-string");
+const webhook = await secrets.getSecret("payments-webhook-signing-secret");
 
 export const databaseUrl = database.value;
 export const webhookSecret = webhook.value;
 ```
 
-The important part is `DefaultAzureCredential`.
-In Azure, it can use the managed identity attached to the running app.
-On a developer laptop, it can use a developer sign-in if the developer has permission.
-That makes local development possible without hardcoding production credentials.
+The important line is `new ManagedIdentityCredential({ clientId })`. `AZURE_CLIENT_ID` is an identifier for the user-assigned managed identity. It is not a password. It helps the SDK choose the intended identity when the Azure hosting resource has that identity attached.
 
-Some Azure compute services also support Key Vault references in their app settings or secret configuration.
-In that model, the platform reads from Key Vault using the managed identity and exposes the value to the app as an app setting or runtime secret.
-That can be convenient, but remember the boundary:
-the secret is still available to the running app.
-Key Vault reduces storage and access sprawl.
-It does not remove the need to protect logs, debug endpoints, process dumps, and broad app-settings readers.
+The identity still needs permission. If the app can get a token but Key Vault returns `403`, check the role assignment and scope for the managed identity. If the app cannot get a token, check whether the identity is attached to the hosting resource and whether `AZURE_CLIENT_ID` points to the intended identity.
+
+Some Azure hosting options can resolve Key Vault references in platform app settings. That can be useful, but do not let it blur the security model. The platform still reads from Key Vault using an identity, and the resolved secret can still reach the running app. Logs, debug endpoints, crash dumps, and support access still need care.
 
 ## Versions And Rotation Keep Old Values From Living Forever
 
-Secret values change.
-Database passwords rotate.
-Webhook providers issue a new signing secret.
-Certificates expire and renew.
-Encryption keys may get new versions as part of a key lifecycle plan.
-
-Key Vault helps by versioning objects.
-When you set a secret with the same name again, Key Vault creates a new version.
-The name stays stable.
-The version identifier changes.
-
-You can see that in a secret ID:
+Key Vault is more useful when you can replace a value without changing every reference to that value. It does this with versions. When you set a secret with the same name again, Key Vault creates a new version. The name stays stable, and the long final segment of the object ID changes.
 
 ```bash
 $ az keyvault secret show \
-  --vault-name kv-devpolaris-orders-prod \
-  --name orders-webhook-secret \
-  --query "{id:id, enabled:attributes.enabled, created:attributes.created}" \
+  --vault-name kv-devpolaris-payments-prod \
+  --name payments-webhook-signing-secret \
+  --query "{id:id, enabled:attributes.enabled, updated:attributes.updated}" \
   -o json
 {
-  "id": "https://kv-devpolaris-orders-prod.vault.azure.net/secrets/orders-webhook-secret/9f0b1b7d8c63461c85a1f41d2d9b4567",
+  "id": "https://kv-devpolaris-payments-prod.vault.azure.net/secrets/payments-webhook-signing-secret/9f0b1b7d8c63461c85a1f41d2d9b4567",
   "enabled": true,
-  "created": "2026-05-01T09:12:44+00:00"
+  "updated": "2026-05-01T09:12:44+00:00"
 }
 ```
 
-The part after the secret name is the version.
-If you retrieve the secret by the base identifier, Key Vault gives you the current version:
+The `/secrets/payments-webhook-signing-secret/9f0b...` part tells you the object type, object name, and version. If the app asks for `payments-webhook-signing-secret` without a version, it receives the current version. If the app uses a full versioned ID, it receives that exact version.
+
+Version pinning can be useful when repeatability matters. It can hurt you when rotation should take effect automatically. If the payment provider has moved to a new webhook value but `devpolaris-payments-webhook` is still pinned to an old version, valid payment callbacks may fail signature checks.
+
+Rotation is a small change process, not a single command. For the webhook value, the team may create the new secret version, configure the payment provider to accept or send the new value, let the app read the new version, verify callbacks, and then disable the old version after the overlap window. For a database connection string, the process may need two valid database users or two passwords so existing connections do not fail during the change.
+
+A useful rotation note does not show the secret value. It shows which reference the app uses:
 
 ```text
-https://kv-devpolaris-orders-prod.vault.azure.net/secrets/orders-webhook-secret
+Current secret version in Key Vault:
+  https://kv-devpolaris-payments-prod.vault.azure.net/secrets/payments-webhook-signing-secret/9f0b1b7d8c63461c85a1f41d2d9b4567
+
+App configuration:
+  WEBHOOK_SECRET_NAME=payments-webhook-signing-secret
+  KEY_VAULT_URI=https://kv-devpolaris-payments-prod.vault.azure.net/
+
+Runtime behavior:
+  App asks for the secret by name, so it follows the current enabled version after refresh.
 ```
 
-If you retrieve it by a versioned identifier, you get that specific version:
-
-```text
-https://kv-devpolaris-orders-prod.vault.azure.net/secrets/orders-webhook-secret/9f0b1b7d8c63461c85a1f41d2d9b4567
-```
-
-Versioned identifiers are useful when you need repeatability.
-They are risky when you expect rotation to take effect automatically.
-If `devpolaris-orders-api` pins the old webhook secret version, the payment provider can rotate to a new value and the app will keep checking signatures with the old one.
-The failure will look like a webhook problem, but the root cause is a stale secret reference.
-
-Rotation is not only "create a new secret."
-It is a small change process:
-create the new value, update the dependent system, let the app pick up the new version, verify traffic, then disable or remove the old version when it is safe.
-For a database connection string, that may mean a dual-password or dual-user pattern so the app can move without downtime.
-For a webhook secret, that may mean accepting both old and new signatures for a short window if the provider supports it.
-For a TLS certificate, that may mean importing or renewing the certificate before expiry and confirming the platform serves the new certificate.
-
-The beginner habit is:
-when something was "rotated," ask which version the app is actually using.
-Do not stop at "there is a new version in the vault."
+The last line matters. A new version in the vault is not always the same as the running process using the new value. If the app caches secrets during startup, include a restart or refresh step in the rotation plan. If the platform resolves a Key Vault reference, check how and when that platform refreshes the value.
 
 ## Encryption At Rest And Customer-Managed Keys
 
-Encryption at rest means data is encrypted while stored on disk or in a managed service's storage layer.
-Azure services commonly encrypt stored data by default with Microsoft-managed keys.
-That means the service handles the encryption keys for you.
-For many beginner and team workloads, that default is the right starting point.
+Encryption at rest means stored data is encrypted while it sits on disk or inside a managed service. Many Azure services encrypt stored data by default with Microsoft-managed keys. For many teams, that default is a good starting point because the team does not need to operate key lifecycle work on day one.
 
-A customer-managed key changes who controls part of the key lifecycle.
-Instead of only using a Microsoft-managed key, an Azure service can be configured to use a key stored in your Key Vault or Managed HSM.
-The service still handles the storage system.
-Your team controls the Key Vault key, its permissions, its versions, and whether the service is still allowed to use it.
+A customer-managed key changes the responsibility. The Azure service still stores the data, but your team controls a key object in Key Vault or Managed HSM. The service uses that key object as part of its encryption workflow, and it can do so only if its identity has the right key permission.
 
-This is where learners often picture the wrong thing.
-Customer-managed key does not usually mean `devpolaris-orders-api` opens every database row, encrypts it by hand, and stores ciphertext itself.
-It often means an Azure service uses your Key Vault key to protect its own data encryption key.
-The service needs permission to use key operations such as wrapping and unwrapping.
-Your application may only need the key identifier as configuration.
+Customer-managed key setups usually sit one layer below your Node app code. The Azure service uses your Key Vault key to protect service-managed encryption material. The app may only know that the service is configured to use a particular key ID.
 
-The evidence for a Key Vault key looks different from secret evidence:
+Key evidence looks different from secret evidence:
 
 ```bash
 $ az keyvault key show \
-  --vault-name kv-devpolaris-orders-prod \
-  --name orders-data-key \
+  --vault-name kv-devpolaris-payments-prod \
+  --name payments-ledger-key \
   --query "{kid:key.kid, keyType:key.kty, enabled:attributes.enabled}" \
   -o json
 {
-  "kid": "https://kv-devpolaris-orders-prod.vault.azure.net/keys/orders-data-key/fb903a0b234d4e8ab4dddb3a8e5541f2",
+  "kid": "https://kv-devpolaris-payments-prod.vault.azure.net/keys/payments-ledger-key/fb903a0b234d4e8ab4dddb3a8e5541f2",
   "keyType": "RSA",
   "enabled": true
 }
 ```
 
-Notice the path says `/keys/`, not `/secrets/`.
-That is not cosmetic.
-It changes the operations and the roles you review.
-An app identity that can read `orders-db-connection-string` as a secret should not automatically be able to manage or purge `orders-data-key`.
-An Azure storage or database service identity that needs to use the key for encryption may need a crypto role such as `Key Vault Crypto Service Encryption User`, scoped carefully to the vault or key.
+Notice the `/keys/` path. That path tells you to review key roles and key operations, not secret-read access. A runtime identity that reads `payments-db-connection-string` should not automatically manage or purge `payments-ledger-key`.
 
-Customer-managed keys give you more responsibility.
-If you disable the key, remove the service identity's access, purge the key, or delete the vault without a recovery path, the dependent service may lose access to encrypted data.
-That is why purge protection and careful role assignment matter more when keys protect service data.
-
-The tradeoff is operational control. Microsoft-managed keys reduce
-operational work. Customer-managed keys give your team more control over
-key access and lifecycle, and that extra control also creates more ways
-to break your own service if the key is deleted, disabled, or
-inaccessible.
+Customer-managed keys give you more control and more ways to break your own service. If the key is disabled, deleted, purged, expired, or made unreachable by a permission change, the dependent service may lose access to protected data. That is why soft-delete, purge protection, narrow key roles, monitoring, and clear ownership matter more when a key protects service data.
 
 ## Evidence You Can Trust During A Review
 
-Security reviews go better when you bring evidence instead of promises.
-You do not need to show secret values.
-In fact, showing secret values is usually a sign that the review is going the wrong way.
-Good evidence proves location, identity, permission, version, and usage without exposing the sensitive value.
+A good review proves the protected setup without revealing the protected values. You want evidence that proves the vault, object type, identity, role scope, version, and deletion settings. You do not want screenshots or logs that contain secret values.
 
-For `devpolaris-orders-api`, a helpful review pack might include:
+For `devpolaris-payments-webhook`, a small review pack is enough:
 
 | Question | Evidence to show | What it proves |
 |----------|------------------|----------------|
-| Which vault is production using? | Vault resource ID and `KEY_VAULT_URI` | The app targets the intended environment |
-| Which identity reads secrets? | Managed identity principal ID and role assignment | Access belongs to the app, not a copied password |
-| Which secret version is current? | Secret ID without value | Rotation state is visible without leaking data |
-| Which key protects service data? | Key ID and service encryption setting | The service points at the intended Key Vault key |
+| Which vault is production using? | Vault URI and resource ID | The app targets the intended environment |
+| Which identity reads secrets? | Managed identity name, client ID, principal ID, and role assignment | Access belongs to the app identity |
+| Which object is being read? | Secret, key, or certificate ID without sensitive value output | The object type and name match the design |
+| Which version is current? | Object ID and updated timestamp | Rotation state is visible |
 | Is deletion recoverable? | Soft-delete and purge protection settings | Accidental deletion has a recovery path |
 
-Here is a small evidence snapshot that does not reveal the database password:
+Here is a secret evidence snapshot that does not print the database connection string:
 
 ```bash
 $ az keyvault secret show \
-  --vault-name kv-devpolaris-orders-prod \
-  --name orders-db-connection-string \
+  --vault-name kv-devpolaris-payments-prod \
+  --name payments-db-connection-string \
   --query "{id:id, enabled:attributes.enabled, updated:attributes.updated}" \
   -o json
 {
-  "id": "https://kv-devpolaris-orders-prod.vault.azure.net/secrets/orders-db-connection-string/4ab61ccf88f94b6fb2e8f0b555cc19d1",
+  "id": "https://kv-devpolaris-payments-prod.vault.azure.net/secrets/payments-db-connection-string/4ab61ccf88f94b6fb2e8f0b555cc19d1",
   "enabled": true,
   "updated": "2026-05-02T14:31:09+00:00"
 }
 ```
 
-This proves the object exists, shows the vault name, shows the object type, and shows the current version.
-It does not print the value.
-That is the kind of evidence you want in tickets and pull requests.
-
-Role evidence should also be scoped:
+Here is role evidence for the app identity. The assignee value is a principal ID, not a secret:
 
 ```bash
 $ az role assignment list \
-  --assignee 6b3b1111-2222-4333-9444-555555555555 \
-  --scope /subscriptions/11111111-2222-3333-4444-555555555555/resourceGroups/rg-devpolaris-orders-prod/providers/Microsoft.KeyVault/vaults/kv-devpolaris-orders-prod \
+  --assignee <principal-id-for-mi-devpolaris-payments-webhook-prod> \
+  --scope /subscriptions/<subscription-id>/resourceGroups/rg-devpolaris-payments-prod/providers/Microsoft.KeyVault/vaults/kv-devpolaris-payments-prod \
   --query "[].{role:roleDefinitionName, scope:scope}" \
   -o table
 Role                    Scope
 ----------------------  --------------------------------------------------------------------------------
-Key Vault Secrets User  /subscriptions/11111111-2222-3333-4444-555555555555/resourceGroups/rg-devpolaris-orders-prod/providers/Microsoft.KeyVault/vaults/kv-devpolaris-orders-prod
+Key Vault Secrets User  /subscriptions/<subscription-id>/resourceGroups/rg-devpolaris-payments-prod/providers/Microsoft.KeyVault/vaults/kv-devpolaris-payments-prod
 ```
 
-This proves the app has a narrow reader role at the production vault scope.
-If the same query showed `Owner` at the subscription scope, the review would go very differently.
-Broad access may work, but working is not the same as being safe to operate.
+This proves a narrow thing, and that is good. It proves the app identity can read secrets from the production payments vault. It does not prove the app can manage keys, purge deleted objects, administer every vault, or read secrets from staging.
 
-## Failure Modes You Will Actually See
+Deletion settings are also review evidence:
 
-Key Vault failures are often permission or targeting mistakes.
-The error message may feel unfriendly at first, but most failures point back to one of a few checks:
-which vault, which identity, which permission model, which object type, which version?
-
-The first failure is storing a secret as a plain environment variable.
-It looks convenient during deployment:
-
-```text
-Container App setting
-DATABASE_URL=Server=tcp:sql-devpolaris-orders-prod.database.windows.net,1433;Database=orders;User ID=orders_app;Password=P@ssw0rd-Prod-2026;Encrypt=True
+```bash
+$ az keyvault show \
+  --name kv-devpolaris-payments-prod \
+  --resource-group rg-devpolaris-payments-prod \
+  --query "{softDelete:properties.enableSoftDelete, purgeProtection:properties.enablePurgeProtection}" \
+  -o json
+{
+  "softDelete": true,
+  "purgeProtection": true
+}
 ```
 
-The fix direction is to move the value into Key Vault, keep only a reference or secret name in ordinary config, and limit who can read app settings.
-Also check logs and deployment history, because the value may already have spread.
-Rotation is usually required after a real leak.
+For a vault that holds production secrets and customer-managed keys, those settings are part of the operating story. Soft-delete gives you a recovery path after accidental deletion. Purge protection helps prevent immediate permanent removal. That protection matters most for keys that other services depend on to read protected data.
 
-The second failure is pointing at the wrong vault.
-Staging and production names can be close:
+## Common Failures
+
+Most Key Vault failures reduce to five checks: vault, identity, permission model, object type, and version. Work through those checks before creating new secrets or widening roles. A quick fix in the wrong place can leave production harder to understand.
+
+The first failure is the wrong vault. Staging and production names can look close when you are moving quickly:
 
 ```bash
 $ az keyvault secret show \
-  --vault-name kv-devpolaris-orders-staging \
-  --name orders-db-connection-string
-SecretNotFound: A secret with name 'orders-db-connection-string' was not found in this key vault.
+  --vault-name kv-devpolaris-payments-staging \
+  --name payments-db-connection-string \
+  --query "{id:id, enabled:attributes.enabled}" \
+  -o json
+SecretNotFound: A secret with name 'payments-db-connection-string' was not found in this key vault.
 ```
 
-If a staging app points at the wrong vault, confirm `KEY_VAULT_URI`,
-subscription, resource group, and vault resource ID. Then point the app
-or pipeline at the correct environment instead of creating a production
-secret in the staging vault just to make the command pass.
+Check `KEY_VAULT_URI`, subscription, resource group, and vault resource ID before creating anything. Creating a production secret in the staging vault just to make a command pass creates a problem for the next person.
 
-The third failure is an identity that lacks `get` permission for secrets.
-The app can start, but the first secret read fails:
+The second failure is the wrong identity. The app may run under a system-assigned identity in staging and a user-assigned identity in production. If the SDK chooses a different identity than the one with access, the error often looks like a Key Vault permission issue:
 
 ```text
-Azure.RequestFailedException: Caller is not authorized to perform action on resource.
-Action: Microsoft.KeyVault/vaults/secrets/read
-Vault: kv-devpolaris-orders-prod
-Identity: devpolaris-orders-api-prod
+2026-05-03T10:18:22.104Z payments-webhook error Key Vault request failed
+status=403
+code=Forbidden
+vault=kv-devpolaris-payments-prod
+secret=payments-db-connection-string
+identityClientId=8a77b7f5-1111-4444-9999-4f2a11111111
+message="Caller is not authorized to perform action on resource."
 ```
 
-The fix direction is to check whether the vault uses RBAC or access policies.
-For RBAC, assign a data-plane role such as `Key Vault Secrets User` to the managed identity at the vault scope.
-For an access-policy vault, grant the managed identity the secret `get` permission through the vault access policy model.
-After changing permissions, allow a little time for permission propagation before assuming the fix failed.
+This log should point you to identity and role assignment evidence. Check which managed identity is attached to `app-devpolaris-payments-webhook-prod`. Then check whether that principal has the Key Vault data role at the production vault scope.
 
-The fourth failure is stale secret version after rotation.
-The webhook provider moved to a new signing secret, but the app still references the old version:
+The third failure is fixing the wrong access path. `Key Vault Contributor` helps manage the vault resource. It does not allow reading keys, secrets, and certificates. If the app cannot read a secret, adding another management role to the vault changes the wrong layer. The missing permission is data-plane access, not vault-resource management.
+
+The fourth failure is stale version use after rotation:
 
 ```text
-configured secret id:
-https://kv-devpolaris-orders-prod.vault.azure.net/secrets/orders-webhook-secret/1c2oldversion
+Configured secret ID:
+  https://kv-devpolaris-payments-prod.vault.azure.net/secrets/payments-webhook-signing-secret/1c2oldversion
 
-current secret id:
-https://kv-devpolaris-orders-prod.vault.azure.net/secrets/orders-webhook-secret/9f0newversion
+Current secret ID:
+  https://kv-devpolaris-payments-prod.vault.azure.net/secrets/payments-webhook-signing-secret/9f0newversion
 ```
 
-The fix direction is to use a versionless secret URI when the app should follow the current version, or update the pinned version intentionally when repeatability matters.
-Also restart or refresh the app if the platform caches the secret value.
-Rotation is not complete until the running app uses the intended version.
+If the app should follow rotation, use the versionless name or base identifier and refresh the running process as needed. If the app should pin a version, write down why the pin exists and when it should be updated.
 
-The fifth failure is deletion confusion.
-A teammate deletes a secret and expects the name to be free immediately.
-Key Vault soft-delete means the deleted object may remain recoverable for a retention period:
+The fifth failure is deletion confusion. A deleted object may still be recoverable when soft-delete is enabled. Purge protection can prevent immediate permanent deletion:
 
 ```bash
 $ az keyvault secret list-deleted \
-  --vault-name kv-devpolaris-orders-prod \
+  --vault-name kv-devpolaris-payments-prod \
   --query "[].{name:name, recoveryId:recoveryId, scheduledPurgeDate:scheduledPurgeDate}" \
   -o table
 Name                         RecoveryId                                             ScheduledPurgeDate
 ---------------------------  -----------------------------------------------------  ------------------------
-orders-webhook-secret        https://kv-devpolaris-orders-prod.vault.azure.net/...   2026-07-31T09:12:44+00:00
+payments-webhook-signing-secret  https://kv-devpolaris-payments-prod.vault.azure.net/...  2026-07-31T09:12:44+00:00
 ```
 
-The fix direction depends on intent.
-If deletion was accidental, recover the object.
-If the object should be permanently removed, purge requires a separate privileged action and may be blocked by purge protection until the retention period ends.
-For encryption keys, be much more careful:
-purging a key used for customer-managed encryption can make dependent data unreadable.
+If deletion was accidental, recover the object. If permanent removal is required, treat purge as a privileged action with a clear reason. Be especially careful with keys used for customer-managed encryption, because removing the wrong key can make dependent data unreadable.
 
-The sixth failure is mixing up management plane and data plane.
-A user has `Key Vault Contributor` and can edit vault settings, but cannot read the database connection string.
-That can feel broken until you remember the two doors.
-Management permission is not the same as secret data permission.
+## A Small AWS Bridge
 
-The fix direction is to decide which operation is failing.
-If the failing operation creates or updates the vault, check management-plane Azure RBAC.
-If the failing operation reads, writes, rotates, recovers, or purges a secret, key, or certificate, check data-plane access through Key Vault RBAC or access policies.
+If you learned AWS first, bring the habit of separating secret storage, key use, and workload identity. Do not force a one-to-one dictionary. AWS and Azure split the work differently, and the exact service boundary matters during reviews.
 
-## A Beginner Operating Checklist
+| Job | Common AWS shape | Azure shape |
+|-----|------------------|-------------|
+| Store a database password or API token | Secrets Manager | Key Vault secret |
+| Store ordinary non-secret config | Systems Manager Parameter Store or app config | App settings or Azure App Configuration |
+| Manage TLS certificate material | ACM or service-specific certificate stores | Key Vault certificate or platform certificate integration |
+| Control encryption keys for services | KMS | Key Vault key or Managed HSM key |
+| Give cloud-hosted code an identity | IAM role attached to a workload | Managed identity attached to an Azure resource |
 
-When you are new to Key Vault, do not try to memorize every role and operation first.
-Start with a short checklist that keeps you from touching the wrong thing.
+The Azure habits are the part to practise. Check whether the vault uses RBAC or access policies. Separate management-plane access from data-plane access. Read `/secrets/`, `/keys/`, and `/certificates/` in object identifiers. Use versionless references only when the app should follow the current version.
 
-Before you store a value, ask:
-is this ordinary configuration or a secret?
-If it grants access, proves trust, decrypts data, signs data, or contains private key material, treat it as sensitive.
-For the orders API, `LOG_LEVEL=info` is config.
-The database password is a secret.
-The webhook signing value is a secret.
-The TLS certificate is a certificate.
-The customer-managed encryption handle is a key.
+For the payments webhook service, the clean Azure sentence is short: `mi-devpolaris-payments-webhook-prod` can read secret values from `kv-devpolaris-payments-prod`, and a service identity can use `payments-ledger-key` for the required encryption operation. If your evidence cannot say the sentence that clearly, the setup probably needs another pass.
 
-Before you give access, ask:
-which identity needs which operation?
-A human deployer may need permission to set a new secret version.
-The running app may need permission to get a secret.
-An Azure service using a customer-managed key may need permission to wrap and unwrap with a key.
-Those are not the same job, so they should not automatically receive the same role.
+## Review Checklist
 
-Before you rotate, ask:
-which systems must accept the old value and the new value during the change?
-A database credential rotation can break active connections.
-A webhook secret rotation can make valid provider calls fail if the app checks the wrong value.
-A certificate rotation can leave a public endpoint serving an expired certificate if the platform did not pick up the new version.
+Use this checklist before closing a Key Vault change for `devpolaris-payments-webhook`:
 
-Before you delete, ask whether the object is used by a running app or by
-encryption at rest. Secret deletion can break startup or external
-integrations. Key deletion or purge can be much more serious when the
-key protects customer-managed encryption. Soft-delete helps with
-recovery, but deletion still deserves careful review.
+1. Is each protected item stored as the right object type: secret, key, or certificate?
+2. Does app configuration contain vault URIs and object names rather than secret values?
+3. Which managed identity reads or uses each vault object?
+4. Is each role assignment scoped to the production vault, object, or service target instead of the whole subscription?
+5. Does the evidence show object IDs, versions, and role scopes without printing secret values?
+6. If a value was rotated, which version is the running app using now?
+7. If a key protects service encryption, are soft-delete, purge protection, monitoring, and ownership part of the operating plan?
+8. If something failed, have you checked vault, identity, permission model, object type, and version before changing production values?
 
-Before you close the ticket, collect evidence that does not leak values:
-vault URI, resource ID, managed identity principal ID, role assignment scope, object ID, current version, and any platform setting that points to the object.
-That evidence lets another engineer review your work without asking you to paste the secret.
-
-Key Vault becomes much less mysterious once you keep four separations clear:
-config is not a secret value,
-a secret is not the same as a key,
-management access is not data access,
-and a new version in the vault is not the same as the running app using it.
+The mental model stays small. Key Vault is the controlled home for protected objects. Secrets, keys, and certificates behave differently. Azure roles decide which identity can read a value, manage an object, or use a key operation. The app should call the vault with its managed identity, not with a copied password.
 
 ---
 
 **References**
 
-- [About Azure Key Vault](https://learn.microsoft.com/en-us/azure/key-vault/general/overview) - Explains the main Key Vault problems: secrets management, key management, certificate management, access, and monitoring.
-- [Azure Key Vault keys, secrets, and certificates overview](https://learn.microsoft.com/en-us/azure/key-vault/general/about-keys-secrets-certificates) - Defines Key Vault object types, identifiers, and versioning across secrets, keys, and certificates.
-- [Provide access to Key Vault keys, certificates, and secrets with Azure role-based access control](https://learn.microsoft.com/en-us/azure/key-vault/general/rbac-guide) - Shows the RBAC model, control plane versus data plane, built-in roles, and recommended vault-per-app patterns.
-- [About Azure Key Vault secrets](https://learn.microsoft.com/en-us/azure/key-vault/secrets/about-secrets) - Describes what secrets store, how secret values are handled, encryption at rest, attributes, and secret permissions.
-- [About keys](https://learn.microsoft.com/en-us/azure/key-vault/keys/about-keys) - Explains Key Vault key resource types, key protection methods, and common key usage scenarios such as customer-managed keys.
-- [Azure Key Vault soft-delete overview](https://learn.microsoft.com/en-us/azure/key-vault/general/soft-delete-overview) - Covers deleted vault and object recovery, retention, purge behavior, and purge protection expectations.
+- [Azure Key Vault keys, secrets, and certificates overview](https://learn.microsoft.com/en-us/azure/key-vault/general/about-keys-secrets-certificates) - Defines Key Vault object types, object identifiers, base identifiers, and versioning.
+- [About keys](https://learn.microsoft.com/en-us/azure/key-vault/keys/about-keys) - Explains Key Vault key types, protection methods, and customer-managed key scenarios.
+- [ManagedIdentityCredential class](https://learn.microsoft.com/javascript/api/%40azure/identity/managedidentitycredential?view=azure-node-latest) - Documents the JavaScript credential used by Azure-hosted code with managed identity.
+- [Authenticate Azure-hosted JavaScript apps using a user-assigned managed identity](https://learn.microsoft.com/en-us/azure/developer/javascript/sdk/authentication/user-assigned-managed-identity) - Shows the JavaScript SDK pattern for user-assigned managed identity and client IDs.
+- [Provide access to Key Vault keys, certificates, and secrets with Azure RBAC](https://learn.microsoft.com/en-us/azure/key-vault/general/rbac-guide) - Covers Key Vault RBAC, data-plane roles, access scopes, and the management-plane/data-plane split.
+- [Azure Key Vault soft-delete overview](https://learn.microsoft.com/en-us/azure/key-vault/general/soft-delete-overview) - Explains deleted object recovery, retention, purge, and purge protection.

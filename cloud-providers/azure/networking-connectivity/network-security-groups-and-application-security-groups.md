@@ -1,7 +1,7 @@
 ---
 title: "Network Security Groups and Application Security Groups"
-description: "Filter Azure virtual network traffic with NSG rules and use ASGs to keep application-level network rules readable."
-overview: "Network security groups decide which packets may reach Azure resources in a virtual network. Application security groups help those rules describe the app shape instead of hardcoding every private IP address."
+description: "Filter Azure packet flows with NSG rules, priority order, effective rule evidence, and readable ASG targets."
+overview: "Network security groups decide whether new Azure virtual network flows are allowed or denied. Application security groups make those packet rules describe application roles instead of brittle private IP lists."
 tags: ["nsg", "asg", "subnets", "network-security"]
 order: 4
 id: article-cloud-providers-azure-networking-connectivity-network-security-groups-and-application-security-groups
@@ -10,640 +10,911 @@ id: article-cloud-providers-azure-networking-connectivity-network-security-group
 ## Table of Contents
 
 1. [The Packet Check Before The App Listens](#the-packet-check-before-the-app-listens)
-2. [AWS Bridge For Security Groups And NACL Habits](#aws-bridge-for-security-groups-and-nacl-habits)
-3. [The Orders API Network Path In One Picture](#the-orders-api-network-path-in-one-picture)
-4. [What An NSG Rule Actually Says](#what-an-nsg-rule-actually-says)
-5. [Priority Numbers Decide The First Match](#priority-numbers-decide-the-first-match)
-6. [Subnet NSGs And NIC NSGs Are Two Checkpoints](#subnet-nsgs-and-nic-nsgs-are-two-checkpoints)
-7. [Default Rules You Should Know First](#default-rules-you-should-know-first)
-8. [ASGs Make Rules Read Like The App](#asgs-make-rules-read-like-the-app)
+2. [One Orders API Flow To Follow](#one-orders-api-flow-to-follow)
+3. [What An NSG Rule Actually Says](#what-an-nsg-rule-actually-says)
+4. [Priority Numbers Decide The First Match](#priority-numbers-decide-the-first-match)
+5. [Default Rules Are Already In The Room](#default-rules-are-already-in-the-room)
+6. [Stateful Does Not Mean Careless](#stateful-does-not-mean-careless)
+7. [Subnet NSGs And NIC NSGs Are Different Checkpoints](#subnet-nsgs-and-nic-nsgs-are-different-checkpoints)
+8. [ASGs Make Packet Rules Read Like The App](#asgs-make-packet-rules-read-like-the-app)
 9. [Evidence You Can Inspect](#evidence-you-can-inspect)
-10. [Failure Modes And Fix Directions](#failure-modes-and-fix-directions)
+10. [Failure Path: The Rule Exists But The Packet Still Dies](#failure-path-the-rule-exists-but-the-packet-still-dies)
 11. [A Review Habit Before You Change Rules](#a-review-habit-before-you-change-rules)
 
 ## The Packet Check Before The App Listens
 
 An application can be healthy and still be unreachable.
-The process is running.
-The port is open on the server.
-The code is listening.
-Then a request from a browser, another service, or a deploy smoke test never arrives.
+The process can be running.
+The health endpoint can return `200` from inside the host.
+The TLS certificate can be valid.
+Then a real request still times out before the app sees a byte.
 
-That is the network filtering problem this article is about.
-Azure needs a way to decide which packets may enter or leave resources inside a virtual network.
-A virtual network, often called a VNet, is the private network space where Azure resources can talk to each other using private IP addresses.
-A network security group, usually shortened to NSG, is an Azure resource that filters traffic to and from supported resources in that VNet.
+That is the packet filtering problem.
+Before an Azure virtual machine receives a new connection, Azure checks network security group rules on the path.
+A network security group, or NSG, is a rule set that allows or denies inbound and outbound traffic for supported Azure resources in a virtual network.
+The app code does not vote in that decision.
+The operating system listener does not vote first either.
+The packet must pass the NSG decision before the listener can answer.
 
-An NSG is made of security rules.
-Each rule says something like:
-allow HTTPS from the internet to the orders API subnet, or deny database traffic from anything except the API tier.
-Rules can apply to inbound traffic, which is traffic trying to reach a resource, and outbound traffic, which is traffic leaving a resource.
+Keep the model small.
+An NSG rule looks at packet facts:
+source, source port, destination, destination port, protocol, and direction.
+It then returns one action:
+allow or deny.
+That is a network decision, not an application authorization decision.
+An NSG does not know whether the request path is `/orders` or `/admin`.
+It does not know whether a user has a valid session.
+It does not know whether a deployment pipeline has permission to update the resource.
 
-An NSG is not Azure RBAC.
-Azure RBAC answers who can create, update, read, or delete Azure resources through the management plane.
-An NSG answers whether network traffic can flow through the data plane.
-Maya can have Contributor access to a virtual machine and still fail to reach port 443 if the NSG blocks it.
-The app can have permission to read a Key Vault secret and still fail to connect to a private endpoint if the network path is blocked.
+For this article, we will follow `devpolaris-orders-api`.
+The API runs on virtual machines in `snet-orders-api`.
+An Azure Application Gateway in `snet-app-gateway` sends HTTPS traffic to the API VMs.
+The API VMs call an Azure SQL private endpoint in `snet-private-endpoints` on TCP `1433`.
+Worker VMs in `snet-orders-worker` call an internal API endpoint on TCP `8443`.
 
-We will use one running example:
-`devpolaris-orders-api` runs in a production VNet.
-The API tier receives HTTPS from a public load balancer.
-Worker VMs call the API on an internal port for background tasks.
-A database tier accepts traffic only from the API tier.
-The team wants rules that are narrow enough to protect production and readable enough that a tired engineer can debug them safely.
-
-Build the NSG reading habit: read the packet direction, read the source
-and destination, read the port and protocol, then read the priority.
-
-> NSGs are packet filters. RBAC is permission to manage Azure resources. Keep those two checks separate.
-
-## AWS Bridge For Security Groups And NACL Habits
-
-If you learned AWS first, Azure NSGs will feel familiar, but not identical.
-AWS Security Groups protect network interfaces attached to resources.
-AWS Network ACLs protect subnets and use numbered rules.
-Azure NSGs sit somewhere between those habits because an NSG can be associated with a subnet, a network interface, or both.
-
-That means your AWS mental model needs one small adjustment.
-Do not ask only, "what is attached to the instance?"
-In Azure, also ask, "what is attached to the subnet?"
-Both places can matter.
-
-Here is the bridge:
-
-| AWS idea you may know | Azure idea to learn | Careful difference |
-|-----------------------|---------------------|--------------------|
-| Security Group on an instance or ENI | NSG associated with a NIC | Similar packet filtering job for one network interface |
-| Network ACL on a subnet | NSG associated with a subnet | Azure uses NSG rules here too, not a separate NACL object |
-| Rule number in a NACL | Priority in an NSG rule | Lower number means higher priority in Azure |
-| Allow-only Security Group style | Allow or deny NSG rules | Azure custom rules can allow or deny |
-| Security Group references | Application Security Groups | ASGs group VM network interfaces by app role |
-
-The priority rule is the part to slow down on.
-In Azure, rule priority is a number from low to high importance.
-A lower number is processed first.
-Priority `100` wins before priority `300`.
-When traffic matches one rule, Azure stops checking lower-priority rules.
-That stop-on-first-match behavior is why a deny at priority `100` can make an allow at priority `200` useless.
-
-There is also a stateful behavior that feels like AWS Security Groups.
-If an outbound request is allowed, the return traffic for that connection does not need a separate inbound rule.
-If an inbound connection is allowed, the response does not need a separate outbound rule.
-You still need rules for connections that start from the other side.
-
-So the AWS bridge is useful, but do not flatten Azure into an AWS dictionary.
-Azure NSGs can sit at subnet and NIC level.
-Azure priorities use lower numbers first.
-Azure ASGs are names you use inside NSG rules so the rules describe app roles instead of private IP lists.
-
-## The Orders API Network Path In One Picture
-
-Before writing rules, draw the path.
-This is the quiet skill that prevents most beginner mistakes.
-If you cannot say where traffic starts, where it goes, and which port it uses, the rule will probably be too broad or attached to the wrong place.
-
-For `devpolaris-orders-api`, imagine this first production network:
+The first useful habit is to write the packet sentence before reading the rule table.
+Here is the sentence for public checkout traffic after it has reached the private side of the gateway:
 
 ```text
-VNet: vnet-devpolaris-prod
-Subnet: snet-orders-edge
-  public load balancer private frontend
-
-Subnet: snet-orders-api
-  vm-orders-api-01
-  vm-orders-api-02
-
-Subnet: snet-orders-worker
-  vm-orders-worker-01
-
-Subnet: snet-orders-data
-  vm-orders-db-01
+Packet sentence:
+  Direction: inbound to the API VM
+  Source: Application Gateway subnet 10.30.1.0/24
+  Source port: ephemeral client port chosen by the gateway instance
+  Destination: orders API NIC in asg-orders-api
+  Destination port: TCP 443
+  Desired result: allow
 ```
 
-The app listens on HTTPS from users.
-The load balancer forwards to the API VMs on port `443`.
-The worker VM calls an internal admin endpoint on port `8443`.
-The API VMs connect to the database VM on port `5432`.
+Notice the destination port.
+That is the port where the API listens.
+The source port is usually an ephemeral port, which means a temporary high port chosen by the caller.
+Beginners often put the listener port in the source port field and create a rule that never matches normal traffic.
 
-Read the diagram from top to bottom.
-The plain-English label comes first.
-The Azure term follows in parentheses.
+The same application has a different packet sentence for database access:
 
-```mermaid
-flowchart TD
-    USER["Customer request<br/>(internet client)"]
-    EDGE["Public entry point<br/>(Azure Load Balancer)"]
-    EDGE_NSG["Edge subnet filter<br/>(NSG on edge subnet)"]
-    API_NSG["API subnet filter<br/>(NSG on API subnet)"]
-    API_VM["Running orders API<br/>(VM network interfaces)"]
-    DATA_NSG["Data subnet filter<br/>(NSG on data subnet)"]
-    DB_VM["Order database listener<br/>(VM network interface)"]
-    RBAC["Management permission<br/>(Azure RBAC)"]
-
-    USER --> EDGE
-    EDGE --> EDGE_NSG
-    EDGE_NSG --> API_NSG
-    API_NSG --> API_VM
-    API_VM --> DATA_NSG
-    DATA_NSG --> DB_VM
-    RBAC -. "lets you edit resources, not packets" .-> API_NSG
+```text
+Packet sentence:
+  Direction: outbound from the API VM
+  Source: orders API NIC in asg-orders-api
+  Source port: ephemeral client port
+  Destination: SQL private endpoint 10.30.40.7
+  Destination port: TCP 1433
+  Desired result: allow
 ```
 
-The solid path is packet flow.
-The dotted line is different.
-RBAC may allow Maya or the deploy pipeline to edit an NSG.
-RBAC does not allow user traffic through the NSG.
+Those two packets are related by the app workflow, but they are different network decisions.
+One starts at the gateway and enters the API tier.
+The other starts at the API tier and leaves toward the private endpoint.
+When we read NSGs, we do not start with "the app is broken."
+We start with "which packet, which direction, which port, and which checkpoint?"
 
-The diagram keeps ASGs out of the packet path because ASGs are labels used by NSG rules.
-A small rule table is clearer:
+## One Orders API Flow To Follow
 
-| Rule intent | Source ASG | Destination ASG | Port |
-|-------------|------------|-----------------|------|
-| Worker calls API admin endpoint | `asg-orders-worker` | `asg-orders-api` | `8443` |
-| API calls database listener | `asg-orders-api` | `asg-orders-db` | `5432` |
+A good NSG review has a single flow in mind.
+Without that flow, rule tables become a wall of names and numbers.
+For `devpolaris-orders-api`, the checkout path has two packet checks that matter for this article.
 
-The RBAC distinction is worth repeating because it shows up in real tickets.
-Someone says, "I have Contributor on the resource group, why is the app blocked?"
-Contributor is a management permission.
-The packet still needs a matching NSG rule.
+First, the gateway must reach the API VMs on HTTPS.
+Second, the API VMs must reach the SQL private endpoint on the database port.
+The gateway article owns load balancing and health probes.
+The private access article owns Private Link and DNS.
+This article owns the packet filters between those pieces.
+
+Here is the compact path:
+
+```text
+Client
+  -> Azure Application Gateway
+  -> snet-orders-api
+  -> vm-orders-api-01 NIC
+  -> SQL private endpoint 10.30.40.7
+```
+
+Now place NSGs on the path:
+
+```text
+snet-app-gateway
+  nsg-snet-app-gateway-prod
+
+snet-orders-api
+  nsg-snet-orders-api-prod
+  vm-orders-api-01 NIC
+    nsg-nic-orders-api-prod, only if the team has a special NIC rule set
+
+snet-private-endpoints
+  nsg-snet-private-endpoints-prod, if enabled for that subnet design
+```
+
+That inventory already gives us a debugging order.
+For inbound traffic to an API VM, the subnet NSG is evaluated before the NIC NSG.
+For outbound traffic from the same VM, the NIC NSG is evaluated before the subnet NSG.
+If the team mostly uses subnet-level policy, the review is simpler.
+If the team mixes subnet and NIC NSGs, every failure needs both association points checked.
+
+The useful packet sentence becomes a review artifact:
+
+```text
+Review target:
+  App Gateway to orders API
+
+Packet:
+  inbound TCP
+  from 10.30.1.0/24
+  to asg-orders-api
+  destination port 443
+
+Expected checkpoints:
+  nsg-snet-orders-api-prod allows it
+  nsg-nic-orders-api-prod allows it, if a NIC NSG exists
+```
+
+That is more reviewable than "open HTTPS."
+Open from where?
+Open to which tier?
+Open on which NSG?
+Open before or after a broad deny?
+The packet sentence forces those answers into the change request before anyone edits production.
 
 ## What An NSG Rule Actually Says
 
 An NSG rule is a small decision record.
-It does not know your intent.
-It only checks packet facts.
-When a packet reaches an NSG, Azure compares the packet to rule fields such as direction, source, destination, port, protocol, and action.
+It is not a policy essay.
+It does not infer intent from a friendly name.
+Azure evaluates the fields.
 
-For beginners, read every custom rule as a sentence:
+For a custom security rule, the fields you read first are:
+
+| Field | What to ask |
+|-------|-------------|
+| Priority | Is this checked before or after broader rules? |
+| Direction | Is the connection starting inbound or outbound from this checkpoint? |
+| Source | Which caller address, range, service tag, or ASG starts the traffic? |
+| Source port | Is this usually `*` because callers use ephemeral ports? |
+| Destination | Which target address, range, service tag, or ASG receives the traffic? |
+| Destination port | Which listener port must be reached? |
+| Protocol | Is this TCP, UDP, ICMP, any, or another supported protocol? |
+| Access | Does the first matching rule allow or deny the packet? |
+
+Read the rule as a sentence:
 
 ```text
-For inbound traffic,
-from this source,
-to this destination,
-using this protocol and destination port,
-allow or deny it,
-at this priority.
+For inbound TCP traffic,
+from the Application Gateway subnet,
+to API NICs in asg-orders-api,
+when the destination port is 443,
+allow the packet,
+at priority 100.
 ```
 
-That sentence is much easier to debug than staring at a portal form.
-For example, this rule allows user HTTPS traffic into the API tier:
+That sentence maps to a realistic rule excerpt:
 
 ```text
-Name: Allow-HTTPS-From-Internet-To-Orders-API
-Priority: 120
+NSG: nsg-snet-orders-api-prod
+
+Name: Allow-AppGateway-To-Orders-API-HTTPS
+Priority: 100
 Direction: Inbound
-Source: Internet
+Source: 10.30.1.0/24
 Source port ranges: *
 Destination: asg-orders-api
 Destination port ranges: 443
 Protocol: TCP
 Action: Allow
+Description: Let the regional gateway reach orders API backends.
 ```
 
-The source port is usually `*` because clients choose temporary source ports.
-The destination port is the service port you care about.
-For HTTPS, that is usually `443`.
-For PostgreSQL, it is often `5432`.
-For a custom internal API endpoint, it might be `8443`.
+The rule does not say "customers may place orders."
+That is application behavior.
+The rule says packets from the gateway subnet may start TCP connections to API NICs on port `443`.
+That precision is the whole point.
 
-Now compare it with this database rule:
+Now compare the outbound SQL rule:
 
 ```text
-Name: Allow-Postgres-From-Orders-API-To-Orders-DB
-Priority: 140
-Direction: Inbound
+NSG: nsg-snet-orders-api-prod
+
+Name: Allow-Orders-API-To-SQL-PrivateEndpoint
+Priority: 120
+Direction: Outbound
 Source: asg-orders-api
 Source port ranges: *
-Destination: asg-orders-db
-Destination port ranges: 5432
+Destination: 10.30.40.7
+Destination port ranges: 1433
 Protocol: TCP
 Action: Allow
+Description: Let orders API reach the SQL private endpoint.
 ```
 
-That second rule is safer and easier to read than "allow `10.40.12.4` and `10.40.12.5` to `10.40.14.6`."
-Private IP addresses change when VMs are replaced, recreated, or scaled.
-Application names change less often than individual NIC IPs.
+This rule belongs to the API subnet because the packet starts at the API VMs.
+The destination is the private endpoint IP, not the public SQL name.
+DNS and Private Link decide whether the app resolves the SQL hostname to `10.30.40.7`.
+The NSG only sees the resulting packet facts.
 
-The tradeoff is that NSG rules are simple by design.
-They do not inspect HTTP paths.
-They do not know whether `/orders` is safer than `/admin`.
-They do not check JWT claims or user roles.
-They filter traffic by network facts.
-If you need application-aware decisions, that belongs in the app, a gateway, a firewall, or another layer.
+This is where packet filtering earns its keep.
+A rule can be narrow enough to protect the data path and still readable enough to review.
+The source is the API role.
+The destination is the private endpoint.
+The port is the database listener.
+The priority leaves space for other targeted rules.
 
 ## Priority Numbers Decide The First Match
 
-NSG priority numbers are one of the most common sources of confusion.
-The smaller number wins.
-Priority `100` is checked before priority `200`.
-Priority `200` is checked before priority `65000`.
-As soon as traffic matches a rule, Azure stops evaluating rules for that direction.
+NSG priorities run from `100` to `4096` for custom rules.
+Lower numbers are processed before higher numbers.
+When a packet matches a rule, evaluation stops for that NSG and direction.
+The first match decides the action.
 
-This means the rules are not a wish list.
-They are an ordered decision list.
-The first matching rule decides the packet.
-
-Here is a realistic NSG excerpt for the data subnet:
+That means rule order is not decorative.
+Two correct-looking rules can produce a broken result when the broad rule is earlier.
+Here is the classic mistake on the API subnet:
 
 ```text
-NSG: nsg-snet-orders-data-prod
+NSG: nsg-snet-orders-api-prod
+Direction: Inbound
 
-Priority  Name                                      Direction  Source            Destination     Port  Action
---------  ----------------------------------------  ---------  ----------------  --------------  ----  ------
-100       Deny-All-To-Orders-DB                     Inbound    *                 asg-orders-db   *     Deny
-140       Allow-Postgres-From-Orders-API-To-DB      Inbound    asg-orders-api    asg-orders-db   5432  Allow
-65000     AllowVNetInBound                          Inbound    VirtualNetwork    VirtualNetwork  *     Allow
-65500     DenyAllInbound                            Inbound    *                 *               *     Deny
+Priority  Name                                      Source        Destination      Port  Action
+--------  ----------------------------------------  ------------  ---------------  ----  ------
+100       Deny-Direct-Internet-To-API               Internet      asg-orders-api   *     Deny
+140       Allow-AppGateway-To-Orders-API-HTTPS      10.30.1.0/24  asg-orders-api   443   Allow
+65000     AllowVNetInBound                          VirtualNetwork VirtualNetwork  *     Allow
+65500     DenyAllInbound                            *             *                *     Deny
 ```
 
-At first glance, the allow rule looks correct.
-The API ASG is allowed to reach the DB ASG on port `5432`.
-But the deny rule at priority `100` is checked first.
-It matches traffic to `asg-orders-db` before the allow rule has a chance.
-The allow rule is shadowed, which means it exists but never affects matching traffic.
+At first glance, that table looks reasonable.
+The team wants to deny direct internet traffic and allow gateway traffic.
+But a packet from the gateway subnet is usually part of the virtual network, not the `Internet` service tag.
+So this exact table might still allow gateway traffic.
 
-Put the more specific allow before the broad deny:
+Now change the broad rule slightly:
 
 ```text
-Priority  Name                                      Direction  Source            Destination     Port  Action
---------  ----------------------------------------  ---------  ----------------  --------------  ----  ------
-100       Allow-Postgres-From-Orders-API-To-DB      Inbound    asg-orders-api    asg-orders-db   5432  Allow
-200       Deny-All-To-Orders-DB                     Inbound    *                 asg-orders-db   *     Deny
-65000     AllowVNetInBound                          Inbound    VirtualNetwork    VirtualNetwork  *     Allow
-65500     DenyAllInbound                            Inbound    *                 *               *     Deny
+Priority  Name                                      Source  Destination      Port  Action
+--------  ----------------------------------------  ------  ---------------  ----  ------
+100       Deny-All-To-Orders-API                    *       asg-orders-api   *     Deny
+140       Allow-AppGateway-To-Orders-API-HTTPS      10.30.1.0/24 asg-orders-api 443 Allow
 ```
 
-The rule pattern is specific allows first, broad denies after, and
-default rules last.
+This version breaks the path.
+The inbound packet from `10.30.1.24` to an API NIC on TCP `443` matches `Deny-All-To-Orders-API` at priority `100`.
+Azure stops there.
+The allow at priority `140` is never used for that packet.
 
-Leave gaps between priority numbers.
-Use `100`, `120`, `140`, and `200` rather than `100`, `101`, `102`, and `103`.
-Those gaps make later fixes easier because you can insert a rule without renumbering the whole NSG.
+The fix is not "add another allow."
+The fix is to place the specific allow before the broad deny:
 
-## Subnet NSGs And NIC NSGs Are Two Checkpoints
+```text
+NSG: nsg-snet-orders-api-prod
+Direction: Inbound
 
-Azure can associate an NSG with a subnet.
-Azure can also associate an NSG with a network interface, usually called a NIC.
-A NIC is the virtual network card attached to a VM or similar resource.
-When both exist, traffic may have to pass both checks.
+Priority  Name                                      Source        Destination      Port  Action
+--------  ----------------------------------------  ------------  ---------------  ----  ------
+100       Allow-AppGateway-To-Orders-API-HTTPS      10.30.1.0/24  asg-orders-api   443   Allow
+200       Deny-All-To-Orders-API                    *             asg-orders-api   *     Deny
+65000     AllowVNetInBound                          VirtualNetwork VirtualNetwork  *     Allow
+65500     DenyAllInbound                            *             *                *     Deny
+```
 
-For inbound traffic, Azure checks the subnet NSG first, then the NIC NSG.
-If the subnet NSG denies the traffic, the packet never reaches the NIC NSG.
-If the subnet NSG allows the traffic, the NIC NSG still gets a chance to allow or deny it.
+Use priority gaps on purpose.
+`100`, `120`, `140`, and `200` are easier to maintain than `100`, `101`, `102`, and `103`.
+Gaps give you room to insert an urgent but narrow rule without renumbering the whole NSG during an incident.
 
-For outbound traffic, the order is reversed.
-Azure checks the NIC NSG first, then the subnet NSG.
-If the NIC NSG denies the packet, the subnet NSG never sees it.
+The safe pattern is not "all allows first forever."
+The safe pattern is more specific decisions before less specific decisions.
+A deny can be specific too.
+For example, a deny for a known scanner range can sit before a broader allow.
+The review question is always the same:
+which packet matches first?
 
-This order matters when a team says, "the rule is there."
-The rule may be there, but it may be on only one checkpoint.
-If inbound HTTPS must reach `vm-orders-api-01` and both the API subnet and the VM NIC have NSGs, both NSGs need to allow the path.
+## Default Rules Are Already In The Room
 
-Here is the mental model:
-
-| Traffic direction | First checkpoint | Second checkpoint | Beginner check |
-|-------------------|------------------|-------------------|----------------|
-| Inbound to VM | Subnet NSG | NIC NSG | A subnet deny can stop traffic before the VM rule matters |
-| Outbound from VM | NIC NSG | Subnet NSG | A NIC deny can stop traffic before the subnet rule matters |
-| Only subnet NSG exists | Subnet NSG | None | All NICs in the subnet share that subnet rule set |
-| Only NIC NSG exists | NIC NSG | None | The rule follows that specific NIC |
-
-Many teams choose one main level for most rules.
-For beginner environments, a subnet NSG is often easier to reason about.
-All API VMs in `snet-orders-api` share the same traffic policy.
-NIC-level NSGs are useful when one VM needs a special exception, but exceptions can make debugging harder if they spread.
-
-The tradeoff is readability versus precision.
-Subnet NSGs are easier to review because they describe the subnet's job.
-NIC NSGs can be narrower, but they add another place to inspect.
-Use both only when the extra checkpoint has a clear reason.
-
-## Default Rules You Should Know First
-
-Every NSG has default security rules.
+Every NSG includes default security rules.
 You cannot remove them.
-You can override them by creating custom rules with higher priority, which means lower priority numbers.
+You can override them with custom rules because custom rule priorities are higher than the default priorities.
+In Azure's numbering, higher priority means a lower number.
 
-For a beginner, the default rules answer three questions.
-First, resources in the same virtual network can usually talk to each other unless you block that traffic.
-Second, inbound traffic from the internet is denied unless you allow it.
-Third, outbound internet traffic is allowed unless you add a deny rule.
+The default rules explain many surprises in a new VNet.
+Inbound from the internet is denied unless you add an allow.
+Traffic inside the virtual network is allowed by default.
+Outbound internet traffic is allowed by default.
+Those defaults are useful for getting started, but production teams usually tighten some of them.
 
-That default shape is helpful, but it can surprise you.
-If the API tier and database tier are in the same VNet, the default inbound `AllowVNetInBound` rule can allow more east-west traffic than you intended.
-East-west traffic means traffic moving inside the private network, such as API to database or worker to API.
-If you want only the API tier to reach the database tier, you need a specific allow for the API and a deny for everything else.
+Here is the beginner view:
 
-Here is a beginner-level view of the defaults:
+| Default rule | Direction | Priority | Meaning |
+|--------------|-----------|----------|---------|
+| `AllowVNetInBound` | Inbound | `65000` | Allow traffic from virtual network sources to virtual network destinations |
+| `AllowAzureLoadBalancerInBound` | Inbound | `65001` | Allow Azure load balancer traffic |
+| `DenyAllInbound` | Inbound | `65500` | Deny inbound traffic not allowed earlier |
+| `AllowVnetOutBound` | Outbound | `65000` | Allow virtual network destinations outbound |
+| `AllowInternetOutBound` | Outbound | `65001` | Allow outbound internet destinations |
+| `DenyAllOutBound` | Outbound | `65500` | Deny outbound traffic not allowed earlier |
 
-| Default rule | Direction | Beginner meaning |
-|--------------|-----------|------------------|
-| `AllowVNetInBound` | Inbound | Let resources in the virtual network talk inbound to each other |
-| `AllowAzureLoadBalancerInBound` | Inbound | Let Azure load balancer health and data traffic reach resources |
-| `DenyAllInbound` | Inbound | Block inbound traffic that no earlier rule allowed |
-| `AllowVnetOutBound` | Outbound | Let resources talk outbound within the virtual network |
-| `AllowInternetOutBound` | Outbound | Let resources start outbound internet connections |
-| `DenyAllOutBound` | Outbound | Block outbound traffic that no earlier rule allowed |
+The default `AllowVNetInBound` rule is the one to slow down on.
+It means VM-to-VM or subnet-to-subnet traffic inside the VNet can work even when you did not write a custom allow.
+That is convenient in a lab.
+It can be too permissive in production when the database tier should accept traffic only from the API role.
 
-Do not treat the defaults as bad.
-They are a starting point.
-They keep random inbound internet traffic out.
-They let basic private communication work.
-They let machines reach package repositories, APIs, and operating system update endpoints unless you tighten outbound traffic.
-
-You cannot delete the defaults. The production question is which custom
-rules should override the defaults for this subnet's job.
-
-For `devpolaris-orders-api`, the data subnet probably needs tighter inbound rules than the API subnet.
-The API subnet may accept HTTPS from the load balancer.
-The data subnet should accept database traffic only from the API role.
-Those are different jobs, so the rules should not look the same.
-
-## ASGs Make Rules Read Like The App
-
-An application security group, or ASG, is a named group you can use as the source or destination in an NSG rule.
-For VM-based workloads, ASG membership is applied through network interfaces.
-That means the ASG becomes a readable label for a set of application resources in the same virtual network.
-
-Without ASGs, NSG rules often turn into private IP lists:
+For the orders SQL private endpoint, a review might choose this inbound shape on the private endpoint subnet:
 
 ```text
-Allow 10.40.12.4,10.40.12.5 to 10.40.14.6 on TCP 5432
+NSG: nsg-snet-private-endpoints-prod
+Direction: Inbound
+
+Priority  Name                                  Source           Destination  Port  Action
+--------  ------------------------------------  ---------------  -----------  ----  ------
+100       Allow-Orders-API-To-SQL-PE            asg-orders-api   10.30.40.7   1433  Allow
+200       Deny-All-To-SQL-PE                    *                10.30.40.7   *     Deny
+65000     AllowVNetInBound                      VirtualNetwork   VirtualNetwork *    Allow
+65500     DenyAllInbound                        *                *            *     Deny
 ```
 
-That may work today, but it becomes hard to review. Six months later,
-nobody remembers whether `10.40.12.5` is an API VM, a worker VM, an old
-test machine, or something deleted last quarter.
+The custom deny at `200` matters because the default VNet allow at `65000` would otherwise allow more internal sources.
+The rule is not saying every private endpoint subnet needs this exact policy.
+It is showing why the default VNet allow must be visible during reviews.
 
-With ASGs, the same policy can read like the application:
+Default outbound internet access is similar.
+It is helpful when a VM needs package repositories, OS update endpoints, or external APIs.
+It is risky when production egress must be limited to known dependencies.
+If you add a broad outbound deny, add specific outbound allows first and test the packet path before saving.
+
+The practical review line is:
+defaults are real rules.
+They are not hidden settings.
+If no custom rule matches, a default rule probably decides the packet.
+
+## Stateful Does Not Mean Careless
+
+NSGs are stateful.
+When a new outbound connection is allowed, the response traffic for that connection does not need a separate inbound allow.
+When a new inbound connection is allowed, the response traffic for that connection does not need a separate outbound allow.
+Azure tracks the established flow.
+
+That saves you from writing mirror-image rules for every normal request and response.
+The API can open a TCP connection to SQL on `1433`.
+SQL can respond on that established flow.
+You do not need to add "SQL outbound to API ephemeral ports" just for the response.
+
+Stateful behavior does not mean "traffic can start anywhere."
+The rule still matters for the side that starts the connection.
+If a worker VM starts a connection to the API admin endpoint on TCP `8443`, the worker-to-API packet needs an allow.
+The API response rides the established flow.
+If the API later starts a different connection back to the worker, that is a new outbound decision from the API side.
+
+State also matters during rule changes.
+Changing or removing an NSG rule affects new connections.
+Existing connections can continue until the flow times out or closes.
+That can fool an incident review.
+One engineer tests an already-open SSH session and says the rule still allows access.
+Another engineer opens a new session and gets blocked.
+Both observations can be true.
+
+Use fresh tests when validating a security change.
+For HTTP, start a new connection instead of trusting an existing keep-alive session.
+For database testing, restart the client connection pool or run from a fresh process when you need proof that new connections match the new rule.
+The point is not to make testing theatrical.
+The point is to test the decision Azure will make for the next new flow.
+
+Here is a packet sentence that includes state:
 
 ```text
-Allow asg-orders-api to asg-orders-db on TCP 5432
-Deny * to asg-orders-db on *
+New flow:
+  API VM 10.30.2.14:53144
+  -> SQL private endpoint 10.30.40.7:1433
+  protocol TCP
+
+Required NSG decision:
+  outbound allow from the API checkpoint
+  inbound allow at the private endpoint checkpoint, if that subnet filters inbound traffic
+
+Response:
+  SQL private endpoint 10.30.40.7:1433
+  -> API VM 10.30.2.14:53144
+  allowed as part of the established flow
+```
+
+The response source port is `1433` because the database is responding from its listener.
+The response destination port is the API VM's temporary client port.
+That is why blanket "source port equals service port" thinking creates bad rules.
+
+## Subnet NSGs And NIC NSGs Are Different Checkpoints
+
+An NSG can be associated with a subnet.
+An NSG can also be associated with a network interface, or NIC.
+If both are present, both can affect the same packet.
+The order depends on direction.
+
+For inbound traffic to a VM, Azure evaluates the subnet NSG first, then the NIC NSG.
+If the subnet NSG denies the packet, the NIC NSG does not rescue it.
+If the subnet NSG allows the packet, the NIC NSG can still deny it.
+
+For outbound traffic from a VM, Azure evaluates the NIC NSG first, then the subnet NSG.
+If the NIC NSG denies the packet, the subnet NSG does not see an allowed packet later.
+If the NIC NSG allows it, the subnet NSG can still deny it.
+
+Keep this table near your mental debugger:
+
+| Packet direction | First checkpoint | Second checkpoint | Review habit |
+|------------------|------------------|-------------------|--------------|
+| Inbound to VM | Subnet NSG | NIC NSG | A subnet deny stops the packet before NIC rules matter |
+| Outbound from VM | NIC NSG | Subnet NSG | A NIC deny stops the packet before subnet rules matter |
+| Only subnet NSG | Subnet NSG | None | Every resource in the subnet shares the subnet policy |
+| Only NIC NSG | NIC NSG | None | The rule follows that specific NIC |
+
+Microsoft's own guidance warns that using both levels can create rule overlap that is harder to troubleshoot.
+That does not mean NIC NSGs are forbidden.
+It means they should have a clear reason.
+
+For `devpolaris-orders-api`, a clean production habit is:
+put the standard tier policy on the subnet NSG.
+Use ASGs or narrow destination ranges to keep the subnet rules readable.
+Reserve NIC NSGs for temporary exceptions or special hosts, and document why the exception exists.
+
+Here is the confusing shape to avoid:
+
+```text
+Subnet NSG:
+  nsg-snet-orders-api-prod
+  100 Allow-AppGateway-To-Orders-API-HTTPS inbound 10.30.1.0/24 -> asg-orders-api 443
+
+NIC NSG:
+  nsg-nic-orders-api-prod
+  100 Deny-All-Inbound inbound * -> * *
+```
+
+The subnet rule is real.
+It allows the packet at the first inbound checkpoint.
+Then the NIC rule denies it at the second checkpoint.
+If a ticket says "the allow is right there," the answer is "yes, and a later checkpoint still denies the packet."
+
+The engineering tradeoff is readability versus precision.
+Subnet NSGs make policy easy to find and easy to review.
+NIC NSGs can target one machine, but they add another place where the truth can hide.
+Choose one main level for normal rules unless the exception is worth the extra inspection cost.
+
+## ASGs Make Packet Rules Read Like The App
+
+Application security groups, or ASGs, make NSG rules talk in application roles.
+Instead of writing every private IP address into a rule, you place VM network interfaces into named groups and use those groups as NSG sources or destinations.
+
+Without ASGs, the rule table becomes a private IP memory test:
+
+```text
+Allow 10.30.2.14,10.30.2.15 to 10.30.40.7 on TCP 1433
+Allow 10.30.3.11 to 10.30.2.14,10.30.2.15 on TCP 8443
+```
+
+That may work today.
+It will age badly.
+When a VM is replaced, a NIC is recreated, or a new instance is added, the rule no longer tells reviewers what role the address represents.
+
+With ASGs, the same intent is readable:
+
+```text
+Allow asg-orders-api to SQL private endpoint 10.30.40.7 on TCP 1433
 Allow asg-orders-worker to asg-orders-api on TCP 8443
+Deny anything else to asg-orders-api on TCP 8443
 ```
 
-This is the main value of ASGs.
-They let the network rule use names that match the app design.
-The rule says "API can reach database," not "this private IP can reach that private IP."
+ASG membership lives on NICs.
+A NIC can be a member of application security groups, and NSG rules that name those groups apply to member NICs.
+If a NIC is not a member, the ASG rule does not match that NIC just because the rule name sounds right.
 
-For `devpolaris-orders-api`, a small ASG plan might be:
+Here is realistic ASG membership evidence:
 
-| ASG | Members | Rule meaning |
-|-----|---------|--------------|
-| `asg-orders-api` | API VM NICs | Machines that answer order requests |
-| `asg-orders-worker` | Worker VM NICs | Machines that run background order jobs |
-| `asg-orders-db` | Database VM NICs | Machines that store order records |
+```bash
+$ az network nic show \
+>   --resource-group rg-devpolaris-orders-prod \
+>   --name nic-vm-orders-api-01 \
+>   --query "{nic:name,privateIp:ipConfigurations[0].privateIPAddress,asgs:ipConfigurations[0].applicationSecurityGroups[].id}" \
+>   --output json
+{
+  "nic": "nic-vm-orders-api-01",
+  "privateIp": "10.30.2.14",
+  "asgs": [
+    "/subscriptions/sub-devpolaris-training/resourceGroups/rg-devpolaris-network-prod/providers/Microsoft.Network/applicationSecurityGroups/asg-orders-api"
+  ]
+}
+```
 
-ASGs also reduce maintenance when resources change.
-If `vm-orders-api-03` is added, you add its NIC to `asg-orders-api`.
-The NSG rule does not need to list a new private IP.
-If an API VM is replaced, the rule can stay the same.
+And here is a worker NIC:
 
-ASGs have important limits.
-The members used together in a rule must be in the same virtual network.
-An ASG rule only matches a NIC that was actually added to the ASG.
-If an ASG is empty, a rule that names it may look correct but match no real application traffic.
+```bash
+$ az network nic show \
+>   --resource-group rg-devpolaris-orders-prod \
+>   --name nic-vm-orders-worker-01 \
+>   --query "{nic:name,privateIp:ipConfigurations[0].privateIPAddress,asgs:ipConfigurations[0].applicationSecurityGroups[].id}" \
+>   --output json
+{
+  "nic": "nic-vm-orders-worker-01",
+  "privateIp": "10.30.3.11",
+  "asgs": [
+    "/subscriptions/sub-devpolaris-training/resourceGroups/rg-devpolaris-network-prod/providers/Microsoft.Network/applicationSecurityGroups/asg-orders-worker"
+  ]
+}
+```
 
-So ASGs improve readability.
-They do not remove the need to inspect membership.
+That output is not busywork.
+It proves the source or destination group in the rule has real members.
+If the new API VM is missing `asg-orders-api`, a correct-looking NSG rule will not match traffic for that VM.
+
+ASGs have boundaries.
+NICs assigned to an ASG must be in the same virtual network as the first NIC assigned to that ASG.
+When a rule uses source and destination ASGs, the NICs in both groups must be in the same virtual network.
+That keeps ASGs useful for app roles inside a VNet, not as a universal cross-network identity system.
+
+The tradeoff is small operational discipline.
+ASGs make rules easier to read, but deployment must keep membership correct.
+If VM replacement creates a new NIC, the automation must attach the right ASG.
+Otherwise the rule remains readable and the packet still misses.
 
 ## Evidence You Can Inspect
 
-When a network ticket arrives, do not start by editing rules.
-First gather evidence.
-You want to know which NSG is associated, which rules exist, whether ASG membership is correct, and what the packet test says.
+When a network ticket arrives, do not start by editing the NSG.
+Collect evidence in the order the packet sees it.
+You want association evidence, rule evidence, membership evidence, and packet-test evidence.
 
-The Azure CLI can show the NSG associated with a subnet:
+Start with subnet association:
 
 ```bash
 $ az network vnet subnet show \
 >   --resource-group rg-devpolaris-network-prod \
 >   --vnet-name vnet-devpolaris-prod \
 >   --name snet-orders-api \
->   --query "{subnet:name,nsg:networkSecurityGroup.id}" \
+>   --query "{subnet:name,addressPrefix:addressPrefix,nsg:networkSecurityGroup.id}" \
 >   --output json
 {
   "subnet": "snet-orders-api",
-  "nsg": "/subscriptions/11111111-2222-3333-4444-555555555555/resourceGroups/rg-devpolaris-network-prod/providers/Microsoft.Network/networkSecurityGroups/nsg-snet-orders-api-prod"
+  "addressPrefix": "10.30.2.0/24",
+  "nsg": "/subscriptions/sub-devpolaris-training/resourceGroups/rg-devpolaris-network-prod/providers/Microsoft.Network/networkSecurityGroups/nsg-snet-orders-api-prod"
 }
 ```
 
-That proves the subnet checkpoint.
-If the VM also has a NIC-level NSG, you need to inspect the NIC too:
+Then check whether the NIC has another NSG:
 
 ```bash
 $ az network nic show \
 >   --resource-group rg-devpolaris-orders-prod \
 >   --name nic-vm-orders-api-01 \
->   --query "{nic:name,nsg:networkSecurityGroup.id,asg:ipConfigurations[0].applicationSecurityGroups[].id}" \
+>   --query "{nic:name,privateIp:ipConfigurations[0].privateIPAddress,nsg:networkSecurityGroup.id,asgs:ipConfigurations[0].applicationSecurityGroups[].id}" \
 >   --output json
 {
   "nic": "nic-vm-orders-api-01",
-  "nsg": null,
-  "asg": [
-    "/subscriptions/11111111-2222-3333-4444-555555555555/resourceGroups/rg-devpolaris-network-prod/providers/Microsoft.Network/applicationSecurityGroups/asg-orders-api"
+  "privateIp": "10.30.2.14",
+  "nsg": "/subscriptions/sub-devpolaris-training/resourceGroups/rg-devpolaris-network-prod/providers/Microsoft.Network/networkSecurityGroups/nsg-nic-orders-api-prod",
+  "asgs": [
+    "/subscriptions/sub-devpolaris-training/resourceGroups/rg-devpolaris-network-prod/providers/Microsoft.Network/applicationSecurityGroups/asg-orders-api"
   ]
 }
 ```
 
-This output tells a helpful story.
-The NIC has no separate NIC-level NSG.
-The NIC is a member of `asg-orders-api`.
-So if API traffic is blocked, the next place to inspect is probably the subnet NSG and the rule priorities.
+That output changes the investigation.
+There is a subnet NSG and a NIC NSG.
+For inbound traffic, both must be inspected.
 
-List the rules in priority order:
+List custom rules in priority order:
 
 ```bash
 $ az network nsg rule list \
 >   --resource-group rg-devpolaris-network-prod \
->   --nsg-name nsg-snet-orders-data-prod \
->   --query "[].{priority:priority,name:name,direction:direction,source:sourceAddressPrefix,destination:destinationAddressPrefix,port:destinationPortRange,access:access}" \
+>   --nsg-name nsg-snet-orders-api-prod \
+>   --query "sort_by([].{priority:priority,name:name,direction:direction,source:sourceAddressPrefix,destination:destinationAddressPrefix,sourceAsgs:sourceApplicationSecurityGroups[].id,destinationAsgs:destinationApplicationSecurityGroups[].id,port:destinationPortRange,access:access}, &priority)" \
 >   --output table
-Priority    Name                                  Direction    Source    Destination    Port    Access
-----------  ------------------------------------  -----------  --------  -------------  ------  --------
-100         Allow-Postgres-From-Orders-API        Inbound      *         *              5432    Allow
-200         Deny-All-To-Orders-DB                 Inbound      *         *              *       Deny
+Priority    Name                                  Direction    Source       Destination    Port    Access
+----------  ------------------------------------  -----------  -----------  -------------  ------  --------
+100         Allow-AppGateway-To-Orders-API-HTTPS  Inbound      10.30.1.0/24                443     Allow
+120         Allow-Orders-API-To-SQL-PE            Outbound                                1433    Allow
+200         Deny-Direct-Internet-To-API           Inbound      Internet                   *       Deny
 ```
 
-The table is useful, but it hides ASG fields because those fields are nested.
-When a rule uses ASGs, inspect the full rule if the summary looks too generic:
+The table is helpful, but it hides nested ASG fields in many output formats.
+Inspect the exact rule when ASGs matter:
 
 ```bash
 $ az network nsg rule show \
 >   --resource-group rg-devpolaris-network-prod \
->   --nsg-name nsg-snet-orders-data-prod \
->   --name Allow-Postgres-From-Orders-API \
->   --query "{priority:priority,sourceAsgs:sourceApplicationSecurityGroups[].id,destinationAsgs:destinationApplicationSecurityGroups[].id,destinationPort:destinationPortRange,access:access}" \
+>   --nsg-name nsg-snet-orders-api-prod \
+>   --name Allow-AppGateway-To-Orders-API-HTTPS \
+>   --query "{priority:priority,direction:direction,source:sourceAddressPrefix,destinationAsgs:destinationApplicationSecurityGroups[].id,port:destinationPortRange,protocol:protocol,access:access}" \
 >   --output json
 {
   "priority": 100,
-  "sourceAsgs": [
-    "/subscriptions/11111111-2222-3333-4444-555555555555/resourceGroups/rg-devpolaris-network-prod/providers/Microsoft.Network/applicationSecurityGroups/asg-orders-api"
-  ],
+  "direction": "Inbound",
+  "source": "10.30.1.0/24",
   "destinationAsgs": [
-    "/subscriptions/11111111-2222-3333-4444-555555555555/resourceGroups/rg-devpolaris-network-prod/providers/Microsoft.Network/applicationSecurityGroups/asg-orders-db"
+    "/subscriptions/sub-devpolaris-training/resourceGroups/rg-devpolaris-network-prod/providers/Microsoft.Network/applicationSecurityGroups/asg-orders-api"
   ],
-  "destinationPort": "5432",
+  "port": "443",
+  "protocol": "Tcp",
   "access": "Allow"
 }
 ```
 
-Now you can see the app-level names.
-The rule allows API NICs to reach DB NICs on PostgreSQL.
-If traffic still fails, the next check is whether the database NIC is actually a member of `asg-orders-db` and whether there is another NSG on the path.
+Now inspect effective security rules for the NIC.
+Effective rules aggregate the subnet and NIC rules applied to the network interface.
+They are useful because they show the packet's combined policy view instead of one NSG at a time.
+The output below is trimmed to the associations and rules that matter for the failed packet.
 
-A realistic app-side symptom might look like this:
-
-```text
-2026-05-03T09:42:18.211Z orders-api db connect failed
-target=vm-orders-db-01.devpolaris.internal:5432
-error=connect ETIMEDOUT 10.40.14.6:5432
-attempt=3
+```bash
+$ az network nic list-effective-nsg \
+>   --resource-group rg-devpolaris-orders-prod \
+>   --name nic-vm-orders-api-01 \
+>   --output json
+[
+  {
+    "association": "/subscriptions/sub-devpolaris-training/resourceGroups/rg-devpolaris-network-prod/providers/Microsoft.Network/networkSecurityGroups/nsg-snet-orders-api-prod",
+    "rules": [
+      {
+        "name": "Allow-AppGateway-To-Orders-API-HTTPS",
+        "priority": 100,
+        "direction": "Inbound",
+        "access": "Allow",
+        "source": "10.30.1.0/24",
+        "destination": "*",
+        "port": "443"
+      },
+      {
+        "name": "Deny-Direct-Internet-To-API",
+        "priority": 200,
+        "direction": "Inbound",
+        "access": "Deny",
+        "source": "Internet",
+        "destination": "*",
+        "port": "*"
+      }
+    ]
+  },
+  {
+    "association": "/subscriptions/sub-devpolaris-training/resourceGroups/rg-devpolaris-network-prod/providers/Microsoft.Network/networkSecurityGroups/nsg-nic-orders-api-prod",
+    "rules": [
+      {
+        "name": "Deny-All-Inbound",
+        "priority": 100,
+        "direction": "Inbound",
+        "access": "Deny",
+        "source": "*",
+        "destination": "*",
+        "port": "*"
+      }
+    ]
+  }
+]
 ```
 
-`ETIMEDOUT` is different from "password rejected."
-The app did not reach the database listener in time.
-That points you toward routing, DNS, NSGs, firewalls, or the database process, not first toward RBAC.
+This evidence says the subnet NSG allows the gateway packet, but the NIC NSG has a broad inbound deny.
+The result is not solved by adding another subnet allow.
+The blocking rule is at the NIC checkpoint.
 
-## Failure Modes And Fix Directions
+For a packet-style test, use Network Watcher IP flow verify when the target is a VM NIC:
 
-The first common failure is a lower priority rule shadowed by an earlier rule.
-Remember the Azure wording:
-lower priority number means higher priority.
-If a broad deny at `100` matches traffic before a specific allow at `140`, the allow will not matter.
-
-The failure often looks like this:
-
-```text
-Symptom:
-  API to database times out on TCP 5432.
-
-NSG excerpt:
-  100 Deny-All-To-Orders-DB inbound * -> asg-orders-db *
-  140 Allow-Postgres-From-Orders-API inbound asg-orders-api -> asg-orders-db 5432
-
-Fix direction:
-  Move the specific allow to a lower number than the broad deny.
-  For example, allow at 100 and deny at 200.
+```bash
+$ az network watcher test-ip-flow \
+>   --resource-group rg-devpolaris-orders-prod \
+>   --vm vm-orders-api-01 \
+>   --nic nic-vm-orders-api-01 \
+>   --direction Inbound \
+>   --protocol TCP \
+>   --local 10.30.2.14:443 \
+>   --remote 10.30.1.24:51020 \
+>   --output table
+Access    RuleName
+--------  ----------------------------
+Deny      UserRule_Deny-All-Inbound
 ```
 
-The second failure is subnet versus NIC confusion.
-The team adds an allow rule to the NIC NSG but forgets that an inbound subnet NSG is evaluated before it.
-The subnet NSG denies the packet, so the NIC NSG never gets to help.
+That is the kind of evidence you want before changing production.
+It names the tested packet.
+It returns allow or deny.
+It identifies the rule responsible for the decision.
 
-Fix direction:
-inspect both association points.
-For inbound traffic, check the subnet NSG first, then the NIC NSG.
-For outbound traffic, check the NIC NSG first, then the subnet NSG.
-If the team wants one clear place for most rules, move the policy to the subnet NSG and remove unnecessary NIC exceptions over time.
-
-The third failure is outbound traffic blocked by a custom deny.
-This often appears after a team tightens production egress.
-Egress means outbound traffic leaving a subnet or resource.
-The API can receive requests, but it cannot call a payment API, pull packages during startup, reach a private endpoint, or send telemetry.
-
-The symptom may look like this:
+Finally, keep application symptoms in the evidence chain without letting them replace network proof:
 
 ```text
-2026-05-03T10:03:44.917Z orders-api outbound call failed
-target=https://payments.internal.devpolaris.com/authorize
-error=connect ETIMEDOUT 10.60.8.20:443
+2026-05-08T14:17:22.408Z gateway backend probe failed
+backend=vm-orders-api-01
+target=10.30.2.14:443
+error=connection timed out
+
+2026-05-08T14:17:23.119Z orders-api local health check
+target=http://127.0.0.1:8080/health
+status=200
 ```
 
+The app is alive locally.
+The gateway cannot start a TCP connection to the backend.
+That combination points toward packet filtering, routes, host firewall, or listener binding.
+The NSG evidence tells us which of those is currently blocking this packet.
+
+## Failure Path: The Rule Exists But The Packet Still Dies
+
+Here is a realistic failure path from a production review.
+The team deploys a new API VM.
+The VM joins the backend pool.
+The app starts.
+The local health check passes.
+Application Gateway marks the backend unhealthy because TCP `443` times out.
+
+The first engineer checks the subnet NSG and sees the allow:
+
+```text
+nsg-snet-orders-api-prod
+100 Allow-AppGateway-To-Orders-API-HTTPS inbound 10.30.1.0/24 -> asg-orders-api TCP 443 Allow
+```
+
+That is a real allow, but it is not complete evidence.
+The packet still has to match the destination ASG.
+The packet may still hit a NIC NSG.
+The listener may still be on the wrong port.
+The host firewall may still block it.
+The point is not to blame NSGs for everything.
+The point is to prove the NSG part before moving on.
+
+The ASG membership check shows a miss:
+
+```bash
+$ az network nic show \
+>   --resource-group rg-devpolaris-orders-prod \
+>   --name nic-vm-orders-api-03 \
+>   --query "{nic:name,privateIp:ipConfigurations[0].privateIPAddress,asgs:ipConfigurations[0].applicationSecurityGroups[].id}" \
+>   --output json
+{
+  "nic": "nic-vm-orders-api-03",
+  "privateIp": "10.30.2.18",
+  "asgs": []
+}
+```
+
+The rule allows traffic to `asg-orders-api`.
+The new NIC is not in `asg-orders-api`.
+For that NIC, the readable rule does not match.
+
+The team adds the NIC to the ASG and tests again.
+The packet still fails.
+Now effective rules show a NIC-level deny:
+
+```text
+Effective inbound rules for nic-vm-orders-api-03
+
+Association                    Priority  Name                                  Access  Port
+-----------------------------  --------  ------------------------------------  ------  ----
+nsg-snet-orders-api-prod       100       Allow-AppGateway-To-Orders-API-HTTPS  Allow   443
+nsg-nic-orders-api-exception   100       Deny-All-Inbound                      Deny    *
+defaultSecurityRules           65500     DenyAllInbound                        Deny    *
+```
+
+This is the second miss.
+The subnet rule allows the packet.
+The NIC rule denies it later in the inbound path.
+The fix is not a broader subnet rule.
+The fix is to remove the stale NIC NSG, change the NIC NSG to allow the intended packet before its deny, or move the exception into the subnet policy if that is the team's chosen operating model.
+
+A safe incident note might read:
+
+```text
+Failure path:
+  Gateway probe from 10.30.1.24:51020 to 10.30.2.18:443 timed out.
+  Subnet NSG has Allow-AppGateway-To-Orders-API-HTTPS at priority 100.
+  nic-vm-orders-api-03 was missing asg-orders-api membership.
+  After ASG fix, effective rules still show nsg-nic-orders-api-exception denying inbound traffic.
+
 Fix direction:
-identify the destination and port the app must reach.
-Then add a narrow outbound allow before the broad outbound deny.
-Do not open all outbound traffic just to make the incident quiet.
-Allow the specific service tag, ASG, private endpoint subnet, or IP range that matches the dependency.
+  Remove the stale NIC NSG from nic-vm-orders-api-03.
+  Keep standard API packet filtering on nsg-snet-orders-api-prod.
+  Re-run IP flow verify for the same packet.
+  Confirm Application Gateway backend health turns healthy.
+```
 
-The fourth failure is an empty ASG or wrong VNet membership.
-The NSG rule says `asg-orders-api` can reach `asg-orders-db`, but the new database VM NIC was never added to `asg-orders-db`.
-Or a teammate tries to use ASGs from different VNets in one rule.
+The key phrase is "fix direction."
+During an incident, the tempting fix is to allow `*` from `*` to `*` on `443`.
+That may quiet the symptom and create a larger exposure.
+A better fix changes the specific failed checkpoint and retests the same packet sentence.
 
-Fix direction:
-inspect NIC ASG membership.
-Confirm source and destination ASGs are in the same VNet for the rule you are writing.
-If a VM was replaced, make ASG assignment part of the deployment process so new NICs join the right application role automatically.
+There are other common failure paths:
 
-The fifth failure is mixing up RBAC and network access.
-Maya has Contributor on `rg-devpolaris-orders-prod`.
-She can edit the VM, view the NIC, and update the NSG.
-But her laptop still cannot connect to `vm-orders-api-01` on port `443`.
+| Symptom | Likely NSG question |
+|---------|---------------------|
+| API can receive checkout traffic but cannot reach SQL | Is outbound API-to-private-endpoint TCP `1433` allowed before a broad outbound deny? |
+| Worker jobs time out calling the API admin endpoint | Is worker-to-API TCP `8443` allowed, and are both ASG memberships correct? |
+| Direct internet traffic reaches the API subnet | Did `Deny-Direct-Internet-To-API` target the right destination and sit before permissive rules? |
+| A rule looks correct but nothing changes | Is the NSG associated to the subnet or NIC the packet actually uses? |
+| Existing sessions work after a deny change | Are you testing an established flow instead of a new connection? |
 
-That is expected if the NSG has no inbound allow from her source range.
-RBAC lets Maya manage resources.
-The NSG decides whether packets from Maya's network may reach the VM.
-
-Fix direction:
-separate the checks.
-Use RBAC evidence to prove who can manage Azure resources.
-Use NSG rules, route checks, DNS checks, and connection tests to prove whether traffic can flow.
-Do not grant broader Azure roles to fix a packet block.
-Open or correct the network rule instead.
+Those failures are different, but the reading habit stays the same.
+Choose the packet.
+Find the checkpoints.
+Read priority order.
+Inspect ASG membership.
+Test the effective decision.
 
 ## A Review Habit Before You Change Rules
 
-Before changing an NSG, write the packet sentence in plain English.
-That sounds slow.
-It is usually faster than guessing.
+Before changing an NSG rule, write a short review note.
+The note should make the packet visible.
+It should also make rollback simple.
 
-For `devpolaris-orders-api`, a review note might be:
+Here is a good note for the gateway-to-API rule:
 
 ```text
 Change request:
-  Let API VMs connect to the orders DB on PostgreSQL.
+  Allow Application Gateway instances to reach orders API backends on HTTPS.
 
 Packet sentence:
-  Inbound to the data subnet, allow TCP 5432 from asg-orders-api to asg-orders-db.
+  Inbound TCP from 10.30.1.0/24 to asg-orders-api on destination port 443.
+
+Expected association:
+  Rule lives on nsg-snet-orders-api-prod.
+  API VM NICs are members of asg-orders-api.
+  API NICs should not carry separate broad-deny NIC NSGs.
 
 Guardrail:
-  Keep a later deny for all other sources to asg-orders-db.
+  Deny direct Internet sources to asg-orders-api after the gateway allow.
 
-Evidence to check:
-  API NICs are members of asg-orders-api.
-  DB NICs are members of asg-orders-db.
-  No subnet or NIC NSG has an earlier deny.
+Validation:
+  az network nic list-effective-nsg for nic-vm-orders-api-01.
+  az network watcher test-ip-flow for remote 10.30.1.24:51020 to local 10.30.2.14:443.
+  Application Gateway backend health shows the VM healthy.
 ```
 
-That note gives reviewers enough context to catch mistakes.
-It names the direction.
-It names the source and destination.
-It names the port and protocol.
-It names the ASG membership that must be true.
+Here is a good note for the API-to-SQL rule:
 
-Here is a small checklist to use before you press save:
+```text
+Change request:
+  Allow orders API VMs to reach the SQL private endpoint.
 
-| Question | Why it matters |
-|----------|----------------|
-| Which direction starts the connection? | Inbound and outbound rules are separate decisions |
-| Is the source a real client range, service tag, or ASG? | Broad sources are easy to forget later |
-| Is the destination the subnet, NIC, or ASG that really receives traffic? | Rules attached to the wrong place look correct but do nothing |
-| Is the port the listener port, not the client source port? | Source ports are usually temporary |
-| Does the priority leave specific rules before broad rules? | First match wins |
-| Are ASG members correct and in the right VNet? | A readable rule still needs real members |
+Packet sentence:
+  Outbound TCP from asg-orders-api to 10.30.40.7 on destination port 1433.
 
-The engineering tradeoff is clear.
+Expected association:
+  Rule lives on nsg-snet-orders-api-prod for outbound API traffic.
+  Private endpoint subnet policy allows the matching inbound packet if that subnet is filtered.
+
+Guardrail:
+  Keep broad outbound denies after specific dependency allows.
+
+Validation:
+  Fresh database connection from an API VM succeeds.
+  IP flow verify allows 10.30.2.14:ephemeral to 10.30.40.7:1433.
+```
+
+A strong review does not need to be long.
+It needs to answer the questions that catch dangerous mistakes:
+
+| Review question | Mistake it catches |
+|-----------------|--------------------|
+| Who starts the connection? | Writing inbound when the needed packet is outbound |
+| What is the destination listener port? | Putting `443` or `1433` in the source port field |
+| Which NSG is associated to the packet's subnet or NIC? | Editing an unused NSG |
+| Which rule matches first? | Shadowing a specific allow behind a broad deny |
+| Which default rule would apply if custom rules did not match? | Forgetting `AllowVNetInBound` or `AllowInternetOutBound` |
+| Are ASG members present and in the right VNet? | Relying on a readable target with no matching NICs |
+| Is the test a new flow? | Mistaking an established connection for proof of new access |
+
+This habit is the difference between "open it until it works" and packet filtering you can operate.
 Broad rules are fast during a lab.
-Narrow rules are safer in production, but they require better naming and better evidence.
-ASGs help with that cost because they let the rule describe the app shape.
-Subnet-level NSGs help because they keep most policy in one visible place.
+Narrow rules are safer in production, but they require cleaner names, consistent ASG membership, and better evidence.
 
-When a rule change feels confusing, return to the packet.
-Who starts the connection?
+For `devpolaris-orders-api`, the preferred shape is plain:
+subnet NSGs carry the normal tier policy.
+ASGs name VM roles where they make the rule clearer.
+Specific allows sit before broad denies.
+Default rules are reviewed as real fallbacks.
+Effective rules and IP flow verify prove the result before the change is called done.
+
+When an NSG review feels confusing, return to the packet sentence.
+Where does this new connection start?
 Where is it going?
-Which port is listening?
+Which destination port is listening?
 Which NSGs are on the path?
-Which rule matches first?
+Which rule is the first match?
 
-Those five questions are enough to solve most beginner NSG problems without turning a network ticket into guesswork.
+Those five questions keep NSG work grounded in packets instead of guesses.
 
 ---
 
 **References**
 
-- [Azure network security groups overview](https://learn.microsoft.com/en-us/azure/virtual-network/network-security-groups-overview) - Explains NSG rule fields, priority order, default rules, service tags, and application security groups.
-- [How network security groups filter network traffic](https://learn.microsoft.com/en-us/azure/virtual-network/network-security-group-how-it-works) - Shows how Azure evaluates subnet and NIC NSGs for inbound and outbound traffic.
-- [Application security groups](https://learn.microsoft.com/en-us/azure/virtual-network/application-security-groups) - Explains how ASGs group network interfaces and how NSG rules use those groups as sources or destinations.
-- [Create, change, or delete a network security group](https://learn.microsoft.com/en-us/azure/virtual-network/manage-network-security-group) - Provides the Microsoft Learn management reference for NSGs and rules.
-- [Tutorial: Filter network traffic with a network security group](https://learn.microsoft.com/en-us/azure/virtual-network/tutorial-filter-network-traffic) - Walks through creating an NSG and filtering traffic in an Azure virtual network.
+- [Azure network security groups overview](https://learn.microsoft.com/en-us/azure/virtual-network/network-security-groups-overview) - Used for NSG rule fields, custom priority range, first-match behavior, default rules, stateful flow behavior, and the fact that new or updated rules apply to new connections.
+- [How network security groups filter network traffic](https://learn.microsoft.com/en-us/azure/virtual-network/network-security-group-how-it-works) - Used for subnet and NIC evaluation order, intra-subnet behavior, and the recommendation to avoid overlapping subnet and NIC NSGs unless there is a clear reason.
+- [Application security groups](https://learn.microsoft.com/en-us/azure/virtual-network/application-security-groups) - Used for ASG behavior, NIC membership, same-VNet constraints, and the pattern of placing specific ASG allows before broad denies.
+- [Effective security rules overview](https://learn.microsoft.com/en-us/azure/network-watcher/effective-security-rules-overview) - Used for the effective-rule evidence model that aggregates security rules applied to a network interface.
+- [IP flow verify overview](https://learn.microsoft.com/en-us/azure/network-watcher/ip-flow-verify-overview) - Used for packet-style allow or deny checks with direction, protocol, local and remote IPs, and ports.
+- [Quickstart: Diagnose a virtual machine network traffic filter problem using the Azure CLI](https://learn.microsoft.com/en-us/azure/network-watcher/diagnose-vm-network-traffic-filtering-problem-cli) - Used for the Azure CLI diagnostic examples with `az network watcher test-ip-flow` and `az network nic list-effective-nsg`.

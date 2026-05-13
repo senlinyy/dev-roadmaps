@@ -127,11 +127,11 @@ tables and data live. Here is the small picture.
 
 ```mermaid
 flowchart TD
-    App["Orders backend<br/>(Container Apps or App Service)"]
-    Network["Allowed network path<br/>(firewall or private endpoint)"]
-    Server["Database boundary<br/>(Azure SQL logical server)"]
-    Database["Order records<br/>(Azure SQL database)"]
-    Identity["Caller permission<br/>(database user or managed identity)"]
+    App["Orders backend"]
+    Network["Network path"]
+    Server["SQL server"]
+    Database["Orders database"]
+    Identity["Caller permission"]
 
     App --> Network
     Network --> Server

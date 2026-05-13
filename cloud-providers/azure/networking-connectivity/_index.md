@@ -1,6 +1,6 @@
 ---
 title: "Networking and Connectivity"
-description: "Understand Azure Virtual Networks, subnets, routes, private access, network rules, load balancers, DNS, and TLS entry points."
-tags: ["Virtual Network", "DNS", "Private Link"]
+description: "Trace Azure traffic through public entry points, virtual networks, routes, packet rules, and private service access."
+tags: ["Virtual Network", "Front Door", "Private Link"]
 order: 3
 ---

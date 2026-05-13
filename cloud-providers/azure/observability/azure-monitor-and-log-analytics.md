@@ -93,11 +93,11 @@ rejected writes? Here is the simple path.
 
 ```mermaid
 flowchart TD
-    App["Backend app<br/>(devpolaris-orders-api)"]
-    Resources["Azure resources<br/>(SQL, Blob, compute)"]
-    Settings["Routing choices<br/>(diagnostic settings)"]
-    Workspace["Searchable evidence<br/>(Log Analytics workspace)"]
-    Query["Human question<br/>(KQL query)"]
+    App["Backend app"]
+    Resources["Azure resources"]
+    Settings["Diagnostic settings"]
+    Workspace["Log Analytics"]
+    Query["KQL question"]
 
     App --> Workspace
     Resources --> Settings

@@ -1,6 +1,6 @@
 ---
 title: "Identity and Security"
-description: "Control who can do what in AWS, which traffic can reach resources, where secrets live, and how changes are audited."
+description: "Learn who is allowed to use AWS resources, how apps get access, where secrets belong, and what evidence proves access worked."
 tags: ["IAM", "Secrets", "CloudTrail"]
 order: 2
 ---
