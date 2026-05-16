@@ -1,6 +1,6 @@
 ---
 title: "Read Alarm State"
-sectionSlug: alarms-turn-signals-into-action
+sectionSlug: alarms
 order: 4
 ---
 

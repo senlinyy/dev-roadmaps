@@ -1,6 +1,6 @@
 ---
 title: "Read The Incident Signal"
-sectionSlug: logs-and-the-first-useful-question
+sectionSlug: evidence
 order: 1
 ---
 

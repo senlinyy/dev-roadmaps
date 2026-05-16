@@ -1,6 +1,6 @@
 ---
 title: "Diagnose Server Failures"
-sectionSlug: diagnostic-path
+sectionSlug: putting-it-all-together
 order: 3
 ---
 

@@ -1,6 +1,6 @@
 ---
 title: "Place Orders Data"
-sectionSlug: the-orders-api-needs-more-than-one-kind-of-storage
+sectionSlug: sample-data-map
 order: 2
 ---
 

@@ -1,6 +1,6 @@
 ---
 title: "Read The Feature"
-sectionSlug: ask-what-the-data-is-doing
+sectionSlug: data-shapes
 order: 1
 ---
 

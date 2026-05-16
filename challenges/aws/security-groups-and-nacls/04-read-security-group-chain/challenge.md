@@ -1,10 +1,10 @@
 ---
 title: "Read Security Group Chain"
-sectionSlug: the-orders-api-rule-chain
+sectionSlug: draw-the-packet-path-before-editing-rules
 order: 4
 ---
 
-The orders request path crosses three packet rules: public users to `sg-orders-alb` on port `443`, `sg-orders-alb` to `sg-orders-api` on port `3000`, and `sg-orders-api` to `sg-orders-db` on port `5432`. Read those rules as a chain instead of one big firewall list.
+The orders request path crosses three packet rules: public users to `sg-orders-alb` on port `443`, `sg-orders-alb` to `sg-orders-api` on port `3000`, and `sg-orders-api` to `sg-orders-db` on port `5432`. Read those rules as a chain of specific hops.
 
 Your job:
 

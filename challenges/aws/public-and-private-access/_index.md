@@ -1,8 +1,8 @@
 ---
-title: "Public and Private Access"
-description: "Practice placing DevPolaris front doors, private app and database resources, outbound paths, endpoints, and access diagnostics for AWS networking."
-articleId: article-cloud-providers-aws-networking-connectivity-public-private-access
-articleSlug: public-and-private-access
+title: "Private Outbound Access"
+description: "Practice keeping application resources private while still giving them the outbound and AWS service paths they need."
+articleId: article-cloud-providers-aws-networking-connectivity-vpcs-subnets-route-tables
+articleSlug: place-workloads-in-a-vpc-without-publishing-everything
 difficulty: medium
 order: 11
 tags: ["aws", "vpc", "subnets", "nat", "endpoints"]

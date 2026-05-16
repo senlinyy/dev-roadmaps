@@ -43,7 +43,7 @@
     {
       "id": "q4",
       "type": "multiple",
-      "scenario": "Which practices keep tracing tools useful without turning them into tool worship?",
+      "scenario": "Which practices keep tracing tools useful without making the tool the whole investigation?",
       "options": [
         { "id": "a", "text": "Name spans after real operations such as `rds.insert_order` and `s3.write_receipt`." },
         { "id": "b", "text": "Keep request IDs in logs so traces and logs can connect." },

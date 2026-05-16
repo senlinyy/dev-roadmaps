@@ -1,6 +1,6 @@
 ---
 title: "Place Public and Private Resources"
-sectionSlug: public-and-private-subnets
+sectionSlug: route-tables-make-public-and-private-concrete
 order: 1
 ---
 

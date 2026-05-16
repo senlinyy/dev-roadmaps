@@ -1,0 +1,70 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "The monthly finance export service has this recovery target:\n\n```text\nRTO: next business day\nRPO: last successful nightly export is acceptable\ntraffic: internal only\ncurrent preparation: backups, infrastructure code, deployment artifacts, and a restore runbook\nstandby compute: none\n```\n\nWhich recovery strategy best fits this target?",
+      "options": [
+        { "id": "a", "text": "Backup and restore, because the target tolerates a slower rebuild and low steady cost matters." },
+        { "id": "b", "text": "Multi-site active/active, because every workload should serve traffic from multiple Regions." },
+        { "id": "c", "text": "Warm standby, because next-business-day recovery requires a full duplicate stack running." },
+        { "id": "d", "text": "No recovery strategy, because internal services do not need restore evidence." }
+      ],
+      "correct": ["a"],
+      "explanation": "Backup and restore can fit a workload with loose RTO/RPO targets when backups, infrastructure code, deployment artifacts, and a tested runbook exist. Paying for always-on standby capacity would not be justified by this target."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "Checkout has this proposed recovery shape:\n\n```text\nRTO: 30 minutes\nRPO: minutes\nrecovery Region: VPC, secrets, container images, task definitions, alarms, and replicated data are ready\nECS service: desired count is 0 until recovery\nworkers: scaled from 0 during recovery\ntraffic: shifted after validation\n```\n\nWhich strategy is this closest to?",
+      "options": [
+        { "id": "a", "text": "Pilot light, because the core path is ready while app compute starts and scales during recovery." },
+        { "id": "b", "text": "Backup and restore, because no recovery pieces exist until the incident." },
+        { "id": "c", "text": "Warm standby, because a small full stack is already handling reduced traffic." },
+        { "id": "d", "text": "Multi-site active/active, because both Regions are already serving customer writes." }
+      ],
+      "correct": ["a"],
+      "explanation": "This is pilot light: important data and core infrastructure are ready, but application compute is switched off or scaled to zero until recovery. The RTO must include scaling, validation, and traffic movement."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "The customer API has this recovery design:\n\n```text\nRTO: minutes\nRPO: seconds to minutes\nrecovery Region: complete service stack already running at small capacity\nnormal state: health checks and synthetic traffic pass continuously\nrecovery action: scale up capacity and shift traffic\n```\n\nWhich strategy is this closest to?",
+      "options": [
+        { "id": "a", "text": "Warm standby, because a smaller but complete service is already running and can be scaled up." },
+        { "id": "b", "text": "Pilot light, because no application stack can process requests before recovery." },
+        { "id": "c", "text": "Backup and restore, because the team only keeps backups." },
+        { "id": "d", "text": "Archive tiering, because warm standby is a storage class." }
+      ],
+      "correct": ["a"],
+      "explanation": "Warm standby keeps a scaled-down but functional copy of the workload running. It costs more than pilot light because more of the stack is alive before failure, but recovery has less work left."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "A global payment path has this design:\n\n```text\nRTO: near zero for regional failure\nRPO: near zero for normal regional failure\ntraffic: users are already served from more than one Region\ndata: application must handle cross-Region consistency and conflict rules\noperations: deployments, alarms, and drills cover both Regions\n```\n\nWhich strategy is this closest to?",
+      "options": [
+        { "id": "a", "text": "Multi-site active/active, because multiple Regions already serve real traffic before failure." },
+        { "id": "b", "text": "Backup and restore, because near-zero RTO requires only snapshots." },
+        { "id": "c", "text": "Pilot light, because the application compute is switched off until recovery." },
+        { "id": "d", "text": "Single-AZ restore, because regional failure is handled by one Availability Zone." }
+      ],
+      "correct": ["a"],
+      "explanation": "Multi-site active/active keeps multiple Regions serving traffic before a failure. It can reduce recovery time for a regional outage, but it is the most complex strategy because data consistency, traffic routing, deployments, and operations all become multi-Region concerns."
+    },
+    {
+      "id": "q5",
+      "type": "multiple",
+      "scenario": "Which statements are healthy strategy-selection habits?",
+      "options": [
+        { "id": "a", "text": "Choose the cheapest tested strategy that can meet the business RTO and RPO." },
+        { "id": "b", "text": "Remember that faster recovery usually means more resources, replication, automation, and drills are ready before failure." },
+        { "id": "c", "text": "Keep point-in-time recovery options even when replication exists, because replication can copy bad writes." },
+        { "id": "d", "text": "Treat active/active as automatically simpler and cheaper than backup and restore." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "Strategy choice is a cost and evidence decision. More aggressive targets usually require more steady preparation. Replication and active/active designs help with availability, but bad writes still need point-in-time recovery and tested repair paths."
+    }
+  ]
+}

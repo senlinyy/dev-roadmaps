@@ -1,6 +1,6 @@
 ---
 title: "Allow ALB To API"
-sectionSlug: why-security-group-references-beat-broad-cidrs
+sectionSlug: make-security-groups-name-the-sender
 order: 5
 ---
 

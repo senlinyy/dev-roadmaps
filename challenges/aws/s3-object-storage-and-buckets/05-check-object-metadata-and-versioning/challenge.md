@@ -1,6 +1,6 @@
 ---
 title: "Check Object Metadata And Versioning"
-sectionSlug: versioning-overwrites-and-safe-deletion
+sectionSlug: versioning
 order: 5
 ---
 

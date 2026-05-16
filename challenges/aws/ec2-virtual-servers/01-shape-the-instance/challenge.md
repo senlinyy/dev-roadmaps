@@ -1,6 +1,6 @@
 ---
 title: "Shape The Instance"
-sectionSlug: the-launch-choices-that-shape-the-machine
+sectionSlug: sample-server-shape
 order: 1
 ---
 

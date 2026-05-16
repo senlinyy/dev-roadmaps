@@ -1,6 +1,6 @@
 ---
 title: "Choose Rollback Target"
-sectionSlug: rollback-means-choosing-the-previous-revision
+sectionSlug: rollback
 order: 3
 ---
 

@@ -1,6 +1,6 @@
 ---
 title: "Follow The Domain Path"
-sectionSlug: the-path-from-name-to-service
+sectionSlug: the-browser-needs-more-than-the-alb-name
 order: 1
 ---
 

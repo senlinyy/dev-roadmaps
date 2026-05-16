@@ -1,6 +1,6 @@
 ---
 title: "Map The Runtime Pieces"
-sectionSlug: the-ecs-pieces-in-one-mental-model
+sectionSlug: what-is-ecs
 order: 1
 ---
 

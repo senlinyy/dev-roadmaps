@@ -1,6 +1,6 @@
 ---
 title: "Read Mounted Volume Evidence"
-sectionSlug: reading-the-evidence-on-a-mounted-ebs-volume
+sectionSlug: volumes
 order: 2
 ---
 

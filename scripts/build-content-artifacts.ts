@@ -28,6 +28,45 @@ const ROADMAP_ACCENT_ORDER = [
   COLORS.lavender,
 ];
 
+const DEFAULT_ROADMAP_SLUG = 'devops';
+
+const DEFAULT_ROADMAP_BASE: Omit<RoadmapSummary, 'rootCount' | 'articleCount'> = {
+  id: 'roadmap-devops',
+  slug: DEFAULT_ROADMAP_SLUG,
+  title: 'DevOps Roadmap',
+  description: 'Build practical fluency across Linux, networking, cloud, CI/CD, infrastructure as code, containers, Kubernetes, and DevSecOps.',
+  category: 'career',
+  tags: ['Linux', 'Cloud', 'CI/CD', 'Kubernetes'],
+  icon: 'Map',
+  order: 1,
+  available: true,
+};
+
+const PLANNED_ROADMAP_BASES: Array<Omit<RoadmapSummary, 'rootCount' | 'articleCount'>> = [
+  {
+    id: 'roadmap-data-engineering',
+    slug: 'data-engineering',
+    title: 'Data Engineering Roadmap',
+    description: 'Learn the systems path from SQL and data modeling through warehouses, orchestration, streaming, reliability, and analytics platforms.',
+    category: 'career',
+    tags: ['SQL', 'Pipelines', 'Warehouses', 'Streaming'],
+    icon: 'Database',
+    order: 2,
+    available: false,
+  },
+  {
+    id: 'roadmap-rust',
+    slug: 'rust',
+    title: 'Rust Roadmap',
+    description: 'Build language fluency from ownership and borrowing through traits, generics, async Rust, crates, tooling, and production patterns.',
+    category: 'language',
+    tags: ['Ownership', 'Traits', 'Async', 'Cargo'],
+    icon: 'Code2',
+    order: 3,
+    available: false,
+  },
+];
+
 type ContentTags = string[];
 
 type MetaRecord = Record<string, unknown>;
@@ -71,7 +110,7 @@ type GroupModule = {
   subs: SubModule[];
 };
 
-type RootChild = SubModule | GroupModule;
+type RootChild = ChildModule | SubModule | GroupModule;
 
 type RootModule = {
   id: string;
@@ -82,6 +121,26 @@ type RootModule = {
   description: string;
   tags: ContentTags;
   subs: RootChild[];
+};
+
+type RoadmapCategory = 'career' | 'language' | 'platform' | 'framework' | 'other';
+
+type RoadmapSummary = {
+  id: string;
+  slug: string;
+  title: string;
+  description: string;
+  category: RoadmapCategory;
+  tags: ContentTags;
+  icon: string;
+  order: number;
+  available: boolean;
+  rootCount: number;
+  articleCount: number;
+};
+
+type Roadmap = RoadmapSummary & {
+  roots: RootModule[];
 };
 
 type Ordered<T> = {
@@ -165,6 +224,8 @@ type Manifest = {
   version: string;
   generatedAt: string;
   articleCatalog: ArticleCatalogItem[];
+  roadmapSummaries: RoadmapSummary[];
+  roadmaps: Roadmap[];
   roadmapData: RootModule[];
   categories: ChallengeCategoryMeta[];
   groupsByCategory: Record<string, ChallengeGroupMeta[]>;
@@ -225,6 +286,98 @@ function getRoadmapAccentColor(index: number): string {
   return ROADMAP_ACCENT_ORDER[index % ROADMAP_ACCENT_ORDER.length];
 }
 
+function isRoadmapCategory(value: unknown): value is RoadmapCategory {
+  return value === 'career'
+    || value === 'language'
+    || value === 'platform'
+    || value === 'framework'
+    || value === 'other';
+}
+
+function isRootArticle(child: RootChild): child is ChildModule {
+  return child.category === 'Child Module';
+}
+
+function countRoadmapArticles(roots: RootModule[]): number {
+  let count = 0;
+
+  for (const root of roots) {
+    for (const child of root.subs) {
+      if (isRootArticle(child)) {
+        count += 1;
+        continue;
+      }
+
+      const subs = child.category === 'Group' ? child.subs : [child];
+      for (const sub of subs) {
+        count += sub.children.length;
+      }
+    }
+  }
+
+  return count;
+}
+
+function createRoadmapSummary(
+  base: Omit<RoadmapSummary, 'rootCount' | 'articleCount'>,
+  roots: RootModule[],
+): RoadmapSummary {
+  return {
+    ...base,
+    rootCount: roots.length,
+    articleCount: countRoadmapArticles(roots),
+  };
+}
+
+function createRoadmap(base: Omit<RoadmapSummary, 'rootCount' | 'articleCount'>, roots: RootModule[]): Roadmap {
+  return {
+    ...createRoadmapSummary(base, roots),
+    roots,
+  };
+}
+
+function createDefaultRoadmap(roots: RootModule[]): Roadmap {
+  return createRoadmap(DEFAULT_ROADMAP_BASE, roots);
+}
+
+function summarizeRoadmap(roadmap: Roadmap): RoadmapSummary {
+  return {
+    id: roadmap.id,
+    slug: roadmap.slug,
+    title: roadmap.title,
+    description: roadmap.description,
+    category: roadmap.category,
+    tags: roadmap.tags,
+    icon: roadmap.icon,
+    order: roadmap.order,
+    available: roadmap.available,
+    rootCount: roadmap.rootCount,
+    articleCount: roadmap.articleCount,
+  };
+}
+
+function createPlannedRoadmaps(): Roadmap[] {
+  return PLANNED_ROADMAP_BASES.map((base) => createRoadmap(base, []));
+}
+
+function mergeRoadmapsBySlug(roadmaps: Roadmap[]): Roadmap[] {
+  const bySlug = new Map<string, Roadmap>();
+
+  for (const roadmap of roadmaps) {
+    bySlug.set(roadmap.slug, roadmap);
+  }
+
+  return Array.from(bySlug.values()).sort((left, right) => left.order - right.order);
+}
+
+function appendMissingPlannedRoadmaps(roadmaps: Roadmap[]): Roadmap[] {
+  const mergedRoadmaps = mergeRoadmapsBySlug(roadmaps);
+  const existingSlugs = new Set(mergedRoadmaps.map((roadmap) => roadmap.slug));
+  const missingPlannedRoadmaps = createPlannedRoadmaps().filter((roadmap) => !existingSlugs.has(roadmap.slug));
+
+  return mergeRoadmapsBySlug([...mergedRoadmaps, ...missingPlannedRoadmaps]);
+}
+
 function ensureDir(dirPath: string): void {
   fs.mkdirSync(dirPath, { recursive: true });
 }
@@ -273,6 +426,25 @@ function hasNestedSubs(dir: string): boolean {
   return dirs(dir).some((name) => exists(path.join(dir, name, '_index.md')));
 }
 
+function loadChildArticle(filePath: string, slug: string, contentPath: string): Ordered<ChildModule> {
+  const childMeta = readMeta(filePath);
+  const frontmatterId = asOptionalString(childMeta.id)?.trim();
+
+  return {
+    order: asNumber(childMeta.order, 99),
+    module: {
+      id: frontmatterId || getFallbackArticleId(contentPath),
+      title: asString(childMeta.title, slug),
+      category: 'Child Module',
+      color: COLORS.white,
+      description: asString(childMeta.description, ''),
+      contentPath,
+      aliases: asStringArray(childMeta.aliases),
+      tags: asStringArray(childMeta.tags),
+    },
+  };
+}
+
 function loadSubModule(rootDir: string, parentPath: string[], subDir: string): Ordered<SubModule> | null {
   const subPath = path.join(ROOT_DIR, rootDir, ...parentPath, subDir);
   const subIndex = path.join(subPath, '_index.md');
@@ -285,23 +457,9 @@ function loadSubModule(rootDir: string, parentPath: string[], subDir: string): O
   const children: Ordered<ChildModule>[] = [];
 
   for (const fileName of fs.readdirSync(subPath).filter((name) => name.endsWith('.md') && name !== '_index.md')) {
-    const childMeta = readMeta(path.join(subPath, fileName));
     const slug = fileName.replace(/\.md$/, '');
     const contentPath = [rootDir, ...parentPath, subDir, fileName].join('/');
-    const frontmatterId = asOptionalString(childMeta.id)?.trim();
-    children.push({
-      order: asNumber(childMeta.order, 99),
-      module: {
-        id: frontmatterId || getFallbackArticleId(contentPath),
-        title: asString(childMeta.title, slug),
-        category: 'Child Module',
-        color: COLORS.white,
-        description: asString(childMeta.description, ''),
-        contentPath,
-        aliases: asStringArray(childMeta.aliases),
-        tags: asStringArray(childMeta.tags),
-      },
-    });
+    children.push(loadChildArticle(path.join(subPath, fileName), slug, contentPath));
   }
 
   children.sort((left, right) => left.order - right.order);
@@ -368,6 +526,12 @@ function loadRoadmapData(): RootModule[] {
     const rootMeta = readMeta(indexFile);
     const rootChildren: Ordered<RootChild>[] = [];
 
+    for (const fileName of fs.readdirSync(rootPath).filter((name) => name.endsWith('.md') && name !== '_index.md')) {
+      const slug = fileName.replace(/\.md$/, '');
+      const contentPath = [rootDir, fileName].join('/');
+      rootChildren.push(loadChildArticle(path.join(rootPath, fileName), slug, contentPath));
+    }
+
     for (const childDir of dirs(rootPath)) {
       const childPath = path.join(rootPath, childDir);
       const childIndex = path.join(childPath, '_index.md');
@@ -412,6 +576,229 @@ function loadRoadmapData(): RootModule[] {
   });
 
   return roots.map((entry) => entry.module);
+}
+
+function scopedId(prefix: string, parts: string[]): string {
+  return [prefix, ...parts].filter(Boolean).join('-');
+}
+
+function loadSubModuleFromBase(
+  baseDir: string,
+  contentPathPrefix: string[],
+  nodeIdPrefix: string,
+  rootDir: string,
+  parentPath: string[],
+  subDir: string,
+): Ordered<SubModule> | null {
+  const subPath = path.join(baseDir, rootDir, ...parentPath, subDir);
+  const subIndex = path.join(subPath, '_index.md');
+
+  if (!exists(subIndex)) {
+    return null;
+  }
+
+  const subMeta = readMeta(subIndex);
+  const children: Ordered<ChildModule>[] = [];
+
+  for (const fileName of fs.readdirSync(subPath).filter((name) => name.endsWith('.md') && name !== '_index.md')) {
+    const slug = fileName.replace(/\.md$/, '');
+    const contentPath = [...contentPathPrefix, rootDir, ...parentPath, subDir, fileName].join('/');
+    children.push(loadChildArticle(path.join(subPath, fileName), slug, contentPath));
+  }
+
+  children.sort((left, right) => left.order - right.order);
+
+  return {
+    order: asNumber(subMeta.order, 99),
+    module: {
+      id: `sub-${scopedId(nodeIdPrefix, [rootDir, ...parentPath, subDir])}`,
+      title: asString(subMeta.title, subDir),
+      category: 'Sub-module',
+      color: COLORS.white,
+      description: asString(subMeta.description, ''),
+      tags: asStringArray(subMeta.tags),
+      children: children.map((entry) => entry.module),
+    },
+  };
+}
+
+function loadGroupModuleFromBase(
+  baseDir: string,
+  contentPathPrefix: string[],
+  nodeIdPrefix: string,
+  rootDir: string,
+  groupDir: string,
+): Ordered<GroupModule> | null {
+  const groupPath = path.join(baseDir, rootDir, groupDir);
+  const groupIndex = path.join(groupPath, '_index.md');
+
+  if (!exists(groupIndex)) {
+    return null;
+  }
+
+  const groupMeta = readMeta(groupIndex);
+  const subs: Ordered<SubModule>[] = [];
+
+  for (const subDir of dirs(groupPath)) {
+    const loaded = loadSubModuleFromBase(baseDir, contentPathPrefix, nodeIdPrefix, rootDir, [groupDir], subDir);
+    if (loaded) {
+      subs.push(loaded);
+    }
+  }
+
+  subs.sort((left, right) => left.order - right.order);
+
+  return {
+    order: asNumber(groupMeta.order, 99),
+    module: {
+      id: `group-${scopedId(nodeIdPrefix, [rootDir, groupDir])}`,
+      title: asString(groupMeta.title, groupDir),
+      category: 'Group',
+      color: COLORS.white,
+      description: asString(groupMeta.description, ''),
+      tags: asStringArray(groupMeta.tags),
+      subs: subs.map((entry) => entry.module),
+    },
+  };
+}
+
+function loadRootModulesFromBase(baseDir: string, contentPathPrefix: string[], nodeIdPrefix: string): RootModule[] {
+  if (!exists(baseDir)) {
+    return [];
+  }
+
+  const roots: Ordered<RootModule>[] = [];
+
+  for (const rootDir of dirs(baseDir)) {
+    const rootPath = path.join(baseDir, rootDir);
+    const indexFile = path.join(rootPath, '_index.md');
+
+    if (!exists(indexFile)) {
+      continue;
+    }
+
+    const rootMeta = readMeta(indexFile);
+    const rootChildren: Ordered<RootChild>[] = [];
+
+    for (const fileName of fs.readdirSync(rootPath).filter((name) => name.endsWith('.md') && name !== '_index.md')) {
+      const slug = fileName.replace(/\.md$/, '');
+      const contentPath = [...contentPathPrefix, rootDir, fileName].join('/');
+      rootChildren.push(loadChildArticle(path.join(rootPath, fileName), slug, contentPath));
+    }
+
+    for (const childDir of dirs(rootPath)) {
+      const childPath = path.join(rootPath, childDir);
+      const childIndex = path.join(childPath, '_index.md');
+
+      if (!exists(childIndex)) {
+        continue;
+      }
+
+      if (hasArticles(childPath)) {
+        const sub = loadSubModuleFromBase(baseDir, contentPathPrefix, nodeIdPrefix, rootDir, [], childDir);
+        if (sub) {
+          rootChildren.push(sub);
+        }
+      } else if (hasNestedSubs(childPath)) {
+        const group = loadGroupModuleFromBase(baseDir, contentPathPrefix, nodeIdPrefix, rootDir, childDir);
+        if (group) {
+          rootChildren.push(group);
+        }
+      }
+    }
+
+    rootChildren.sort((left, right) => left.order - right.order);
+
+    roots.push({
+      order: asNumber(rootMeta.order, 99),
+      module: {
+        id: `root-${scopedId(nodeIdPrefix, [rootDir])}`,
+        title: asString(rootMeta.title, rootDir),
+        category: 'Root Module',
+        color: COLORS.coral,
+        icon: asString(rootMeta.icon, 'BookOpen'),
+        description: asString(rootMeta.description, ''),
+        tags: asStringArray(rootMeta.tags),
+        subs: rootChildren.map((entry) => entry.module),
+      },
+    });
+  }
+
+  roots.sort((left, right) => left.order - right.order);
+  roots.forEach((entry, index) => {
+    entry.module.color = getRoadmapAccentColor(index);
+  });
+
+  return roots.map((entry) => entry.module);
+}
+
+function readRoadmapBase(slug: string): Omit<RoadmapSummary, 'rootCount' | 'articleCount'> | null {
+  const roadmapIndex = path.join(ROOT_DIR, 'roadmaps', slug, '_index.md');
+
+  if (!exists(roadmapIndex)) {
+    return null;
+  }
+
+  const meta = readMeta(roadmapIndex);
+  const category = isRoadmapCategory(meta.category) ? meta.category : 'career';
+
+  return {
+    id: asString(meta.id, `roadmap-${slug}`),
+    slug,
+    title: asString(meta.title, slug),
+    description: asString(meta.description, ''),
+    category,
+    tags: asStringArray(meta.tags),
+    icon: asString(meta.icon, 'Map'),
+    order: asNumber(meta.order, 99),
+    available: asBoolean(meta.available, true),
+  };
+}
+
+function loadRoadmapFromDirectory(slug: string): Roadmap | null {
+  const roadmapDir = path.join(ROOT_DIR, 'roadmaps', slug);
+  const modulesDir = path.join(roadmapDir, 'modules');
+  const indexFile = path.join(roadmapDir, '_index.md');
+
+  if (!exists(indexFile)) {
+    return null;
+  }
+
+  const hasModulesDir = exists(modulesDir);
+  const rootBaseDir = hasModulesDir ? modulesDir : roadmapDir;
+  const contentPathPrefix = hasModulesDir ? ['roadmaps', slug, 'modules'] : ['roadmaps', slug];
+  const roots = loadRootModulesFromBase(rootBaseDir, contentPathPrefix, slug);
+  const base = readRoadmapBase(slug);
+
+  return base ? createRoadmap(base, roots) : null;
+}
+
+function loadExplicitRoadmaps(): Roadmap[] {
+  const roadmapsDir = path.join(ROOT_DIR, 'roadmaps');
+
+  if (!exists(roadmapsDir)) {
+    return [];
+  }
+
+  return dirs(roadmapsDir)
+    .map(loadRoadmapFromDirectory)
+    .filter((roadmap): roadmap is Roadmap => roadmap !== null);
+}
+
+function loadLegacyDefaultRoadmap(): Roadmap | null {
+  const roots = loadRoadmapData();
+
+  return roots.length > 0 ? createDefaultRoadmap(roots) : null;
+}
+
+function loadRoadmaps(): Roadmap[] {
+  const legacyRoadmap = loadLegacyDefaultRoadmap();
+  const roadmaps = [
+    ...(legacyRoadmap ? [legacyRoadmap] : []),
+    ...loadExplicitRoadmaps(),
+  ];
+
+  return appendMissingPlannedRoadmaps(roadmaps);
 }
 
 const CHALLENGES_ROOT = path.join(ROOT_DIR, 'challenges');
@@ -641,6 +1028,11 @@ function walkRoadmapArticles(roadmapData: RootModule[]): string[] {
 
   for (const root of roadmapData) {
     for (const child of root.subs) {
+      if (isRootArticle(child)) {
+        contentPaths.push(child.contentPath);
+        continue;
+      }
+
       const subs = child.category === 'Group' ? child.subs : [child];
 
       for (const sub of subs) {
@@ -659,6 +1051,26 @@ function buildArticleCatalog(roadmapData: RootModule[]): ArticleCatalogItem[] {
 
   for (const root of roadmapData) {
     for (const child of root.subs) {
+      if (isRootArticle(child)) {
+        const slug = slugifyTitle(child.title);
+        const aliases = new Set<string>();
+        aliases.add(slug);
+        aliases.add(child.contentPath);
+        const legacyGeneratedId = getLegacyGeneratedArticleId(child.contentPath);
+        if (legacyGeneratedId) aliases.add(legacyGeneratedId);
+        for (const alias of child.aliases ?? []) aliases.add(alias);
+        aliases.delete(child.id);
+
+        catalog.push({
+          id: child.id,
+          title: child.title,
+          slug,
+          contentPath: child.contentPath,
+          aliases: Array.from(aliases).sort(),
+        });
+        continue;
+      }
+
       const subs = child.category === 'Group' ? child.subs : [child];
 
       for (const sub of subs) {
@@ -694,6 +1106,7 @@ const CHALLENGE_ARTICLE_PREFIXES: Record<string, string> = {
   cicd: 'cicd/',
   linux: 'devops-foundation/linux/',
   networking: 'devops-foundation/networking/',
+  rust: 'roadmaps/rust/',
 };
 
 function articleMatchesKey(article: ArticleCatalogItem, key: string): boolean {
@@ -704,19 +1117,13 @@ function articleMatchesKey(article: ArticleCatalogItem, key: string): boolean {
 }
 
 function resolveChallengeArticleId(group: ChallengeGroupMeta, catalog: ArticleCatalogItem[]): string | undefined {
-  if (group.articleId) {
-    if (!catalog.some((article) => article.id === group.articleId)) {
-      throw new Error(`Challenge group ${group.category}/${group.id} links to unknown articleId ${group.articleId}.`);
-    }
-    return group.articleId;
-  }
+  const articleKey = group.articleId ?? group.articleSlug;
 
-  if (!group.articleSlug) {
+  if (!articleKey) {
     return undefined;
   }
 
-  const articleSlug = group.articleSlug;
-  const matches = catalog.filter((article) => articleMatchesKey(article, articleSlug));
+  const matches = catalog.filter((article) => articleMatchesKey(article, articleKey));
   const categoryPrefix = CHALLENGE_ARTICLE_PREFIXES[group.category];
   const scopedMatches = categoryPrefix
     ? matches.filter((article) => article.contentPath?.startsWith(categoryPrefix))
@@ -728,10 +1135,10 @@ function resolveChallengeArticleId(group: ChallengeGroupMeta, catalog: ArticleCa
   }
 
   if (candidates.length > 1) {
-    throw new Error(`Challenge group ${group.category}/${group.id} has ambiguous articleSlug ${articleSlug}. Add articleId.`);
+    throw new Error(`Challenge group ${group.category}/${group.id} has ambiguous article key ${articleKey}. Add articleId.`);
   }
 
-  throw new Error(`Challenge group ${group.category}/${group.id} links to unknown articleSlug ${articleSlug}.`);
+  throw new Error(`Challenge group ${group.category}/${group.id} links to unknown article key ${articleKey}.`);
 }
 
 function resolveArticleIdsForGroups(
@@ -780,8 +1187,10 @@ function writeGroupArtifacts(
 }
 
 function buildManifest(): Manifest {
-  const roadmapData = loadRoadmapData();
-  const articleCatalog = buildArticleCatalog(roadmapData);
+  const roadmaps = loadRoadmaps();
+  const roadmapData = roadmaps.find((roadmap) => roadmap.slug === DEFAULT_ROADMAP_SLUG)?.roots ?? roadmaps[0]?.roots ?? [];
+  const allRoadmapData = roadmaps.flatMap((roadmap) => roadmap.roots);
+  const articleCatalog = buildArticleCatalog(allRoadmapData);
   const categories = loadCategories();
   const rawGroupsByCategory = Object.fromEntries(
     categories.map((category) => [category.id, loadGroupsForCategory(category.id)]),
@@ -833,6 +1242,8 @@ function buildManifest(): Manifest {
     version: VERSION,
     generatedAt: GENERATED_AT,
     articleCatalog,
+    roadmapSummaries: roadmaps.map(summarizeRoadmap),
+    roadmaps,
     roadmapData,
     categories,
     groupsByCategory,
@@ -880,7 +1291,7 @@ function main(): void {
   });
   writeJson(path.join(versionRoot, 'manifest.json'), manifest);
   writeGroupArtifacts(versionRoot, manifest.categories, manifest.groupsByCategory);
-  writeArticleArtifacts(versionRoot, manifest.roadmapData);
+  writeArticleArtifacts(versionRoot, manifest.roadmaps.flatMap((roadmap) => roadmap.roots));
   writeText(path.join(DIST_ROOT, '.nojekyll'), '');
   writeStaticIndex();
 

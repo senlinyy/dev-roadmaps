@@ -1,6 +1,6 @@
 ---
 title: "Choose The Recovery Action"
-sectionSlug: rollback-target-and-recovery-thinking
+sectionSlug: rollback
 order: 5
 ---
 

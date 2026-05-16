@@ -1,6 +1,6 @@
 ---
 title: "Model Relational State"
-sectionSlug: why-orders-fit-a-relational-database
+sectionSlug: relational-shape
 order: 1
 ---
 

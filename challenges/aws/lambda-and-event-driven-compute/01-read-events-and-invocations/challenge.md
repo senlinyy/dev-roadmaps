@@ -1,6 +1,6 @@
 ---
 title: "Read Events and Invocations"
-sectionSlug: events-handlers-and-invocations
+sectionSlug: events
 order: 1
 ---
 

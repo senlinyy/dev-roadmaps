@@ -12,7 +12,7 @@
         { "id": "d", "text": "Change the ALB health check matcher because the browser sees a backend error." }
       ],
       "correct": ["a"],
-      "explanation": "The app reached the AWS API and received an authorization decision. That points to IAM, resource policy, or key access, not to the database port. A network change would not grant `secretsmanager:GetSecretValue`."
+      "explanation": "The app reached the AWS API and received an authorization decision. That points to IAM, resource policy, or key access. A network change would not grant `secretsmanager:GetSecretValue`."
     },
     {
       "id": "q2",

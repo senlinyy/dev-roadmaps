@@ -1,6 +1,6 @@
 ---
 title: "Read Route Table Targets"
-sectionSlug: route-tables-are-the-traffic-directions
+sectionSlug: route-tables-make-public-and-private-concrete
 order: 5
 ---
 

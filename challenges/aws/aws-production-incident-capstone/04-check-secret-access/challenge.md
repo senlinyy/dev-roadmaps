@@ -1,6 +1,6 @@
 ---
 title: "Check Secret Access"
-sectionSlug: config-secrets-and-permissions
+sectionSlug: runtime-contract
 order: 4
 ---
 

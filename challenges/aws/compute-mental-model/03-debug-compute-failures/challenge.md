@@ -1,6 +1,6 @@
 ---
 title: "Debug Compute Failures"
-sectionSlug: a-practical-diagnostic-path
+sectionSlug: scaling-and-failures
 order: 3
 ---
 

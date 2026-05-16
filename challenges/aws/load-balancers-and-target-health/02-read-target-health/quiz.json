@@ -45,7 +45,7 @@
       "type": "multiple",
       "scenario": "Which target health interpretations are sound?",
       "options": [
-        { "id": "a", "text": "`healthy` means the target passed the configured health check, not that every app feature is perfect." },
+        { "id": "a", "text": "`healthy` means the target passed the configured health check; deeper app feature checks still need their own evidence." },
         { "id": "b", "text": "`Target.Timeout` can come from a wrong port, blocked security group path, or a process that is too slow to answer." },
         { "id": "c", "text": "`draining` means the target is being removed from service, often during replacement." },
         { "id": "d", "text": "`healthy` means the database credentials, IAM permissions, and every external dependency are all correct." }

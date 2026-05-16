@@ -1,6 +1,6 @@
 ---
 title: "Inspect Export Objects"
-sectionSlug: designing-keys-for-orders-exports
+sectionSlug: keys
 order: 4
 ---
 

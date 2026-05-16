@@ -1,6 +1,6 @@
 ---
 title: "Diagnose ALB Failures"
-sectionSlug: a-practical-diagnostic-path
+sectionSlug: walk-the-diagnostic-path
 order: 3
 ---
 

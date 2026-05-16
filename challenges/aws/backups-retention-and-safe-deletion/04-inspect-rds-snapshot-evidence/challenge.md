@@ -1,6 +1,6 @@
 ---
 title: "Inspect RDS Snapshot Evidence"
-sectionSlug: rds-snapshots-and-point-in-time-recovery
+sectionSlug: snapshots
 order: 4
 ---
 

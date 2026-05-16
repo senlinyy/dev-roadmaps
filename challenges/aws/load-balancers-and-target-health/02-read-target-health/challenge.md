@@ -1,6 +1,6 @@
 ---
 title: "Read Target Health"
-sectionSlug: what-target-health-really-means
+sectionSlug: read-target-health-as-evidence
 order: 2
 ---
 

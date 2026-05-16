@@ -1,6 +1,6 @@
 ---
 title: "Match Data Shapes"
-sectionSlug: start-with-the-shape-of-the-data
+sectionSlug: data-shapes
 order: 1
 ---
 

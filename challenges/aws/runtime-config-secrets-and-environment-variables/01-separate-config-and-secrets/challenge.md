@@ -1,6 +1,6 @@
 ---
 title: "Separate Config and Secrets"
-sectionSlug: ordinary-values-secrets-and-defaults
+sectionSlug: runtime-config
 order: 1
 ---
 

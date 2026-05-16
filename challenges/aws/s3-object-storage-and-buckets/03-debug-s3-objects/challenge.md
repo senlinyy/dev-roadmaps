@@ -1,6 +1,6 @@
 ---
 title: "Debug S3 Objects"
-sectionSlug: debugging-missing-or-unreadable-objects
+sectionSlug: access
 order: 3
 ---
 

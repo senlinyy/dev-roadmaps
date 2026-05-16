@@ -1,6 +1,6 @@
 ---
 title: "Protect Idempotency"
-sectionSlug: conditional-writes-for-idempotency
+sectionSlug: conditional-writes
 order: 2
 ---
 

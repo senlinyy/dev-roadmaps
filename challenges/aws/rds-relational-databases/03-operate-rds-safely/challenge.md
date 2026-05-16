@@ -1,6 +1,6 @@
 ---
 title: "Operate RDS Safely"
-sectionSlug: schema-changes-are-part-of-operations
+sectionSlug: schema-changes
 order: 3
 ---
 

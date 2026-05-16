@@ -1,6 +1,6 @@
 ---
 title: "Choose Disk or Files"
-sectionSlug: three-storage-shapes-blocks-files-and-objects
+sectionSlug: attached-storage
 order: 1
 ---
 

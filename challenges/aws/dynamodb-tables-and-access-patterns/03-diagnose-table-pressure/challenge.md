@@ -1,6 +1,6 @@
 ---
 title: "Diagnose Table Pressure"
-sectionSlug: failure-modes-and-a-diagnostic-path
+sectionSlug: capacity-and-pressure
 order: 3
 ---
 

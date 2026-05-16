@@ -1,6 +1,6 @@
 ---
 title: "Place The Network Boundary"
-sectionSlug: the-network-boundary-before-the-first-deploy
+sectionSlug: place-the-boundary-before-the-first-deploy
 order: 1
 ---
 

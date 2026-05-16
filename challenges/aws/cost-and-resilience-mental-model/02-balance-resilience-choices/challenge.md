@@ -1,6 +1,6 @@
 ---
 title: "Balance Resilience Choices"
-sectionSlug: resilience-means-serving-or-recovering
+sectionSlug: resilience-shapes
 order: 2
 ---
 

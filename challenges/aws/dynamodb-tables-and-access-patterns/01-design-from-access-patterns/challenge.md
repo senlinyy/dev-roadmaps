@@ -1,6 +1,6 @@
 ---
 title: "Design From Access Patterns"
-sectionSlug: the-query-shape-comes-first
+sectionSlug: access-patterns
 order: 1
 ---
 

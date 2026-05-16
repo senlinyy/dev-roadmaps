@@ -1,6 +1,6 @@
 ---
 title: "Check The Connection Path"
-sectionSlug: the-connection-path-from-ecs-to-rds
+sectionSlug: subnets-and-security-groups
 order: 2
 ---
 

@@ -1,6 +1,6 @@
 ---
 title: "Read The Runtime Contract"
-sectionSlug: the-runtime-contract
+sectionSlug: runtime-contract
 order: 1
 ---
 

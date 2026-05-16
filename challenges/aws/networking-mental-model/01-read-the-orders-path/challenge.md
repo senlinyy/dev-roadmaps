@@ -1,7 +1,7 @@
 ---
-title: "Read The Orders Path"
-sectionSlug: two-questions-before-service-names
+title: "Trace The Browser Request"
+sectionSlug: the-question-after-the-browser
 order: 1
 ---
 
-Knowledge check on reading the network for devpolaris-orders-api before jumping into service names. Focus on who should reach each layer and which path traffic should take.
+Knowledge check on tracing the `devpolaris-orders-api` request before jumping into service names. Focus on the next hop, the intended path, and the evidence each layer can provide.

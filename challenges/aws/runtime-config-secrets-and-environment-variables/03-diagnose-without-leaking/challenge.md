@@ -1,6 +1,6 @@
 ---
 title: "Diagnose Without Leaking"
-sectionSlug: diagnose-without-leaking-values
+sectionSlug: safe-diagnosis
 order: 3
 ---
 

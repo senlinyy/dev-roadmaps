@@ -1,7 +1,7 @@
 ---
-title: "Use Tools Without Tool Worship"
-sectionSlug: aws-x-ray-without-tool-worship
+title: "Use AWS Tracing Tools"
+sectionSlug: aws-tracing-tools
 order: 3
 ---
 
-Use the scenarios to decide how AWS X-Ray or OpenTelemetry should support the request story without replacing clear logs and useful names. The tool is helpful when it answers a question the team can act on.
+Use the scenarios to decide how AWS tracing tools, X-Ray, OpenTelemetry, and Application Signals should support the request story without replacing clear logs and useful names. The tool is helpful when it answers a question the team can act on.

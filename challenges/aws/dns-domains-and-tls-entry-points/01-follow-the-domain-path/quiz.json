@@ -64,7 +64,7 @@
         { "id": "d", "text": "A database subnet group in public subnets so the listener can query orders." }
       ],
       "correct": ["a"],
-      "explanation": "Once DNS and TLS work, the listener still needs to send the request somewhere useful. A fixed 404 default action does not forward to the app target group. The missing promise is listener routing, not task public IPs or database placement."
+      "explanation": "Once DNS and TLS work, the listener still needs to send the request somewhere useful. A fixed 404 default action leaves the app target group out of the path. The missing promise is listener routing."
     }
   ]
 }

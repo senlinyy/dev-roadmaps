@@ -1,6 +1,6 @@
 ---
 title: "Inspect Load Balancer Health"
-sectionSlug: health-capacity-and-traffic
+sectionSlug: health
 order: 2
 ---
 

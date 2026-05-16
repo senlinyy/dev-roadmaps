@@ -1,6 +1,6 @@
 ---
 title: "Diagnose Subnet Guardrails"
-sectionSlug: nacls-are-subnet-guardrails-that-do-not-remember
+sectionSlug: read-nacls-as-subnet-guardrails
 order: 3
 ---
 

@@ -12,7 +12,7 @@
         { "id": "d", "text": "Move the ALB to the same subnet as the certificate request." }
       ],
       "correct": ["a"],
-      "explanation": "ACM DNS validation uses a proof CNAME, not the user-facing app record. ACM must see that exact CNAME in public DNS before it can issue the certificate. This proves domain control, not backend reachability."
+      "explanation": "ACM DNS validation uses a separate proof CNAME. ACM must see that exact CNAME in public DNS before it can issue the certificate. This proves domain control; backend reachability is a later check."
     },
     {
       "id": "q2",

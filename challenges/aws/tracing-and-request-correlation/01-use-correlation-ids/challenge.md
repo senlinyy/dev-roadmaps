@@ -1,6 +1,6 @@
 ---
 title: "Use Correlation IDs"
-sectionSlug: correlation-ids-first
+sectionSlug: correlation-ids
 order: 1
 ---
 

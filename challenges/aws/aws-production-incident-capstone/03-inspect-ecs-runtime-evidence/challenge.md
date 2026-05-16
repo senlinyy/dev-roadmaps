@@ -1,6 +1,6 @@
 ---
 title: "Inspect ECS Runtime Evidence"
-sectionSlug: from-artifact-to-running-version
+sectionSlug: artifacts
 order: 3
 ---
 

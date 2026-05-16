@@ -6,13 +6,13 @@
       "type": "single",
       "scenario": "Two database rule proposals are on the review:\n\nProposal A: TCP 5432 from 10.20.0.0/16\nProposal B: TCP 5432 from sg-orders-task\n\nThe database only serves devpolaris-orders-api. Which proposal is better and why?",
       "options": [
-        { "id": "a", "text": "Proposal B, because it describes the app task tier instead of every routable address in the VPC." },
+        { "id": "a", "text": "Proposal B, because it describes the app task tier as the sender." },
         { "id": "b", "text": "Proposal A, because CIDR ranges automatically follow ECS task replacement better than security groups." },
         { "id": "c", "text": "Proposal A, because a VPC CIDR source proves that only the ALB can reach RDS." },
         { "id": "d", "text": "Proposal B only if the database is public, because private databases cannot use security group references." }
       ],
       "correct": ["a"],
-      "explanation": "A security group reference describes the role in the architecture, not a broad address range. That is helpful for Fargate tasks whose private IPs can change. It also avoids giving unrelated VPC resources the same chance to reach the database port."
+      "explanation": "A security group reference describes the role in the architecture with a named source group. That is helpful for Fargate tasks whose private IPs can change. It also avoids giving unrelated VPC resources the same chance to reach the database port."
     },
     {
       "id": "q2",

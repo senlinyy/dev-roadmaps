@@ -1,9 +1,9 @@
 ---
 title: "AWS Core Services Map"
-description: "Choose the first AWS service family by asking what job your app needs AWS to handle."
-overview: "After you know what AWS gives you, the service list becomes easier to read by job. This article maps familiar app needs to the first AWS service families: traffic, compute, data, access, signals, operations, cost, and resilience."
-tags: ["vpc", "ecs", "s3", "iam"]
-order: 2
+description: "Choose the first AWS service family to inspect by asking which app job needs help."
+overview: "After the AWS mental model, the service list becomes easier to read as a map of jobs. This article follows one orders API through traffic, compute, state, access, signals, deployment, cost, and recovery."
+tags: ["aws", "ecs", "s3", "iam", "cloudwatch"]
+order: 4
 id: article-cloud-iac-cloud-providers-core-services
 aliases:
   - cloud-iac/cloud-providers/core-services.md
@@ -12,384 +12,291 @@ aliases:
 
 ## Table of Contents
 
-1. [The Job-Based Map](#the-job-based-map)
-2. [The Running Example](#the-running-example)
-3. [Traffic: Names, Networks, And Entry Points](#traffic-names-networks-and-entry-points)
-4. [Compute: Where The Code Runs](#compute-where-the-code-runs)
-5. [Data: Files, Volumes, And Databases](#data-files-volumes-and-databases)
-6. [Access: Who Can Touch What](#access-who-can-touch-what)
-7. [Signals: How You Know It Is Working](#signals-how-you-know-it-is-working)
-8. [Operations: Images, Secrets, Deployments, And Health](#operations-images-secrets-deployments-and-health)
-9. [Cost And Resilience: Small Choices Before Traffic Grows](#cost-and-resilience-small-choices-before-traffic-grows)
+1. [The Problem](#the-problem)
+2. [The Job-Based Map](#the-job-based-map)
+3. [The Orders API](#the-orders-api)
+4. [Traffic: What Handles Public Entry](#traffic-what-handles-public-entry)
+5. [Compute: Where The Code Runs](#compute-where-the-code-runs)
+6. [State: Where Data Lives](#state-where-data-lives)
+7. [Access: Who Can Touch What](#access-who-can-touch-what)
+8. [Signals: Where Evidence Lives](#signals-where-evidence-lives)
+9. [Operations: Deployment, Cost, And Recovery](#operations-deployment-cost-and-recovery)
 10. [Debugging With The Map](#debugging-with-the-map)
-11. [Quick Recap: The Service Map Questions](#quick-recap-the-service-map-questions)
+11. [Putting It All Together](#putting-it-all-together)
+
+## The Problem
+
+A team is moving a small checkout backend into AWS. The app is familiar. It accepts orders, reads product and payment settings, stores order records, writes monthly finance exports, and needs to survive normal production change.
+
+The AWS console is less familiar. The team starts searching service names first, and every search creates more noise:
+
+- Users need a public URL, but Route 53, VPCs, subnets, listeners, target groups, and security groups all seem related.
+- The code needs to run, but EC2, ECS, Fargate, Lambda, and ECR all appear in compute conversations.
+- The app needs records, files, secrets, logs, deployment evidence, cost visibility, and recovery, but those needs do not live in one service.
+
+The mistake is starting with names. AWS has many service names because production systems have many jobs. The beginner question should be:
+
+> Which AWS service family should I look at first for this app need?
+
+This article builds that map around one production backend. Each section starts with the app need, points to the first AWS family to inspect, and shows the evidence a teammate would use later. By the end, the map has become a debugging habit, not only a study aid.
 
 ## The Job-Based Map
 
-The first AWS Foundations article started with your local app.
-It asked what changes when the app moves from your laptop into AWS.
-This article asks the next beginner question:
+The service map starts with plain questions. Do not ask whether the app uses "the right AWS service" before you know which job you are asking about.
 
-> I know what my app needs to do. How do I choose the AWS service family that handles each job?
+| Guiding question | First service family | First AWS services to recognize |
+|------------------|----------------------|---------------------------------|
+| What handles public traffic? | Traffic | Route 53, VPC, subnets, Application Load Balancer, target groups |
+| Where does code run? | Compute | EC2, ECS with Fargate, Lambda |
+| Where does state live? | Storage and databases | S3, RDS, DynamoDB, EBS, EFS |
+| Who grants access? | Identity and secrets | IAM, IAM roles, Secrets Manager |
+| Where do logs, metrics, and alarms live? | Observability | CloudWatch Logs, CloudWatch metrics, CloudWatch alarms, CloudTrail |
+| Which services help deployment? | Release operations | ECR, ECS task definitions, ECS services, health checks |
+| Which services help cost and recovery? | Cost and resilience | AWS Budgets, Cost Explorer, AWS Backup, service-specific backups |
 
-That is a better starting point than the AWS service menu.
-The menu is large because real systems need many different jobs handled separately.
-Your app needs code to run.
-It needs data to live somewhere.
-It needs users to reach it.
-It needs permissions.
-It needs logs and health evidence.
-It needs a safe way to release new versions.
-It needs cost and recovery choices before the first real traffic spike.
+Read the table from left to right. The job comes first. The service family comes second. The exact service name comes last.
 
-So do not start with "Should I use EC2, ECS, Lambda, S3, RDS, DynamoDB, IAM, VPC, or CloudWatch?"
-Start with the job:
+That order keeps the map useful. "We use ECS" is a label. "The orders API runs as an ECS service with two Fargate tasks behind an Application Load Balancer" tells you where the code runs, how traffic reaches it, and which layer to inspect when health changes.
 
-- Is this about users reaching the app?
-- Is this about where code runs?
-- Is this about files, records, or disks?
-- Is this about who can use or change something?
-- Is this about evidence that the app is working?
-- Is this about releasing a new version safely?
-- Is this about cost, backup, or failure recovery?
+There is one more habit to add early: write the map as a small design note, not as a memory exercise. The note should name the production resource, the job it performs, and the first evidence to check.
 
-Those questions turn AWS from a product list into a map.
-Each service family has a job in the system.
-The exact service choice can change later, but the job usually stays clear.
+## The Orders API
 
-Here is the map we will use:
+The running example is `devpolaris-orders-api`. It is a normal backend, not a special cloud demo. It receives checkout requests, writes order records, creates export files for finance, reads a database secret, and emits logs after each request.
 
-| App Need | AWS Service Family | First Services To Recognize |
-|----------|--------------------|-----------------------------|
-| Users need to reach the app | Traffic | Route 53, VPC, subnets, route tables, load balancers |
-| Code needs to run | Compute | EC2, ECS with Fargate, Lambda |
-| Files and records need a home | Data | S3, EBS, EFS, RDS, DynamoDB |
-| Something needs permission | Access | IAM users, roles, policies |
-| The team needs evidence | Signals | CloudWatch metrics, logs, alarms |
-| A new version needs to start safely | Operations | ECR, ECS task definitions, Secrets Manager, health checks |
-| The system needs limits and recovery | Cost and resilience | AWS Budgets, backups, multi-AZ design |
+Before choosing services, write the jobs in app language:
 
-Read the table from left to right.
-The app need comes first.
-The AWS family comes second.
-The service names come last.
+```text
+orders API needs:
+  public traffic to reach the app
+  backend code to keep running
+  order records to persist
+  finance export files to persist
+  private config to stay out of the image
+  logs and metrics after the process exits
+  releases to move safely from image to traffic
+  cost and recovery controls before the app grows
+```
 
-That order matters for learning.
-If you start with service names, AWS feels like memorization.
-If you start with the app job, AWS feels like a set of answers.
-
-## The Running Example
-
-We will keep using `devpolaris-orders-api`.
-It is a small checkout backend.
-It receives orders, validates carts, stores order records, writes finance exports, reads secrets, and emits logs.
-
-Before we choose service names, list the jobs the app needs AWS to handle:
-
-- A public name for users.
-- A traffic entry point.
-- A runtime for the backend code.
-- A database for order records.
-- A file store for finance exports.
-- A way to read secrets without hardcoding them.
-- Logs, metrics, and alarms.
-- Permissions around every action.
-- A release path for new versions.
-- Cost and recovery controls.
-
-Now the service map has a reason to exist.
-It is not a catalog.
-It is a translation from app needs to AWS service families.
-
-Here is a first teaching shape:
+Now the AWS shape has something to answer.
 
 ```mermaid
 flowchart TD
-    DNS["DNS"] --> ENTRY["Load balancer"]
-    ENTRY --> API["Orders API"]
-    API --> DB["Database"]
-    API --> FILES["Export files"]
-    API --> LOGS["Logs"]
+    User["customer"] --> Name["public name"]
+    Name --> Entry["front door"]
+    Entry --> App["orders API"]
+    App --> Records["order records"]
+    App --> Files["exports"]
+    App --> Secret["database secret"]
+    App --> Evidence["logs and metrics"]
+    Release["new version"] --> App
+    Cost["cost view"] --> Team["team review"]
+    Recovery["restore path"] --> Team
 ```
 
-In AWS words, the first version might become:
+A first production map might look like this:
 
-| Job | Possible AWS Service | Why It Appears |
-|-----|----------------------|----------------|
-| Public name | Route 53 | Users need a stable domain name |
-| HTTP entry | Application Load Balancer | The app needs a public traffic door and health checks |
-| Backend runtime | ECS with Fargate | The team wants to run a container without managing servers |
-| Order records | Amazon RDS | Orders need relational storage |
-| Finance exports | Amazon S3 | CSV files need durable object storage |
-| Runtime secret | Secrets Manager | The app needs private configuration |
-| Logs and alarms | CloudWatch | The team needs operational evidence |
-| Permissions | IAM | AWS must know who can do what |
+| App job | First AWS service | Why this is the first family to inspect |
+|---------|-------------------|-----------------------------------------|
+| Public name | Route 53 | Users need a stable DNS name for the API. |
+| HTTP entry | Application Load Balancer | Requests need a controlled entry point and target health checks. |
+| Network home | VPC and subnets | Public entry points, app tasks, and data services need placement. |
+| Runtime | ECS with Fargate | The team wants to run a container without managing EC2 instances. |
+| Container image | ECR | Deployments need a managed image registry. |
+| Order records | RDS | Orders need relational data and transactions. |
+| Export files | S3 | CSV files need object storage. |
+| Runtime secret | Secrets Manager | The database URL should not be hardcoded into the image. |
+| Runtime permission | IAM role | The task needs limited permission to read the secret and write exports. |
+| Operational evidence | CloudWatch | Logs, metrics, and alarms need a durable home. |
+| Cost watch | AWS Budgets and Cost Explorer | The team needs alerts and usage views before spend surprises become normal. |
+| Recovery | AWS Backup or service backups | Important state needs a restore path, not only a storage location. |
 
-This is not the only correct design.
-Another team might use EC2 because it needs server control.
-Another might use Lambda for an event-driven workflow.
-Another might use DynamoDB for known-key access patterns.
+Many architectures can be correct. Another backend might use Lambda because requests are short and event-driven. Another might use DynamoDB because every query is known by key. Another might use EC2 because it needs host-level control.
 
-The point is not to copy this exact architecture.
-The point is to ask which job you are solving before choosing the service.
+The map does not choose forever. It gives you a first place to look.
 
-## Traffic: Names, Networks, And Entry Points
+## Traffic: What Handles Public Entry
 
-Traffic answers the question:
+Traffic answers a concrete question:
 
-> How do users or other services reach the app?
+> How does a customer request reach healthy backend code?
 
-For a public backend, traffic usually starts with a name and ends at healthy running code.
-For `devpolaris-orders-api`, the first path might be:
+For the orders API, the first path is a chain, not a vague statement like "the internet hits ECS":
 
 ```text
 orders.devpolaris.com
-  -> DNS record
+  -> Route 53 DNS record
   -> Application Load Balancer
+  -> listener rule
   -> target group
-  -> ECS tasks
+  -> healthy ECS task
 ```
 
-Several AWS services can appear in that path.
-Route 53 can host DNS records.
-A VPC gives resources a private network boundary.
-Subnets place resources inside Availability Zones.
-Route tables decide where traffic goes next.
-Security groups and network ACLs filter traffic.
-An Application Load Balancer receives HTTP or HTTPS and forwards to healthy targets.
+Route 53 is the first service family to inspect when the name itself is wrong. It can register domains, route DNS traffic, and run health checks. But Route 53 does not prove that the backend is healthy. It only points the user toward the entry point.
 
-A beginner does not need every networking detail yet.
-The first split is enough:
-the public entry lets users reach the app, while the private network lets backend pieces talk without making every resource public.
+The Application Load Balancer is the first service family to inspect when the name reaches AWS but requests fail at the front door. An ALB receives application traffic, evaluates listener rules, forwards requests to target groups, and uses health checks to decide which targets should receive traffic.
 
-Use a short traffic note:
+That creates a useful traffic note:
 
 ```text
-traffic path:
+traffic:
   public name: orders.devpolaris.com
-  entry point: Application Load Balancer
-  backend target: ECS target group orders-api-prod
+  entry point: alb-orders-prod
+  listener: HTTPS 443
+  target group: tg-orders-api-prod
   health path: /health
-  network home: vpc-devpolaris-prod
+  backend port: 3000
 ```
 
-This note gives the reader an order.
-If the domain points to the wrong place, debugging ECS is too late.
-If the load balancer has no healthy targets, changing DNS is too early.
-If the network rule blocks the task port, the app can be running and still be unreachable.
+The non-obvious truth is that a running backend can still be absent from traffic. The ECS task can exist, the container can start, and the app can still receive no customer requests if the target group sees failed health checks, the listener points to the wrong group, or the network path blocks the backend port.
 
-The traffic family teaches a habit:
-follow the request path before changing services.
+So the traffic family teaches an order:
 
-Later networking articles will teach VPCs, subnets, route tables, security groups, network ACLs, public and private access, DNS, TLS, and load balancer health.
-For this map article, the job is simpler:
-name, entry point, network path, target, health.
+```text
+name -> load balancer -> listener -> target group -> target health -> app port
+```
+
+If the domain is wrong, changing the task definition is too late in the path. If every target is unhealthy, changing the DNS record is too early. Follow the request until the layer that stops it.
 
 ## Compute: Where The Code Runs
 
-Compute answers the question:
+Compute answers:
 
-> Where does my application process run?
+> What runs the application process?
 
-On your laptop, the answer might be `node server.js`.
-In AWS, the answer depends on how much control the app needs and how the work starts.
+On a laptop, the answer might be `npm start`. In AWS, the answer is a runtime shape. EC2 gives you virtual servers. ECS runs and manages containers. Fargate lets ECS run containers without your team managing the EC2 instances underneath. Lambda runs code in response to events without managing servers.
 
-For `devpolaris-orders-api`, the team has a long-running HTTP backend packaged as a container image.
-That points toward ECS with Fargate as a reasonable first service to inspect.
-ECS gives the team a service, task definition, desired task count, and integration with a load balancer.
-Fargate means the team does not manage EC2 instances for the container runtime.
-
-That does not make ECS the answer to every compute problem.
-Use workload shape first:
-
-| Workload Shape | First AWS Service To Inspect | Why |
-|----------------|------------------------------|-----|
-| Needs server control | EC2 | You manage the operating system and process model |
-| Long-running container service | ECS with Fargate | AWS runs the container infrastructure for you |
-| Short event-driven work | Lambda | Code runs when an event invokes it |
-| Scheduled or queue-driven worker | Lambda or ECS task | The best fit depends on runtime length and packaging |
-
-The compute choice should answer six plain questions:
-
-- What code runs?
-- What package starts it?
-- How many copies should exist?
-- How does traffic reach it?
-- What role does it run with?
-- What evidence proves it is healthy?
-
-For an ECS service, a first runtime note might be:
+The orders API is a long-running HTTP container, so ECS with Fargate is the first compute family to inspect. The useful words are not only "ECS" and "Fargate." The useful runtime shape is:
 
 ```text
-runtime:
-  service: orders-api-prod
+compute:
   cluster: devpolaris-prod
+  service: orders-api-prod
   task definition: orders-api:42
   desired tasks: 2
-  package: container image
+  launch type: Fargate
+  container image: orders-api:2026.05.14.1
   container port: 3000
-  health path: /health
 ```
 
-That record is more useful than "we use ECS."
-It tells a teammate what to inspect.
+ECS has a few pieces beginners should separate. A task definition is the blueprint for the application. It names the container image, CPU, memory, port mappings, logging configuration, roles, environment values, secrets, and other runtime settings. A task is a running copy of that blueprint. An ECS service keeps the desired number of tasks running.
 
-Compute failures often look like another layer at first.
-Users may see `503`.
-The load balancer may show zero healthy targets.
-But the real issue may be the container crashing because an environment value is missing.
-The service map keeps the reader from guessing.
+That separation is where many production mistakes hide. A deployment might register a new task definition but not update the service. A service might desire two tasks but have zero running because the image cannot start. A task might run but fail the load balancer health check because the app listens on the wrong port.
 
-## Data: Files, Volumes, And Databases
+Use workload shape before service loyalty:
 
-Data answers the question:
+| Workload shape | First compute service to inspect | Why |
+|----------------|----------------------------------|-----|
+| Needs full server control | EC2 | You choose and manage the virtual server shape and operating system behavior. |
+| Long-running container API | ECS with Fargate | The service runs containers while AWS handles the server capacity layer. |
+| Short event-driven work | Lambda | Code starts when an event invokes it and scales around that event model. |
+| Scheduled worker | Lambda or ECS task | The choice depends on runtime length, packaging, dependencies, and operational fit. |
 
-> What shape of information does my app need to keep?
+The compute family teaches a habit: describe how the code becomes a running process. "It runs on AWS" is too vague. Name the service, desired count, package, port, role, and health signal.
 
-Do not start with "S3 or RDS?"
-Start with the data shape.
-Order records, uploaded images, monthly CSV exports, attached disks, shared files, and key-value lookups are not the same problem.
+## State: Where Data Lives
 
-For `devpolaris-orders-api`, the app has at least two data shapes.
-Order records need relationships, updates, and queries.
-Finance exports are whole files that need durable storage and access control.
+State answers:
 
-That gives us this first map:
+> What kind of information must survive after the process exits?
 
-| Data Need | First AWS Service To Inspect | Why |
-|-----------|------------------------------|-----|
-| Order records | Amazon RDS | Relational data, transactions, SQL queries |
-| Finance export files | Amazon S3 | Durable object storage for files |
-| VM disk state | Amazon EBS | Block storage attached to EC2 |
-| Shared mounted files | Amazon EFS | Managed network file system |
-| Known-key items | DynamoDB | Key-value or document access pattern |
+The orders API has more than one kind of state. Order records are structured business data. Export files are objects. A container image is a deployment artifact. A virtual machine might need a block volume. A shared tool might need a mounted filesystem.
 
-The names are less important than the promise each service makes.
-S3 stores objects.
-RDS runs relational databases.
-DynamoDB fits access patterns built around keys.
-EBS behaves like a block volume for EC2.
-EFS behaves like a managed shared filesystem.
+That is why "where do we store data?" is still too broad. Start with the promise the data needs.
 
-A small data note for the orders service might say:
+| State need | First AWS service to inspect | What the service is good at first |
+|------------|------------------------------|-----------------------------------|
+| Order records with transactions | RDS | Managed relational databases such as PostgreSQL or MySQL. |
+| Finance export CSV files | S3 | Object storage in buckets, addressed by object keys. |
+| Known-key items at high scale | DynamoDB | Key-value and document data models with managed NoSQL behavior. |
+| Disk attached to an EC2 instance | EBS | Block storage volumes for EC2 instances. |
+| Shared mounted files | EFS | Managed NFS file storage that multiple compute clients can mount. |
+
+For this backend, the first state note is small:
 
 ```text
 records:
-  service: Amazon RDS
-  resource: rds-orders-prod
+  service: RDS
+  database: rds-orders-prod
   data: order records
-  risk: production customer state
+  recovery question: can we restore a usable database?
 
-files:
-  service: Amazon S3
+exports:
+  service: S3
   bucket: devpolaris-orders-exports-prod
   prefix: monthly/
-  data: finance CSV exports
-  risk: internal business data
+  data: finance CSV files
+  access question: who can write and who can read?
 ```
 
-This note prevents vague design and vague permissions.
-The app does not need "database access" in general.
-It needs the right database connection.
-The app does not need "S3 access" in general.
-It needs the required actions on one bucket or prefix.
+The non-obvious truth is that storage services are not interchangeable just because they all "keep data." S3 stores objects in buckets. Treating it like a mounted disk leads to the wrong design. RDS runs relational database engines and takes over many database administration tasks, but your team still owns schema design, query behavior, and application use. DynamoDB works best when the access pattern is designed around keys instead of ad hoc joins.
 
-The data family teaches a habit:
-ask what promise the data needs before choosing a service.
-
-Later storage and database articles will teach S3 object keys, RDS connection paths, DynamoDB access patterns, EBS, EFS, backups, retention, and safe deletion.
-Here we only need the first map.
+A good map also names recovery early. "The data is in RDS" is not the same as "we can restore checkout after a bad migration." "The export is in S3" is not the same as "finance can find the correct bucket, prefix, and version." The state family should always lead to the restore question.
 
 ## Access: Who Can Touch What
 
-Access answers the question:
+Access answers:
 
-> Who or what can use or change this AWS resource?
+> Which caller is allowed to perform which action on which resource?
 
-In AWS, that usually means IAM.
-IAM stands for Identity and Access Management.
-IAM includes users, roles, policies, and the evaluation logic that decides whether a request is allowed.
+IAM is the first family to inspect because every AWS API request has an identity and an authorization decision. The caller might be a human, a CI job, an ECS task, a Lambda function, or an AWS service acting through a role.
 
-For beginners, the most useful sentence is:
-
-> A caller tries an action on a resource.
-
-For the orders API, the running app may need to read a database secret.
-That request has a caller, an action, and a target:
+For the orders API, the app should not carry a developer access key. It should run with a task role. That role should allow only the actions the runtime actually needs:
 
 ```text
 caller:
   orders-api-task-role
 
-action:
-  secretsmanager:GetSecretValue
+allowed actions:
+  secretsmanager:GetSecretValue on orders/prod/database-url
+  s3:PutObject on devpolaris-orders-exports-prod/monthly/*
 
-resource:
-  arn:aws:secretsmanager:us-east-1:333333333333:secret:orders/prod/database-url
+not allowed:
+  s3:* on every bucket
+  secretsmanager:* on every secret
+  administrator access
 ```
 
-The app does not get access just because it runs in AWS.
-It needs a role.
-The role needs a policy.
-The policy needs the right action and resource.
-The target service may also have its own resource policy or network controls.
+Secrets Manager belongs in the same access conversation because secrets are private runtime values, not ordinary config. It can store and retrieve credentials, API keys, and other secrets. The app still needs permission to read the specific secret, and the runtime path still matters.
 
-Keep the first review small:
+One ECS gotcha is worth learning early. If a Secrets Manager secret is injected into a container as an environment variable, the value is injected when the container starts. If the secret later rotates, the already running container does not automatically receive the new value. The service needs a new task or deployment path to pick up the new secret value.
 
-| Request | Better First Question |
+That gotcha changes how you read an incident. A database password may be rotated correctly in Secrets Manager while the running task still uses the old value. The useful conclusion is more specific than "Secrets Manager is broken": check runtime configuration, deployment, and task freshness.
+
+Keep the first access review small:
+
+| Request | Better first question |
 |---------|-----------------------|
-| ECS task reads a database secret | Does the task role need only this secret? |
-| CI/CD updates the service | Does the deploy role need only this ECS service? |
-| App writes export files | Does the role need only this bucket and prefix? |
-| Human reads logs | Does the person need read-only log access? |
+| ECS task reads a database secret | Which task role is the caller, and does it need only this secret? |
+| App writes monthly exports | Which bucket and prefix does the task role need? |
+| CI updates the ECS service | Which deploy role can register task definitions and update this service? |
+| Human reads production logs | Which read-only role grants CloudWatch access without changing resources? |
 
-Access errors can feel frustrating, but they are also useful evidence.
-An `AccessDenied` response means AWS enforced a boundary.
-Now the team can ask whether the boundary is correct, whether the app used the wrong identity, or whether the request pointed at the wrong resource.
+The access family teaches a habit: name the caller, action, and resource before widening permissions. Access and network reachability are separate questions. A role can be allowed while packets cannot reach the endpoint. Packets can reach the endpoint while IAM denies the action.
 
-The access family teaches a habit:
-name the caller, action, and resource before widening permissions.
+## Signals: Where Evidence Lives
 
-Later identity articles will teach IAM roles, policies, principals, temporary credentials, service roles, and audit trails in detail.
+Signals answer:
 
-## Signals: How You Know It Is Working
+> What evidence tells us whether the app is working?
 
-Signals answer the question:
+CloudWatch is the first family most beginners inspect for runtime evidence. CloudWatch can monitor AWS resources and applications, collect metrics, store logs, show dashboards, and trigger alarms. CloudWatch Logs stores log events in log streams and log groups, so logs survive after a container exits.
 
-> What evidence tells me the app is healthy or broken?
-
-Without signals, a team has to guess.
-With useful signals, the team can follow a request, see a dependency failure, and decide whether a release is safe.
-
-CloudWatch is the first AWS observability service many beginners meet.
-It can store metrics, logs, alarms, dashboards, and events from many AWS services and applications.
-That does not mean observability appears by itself.
-Your app still needs useful log lines.
-Your alarms still need meaningful thresholds.
-Your dashboard still needs context.
-
-For `devpolaris-orders-api`, a first signal plan might be:
+For the orders API, a signal note might be:
 
 ```text
-logs:
-  CloudWatch log group: /aws/ecs/orders-api-prod
-  include request id, route, status, dependency errors
-
-metrics:
-  load balancer request count and target errors
-  ECS CPU and memory
-  database connections and latency
-
-alarms:
-  high 5xx rate
-  no healthy targets
-  database connection failures
+signals:
+  app logs: /aws/ecs/orders-api-prod
+  load balancer metrics: request count, 5xx, target response time
+  ECS metrics: CPU, memory, running task count
+  RDS metrics: connections, CPU, storage, latency
+  alarms: high 5xx, no healthy targets, database connection pressure
 ```
 
-A useful log line carries enough context to move the team forward:
+This note does not make observability automatic. The app still needs useful log lines. The team still needs meaningful alarm thresholds and owners. A log that says `error` is weak evidence. A log that names the request, route, dependency, status, and error gives the next engineer a path.
 
 ```text
-2026-05-06T10:31:04Z ERROR checkout failed
+2026-05-14T10:31:04Z ERROR checkout failed
 request_id=req_8f17
 route=POST /orders
 status=503
@@ -397,143 +304,79 @@ dependency=rds-orders-prod
 message="database connection timed out"
 ```
 
-That line names the request, route, status, dependency, and failure.
-It does not merely say "error."
-It gives the team a next place to look.
+CloudTrail is a different kind of signal. It records AWS account activity such as actions taken through the console, CLI, SDKs, APIs, and AWS services. If a bucket policy changed or an ECS service was updated, application logs might show the symptom. CloudTrail is where you look for the control-plane change.
 
-The signals family teaches a habit:
-do not ask whether AWS is working in general.
-Ask what evidence each layer gives you.
+The non-obvious truth is that no single evidence source owns the whole story. Target health tells you whether the load balancer trusts a backend. ECS task state tells you whether the runtime exists. Application logs tell you what the code experienced. CloudWatch metrics show trends and thresholds. CloudTrail tells you who or what changed AWS resources.
 
-Later observability articles will teach CloudWatch logs, metrics, alarms, dashboards, tracing, and request correlation in more depth.
+The signals family teaches a habit: choose evidence that matches the question.
 
-## Operations: Images, Secrets, Deployments, And Health
+## Operations: Deployment, Cost, And Recovery
 
-Operations answers the question:
+Operations answers three practical questions:
 
-> How does a new version become safely running code?
+> How does a new version become healthy traffic?
 
-Running code once is not the whole job.
-A team needs to package the app, store the package, attach runtime configuration, provide secrets safely, roll out a new version, and prove health before real traffic depends on it.
+> What spend should someone notice?
 
-For an ECS container service, the operational path might be:
+> What restore path protects important state?
+
+For an ECS container service, deployment is a chain. ECR stores the container image. The ECS task definition points at the image and runtime settings. The ECS service starts tasks from the new revision and replaces old ones according to its deployment settings. The load balancer health check decides whether traffic should trust the new tasks. CloudWatch shows logs, metrics, and alarms during the change.
 
 ```text
-build image
-  -> push image to ECR
-  -> register task definition
-  -> update ECS service
-  -> wait for healthy targets
-  -> watch logs and metrics
+deployment:
+  image: ecr/orders-api:2026.05.14.1
+  task definition: orders-api:42
+  service: orders-api-prod
+  desired tasks: 2
+  health check: /health
+  evidence: target health, ECS events, app logs, 5xx metrics
 ```
 
-ECR stores container images.
-An ECS task definition describes how a task should run: image, CPU, memory, ports, environment, secrets, logging, and roles.
-Secrets Manager can hold sensitive values.
-The load balancer and ECS service use health checks to decide whether a task should receive traffic.
+The important tradeoff is speed versus proof. A deployment event can prove AWS accepted a new desired state. It does not prove the app read the right secret, connected to the database, passed health checks, and served real checkout traffic. That proof comes from traffic, compute, access, and signals together.
 
-A release note might look like this:
+Cost visibility is also operational work. AWS Budgets can track costs and usage and send alerts when actual or forecasted spend crosses a threshold. Cost Explorer lets teams view and analyze cost and usage trends. These services are not a substitute for architecture review, but they make drift visible. The earlier you tag resources by service, environment, and owner, the easier it is to understand which part of the app is spending money.
+
+Recovery belongs beside cost because both become painful when they are added too late. AWS Backup can centralize and automate data protection for supported resources. Many services also have their own backup, snapshot, versioning, retention, or restore controls. The first question is not "which backup feature exists?" It is:
 
 ```text
-release: 2026.05.06.3
-image: 333333333333.dkr.ecr.us-east-1.amazonaws.com/orders-api:2026.05.06.3
-task definition: orders-api:42
-service: orders-api-prod
-secret: orders/prod/database-url
-health path: /health
-target health: 2 healthy, 0 unhealthy
-logs: /aws/ecs/orders-api-prod
+If this state is damaged or deleted, how do we restore a usable system?
 ```
 
-This note connects the release to evidence.
-The team can inspect the image tag, task definition, secret reference, service rollout, target health, and logs.
-
-The important tradeoff is speed versus proof.
-A deployment event can tell you AWS accepted a change.
-It cannot prove the app started correctly, read its secrets, connected to the database, passed health checks, and served real requests.
-That proof comes from health and signals.
-
-The operations family teaches a habit:
-do not stop at "deployed."
-Follow the version until it is healthy.
-
-Later runtime operations articles will teach task definitions, environment variables, secrets, rollout behavior, rollback choices, and health checks in detail.
-
-## Cost And Resilience: Small Choices Before Traffic Grows
-
-Cost and resilience answer two questions:
-
-> What will keep costing money?
-
-> What can fail, and how would we recover?
-
-These questions appear early, even for small systems.
-An always-on runtime costs money.
-A database costs money.
-A load balancer costs money.
-Log storage costs money.
-Backups cost money.
-Cross-AZ traffic and NAT gateways can surprise teams if nobody watches the bill.
-
-Resilience has the same pattern.
-A single-AZ dependency can fail locally.
-A missing backup can turn a small mistake into data loss.
-An alarm with no owner can fail silently.
-A restore plan nobody has tested is only a hope.
-
-For `devpolaris-orders-api`, a first review might say:
+A first operations note might say:
 
 ```text
-cost visibility:
-  required tags: service, env, owner
-  budget: monthly prod budget alert
-  log retention: 30 days for normal app logs
+cost:
+  required tags: service=orders-api, env=prod, owner=checkout
+  budget: prod monthly budget alert
+  review: Cost Explorer grouped by service and tag
 
-resilience:
-  app path spans two AZs
-  database backup enabled
-  restore process documented
-  critical alarms routed to owner
+recovery:
+  RDS backup enabled
+  export bucket retention reviewed
+  restore drill owner assigned
+  critical alarms routed to the on-call path
 ```
 
-The tradeoffs are real.
-Running across two AZs can cost more than one AZ, but it reduces the chance that one local failure takes down the whole app path.
-Keeping logs forever may feel safe, but it creates storage cost and review noise.
-Short log retention is cheaper, but it may remove evidence before an incident review.
-Backups only matter if the team can restore from them.
-
-AWS Budgets can help notice spend drift.
-AWS Backup can centralize backup policy for supported resources.
-Service-specific backup and retention controls still matter.
-
-The cost and resilience family teaches a habit:
-ask about cost and recovery while the system is still small enough to change.
-
-Later cost and resilience articles will teach budgets, right sizing, backups, recovery objectives, retention, and safe deletion.
+The operations family teaches a habit: deployment, cost, and recovery are not afterthoughts. They are part of how the service runs.
 
 ## Debugging With The Map
 
-Debugging with the map answers the question:
+Debugging with the map answers:
 
 > Which job is failing?
 
-That is usually a better first question than "which AWS service is broken?"
-The service map gives you an order to inspect.
-Start with the user path, then move toward the backend, data, access, and signals.
+That is usually better than asking which AWS service is broken. Start with the user path, then move to runtime, state, access, signals, deployment, cost, or recovery only when the evidence points there.
 
-Here is a checkout failure:
+Here is a checkout incident:
 
 ```text
 incident:
-  checkout requests return 503 after release 2026.05.06.3
+  checkout requests return 503 after release 2026.05.14.1
 
 traffic:
   orders.devpolaris.com resolves to the expected load balancer
-
-load balancer:
-  target group orders-api-prod
-  healthy targets: 0
-  reason: health checks failed with code 500
+  listener forwards to tg-orders-api-prod
+  target health: 0 healthy, 2 unhealthy
 
 compute:
   ECS desired tasks: 2
@@ -542,83 +385,77 @@ compute:
 
 signals:
   CloudWatch log group: /aws/ecs/orders-api-prod
-  error: secret "orders/prod/database-url" not found
+  error: DATABASE_URL is missing
+
+access and secrets:
+  task definition references orders/prod/database-url
+  task role can read the secret
+  secret was rotated after the previous tasks started
 ```
 
-The map narrows the problem.
-DNS works, so the public name is not the first suspect.
-The load balancer is reachable, but targets are unhealthy.
-ECS tasks are running, so AWS started the compute.
-Logs show the app cannot find its database secret.
+The map narrows the story. DNS is not the first suspect because the name reaches the expected load balancer. ECS did start the runtime because two tasks are running. Target health is failing because the app returns an unhealthy response. Logs point to missing database configuration. The secret exists and the role can read it, but the running task needs to be refreshed after the secret change.
 
-The next questions are now specific:
+The correction is now specific: update the runtime reference if it is wrong, or roll new tasks so the container receives the current secret value. That is a very different conversation from "AWS is down."
 
-- Does the task definition reference the correct secret name?
-- Is the secret in the same account and Region?
-- Does the task role have permission to read that secret?
-- Did the release change the environment name?
-
-That is a different conversation from "AWS is broken."
-The service map turned a broad failure into an operations, access, or configuration problem.
-
-Here is another failure:
+Here is another incident:
 
 ```text
 incident:
-  finance export job says "upload complete"
-  finance cannot find the CSV file in S3
+  finance export job says upload complete
+  finance cannot find the CSV in S3
 
 map checks:
-  compute: did the task run the export code?
-  access: did S3 PutObject succeed or fail?
-  data: which bucket and key did the app write?
-  account and Region: is finance looking in the same place?
+  compute: did the export task run?
+  access: did s3:PutObject succeed?
+  state: which bucket and key did the app write?
+  signals: does the log name the bucket, key, and request id?
 
 log clue:
   bucket=devpolaris-orders-export
-  key=prod/2026-05/orders.csv
+  key=monthly/2026-05/orders.csv
 
-likely correction:
-  documented bucket is devpolaris-orders-exports-prod
-  app configuration points at the old bucket name
+documented destination:
+  bucket=devpolaris-orders-exports-prod
+  prefix=monthly/
 ```
 
-This failure is not exotic.
-Many cloud bugs are name, Region, account, permission, and configuration mistakes.
-The map helps you choose the first question instead of guessing.
+The likely problem is configuration drift, not object storage in general: the app wrote to an old bucket name. The service map makes that visible because it separates runtime, access, state, and evidence.
 
-## Quick Recap: The Service Map Questions
+Many AWS failures are ordinary once the job is named: wrong account, wrong Region, wrong name, wrong target group, wrong role, wrong secret version, wrong bucket, wrong restore assumption. The map gives those checks a calm order.
 
-The core services map is a question loop.
-Use it when the AWS service list feels too large or when a failure feels vague.
+## Putting It All Together
 
-| Question | Service Family | First Evidence |
-|----------|----------------|----------------|
-| How do users reach the app? | Traffic | DNS target, load balancer, target health, network rules |
-| Where does code run? | Compute | service, task, instance, function, desired count, health |
-| What shape of data is this? | Data | bucket, database, table, volume, file system, key pattern |
-| Who can use or change it? | Access | caller, action, resource, IAM role, policy, error |
-| How do we know it works? | Signals | logs, metrics, alarms, traces, health checks |
-| How does a new version start safely? | Operations | image, task definition, secret, rollout, health evidence |
-| What costs money or can fail? | Cost and resilience | budget, tags, backups, retention, AZ posture, restore plan |
+The AWS core services map is a way to keep the application story visible inside a large service catalog.
 
-A beginner does not need every AWS service on day one.
-A beginner needs the first map:
-traffic, compute, data, access, signals, operations, cost, and resilience.
+The team in the opener needed traffic, compute, storage, secrets, logs, deployment, cost visibility, and recovery. Searching service names first made the problem noisy. Mapping jobs first made it orderly.
 
-When you learn the later AWS modules, keep bringing every service back to one question:
+For the orders API, the map now answers the first questions:
+
+- Public traffic starts at Route 53, moves through an Application Load Balancer, and depends on target health before it reaches the app.
+- Code runs as an ECS service on Fargate, using a task definition that describes the image, port, logging, roles, and secrets.
+- State is split by shape: RDS for order records, S3 for export files, and other storage services only when their promises match the data need.
+- Access starts with IAM: caller, action, resource, and only then permission changes.
+- Secrets Manager keeps private runtime values out of the image, but running tasks still need a deployment path to receive changed secret values.
+- CloudWatch and CloudTrail provide different evidence: runtime behavior, metrics, alarms, and account activity.
+- ECR, ECS deployments, health checks, budgets, cost views, backups, and restore drills make the service operable after the first launch.
+
+This article closes the foundations module by turning AWS names back into app needs. The next AWS modules go deeper into those families one at a time: identity and security, networking, compute, storage, observability, cost, and recovery. Keep the same first question with you:
 
 > What job is this service doing for the app?
 
-That question is the bridge from service names to practical cloud engineering.
+That question is the bridge from service names to practical AWS engineering.
 
 ---
 
 **References**
 
-- [How Amazon VPC works](https://docs.aws.amazon.com/vpc/latest/userguide/how-it-works.html), [What is Amazon Route 53?](https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/Welcome.html), and [Health checks for Application Load Balancer target groups](https://docs.aws.amazon.com/elasticloadbalancing/latest/application/target-group-health-checks.html) - Used for the traffic map: VPC networking, DNS routing, load balancer target groups, and target health.
-- [What is Amazon EC2?](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/concepts.html), [Amazon ECS task definitions](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task_definitions.html), and [How Lambda works](https://docs.aws.amazon.com/lambda/latest/dg/concepts-basics.html) - Used for the compute comparison between virtual machines, container task definitions, and event-driven functions.
-- [What is Amazon S3?](https://docs.aws.amazon.com/AmazonS3/latest/userguide/Welcome.html), [What is Amazon RDS?](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/Welcome.html), and [What is Amazon DynamoDB?](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/Introduction.html) - Used for the data service map covering object storage, relational records, and key-value or document access patterns.
-- [IAM roles](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles.html), [What is Amazon ECR?](https://docs.aws.amazon.com/AmazonECR/latest/userguide/what-is-ecr.html), and [Pass Secrets Manager secrets through Amazon ECS environment variables](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/secrets-envvar-secrets-manager.html) - Used for runtime access, container image storage, and secret injection into ECS tasks.
-- [Metrics in Amazon CloudWatch](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/working_with_metrics.html) and [Working with log groups and log streams](https://docs.aws.amazon.com/AmazonCloudWatch/latest/logs/Working-with-log-groups-and-streams.html) - Used for the signal model around metrics, logs, log groups, and operational evidence.
-- [Creating a budget](https://docs.aws.amazon.com/cost-management/latest/userguide/budgets-create.html) and [What is AWS Backup?](https://docs.aws.amazon.com/aws-backup/latest/devguide/whatisbackup.html) - Used for the cost and resilience section covering budget alerts and centralized backup planning.
+- [What is Amazon VPC?](https://docs.aws.amazon.com/vpc/latest/userguide/what-is-amazon-vpc.html). Supports the traffic and placement map around VPCs, subnets, route tables, gateways, and private AWS service access.
+- [What is Amazon Route 53?](https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/Welcome.html). Supports the DNS role of Route 53, including domain names, DNS routing, and health checking.
+- [What is an Application Load Balancer?](https://docs.aws.amazon.com/elasticloadbalancing/latest/application/introduction.html) and [Health checks for Application Load Balancer target groups](https://docs.aws.amazon.com/elasticloadbalancing/latest/application/target-group-health-checks.html). Support the front-door, listener, target group, and target health explanations.
+- [What is Amazon Elastic Container Service?](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/Welcome.html), [Architect for AWS Fargate for Amazon ECS](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/AWS_Fargate.html), and [Amazon ECS task definitions](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task_definitions.html). Support the ECS, Fargate, service, task, and task definition model.
+- [What is Amazon EC2?](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/concepts.html) and [What is AWS Lambda?](https://docs.aws.amazon.com/lambda/latest/dg/welcome.html). Support the compute comparison between virtual servers, container services, and event-driven functions.
+- [What is Amazon S3?](https://docs.aws.amazon.com/AmazonS3/latest/userguide/Welcome.html), [What is Amazon RDS?](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/Welcome.html), [What is Amazon DynamoDB?](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/Introduction.html), [What is Amazon EBS?](https://docs.aws.amazon.com/ebs/latest/userguide/what-is-ebs.html), and [What is Amazon EFS?](https://docs.aws.amazon.com/efs/latest/ug/whatisefs.html). Support the storage and database map for objects, relational data, key-value/document data, block volumes, and shared file systems.
+- [What is IAM?](https://docs.aws.amazon.com/IAM/latest/UserGuide/introduction.html), [IAM roles](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles.html), [What is AWS Secrets Manager?](https://docs.aws.amazon.com/secretsmanager/latest/userguide/intro.html), and [Pass Secrets Manager secrets through Amazon ECS environment variables](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/secrets-envvar-secrets-manager.html). Support the caller/action/resource access model, temporary-role model, secrets storage, and ECS secret injection gotcha.
+- [What is Amazon CloudWatch?](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/WhatIsCloudWatch.html), [What is Amazon CloudWatch Logs?](https://docs.aws.amazon.com/AmazonCloudWatch/latest/logs/WhatIsCloudWatchLogs.html), and [What Is AWS CloudTrail?](https://docs.aws.amazon.com/awscloudtrail/latest/userguide/cloudtrail-user-guide.html). Support the distinction between metrics, logs, alarms, runtime evidence, and account activity.
+- [What is Amazon ECR?](https://docs.aws.amazon.com/AmazonECR/latest/userguide/what-is-ecr.html) and [Deploy Amazon ECS services by replacing tasks](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/deployment-type-ecs.html). Support the deployment path from image registry to task replacement and health evidence.
+- [Managing your costs with AWS Budgets](https://docs.aws.amazon.com/cost-management/latest/userguide/budgets-managing-costs.html), [Analyzing your costs and usage with AWS Cost Explorer](https://docs.aws.amazon.com/cost-management/latest/userguide/ce-what-is.html), and [What is AWS Backup?](https://docs.aws.amazon.com/aws-backup/latest/devguide/whatisbackup.html). Support the cost visibility and centralized backup planning discussion.

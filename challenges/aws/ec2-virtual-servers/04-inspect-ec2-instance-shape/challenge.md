@@ -1,6 +1,6 @@
 ---
 title: "Inspect EC2 Instance Shape"
-sectionSlug: the-launch-choices-that-shape-the-machine
+sectionSlug: sample-server-shape
 order: 4
 ---
 

@@ -12,7 +12,7 @@
         { "id": "d", "text": "The database rejected the browser directly." }
       ],
       "correct": ["a"],
-      "explanation": "`server: awselb/2.0` is strong evidence that the ALB answered. A 503 from the ALB usually means it could not forward to usable backend targets. Move inward instead of changing DNS first."
+      "explanation": "`server: awselb/2.0` is strong evidence that the ALB answered. A 503 from the ALB usually means it could not forward to usable backend targets. Move inward through listener and target health evidence before changing DNS."
     },
     {
       "id": "q2",
@@ -21,7 +21,7 @@
       "options": [
         { "id": "a", "text": "The host rule does not match the requested hostname, so the request may fall to the default action." },
         { "id": "b", "text": "The listener must forward on port 80 because host-header rules do not work on HTTPS." },
-        { "id": "c", "text": "The target group should be attached to Route 53 instead of the listener." },
+        { "id": "c", "text": "The target group should be attached directly to Route 53." },
         { "id": "d", "text": "The database security group needs inbound TCP 443 from the internet." }
       ],
       "correct": ["a"],
@@ -38,7 +38,7 @@
         { "id": "d", "text": "Move the listener rule to a new domain because one target is still healthy." }
       ],
       "correct": ["a"],
-      "explanation": "The ALB reached the app, and the app said it was not ready. That is useful evidence, not something to hide. Fix the readiness cause or tune the deployment behavior instead of forcing green health."
+      "explanation": "The ALB reached the app, and the app said it was still waiting on readiness. That evidence is useful. Fix the readiness cause or tune the deployment behavior before forcing green health."
     },
     {
       "id": "q4",
@@ -64,7 +64,7 @@
         { "id": "d", "text": "The target group is unused because a task cannot be registered before the HTTP server starts." }
       ],
       "correct": ["a"],
-      "explanation": "The evidence shows a timing problem: health checks fail before the server is ready. Possible fixes include reducing slow startup work, starting the HTTP listener earlier with accurate readiness, or tuning the ECS health check grace period. Always returning `200` would hide readiness rather than fix it."
+      "explanation": "The evidence shows a timing problem: health checks fail before the server is ready. Possible fixes include reducing slow startup work, starting the HTTP listener earlier with accurate readiness, or tuning the ECS health check grace period. Always returning `200` would hide the readiness bug."
     }
   ]
 }

@@ -1,6 +1,6 @@
 ---
 title: "Read The Workload Shape"
-sectionSlug: start-with-the-workload
+sectionSlug: the-workload-shape
 order: 1
 ---
 

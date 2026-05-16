@@ -8,7 +8,7 @@
       "options": [
         { "id": "a", "text": "NACLs are stateless, so the response to the customer's ephemeral port also needs an outbound allow path." },
         { "id": "b", "text": "Security groups become stateless whenever a custom NACL is attached to a subnet." },
-        { "id": "c", "text": "Inbound 443 should be placed on the database subnet NACL instead of the ALB subnet NACL." },
+        { "id": "c", "text": "Inbound 443 should be placed on the database subnet NACL." },
         { "id": "d", "text": "HTTPS requires NAT gateway return traffic even for a public ALB." }
       ],
       "correct": ["a"],

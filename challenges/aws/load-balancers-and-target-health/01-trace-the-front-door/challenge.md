@@ -1,6 +1,6 @@
 ---
 title: "Trace The Front Door"
-sectionSlug: the-front-door-problem
+sectionSlug: follow-one-request-through-the-front-door
 order: 1
 ---
 

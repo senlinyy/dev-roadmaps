@@ -1,6 +1,6 @@
 ---
 title: "Check Scaling And Queue Evidence"
-sectionSlug: desired-count-and-target-tracking
+sectionSlug: autoscaling
 order: 4
 ---
 

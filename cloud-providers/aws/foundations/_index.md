@@ -1,6 +1,6 @@
 ---
 title: "AWS Foundations"
-description: "Understand the AWS mental model and the core service map before learning individual AWS services."
-tags: ["Accounts", "Regions", "Services"]
+description: "Understand AWS jobs, account and Region placement, resource identity, and core service families before learning individual services."
+tags: ["aws", "accounts", "regions", "resources", "services"]
 order: 1
 ---

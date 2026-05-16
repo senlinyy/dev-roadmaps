@@ -1,440 +1,270 @@
 ---
-title: "Observability Mental Model"
-description: "Use logs, metrics, traces, and alarms to understand what an AWS application is doing and where to look first."
-overview: "Observability starts with one practical goal: when production behaves differently from your laptop, you need enough signals to explain what happened. This article teaches the four beginner signals through a checkout API running on AWS."
-tags: ["cloudwatch", "logs", "metrics", "alarms"]
+title: "What Is Observability"
+description: "Use logs, metrics, traces, and alarms to understand what an AWS application is doing when production behavior is spread across many services."
+overview: "Observability starts with one practical goal: when production behaves differently from your laptop, the system should leave enough evidence for the next engineer to explain what happened. This article introduces the signals that make that possible for an AWS application."
+tags: ["cloudwatch", "logs", "metrics", "traces", "alarms"]
 order: 1
 id: article-cloud-providers-aws-observability-observability-mental-model
+aliases:
+  - observability-mental-model
+  - cloud-providers/aws/observability/observability-mental-model.md
 ---
 
 ## Table of Contents
 
-1. [When Production Stops Being Your Laptop](#when-production-stops-being-your-laptop)
-2. [The Four Signals](#the-four-signals)
-3. [The Running Example](#the-running-example)
-4. [Logs Tell You What Happened](#logs-tell-you-what-happened)
-5. [Metrics Tell You How Much](#metrics-tell-you-how-much)
-6. [Traces Tell You Where Time Went](#traces-tell-you-where-time-went)
-7. [Alarms Tell Humans When To Look](#alarms-tell-humans-when-to-look)
-8. [Reading A Checkout Failure](#reading-a-checkout-failure)
-9. [Tradeoffs And Signal Quality](#tradeoffs-and-signal-quality)
+1. [The Problem](#the-problem)
+2. [What Is Observability](#what-is-observability)
+3. [The Four Signals](#the-four-signals)
+4. [The Running Example](#the-running-example)
+5. [Logs](#logs)
+6. [Metrics](#metrics)
+7. [Traces](#traces)
+8. [Alarms](#alarms)
+9. [Runtime And Audit Evidence](#runtime-and-audit-evidence)
+10. [Reading A Checkout Failure](#reading-a-checkout-failure)
+11. [Tradeoffs And Signal Quality](#tradeoffs-and-signal-quality)
+12. [Putting It All Together](#putting-it-all-together)
+13. [What's Next](#whats-next)
 
-## When Production Stops Being Your Laptop
+## The Problem
 
-On your laptop, debugging feels close to the code.
-You run `npm start`, reproduce the bug, add a `console.log`, refresh the browser, and watch the terminal.
-The app, terminal, database, and request are all near you.
+On your laptop, debugging feels close to the code. You run the server, reproduce the bug, add a log line, refresh the browser, and watch the terminal. The app, request, database, and output are all near you.
 
-AWS changes that feeling.
-The same backend may run as ECS tasks behind an Application Load Balancer.
-It may read secrets from Secrets Manager, write records to RDS, put exports in S3, and store idempotency keys in DynamoDB.
-No single terminal shows the whole story.
+AWS changes that feeling. The same checkout request may pass through API Gateway, an ECS task, RDS, S3, DynamoDB, SQS, EventBridge, and a Lambda function. Some work happens while the user waits. Some work happens later. Some work happens in a different service that the original developer did not write.
 
-Observability is the practice of leaving useful signals behind so the team can understand a running system.
-It exists because production systems are separated into many pieces.
-When the checkout API fails, you need to know whether the problem is the app, the load balancer, the database, the queue, the function, or the permission boundary.
+Then the system fails in ways a browser cannot explain:
 
-In AWS, many of those signals land in CloudWatch.
-CloudWatch is AWS's main place for logs, metrics, alarms, and dashboards.
-You will also see tracing through AWS X-Ray or OpenTelemetry, but the beginner mental model comes first.
+- Checkout returns `500`, but the app task was replaced during the deploy.
+- The API looks healthy, but customers report slow responses during payment.
+- Receipt emails are missing, and the work may be in a queue, Lambda, or an external provider.
+- A new alarm fires, but nobody knows whether it represents user impact or harmless noise.
+- A role or route changed yesterday, and the team needs to know whether that change belongs to the incident.
 
-This article follows `devpolaris-orders-api`, a Node.js checkout backend.
-The service receives checkout requests, writes order records to RDS, writes receipt and export objects to S3, uses DynamoDB for idempotency and job status, and sometimes invokes Lambda side jobs.
-The useful skill is knowing which kind of signal answers which kind of question, not memorizing every AWS screen.
+Observability is the answer to that distance. It is the habit of leaving useful evidence in the system so a team can explain production behavior without guessing.
 
-> Observability means collecting the signals you need to answer the next operational question.
+## What Is Observability
 
-Here is the first map.
-Read it from top to bottom.
-The request path is solid.
-The signal path is dotted because it is evidence about the request, not the request itself.
+Observability is the practice of collecting and connecting signals from a running system so engineers can answer operational questions. It is not just "turn on CloudWatch" and it is not collecting every possible event forever.
 
-```mermaid
-flowchart TD
-    USER["Customer request<br/>(checkout)"] --> ALB["Traffic entry<br/>(Application Load Balancer)"]
-    ALB --> APP["Running service<br/>(ECS tasks)"]
-    APP --> DATA["Data services<br/>(RDS, S3, DynamoDB)"]
-    APP -.-> LOGS["What happened<br/>(logs)"]
-    APP -.-> METRICS["How much and how often<br/>(metrics)"]
-    APP -.-> TRACE["Where time went<br/>(trace)"]
-    METRICS -.-> ALARM["Human attention<br/>(alarm)"]
-```
+The useful beginner question is simple: if this system behaves differently in production, what evidence will tell us what happened?
 
-The diagram is small on purpose.
-A beginner does not need a huge observability platform diagram yet.
-A beginner needs four reliable questions:
-what happened, how much did it happen, where did the time go, and should a human look now?
+For an AWS application, observability usually starts with CloudWatch because CloudWatch is the AWS service family for many logs, metrics, alarms, dashboards, and application monitoring views. But the service is only the home for evidence. The application still has to create useful evidence. A log that says `error` is weak. A log that names the request, route, dependency, status, and correlation ID gives the next engineer a path.
+
+Think of observability as a map of questions:
+
+| Question | Useful signal |
+| --- | --- |
+| What exactly happened in this request or worker? | Logs |
+| How often is this happening, and how bad is the shape? | Metrics |
+| Where did one request spend time across services? | Traces |
+| When should a human stop what they are doing? | Alarms |
+| Who changed an AWS resource or called an AWS API? | CloudTrail audit events |
+
+The gotcha is that these signals do not replace each other. A metric can show that errors increased. A log can show the first concrete error. A trace can show where one request slowed down. An alarm can bring a person to the problem. CloudTrail can show that a deployment role changed a load balancer or policy. The investigation becomes calmer when each signal has a job.
 
 ## The Four Signals
 
-Logs are timestamped events.
-They say what happened at a particular moment.
-An app log might say the checkout request started, the database insert failed, or the receipt upload succeeded.
-Logs are good when you need details.
+A beginner does not need a huge observability platform diagram yet. Start with four runtime signals.
 
-Metrics are numbers over time.
-They say how much, how often, how fast, or how full something is.
-An ALB metric might show a spike in HTTP 500 responses.
-An ECS metric might show high CPU.
-An RDS metric might show rising database connections.
+Logs are timestamped records of things that happened. They are best for details: request IDs, error messages, order IDs, dependency names, status codes, and stack traces. Logs answer "what happened here?"
 
-Traces follow one request through multiple steps.
-They show where time was spent and which downstream call slowed the request.
-A trace for checkout might show the app received the request, called RDS, wrote an S3 receipt, and updated DynamoDB.
+Metrics are numbers recorded over time. They are best for shape: request count, error rate, latency, CPU, memory, queue age, Lambda errors, RDS connections, and DynamoDB throttling. Metrics answer "how much, how often, and how bad?"
 
-Alarms watch a metric or expression and change state when the signal crosses a rule.
-An alarm is not the problem.
-It is the system tapping someone on the shoulder and saying, "This needs attention."
+Traces connect steps in one unit of work. They are best for path and timing: API Gateway received the request, ECS handled it, RDS took 40 ms, S3 took 900 ms, and a downstream call failed. Traces answer "where did this request go?"
 
-The four signals answer different questions:
+Alarms watch metrics or expressions and change state when a condition stays true. They are best for attention. Alarms answer "does a human need to look now?"
 
-| Signal | Beginner Question | Example |
-|--------|-------------------|---------|
-| Logs | What happened? | `payment authorize failed` |
-| Metrics | How much or how often? | `5xx responses increased` |
-| Traces | Where did time go? | `RDS insert took most of the request` |
-| Alarms | Should someone look now? | `checkout error rate stayed high` |
+Those four signals are related, but their first jobs are different:
 
-The mistake is expecting one signal to do every job.
-Logs can show the exact error, but they are awkward for answering "is the whole service getting slower?"
-Metrics are good for trends, but they often lack the request detail.
-Traces are good for following one request, but they are usually sampled and are not a replacement for logs.
-Alarms are useful for attention, but too many noisy alarms train people to ignore them.
+| Signal | First job | Common mistake |
+| --- | --- | --- |
+| Logs | Preserve concrete events | Logging too much text with no searchable fields |
+| Metrics | Show trends and pressure | Watching averages that hide painful tail latency |
+| Traces | Connect one path | Adding tracing before requests have stable names |
+| Alarms | Interrupt for action | Alerting on noise nobody can act on |
 
-You will use all four, but not all at the same moment.
-During an incident, a common path is:
-an alarm points at the symptom, a dashboard shows the shape, logs show the first useful error, and a trace shows which step was slow or failing.
+Good observability starts when the team agrees which signal answers the next question.
 
 ## The Running Example
 
-The `devpolaris-orders-api` service handles a checkout request like this:
+This module follows `devpolaris-orders-api`, a small checkout system.
 
-1. The customer sends `POST /v1/orders`.
-2. The Application Load Balancer forwards the request to an ECS task.
-3. The Node.js app validates the cart and payment result.
-4. The app writes the order to RDS.
-5. The app stores an idempotency record in DynamoDB.
-6. The app writes a receipt object to S3.
-7. A Lambda side job may send a receipt email.
-
-That is a small enough system to understand, but it already has several places where a request can fail.
-The app can throw.
-The database can reject a connection.
-DynamoDB can reject a conditional write.
-S3 can return `AccessDenied`.
-Lambda can time out.
-The load balancer can see an unhealthy target.
-
-A healthy checkout should leave signals like these:
-
-```text
-request_id=req_01J8K2M6TK7S1E9R0Y6Q
-route=POST /v1/orders
-status=201
-duration_ms=184
-order_id=ord_8x7k2n
-payment_status=authorized
-rds_write_ms=42
-dynamodb_write_ms=11
-s3_receipt_ms=27
+```mermaid
+flowchart TD
+    User["Customer"] --> API["API Gateway"]
+    API --> ECS["Orders API"]
+    ECS --> RDS["RDS"]
+    ECS --> S3["S3 receipt"]
+    ECS --> SQS["SQS job"]
+    SQS --> Lambda["Email Lambda"]
+    ECS --> Bus["EventBridge"]
+    Bus --> Workflow["Step Functions"]
 ```
 
-This is a log-shaped view.
-It gives detail for one request.
-It is useful because the request ID appears with the important steps.
+The customer sees one action: place an order. AWS sees many resources. The application creates a record in RDS, writes a receipt artifact to S3, queues email work, emits an order event, and may start a workflow.
 
-The same request also contributes to metric-shaped signals:
+Observability is what lets the team keep that path understandable after the system is running. The team should be able to ask:
 
-| Metric Idea | What It Helps You See |
-|-------------|-----------------------|
-| Request count | Is traffic normal or unusual? |
-| Error count | Are requests failing more often? |
-| Latency | Are customers waiting longer? |
-| Database connections | Is the app pressuring RDS? |
-| Task CPU and memory | Are ECS tasks near resource pressure? |
+| Need | Evidence |
+| --- | --- |
+| Did the request reach the API? | API and application logs, request count |
+| Did customer impact rise? | Error rate, latency, availability metrics |
+| Which dependency was slow? | Trace spans or correlated logs |
+| Did background work fall behind? | SQS depth and age metrics, worker logs |
+| Did a recent change matter? | Deploy records, CloudTrail events, config history |
 
-The same request can also have trace-shaped evidence:
+This article is the map. The next articles go deeper into the main signals.
 
-```text
-trace checkout req_01J8K2M6TK7S1E9R0Y6Q
+## Logs
 
-POST /v1/orders              184 ms
-  validate cart                8 ms
-  authorize payment           51 ms
-  insert order in RDS         42 ms
-  write idempotency item      11 ms
-  write receipt to S3         27 ms
-  build response               4 ms
+Logs are the most familiar signal because they look like what developers already see in a local terminal. In AWS, the important change is location. The terminal is gone. The container, function, or instance may be replaced. Logs need a durable home outside the runtime.
+
+CloudWatch Logs stores log events inside log streams, and log streams live inside log groups. A log group usually represents an application, function, service, or operational boundary. The log group owns settings such as retention and access control. That means log design is also operational design.
+
+A useful checkout log does not need to be huge:
+
+```json
+{
+  "level": "ERROR",
+  "service": "orders-api",
+  "route": "POST /checkout",
+  "requestId": "req-7b91",
+  "orderId": "order-1042",
+  "dependency": "rds",
+  "message": "failed to commit order",
+  "error": "connection timeout"
+}
 ```
 
-This kind of view is valuable because it keeps the team from arguing from memory.
-If checkout is slow, the trace gives a starting point.
-Maybe the app is slow.
-Maybe RDS is slow.
-Maybe the S3 write is slow.
-The trace gives you a map for one request.
+Notice the searchable fields. The next engineer can search by `requestId`, `orderId`, `route`, `dependency`, or `level`. The log names the failing dependency without exposing secrets or payment details.
 
-## Logs Tell You What Happened
+The gotcha is that logs are not free storage and not a safe place for private data. More logs can help, but logs with no structure become a pile. Logs with secrets become a security problem. Logs with no retention plan become a cost and compliance problem.
 
-Logs are usually the first signal a developer understands.
-You have seen `console.log`, stack traces, test output, and terminal errors.
-Cloud logs are the same idea, but they need structure and a home.
+## Metrics
 
-In AWS, application logs often go to CloudWatch Logs.
-An ECS task can send container output to a log group.
-A Lambda function sends invocation logs to a log group.
-The log group is the named container for related logs.
-The log stream is usually one runtime source, such as one ECS task or one Lambda execution environment.
+Metrics turn behavior into numbers over time. They help you see shape before reading details.
 
-Good logs are not essays.
-They are small facts written at useful moments.
-For checkout, the team wants to know when the request started, which request ID it used, what downstream call failed, and what the app decided next.
+If checkout fails once, logs may be enough. If checkout is failing for many users, the team needs to know the size and direction of the problem. Is request volume rising? Did the 5xx rate jump? Is p95 latency high? Did queue age climb? Are ECS tasks out of CPU? Are database connections near the limit?
 
-Here is a useful error log:
+CloudWatch metrics use names, namespaces, dimensions, periods, and statistics. That sounds abstract until you treat it like addressable evidence.
 
-```text
-2026-05-02T09:42:18.411Z ERROR service=devpolaris-orders-api
-request_id=req_01J8K2M6TK7S1E9R0Y6Q
-route=POST /v1/orders
-step=rds.insert_order
-error_name=ConnectionTimeout
-message="database connection timed out"
+| Metric idea | Plain meaning |
+| --- | --- |
+| Namespace | The metric family, such as `AWS/Lambda` or `AWS/RDS` |
+| Metric name | The measured thing, such as `Errors` or `CPUUtilization` |
+| Dimension | The resource or slice, such as function name or DB instance |
+| Period | The time bucket, such as 1 minute or 5 minutes |
+| Statistic | How values are summarized, such as average, sum, max, or p95 |
+
+The statistic choice matters. Average latency can look fine while a small group of users sees painful waits. Percentiles, such as p95, often show the slow tail better than an average.
+
+Metrics are strongest when they start from user impact and then move inward. First ask whether customers are seeing errors or slow responses. Then ask which layer is under pressure.
+
+## Traces
+
+Traces show the path of one unit of work across services. A trace is useful when "the system is slow" needs to become "this request spent most of its time waiting on the receipt upload" or "the Lambda side job retried the email provider."
+
+Tracing depends on identity. One request needs a shared name as it moves through the system. That name may appear as a correlation ID, request ID, or trace ID. Without shared identity, the team gets fragments: one API log, one RDS metric, one Lambda log, and no proof that they belong together.
+
+A trace is usually made of spans. Each span represents one piece of work, such as handling an HTTP route, calling RDS, writing to S3, or publishing an event. Parent-child relationships show how the work fits together.
+
+```mermaid
+flowchart LR
+    Request["Trace"] --> Api["API span"]
+    Api --> App["App span"]
+    App --> Db["RDS span"]
+    App --> Object["S3 span"]
+    App --> Queue["SQS span"]
 ```
 
-The log gives you more than the error message: request, route, step, and failing dependency.
-That means the next place to inspect is RDS connectivity and database pressure, not S3, Lambda, or the frontend.
+The gotcha is that traces are sampled and instrumentation-dependent. You may not have every request. You may not have every downstream call. Tracing improves the investigation when the application propagates context consistently and logs still carry useful fields.
 
-A less useful log would say only this:
+## Alarms
 
-```text
-checkout failed
-```
+Alarms exist because humans cannot stare at dashboards all day. A CloudWatch alarm watches a metric or expression over time and changes state when the condition is met.
 
-That log is true, but it is too small.
-It forces the next engineer to guess.
-During a real incident, guessing is expensive because every minute can create more failed checkouts and more confused customers.
+The best alarms are tied to user impact or real operational risk. They should tell someone that action may be needed, not merely that a number moved.
 
-Good logs are written for the person who will read them later.
-That person might be you, tired after a release, trying to find the first meaningful error.
+For the orders system, useful early alarms might include:
 
-## Metrics Tell You How Much
+| Alarm | Why it matters |
+| --- | --- |
+| High API 5xx rate | Customers are seeing failures |
+| High p95 checkout latency | Customers are waiting too long |
+| No healthy targets | The load balancer cannot trust app tasks |
+| High SQS age | Background work is falling behind |
+| RDS connection pressure | The database may become the bottleneck |
 
-Metrics are numbers that change over time.
-They help you see shape.
-One error log tells you what happened once.
-A metric tells you whether the error happened one time, one hundred times, or only for one target.
+Noisy alarms are dangerous in a quiet way. If an alarm fires often and rarely requires action, people learn to ignore it. If every small fluctuation becomes a page, the team loses trust in the system.
 
-AWS services publish many metrics to CloudWatch.
-An Application Load Balancer can show request count, target response time, and HTTP response categories.
-ECS can show CPU and memory use.
-RDS can show connections and database resource pressure.
-DynamoDB can show request behavior and throttling signals.
-Lambda can show errors, duration, and invocation counts.
+Good alarms have owners, context, and a first place to look. "5xx high on orders API, check API logs and target health" is better than "CPU above threshold" with no service context.
 
-The beginner habit is to connect metrics to questions:
+## Runtime And Audit Evidence
 
-| Question | Metric Direction |
-|----------|------------------|
-| Are customers failing checkout? | ALB 5xx responses and app error count |
-| Is the app overloaded? | ECS CPU and memory |
-| Is the database under pressure? | RDS connections and latency-related signals |
-| Did a side job fail? | Lambda errors and duration |
-| Is a table rejecting work? | DynamoDB error or throttle signals |
+Runtime observability explains what the running application is doing. Audit evidence explains who or what changed AWS resources and called AWS APIs.
 
-Metrics are strongest when they show change over time.
-For example:
+CloudWatch and CloudTrail often appear together during incidents, but they answer different questions.
 
-```text
-checkout dashboard, last 15 minutes
+| Evidence | Best question |
+| --- | --- |
+| CloudWatch Logs | What did the application or service report at runtime? |
+| CloudWatch Metrics | How did resource or application behavior change over time? |
+| CloudWatch Alarms | Which monitored condition crossed a threshold? |
+| CloudTrail | Which identity called which AWS API, against which resource, and when? |
 
-request count:
-  normal traffic
+If checkout fails because the app cannot connect to RDS, CloudWatch logs and metrics help explain the runtime symptom. If a security group rule changed before the failure, CloudTrail helps show who or what made that change.
 
-HTTP 5xx:
-  increased at 09:40
-
-target response time:
-  rose from normal to slow at 09:41
-
-RDS connections:
-  rising before the 5xx spike
-```
-
-This does not prove the database is the root cause.
-It gives you a direction.
-The shape says checkout errors and database pressure moved together.
-The next step is to read app logs around that time and check whether the database call failed or slowed down.
-
-Metrics are also how many alarms work.
-An alarm does not read your whole system like a human.
-It watches a metric rule.
-That is why choosing the right metric matters more than creating many alarms.
-
-## Traces Tell You Where Time Went
-
-A trace follows one request through its work.
-For beginners, think of a trace as a timeline with named steps.
-Each step is often called a span.
-A span is one measured piece of work, such as "insert order in RDS" or "write receipt to S3."
-
-You can learn the idea before learning a tracing tool.
-Imagine one checkout request:
-
-```text
-request_id=req_01J8K2M6TK7S1E9R0Y6Q
-
-POST /v1/orders                         184 ms
-  validate cart                           8 ms
-  call payment provider                  51 ms
-  insert order in RDS                    42 ms
-  write idempotency item in DynamoDB     11 ms
-  write receipt object to S3             27 ms
-  send response                           4 ms
-```
-
-If the whole request takes 184 ms, the trace helps you see where that time went.
-Without it, the team may argue from guesses:
-"It feels like the database."
-"Maybe S3 is slow."
-"Maybe the app is doing too much JSON work."
-
-The trace does not replace logs.
-It points you toward the slow or failing step.
-Then logs explain the details inside that step.
-
-In AWS, you may see AWS X-Ray for tracing, or you may use OpenTelemetry to create and export traces.
-The beginner-friendly requirement is the same in either tool:
-give one request a way to be followed across services.
-
-The most useful bridge between logs and traces is a shared request ID or trace ID.
-If the same ID appears in app logs, Lambda logs, and trace data, the team can move from one view to another without losing the story.
-
-## Alarms Tell Humans When To Look
-
-An alarm is a rule that watches a signal and changes state when the signal looks unhealthy.
-In CloudWatch, alarms commonly watch metrics.
-For example, an alarm might watch checkout 5xx responses, Lambda errors, or RDS connection pressure.
-
-Alarms exist because humans cannot stare at dashboards all day.
-A dashboard is useful when you are already looking.
-An alarm is useful when nobody is looking yet.
-
-Good alarms are tied to user impact or real operational risk.
-For `devpolaris-orders-api`, useful first alarms might be:
-
-| Alarm | Why It Matters |
-|-------|----------------|
-| Checkout 5xx rate increased | Customers may be unable to place orders |
-| ALB has no healthy targets | Traffic has nowhere safe to go |
-| ECS tasks restart repeatedly | The app may be crashing after start |
-| RDS connections stay high | Checkout may soon fail or slow down |
-| Receipt Lambda errors increase | Orders may succeed but emails may not send |
-
-Notice what is not on the list:
-"CPU was briefly weird for one minute."
-That may be worth seeing on a dashboard, but it may not deserve waking a person unless it connects to user impact or sustained risk.
-
-Noisy alarms are dangerous in a quiet way.
-If an alarm fires every day for harmless reasons, people stop trusting it.
-Then, when the real incident arrives, the alarm looks like more noise.
-
-A good alarm should make the first human question easier:
-what changed, who is affected, and where should I look first?
+This distinction prevents a common mistake: looking for application stack traces in CloudTrail or looking for IAM API caller history in application logs. Both are evidence. They just belong to different questions.
 
 ## Reading A Checkout Failure
 
-Now put the signals together.
-The team sees checkout failures after a release.
-The first sign is a CloudWatch alarm:
+Imagine checkout starts failing at 12:40.
 
-```text
-ALARM: devpolaris-orders-api-checkout-5xx
-state: ALARM
-reason: HTTP 5xx responses increased for POST /v1/orders
-time: 2026-05-02T09:42:00Z
-```
+The first useful question is not "which AWS service is broken?" It is "what changed for customers?" Start with user-impact metrics: request count, 5xx rate, and latency for the checkout path. If only one request failed, the investigation can be narrow. If failures climbed across many requests, the team needs a wider view.
 
-The alarm tells you to look.
-It does not tell you the root cause.
+Next, use logs to find a concrete error. Search the orders API log group around 12:40 for the route and correlation ID if one exists. A log that names `rds connection timeout` moves the investigation toward the database path. A log that names `access denied` moves it toward permissions. A log that names `sqs send failed` moves it toward background work.
 
-The dashboard gives the shape:
+Then use traces or correlated logs to connect steps. Did the request spend time in the app before RDS? Did it succeed in RDS but fail writing the receipt to S3? Did it publish a message but the email Lambda failed later?
 
-```text
-09:38  deploy started
-09:40  new ECS tasks became healthy
-09:41  target response time rose
-09:42  HTTP 5xx increased
-09:42  RDS connections rose
-```
+Finally, check audit evidence when the shape suggests a recent change. CloudTrail can show whether a role, security group, Lambda configuration, or route changed around the failure window.
 
-The log gives the first useful error:
-
-```text
-2026-05-02T09:42:18.411Z ERROR service=devpolaris-orders-api
-request_id=req_01J8K2M6TK7S1E9R0Y6Q
-step=rds.insert_order
-error_name=ConnectionTimeout
-message="database connection timed out"
-```
-
-The trace shows where the request waited:
-
-```text
-POST /v1/orders              5020 ms
-  validate cart                 6 ms
-  authorize payment            44 ms
-  insert order in RDS        4930 ms
-  build error response          4 ms
-```
-
-Now the story is much clearer.
-The alarm showed impact.
-The metrics showed timing and system shape.
-The log named the failing step.
-The trace showed that most of the request time was spent waiting on RDS.
-
-The next fix direction might be checking connection pool settings, database security group changes, database events, or a migration that changed query behavior.
-The important part is that the team is no longer guessing.
+The goal is not to follow a memorized runbook. The goal is to let each signal answer the next useful question.
 
 ## Tradeoffs And Signal Quality
 
-More signals are not automatically better.
-A service can log so much that useful errors become hard to find.
-A dashboard can show so many charts that nobody knows which one matters.
-Tracing can add overhead or cost if every tiny detail is captured without purpose.
-Alarms can become background noise.
+Observability has tradeoffs.
 
-Good observability starts with the questions your team actually asks.
-For `devpolaris-orders-api`, those questions are practical:
-can customers place orders, are errors increasing, which dependency is failing, how slow is checkout, and which release changed behavior?
+More data can help, but every signal has cost, storage, privacy, and attention consequences. A high-cardinality custom metric can create many unique time series. A verbose log line can leak private data. A trace sampled too lightly can miss rare failures. An alarm with no owner can become background noise.
 
-That gives you a starting standard:
+Signal quality is the habit of asking whether evidence will be useful later:
 
-| Signal | Keep It Useful By Asking |
-|--------|--------------------------|
-| Logs | Would this help me debug one failed request? |
-| Metrics | Would this show service health over time? |
-| Traces | Would this show where one request spent time? |
-| Alarms | Would this tell a human to look at real risk? |
+| Signal choice | Better habit |
+| --- | --- |
+| Log every object payload | Log identifiers, status, and safe context |
+| Graph every metric | Start with user impact, then dependencies |
+| Trace only the easy path | Propagate context across queues and events |
+| Page on every warning | Alert on sustained impact or real risk |
+| Keep logs forever by default | Set retention based on operational and compliance needs |
 
-There is also a cost tradeoff.
-Logs are stored.
-Metrics are stored.
-Traces are stored or sampled.
-Dashboards and alarms take human attention.
-Retention settings decide how long signals stay available.
+The best observability is boring in the right way. When something fails, the evidence is already there, safe to search, and connected enough that the team can move calmly.
 
-Start with a service that leaves enough evidence for an investigation.
-When a checkout fails, you should be able to say:
-which request failed, which component complained first, whether the problem is isolated or widespread, and what the next check should be.
+## Putting It All Together
 
-That is observability doing its job.
+The opening problem was distance. Production spread one checkout request across managed services, containers, databases, queues, events, and functions. The browser could only say that something went wrong.
+
+Observability gives that distributed system an evidence path. Logs preserve concrete runtime events. Metrics show shape and pressure. Traces connect one unit of work across services. Alarms bring humans to sustained impact. CloudTrail adds audit evidence when the question is who changed what in AWS.
+
+The design is healthy when every important production question has a signal that can answer it, and when those signals are safe, searchable, and connected.
+
+## What's Next
+
+The next article starts with the most familiar signal: logs. It explains CloudWatch Logs, log groups, log streams, structured events, search, retention, and the first useful error.
 
 ---
 
 **References**
 
-- [What is Amazon CloudWatch?](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/WhatIsCloudWatch.html) - Official AWS overview for CloudWatch metrics, logs, alarms, dashboards, and events.
-- [Working with log groups and log streams](https://docs.aws.amazon.com/AmazonCloudWatch/latest/logs/Working-with-log-groups-and-streams.html) - Explains the basic CloudWatch Logs containers that application and service logs use.
-- [Using Amazon CloudWatch alarms](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/AlarmThatSendsEmail.html) - Describes how CloudWatch alarms watch metrics and change state.
-- [What is AWS X-Ray?](https://docs.aws.amazon.com/xray/latest/devguide/aws-xray.html) - Introduces AWS tracing concepts for following requests through distributed applications.
+- [What is Amazon CloudWatch?](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/WhatIsCloudWatch.html). Supports the CloudWatch role for metrics, logs, alarms, dashboards, and operational visibility.
+- [Metrics concepts](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/cloudwatch_concepts.html). Supports the metric model of namespaces, dimensions, statistics, periods, percentiles, and alarms.
+- [What Is AWS CloudTrail?](https://docs.aws.amazon.com/awscloudtrail/latest/userguide/cloudtrail-user-guide.html). Supports the distinction between runtime observability and AWS account/API audit evidence.
+- [AWS X-Ray concepts](https://docs.aws.amazon.com/xray/latest/devguide/xray-concepts.html). Supports the trace, segment, subsegment, service graph, and sampling concepts used in the tracing overview.

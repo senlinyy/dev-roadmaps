@@ -1,6 +1,6 @@
 ---
 title: "Use Controls That Buy Time"
-sectionSlug: controls-that-buy-time
+sectionSlug: pause-controls
 order: 3
 ---
 

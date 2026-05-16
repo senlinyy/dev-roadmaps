@@ -1,6 +1,6 @@
 ---
 title: "Find The Right Log Home"
-sectionSlug: log-groups-streams-and-events
+sectionSlug: log-groups
 order: 1
 ---
 

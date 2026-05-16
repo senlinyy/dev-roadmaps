@@ -1,6 +1,6 @@
 ---
 title: "Observability"
-description: "Use AWS service signals, logs, metrics, traces, dashboards, and alerts to understand production behavior."
-tags: ["CloudWatch", "Logs", "Metrics"]
-order: 6
+description: "Use logs, metrics, traces, dashboards, alarms, and audit evidence to understand production behavior across AWS services."
+tags: ["CloudWatch", "Logs", "Metrics", "Tracing"]
+order: 7
 ---

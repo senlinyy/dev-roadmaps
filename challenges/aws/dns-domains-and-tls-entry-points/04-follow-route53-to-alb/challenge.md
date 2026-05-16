@@ -1,10 +1,10 @@
 ---
 title: "Follow Route 53 To ALB"
-sectionSlug: alias-records-connect-the-friendly-name-to-aws
+sectionSlug: the-alias-record-points-at-the-aws-front-door
 order: 4
 ---
 
-A customer types the friendly name `orders.devpolaris.com` in the hosted zone `devpolaris.com`, but AWS routes traffic to the `devpolaris-orders-alb` load balancer DNS name. Follow the DNS record to the ALB instead of treating the domain as the whole system.
+A customer types the friendly name `orders.devpolaris.com` in the hosted zone `devpolaris.com`, but AWS routes traffic to the `devpolaris-orders-alb` load balancer DNS name. Follow the DNS record to the ALB and keep the domain as one hop in the system.
 
 Your job:
 

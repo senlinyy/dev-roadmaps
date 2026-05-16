@@ -1,6 +1,6 @@
 ---
 title: "Review Data Choices"
-sectionSlug: decision-table-for-everyday-aws-data-choices
+sectionSlug: sample-data-map
 order: 2
 ---
 

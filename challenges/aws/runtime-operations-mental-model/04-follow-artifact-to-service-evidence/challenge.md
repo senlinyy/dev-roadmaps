@@ -1,6 +1,6 @@
 ---
 title: "Follow Artifact To Service Evidence"
-sectionSlug: from-artifact-to-running-version
+sectionSlug: artifacts
 order: 4
 ---
 

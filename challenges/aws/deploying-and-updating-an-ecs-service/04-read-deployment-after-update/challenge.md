@@ -1,6 +1,6 @@
 ---
 title: "Read Deployment After Update"
-sectionSlug: reading-the-deployment-after-it-finishes
+sectionSlug: deployment-evidence
 order: 4
 ---
 

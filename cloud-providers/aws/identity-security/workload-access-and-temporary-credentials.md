@@ -1,313 +1,215 @@
 ---
-title: "Workload Access And Temporary Credentials"
-description: "Let AWS workloads call AWS APIs through runtime roles and short-lived credentials instead of hardcoded access keys."
-overview: "Applications still need credentials when they call AWS APIs. The safer pattern is to attach a narrow role to the runtime so the app receives temporary credentials from AWS."
+title: "Workload Roles"
+description: "Run AWS workloads with runtime roles and temporary credentials instead of carrying static access keys in code, containers, or pipelines."
+overview: "After IAM explains the shape of an AWS request, workload roles answer the next question: how does running code become the caller without storing an AWS key inside the app?"
 tags: ["iam", "roles", "credentials", "workloads"]
-order: 3
+order: 2
 id: article-cloud-providers-aws-identity-security-temporary-credentials-role-assumption
 aliases:
+  - workload-access-and-temporary-credentials
   - temporary-credentials-and-role-assumption
+  - cloud-providers/aws/identity-security/workload-access-and-temporary-credentials.md
   - cloud-providers/aws/identity-security/temporary-credentials-and-role-assumption.md
 ---
 
 ## Table of Contents
 
-1. [The Bad Shortcut: Put A Key In The App](#the-bad-shortcut-put-a-key-in-the-app)
-2. [The Better Shape: Give The Runtime A Role](#the-better-shape-give-the-runtime-a-role)
-3. [How Temporary Credentials Change The Risk](#how-temporary-credentials-change-the-risk)
-4. [ECS, EC2, And Lambda Examples](#ecs-ec2-and-lambda-examples)
-5. [Debugging The Caller Identity](#debugging-the-caller-identity)
-6. [Quick Recap](#quick-recap)
+1. [The Problem](#the-problem)
+2. [What Is a Workload Role](#what-is-a-workload-role)
+3. [Temporary Credentials](#temporary-credentials)
+4. [Credential Lookup](#credential-lookup)
+5. [ECS Tasks](#ecs-tasks)
+6. [EC2 Instances](#ec2-instances)
+7. [Lambda Functions](#lambda-functions)
+8. [Pipelines And Role Assumption](#pipelines-and-role-assumption)
+9. [Common Failure Shapes](#common-failure-shapes)
+10. [Putting It All Together](#putting-it-all-together)
+11. [What's Next](#whats-next)
 
-## The Bad Shortcut: Put A Key In The App
+## The Problem
 
-The receipt worker starts as a small feature.
-When an order is paid, `devpolaris-receipt-worker` renders a PDF and uploads it to an S3 bucket.
-On a laptop, the first version is straightforward.
-The developer already has an AWS profile in the shell, the SDK finds those credentials, and the upload works.
+The previous article treated IAM as a request story: one caller wants to perform one action on one resource, and AWS decides whether that request is allowed. That shape is useful, but it leaves a practical question open.
 
-The production review starts when someone asks a simple question:
+Who is the caller when the code is not a human?
 
-> How should my app call AWS without storing an AWS key inside the app?
+The receipt worker is a small example. When an order is paid, `devpolaris-receipt-worker` renders a PDF and writes it to an S3 bucket. On a laptop, the SDK finds the developer's local AWS profile and the upload works. In production, the code runs as a task, instance, function, or deploy job. It still needs to call AWS APIs, but nobody wants a reusable AWS key baked into the app.
 
-The first answer someone proposes is familiar from local development:
-put the AWS key in the container environment.
+The tempting shortcuts are familiar:
 
-```text
-AWS_REGION=us-east-1
-AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE
-AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
-RECEIPT_BUCKET=devpolaris-receipts-prod
-```
+- A container gets `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` as environment variables.
+- An EC2 instance gets one broad role because several scripts happen to run on the same host.
+- A pipeline can deploy the service, so someone assumes the running app must have the same AWS access.
+- An ECS task gets `AccessDenied`, and the team adds S3 permission to the task execution role instead of the task role.
 
-That would make the code run.
-It is also the wrong lifetime for the credential.
-The worker only needs access while a task is running.
-The access key may live in CI secrets, image layers, shell history, crash dumps, screenshots, and old repository commits.
-If it leaks, it keeps working until a human notices and disables it.
+All four mistakes blur identity. They make it harder to answer the IAM question from the previous article: which caller is AWS judging?
 
-The code itself should not need to know about access keys:
+This article is about the safer shape. Running code should receive an AWS identity from the runtime that starts it. The app should not carry a static access key. The role should describe the workload's job, the credentials should be temporary, and evidence should show the assumed role session that made the request.
 
-```js
-import { PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+## What Is a Workload Role
 
-const s3 = new S3Client({ region: process.env.AWS_REGION ?? "us-east-1" });
+A workload role is the IAM role your running code uses when it calls AWS. AWS documentation names the role differently depending on the runtime. ECS has a task role. EC2 uses an instance profile that contains a role. Lambda has an execution role. A deploy pipeline may assume a deployment role. The service names differ, but the design question is the same:
 
-export async function saveReceipt({ orderId, pdf }) {
-  await s3.send(new PutObjectCommand({
-    Bucket: process.env.RECEIPT_BUCKET,
-    Key: `receipts/${orderId}.pdf`,
-    Body: pdf,
-    ContentType: "application/pdf"
-  }));
-}
-```
+What job is this running thing allowed to do in AWS?
 
-This code describes the AWS operation.
-It names the bucket and key.
-It does not pass `accessKeyId` or `secretAccessKey`.
-That is the design we want:
-application code makes the request, while the runtime supplies the AWS identity.
+For the receipt worker, the answer is narrow. The production worker may write receipt PDFs under one bucket prefix. It does not need every S3 action. It does not need access to unrelated buckets. It does not need permission to edit IAM, update ECS services, or read every secret in the account.
 
-The questions for the review are:
-
-- Why is a long-lived access key risky inside app code or deployment config?
-- Where should an app get AWS access when it runs on ECS, EC2, or Lambda?
-- What are temporary credentials?
-- How does the AWS SDK find credentials without hardcoding them?
-- How do we prove which AWS identity the running app is using?
-- What failure tells us the runtime role or permission is wrong?
-
-The rest of the article follows the review from the unsafe key to the runtime role that replaces it.
-
-## The Better Shape: Give The Runtime A Role
-
-The safer design starts by naming the worker's job.
-The production receipt worker may write receipt PDFs under one S3 prefix.
-It does not need access to every bucket, every secret, or every deployment action.
+That job sentence becomes the role shape:
 
 ```text
-The production receipt worker may write objects under:
-s3://devpolaris-receipts-prod/receipts/
+workload:
+  devpolaris-receipt-worker-prod
+
+trusted runtime:
+  ECS tasks for this service
+
+allowed AWS work:
+  s3:PutObject on arn:aws:s3:::devpolaris-receipts-prod/receipts/*
 ```
 
-That sentence becomes an IAM role and a narrow policy:
+Two sides matter. The trust policy says who is allowed to receive credentials for the role. The permissions policy says what those credentials can do after they exist.
 
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Effect": "Allow",
-      "Action": "s3:PutObject",
-      "Resource": "arn:aws:s3:::devpolaris-receipts-prod/receipts/*"
-    }
-  ]
-}
+That split is one of the first non-obvious IAM habits. If the role has the right S3 permission but the runtime is not trusted to assume it, the app will not receive the role. If the runtime is trusted but the permission is too broad, the app works with more power than its job needs. If the permission is attached to a different role, the error will keep pointing at the caller that actually made the request.
+
+The role is not a secret value you copy into the app. It is the identity AWS attaches to the running workload. The app still makes normal AWS SDK calls, but the runtime supplies the credentials for that role session.
+
+## Temporary Credentials
+
+Workload roles do not mean "no credentials." AWS API requests still have to be signed. The improvement is that the credentials are issued for a session instead of being long-lived access keys stored in code, images, shell history, CI variables, or screenshots.
+
+Temporary credentials include an access key ID, a secret access key, a session token, and an expiration time. The session token is the part many beginners miss. If an app uses temporary credentials, all three credential values travel together. When the session expires, AWS rejects those credentials and the runtime or SDK must use fresh ones.
+
+```mermaid
+flowchart LR
+    Code["App code"] --> SDK["AWS SDK"]
+    SDK --> Lookup["Credential lookup"]
+    Lookup --> Runtime["Runtime role"]
+    Runtime --> STS["AWS STS"]
+    STS --> Creds["Temporary creds"]
+    Creds --> API["Signed API call"]
 ```
 
-The role also has a trust relationship.
-Trust answers who is allowed to receive credentials for the role.
-Permissions answer what those credentials can do after they exist.
-Both questions are needed.
+The expiration does not make a bad role safe by itself. A temporary admin session is still an admin session while it is alive. The safety comes from the combination: a limited lifetime, a role scoped to the workload's real job, and logs that show which role session made the request.
+
+This changes the incident story. If a static key leaks from a container image, the key can keep working until someone finds and disables it. If a temporary role session leaks, the window is shorter, and the session can only do what the role allows. The team still has to rotate, investigate, and reduce blast radius, but the credential lifetime is no longer pretending to be permanent infrastructure.
+
+## Credential Lookup
+
+Most application code should not manually pass AWS credentials into each client. It should create an ordinary AWS SDK client and let the SDK find credentials through its provider chain.
+
+That provider chain is the bridge between code and runtime. In an ECS task, the SDK can use the container credential provider. On EC2, it can use the instance metadata service for the instance profile role. In Lambda, the runtime exposes credentials for the function's execution role. The exact chain differs by SDK and configuration, but the operating habit is stable: let the runtime be the source of AWS identity.
+
+This is why a clean runtime environment is part of security design. `AWS_REGION` and `RECEIPT_BUCKET` are normal configuration. `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, and `AWS_SESSION_TOKEN` are credentials. If static credential environment variables are left in the container, the SDK may use those instead of the runtime role. The app can appear to work while CloudTrail shows the wrong caller.
+
+The first debugging question is therefore not "which policy should I edit?" It is "which credential source did the app actually use?"
+
+`aws sts get-caller-identity` is useful when you can run it from the same runtime context. The output should point at the workload role session, not a developer, not a CI role, and not an old IAM user. If the ARN is wrong, changing the intended role's policy will not fix the request because AWS is judging a different caller.
+
+## ECS Tasks
+
+ECS is where role confusion shows up quickly because there are two common roles in one task definition.
+
+The task execution role is for ECS platform work. It lets ECS pull container images, write logs, and perform other actions needed to start and manage the task. The task role is for the application code inside the container. If the Node.js worker calls S3, the S3 permission belongs on the task role.
+
+That distinction prevents a very common false repair. The receipt worker receives `AccessDenied` from S3. Someone sees "ECS task" and adds `s3:PutObject` to the execution role. The next task still fails because the application did not call S3 as the execution role. It called S3 as the task role session.
+
+Task roles also give better evidence. ECS task credentials include task context for auditing, so a CloudTrail event can tie API activity back to the task that received the credentials. That is much more readable than a shared IAM user key named `prod-app`.
+
+There is still a boundary gotcha. ECS task roles separate permissions better than a shared EC2 instance profile, but containers are not a universal security boundary. AWS explicitly warns that containers are not a security boundary, and ECS on EC2 needs extra care around metadata access and task isolation. Keep using task roles, but avoid packing unrelated trust zones onto the same host and assuming the role name alone creates hard isolation.
+
+## EC2 Instances
+
+On EC2, the workload role is attached through an instance profile. The instance profile is the container AWS uses to attach an IAM role to an instance. Applications on the instance can retrieve temporary role credentials from the instance metadata service and use them to sign AWS requests.
+
+This is a good fit for a single-purpose host. If `receipt-worker-prod-1` only runs the receipt worker, an instance profile role named around that job is easy to explain. The role can allow receipt writes and little else.
+
+The trouble starts when one instance becomes a shared box. A cron job, a migration script, a log shipper, and a one-off admin tool may all be able to reach the same instance profile credentials. From IAM's point of view, those processes are using the same caller unless you add another isolation layer. That makes the policy either too narrow for one process or too broad for another.
+
+This is why containers, Lambda functions, and managed runtimes often feel cleaner for workload identity. They let the role follow the workload more closely. EC2 can still be secure, but the instance profile belongs to the instance, so the instance should have a clear job.
+
+## Lambda Functions
+
+Lambda uses an execution role. When the function is invoked, Lambda assumes that role and makes credentials available to the function runtime. The function code can then call AWS APIs through the SDK in the same normal way.
+
+The execution role should describe what the function does while it runs. A function that writes receipts to one S3 prefix should not share a broad role with an image processor, a billing repair function, and a database migration. Shared roles look convenient until one function needs a new permission and every other function inherits it.
+
+Lambda also has a trust side. The role's trust policy must allow the Lambda service principal to assume it. If that trust is wrong, the function cannot use the role correctly. If the trust is right but the function gets `AccessDenied`, read the action and resource in the error before widening the policy.
+
+One small habit helps: avoid having function code manually assume its own execution role. Lambda is already doing that runtime assumption for you. Manual role hops inside the function are for special cases, such as accessing a separate cross-account role, and they deserve their own review.
+
+## Pipelines And Role Assumption
+
+Pipelines have their own identity story. A deployment job is a workload too, but it is not the same workload as the app it deploys.
+
+A CI job may start with an external identity, federated identity, or runner credential. It then assumes a deployment role through AWS STS. That deploy role might register an ECS task definition, update an ECS service, create a Lambda version, or publish infrastructure changes. The session name can appear in the assumed role ARN and in audit evidence, which helps connect the change back to a build or release.
+
+After deployment, the running app uses its runtime role. The deploy role and the app role should be separate because their jobs are different. The pipeline may need permission to change the service. The app may need permission to read one secret or write one bucket prefix. Giving the app deploy power turns a runtime bug into a release-system risk. Giving the deploy job every runtime permission turns a CI leak into a data-access incident.
+
+There is one connector between them: passing a role to a service. Many AWS services let a caller configure a resource with an IAM role that the service will use later. For that setup step, the deployment identity may need `iam:PassRole` for approved workload roles. That permission should be narrow. A deploy role that can pass any powerful role to any service can indirectly grant more access than the pipeline should have.
+
+The clean mental model is a handoff:
 
 ```text
-trust:
-  ECS may provide this role to tasks for the receipt worker
-
-permissions:
-  the role may write receipt objects to one S3 prefix
+pipeline assumes deploy role
+deploy role configures service with approved workload role
+AWS runtime assumes workload role
+app code uses workload role credentials
 ```
 
-This changes the architecture of the secret.
-The app no longer carries a reusable AWS key.
-When AWS starts the workload, the runtime provides temporary credentials for the role.
-Supported AWS SDKs know how to find those credentials through the runtime environment.
+Each line is a different caller. Keeping those callers separate is what makes audit logs and AccessDenied errors useful.
 
-The result is not "no credentials."
-AWS API calls always need credentials.
-The improvement is that the credentials are delivered by AWS for the workload's current session, not copied into the app's source, image, or config bundle.
+## Common Failure Shapes
 
-That distinction becomes important during operations.
-If the worker starts using the wrong role, the team fixes role attachment.
-If the role lacks `s3:PutObject`, the team fixes the role policy.
-If a key appears in a build log, that is no longer how the worker is supposed to authenticate.
+Most workload-role failures are easier to read once you separate credential delivery from permission design. A missing credential source is different from a correct caller with a narrow policy. A deploy role failure is different from a runtime role failure.
 
-## How Temporary Credentials Change The Risk
+| Symptom | Usually Means | First Question |
+| --- | --- | --- |
+| `Unable to locate credentials` | The runtime did not deliver credentials, or the SDK could not reach the runtime provider. | Is the role attached to this task, instance, or function, and is the app using the default provider chain? |
+| `AccessDenied` names the expected workload role | The app is using the right identity, but the action, resource, or condition does not allow this request. | Does the denied action and resource match the job the role should have? |
+| `AccessDenied` names a human, CI, or old IAM user | The app is not using the intended runtime role. | Where did those credentials enter the environment or SDK configuration? |
+| ECS app still fails after editing the execution role | The permission was added to the platform role, not the application task role. | Which role appears in the denied caller ARN? |
+| Works locally but fails in AWS | A local profile hid the missing or narrow runtime role. | What does `get-caller-identity` show inside the running workload? |
+| Deploy fails with `iam:PassRole` | The deploy identity cannot configure the service with that workload role. | Should this deploy role be allowed to pass exactly this role to exactly this AWS service? |
 
-Temporary credentials are still credentials.
-They contain an access key ID, secret access key, and session token.
-The difference is that AWS issues them for a limited session and rejects them after they expire.
+The table is not a replacement for reading the error. It is a way to slow down before widening permissions. The caller ARN, action, and resource usually tell you whether the issue is identity delivery, permission scope, or deployment authority.
 
-That changes the review.
-A leaked long-lived key can be useful months later.
-A leaked role session has a shorter window.
-The damage still depends on what the role can do, which is why temporary credentials and least privilege belong together.
+## Putting It All Together
 
-The request story should look like this while the task is running:
+The receipt worker started with a simple need: write PDFs to S3. The unsafe shortcut was to put a reusable AWS key in the container. That would make the upload work, but it would give the credential the wrong lifetime and make the caller harder to explain.
 
-```text
-caller:   assumed-role/devpolaris-receipt-worker-prod-role/ecs-task-6d7a
-action:   s3:PutObject
-resource: arn:aws:s3:::devpolaris-receipts-prod/receipts/order-8842.pdf
-result:   allowed
-```
+The workload-role design answers the original problem in smaller pieces.
 
-If the same task tries to write outside its area, the request should fail:
+The role describes the running code's job. The trust policy lets the right runtime receive credentials. The permissions policy allows the specific AWS actions and resources the workload needs. AWS issues temporary credentials for the role session. The SDK finds those credentials through the runtime provider. CloudTrail and error messages show the assumed role session that made the request.
 
-```text
-caller:   assumed-role/devpolaris-receipt-worker-prod-role/ecs-task-6d7a
-action:   s3:PutObject
-resource: arn:aws:s3:::devpolaris-receipts-prod/manual-backups/order-8842.pdf
-result:   denied
-```
+That gives the team practical answers:
 
-This is why the review does not stop at "we use roles."
-A role with broad permissions can still cause broad damage during a session.
-A narrow role with temporary credentials gives the team two controls:
-the credential dies, and the credential can only do the workload's job while it is alive.
+- The app calls AWS without carrying a static access key.
+- ECS task roles, EC2 instance profiles, Lambda execution roles, and pipeline deploy roles are related shapes, not interchangeable names.
+- Temporary credentials reduce credential lifetime, but least privilege still decides blast radius.
+- The SDK credential chain is part of the architecture, so stray static credential variables can mask the runtime role.
+- `AccessDenied` should be read as caller, action, and resource before anyone widens a policy.
+- Deployment roles may pass approved workload roles to services, but they should not become the app's runtime identity.
 
-There is also an evidence benefit.
-CloudTrail and AWS error messages can show an assumed role session for the worker.
-That is much clearer than a shared IAM user named `prod-app-key`.
-The session name can tie the request back to a task, function, host, or deploy run.
+The final habit is simple: ask what is running, what role it should receive, and what job that role should allow. If those three answers are clear, workload access becomes explainable instead of magical.
 
-## ECS, EC2, And Lambda Examples
+## What's Next
 
-The receipt worker might run in different AWS runtimes over its life.
-The access pattern should stay recognizable even when the service changes:
-attach a role to the runtime, let AWS deliver temporary credentials, and keep the role permissions narrow.
+Workload roles answer who the running app is when it calls AWS. The next question is what private values the app should read after it has that identity.
 
-For ECS, the important field is the task role:
+The receipt worker might need a signing key. The orders API might need a database password. A webhook handler might need a vendor token. Those values should not live in source code or ordinary environment files either.
 
-```json
-{
-  "family": "devpolaris-receipt-worker",
-  "taskRoleArn": "arn:aws:iam::333333333333:role/devpolaris-receipt-worker-prod-role",
-  "executionRoleArn": "arn:aws:iam::333333333333:role/devpolaris-receipt-worker-execution-role",
-  "containerDefinitions": [
-    {
-      "name": "receipt-worker",
-      "environment": [
-        { "name": "AWS_REGION", "value": "us-east-1" },
-        { "name": "RECEIPT_BUCKET", "value": "devpolaris-receipts-prod" }
-      ]
-    }
-  ]
-}
-```
-
-The task execution role lets ECS pull images and do platform work.
-The task role is what the application code uses when it calls S3.
-If the worker gets `AccessDenied` from S3, adding S3 permission to the execution role is usually the wrong repair.
-
-If the same worker ran on EC2, the role would arrive through an instance profile:
-
-```text
-instance:
-  name: receipt-worker-prod-1
-  instance profile: devpolaris-receipt-worker-prod-profile
-  role inside profile: devpolaris-receipt-worker-prod-role
-```
-
-That is a reasonable fit for a single-purpose instance.
-It becomes harder on a shared host because ordinary processes on the instance may be able to use the instance role.
-If several unrelated apps need different AWS permissions, per-workload roles are easier to reason about.
-
-If the worker becomes a Lambda function, the role is the execution role:
-
-```json
-{
-  "FunctionName": "devpolaris-receipt-worker-prod",
-  "Runtime": "nodejs22.x",
-  "Role": "arn:aws:iam::333333333333:role/devpolaris-receipt-worker-prod-role",
-  "Environment": {
-    "Variables": {
-      "RECEIPT_BUCKET": "devpolaris-receipts-prod"
-    }
-  }
-}
-```
-
-Lambda assumes the execution role when the function runs.
-The function code uses the SDK in the same ordinary way.
-
-The service names differ, but the decision stays connected:
-which runtime starts the code, which role does that runtime provide, and does that role match the job?
-
-## Debugging The Caller Identity
-
-The first production failure after the refactor is predictable.
-The worker starts without a hardcoded key, tries to upload a receipt, and S3 denies the request.
-The old reaction would be to paste a key back into the environment.
-The better reaction is to prove the caller.
-
-Run `aws sts get-caller-identity` from the failing runtime when possible.
-Inside a correctly configured ECS task, the output should resemble a task role session:
-
-```bash
-$ aws sts get-caller-identity
-{
-  "UserId": "AROARECEIPTROLE:ecs-task-6d7a",
-  "Account": "333333333333",
-  "Arn": "arn:aws:sts::333333333333:assumed-role/devpolaris-receipt-worker-prod-role/ecs-task-6d7a"
-}
-```
-
-If the ARN shows a human user, an old IAM user, a staging role, or a different workload role, the problem is credential delivery.
-Fix the task role, instance profile, Lambda execution role, or deployment configuration before editing the permission policy.
-
-If the caller is correct, read the denied action and resource:
-
-```text
-AccessDenied: User:
-arn:aws:sts::333333333333:assumed-role/devpolaris-receipt-worker-prod-role/ecs-task-6d7a
-is not authorized to perform: s3:PutObject
-on resource:
-arn:aws:s3:::devpolaris-receipts-prod/manual-backups/order-8842.pdf
-```
-
-This denial may be good news.
-The worker is using the right role, but it is trying to write outside `receipts/*`.
-That points to a wrong key prefix in code or configuration.
-Widening the role would hide the bug.
-
-Another failure points at missing credential delivery:
-
-```text
-Unable to locate credentials.
-You can configure credentials by running "aws configure".
-```
-
-In a production runtime, that usually means the app did not receive credentials through the runtime path.
-The fix is role attachment, not a copied access key.
-
-## Quick Recap
-
-The receipt worker review started with a tempting shortcut:
-put a reusable AWS key in the container.
-The safer design moved authority to the runtime.
-
-| Question | Answer Habit |
-|----------|--------------|
-| Why not put a key in the app? | Long-lived keys leak and keep working until disabled |
-| Where should the app get access? | From the AWS runtime role attached to ECS, EC2, or Lambda |
-| What are temporary credentials? | Short-lived credentials AWS issues for a role session |
-| How does the SDK find them? | Through the runtime credential provider path |
-| How do we debug it? | Start with `aws sts get-caller-identity` in the failing runtime |
-| What should permissions look like? | Narrow to the workload's actual AWS job |
-
-The code still uploads a receipt.
-What changed is where authority lives.
-Configuration names resources, the runtime provides identity, IAM narrows the role, and evidence shows which caller made the request.
+The next article covers secrets, encryption, and security evidence: where sensitive runtime values belong, who can read them, how encryption fits in, and what proof shows the app used them safely.
 
 ---
 
 **References**
 
-- [Security best practices in IAM](https://docs.aws.amazon.com/IAM/latest/UserGuide/best-practices.html) - Confirms AWS guidance to use temporary credentials with IAM roles for workloads and to apply least-privilege permissions.
-- [Temporary security credentials in IAM](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_credentials_temp.html) - Explains that temporary credentials are generated dynamically, include a limited lifetime, and avoid distributing long-term credentials with applications.
-- [Use an IAM role to grant permissions to applications running on Amazon EC2 instances](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_use_switch-role-ec2.html) - Documents the EC2 instance profile pattern for giving applications temporary role credentials.
-- [Amazon ECS task IAM role](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-iam-roles.html) - Documents task roles, the split from task execution roles, and how ECS makes role permissions available to containers.
-- [Defining Lambda function permissions with an execution role](https://docs.aws.amazon.com/lambda/latest/dg/lambda-intro-execution-role.html) - Documents Lambda execution roles and the trust relationship that allows Lambda to assume the role.
-- [get-caller-identity](https://docs.aws.amazon.com/cli/latest/reference/sts/get-caller-identity.html) - Documents the AWS CLI command used to verify which credentials are currently making AWS requests.
+- [IAM roles](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles.html). Supports the explanation that roles are IAM identities with permissions, have no long-term access keys, and provide temporary credentials when assumed.
+- [Temporary security credentials in IAM](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_credentials_temp.html). Supports the temporary credential model and the guidance to use temporary credentials instead of long-term credentials where possible.
+- [AssumeRole](https://docs.aws.amazon.com/STS/latest/APIReference/API_AssumeRole.html). Supports the role-session, trust-policy, session-duration, and temporary credential details used in the temporary credentials and pipeline sections.
+- [AWS SDKs and Tools standardized credential providers](https://docs.aws.amazon.com/sdkref/latest/guide/standardized-credentials.html). Supports the credential provider chain explanation and the runtime-provider mental model.
+- [Container credential provider](https://docs.aws.amazon.com/sdkref/latest/guide/feature-container-credentials.html). Supports the ECS container credential lookup path used by SDKs and tools.
+- [Amazon ECS task IAM role](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-iam-roles.html). Supports the ECS task role explanation, the split from task execution permissions, CloudTrail task context, and the container-boundary warning.
+- [Use an IAM role to grant permissions to applications running on Amazon EC2 instances](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_use_switch-role-ec2.html). Supports the EC2 instance profile pattern and temporary credentials through instance metadata.
+- [Defining Lambda function permissions with an execution role](https://docs.aws.amazon.com/lambda/latest/dg/lambda-intro-execution-role.html). Supports the Lambda execution role explanation and Lambda's runtime role assumption behavior.
+- [Using an IAM role in the AWS CLI](https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-role.html). Supports the CLI and tool role-assumption model, source credentials, and role session naming.
+- [Grant a user permissions to pass a role to an AWS service](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_use_passrole.html). Supports the `iam:PassRole` discussion for deployment identities that configure services with approved workload roles.

@@ -1,6 +1,6 @@
 ---
 title: "Read Service Metrics"
-sectionSlug: metrics-namespaces-and-dimensions
+sectionSlug: namespaces-and-dimensions
 order: 1
 ---
 

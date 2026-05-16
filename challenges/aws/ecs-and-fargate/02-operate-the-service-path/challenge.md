@@ -1,6 +1,6 @@
 ---
 title: "Operate The Service Path"
-sectionSlug: networking-ports-and-target-groups
+sectionSlug: networking
 order: 2
 ---
 

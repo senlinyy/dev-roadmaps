@@ -1,6 +1,6 @@
 ---
 title: "Read The Packet Path"
-sectionSlug: the-packet-question-iam-cannot-answer
+sectionSlug: the-route-exists-so-why-is-the-packet-still-blocked
 order: 1
 ---
 

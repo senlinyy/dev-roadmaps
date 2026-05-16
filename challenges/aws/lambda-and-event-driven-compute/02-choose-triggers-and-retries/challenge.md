@@ -1,6 +1,6 @@
 ---
 title: "Choose Triggers and Retries"
-sectionSlug: synchronous-asynchronous-and-queue-based-calls
+sectionSlug: triggers
 order: 2
 ---
 

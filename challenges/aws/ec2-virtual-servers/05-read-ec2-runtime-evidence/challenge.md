@@ -1,6 +1,6 @@
 ---
 title: "Read EC2 Runtime Evidence"
-sectionSlug: running-port-3000-with-systemd
+sectionSlug: sample-server-shape
 order: 5
 ---
 

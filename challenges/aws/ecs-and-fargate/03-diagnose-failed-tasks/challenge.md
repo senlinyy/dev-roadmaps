@@ -1,6 +1,6 @@
 ---
 title: "Diagnose Failed Tasks"
-sectionSlug: reading-ecs-events-when-a-task-will-not-start
+sectionSlug: roles-and-logs
 order: 3
 ---
 

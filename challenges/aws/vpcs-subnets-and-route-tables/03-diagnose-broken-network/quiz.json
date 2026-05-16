@@ -25,7 +25,7 @@
         { "id": "d", "text": "The target group is missing from the ALB listener rule." }
       ],
       "correct": ["a"],
-      "explanation": "A blackhole route means AWS cannot deliver traffic through that target. If the task needs outbound access during startup or health checks, this can explain the unhealthy target. The fix is to use an active intended route target, not to reinterpret the route as a security rule."
+      "explanation": "A blackhole route means AWS cannot deliver traffic through that target. If the task needs outbound access during startup or health checks, this can explain the unhealthy target. The fix is to use an active intended route target and keep security rules as a separate check."
     },
     {
       "id": "q3",
@@ -51,7 +51,7 @@
         { "id": "d", "text": "Delete the local route because security groups already allow `sg-orders-app`." }
       ],
       "correct": ["a"],
-      "explanation": "Once the route and security group shape match the design, the next checks move deeper into service-specific evidence. DNS, database availability, credentials, or app configuration may still fail. The point is to advance only after proving the current layer."
+      "explanation": "Once the route and security group shape match the design, the next checks move deeper into service-specific evidence. DNS, database availability, credentials, or app configuration may still fail. Advance only after proving the current layer."
     },
     {
       "id": "q5",

@@ -1,6 +1,6 @@
 ---
 title: "Validate Before Traffic"
-sectionSlug: validate-config-before-serving-traffic
+sectionSlug: startup-validation
 order: 2
 ---
 

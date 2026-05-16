@@ -1,6 +1,6 @@
 ---
 title: "Control Access and Retention"
-sectionSlug: access-iam-and-real-accessdenied-errors
+sectionSlug: access
 order: 2
 ---
 

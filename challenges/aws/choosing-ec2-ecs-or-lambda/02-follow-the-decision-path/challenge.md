@@ -1,6 +1,6 @@
 ---
 title: "Follow The Decision Path"
-sectionSlug: the-practical-decision-path
+sectionSlug: sample-compute-map
 order: 2
 ---
 

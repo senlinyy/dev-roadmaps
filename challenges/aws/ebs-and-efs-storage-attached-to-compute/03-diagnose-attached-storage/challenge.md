@@ -1,6 +1,6 @@
 ---
 title: "Diagnose Attached Storage"
-sectionSlug: storage-bugs-you-will-actually-see
+sectionSlug: putting-it-all-together
 order: 3
 ---
 

@@ -1,6 +1,6 @@
 ---
 title: "Diagnose Access Drift"
-sectionSlug: failure-modes-and-diagnosis
+sectionSlug: what-breaks-when-placement-or-routes-drift
 order: 3
 ---
 

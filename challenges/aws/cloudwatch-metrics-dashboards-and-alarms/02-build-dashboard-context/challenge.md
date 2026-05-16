@@ -1,6 +1,6 @@
 ---
 title: "Build Dashboard Context"
-sectionSlug: dashboards-turn-numbers-into-context
+sectionSlug: dashboards
 order: 2
 ---
 

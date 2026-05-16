@@ -1,6 +1,6 @@
 ---
 title: "Scale Capacity Carefully"
-sectionSlug: scaling-means-capacity-not-a-cure
+sectionSlug: scaling
 order: 1
 ---
 

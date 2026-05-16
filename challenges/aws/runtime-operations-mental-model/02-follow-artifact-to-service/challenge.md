@@ -1,6 +1,6 @@
 ---
 title: "Follow Artifact To Service"
-sectionSlug: from-artifact-to-running-version
+sectionSlug: artifacts
 order: 2
 ---
 

@@ -1,6 +1,6 @@
 ---
 title: "Search First Useful Error"
-sectionSlug: searching-for-the-first-useful-error
+sectionSlug: first-useful-error
 order: 4
 ---
 

@@ -1,6 +1,6 @@
 ---
 title: "Diagnose Broken Network"
-sectionSlug: a-diagnostic-path-for-a-broken-service
+sectionSlug: a-diagnostic-path-for-a-broken-network
 order: 3
 ---
 

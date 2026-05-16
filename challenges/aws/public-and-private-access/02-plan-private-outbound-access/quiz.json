@@ -25,7 +25,7 @@
         { "id": "d", "text": "A Route 53 alias from the vendor domain to the orders ALB." }
       ],
       "correct": ["a"],
-      "explanation": "VPC endpoints help with supported AWS services, not arbitrary third-party APIs. A tax provider endpoint is a true external destination, so the private task needs a controlled egress path. Keep NAT or proxy access focused on real external needs."
+      "explanation": "VPC endpoints help with supported AWS services. A tax provider endpoint is a true external destination, so the private task needs a controlled egress path. Keep NAT or proxy access focused on real external needs."
     },
     {
       "id": "q3",
@@ -51,7 +51,7 @@
         { "id": "d", "text": "Whether the task role can create route tables at runtime." }
       ],
       "correct": ["a"],
-      "explanation": "Endpoints can cover many AWS service calls, but they do not cover every possible runtime dependency. Before removing NAT, list the app's real outbound destinations. A private design should be quiet, not blind."
+      "explanation": "Endpoints can cover many AWS service calls, but they do not cover every possible runtime dependency. Before removing NAT, list the app's real outbound destinations. A private design should stay quiet while preserving required evidence paths."
     },
     {
       "id": "q5",
@@ -64,7 +64,7 @@
         { "id": "d", "text": "Disable CloudWatch Logs so the task has fewer outbound dependencies." }
       ],
       "correct": ["a"],
-      "explanation": "Private tasks need outbound design, not direct public exposure. NAT, endpoints, or a proxy can solve the egress need while preserving the ALB as the inbound path. Removing logs would make debugging worse."
+      "explanation": "Private tasks need outbound design while preserving private inbound paths. NAT, endpoints, or a proxy can solve the egress need while preserving the ALB as the inbound path. Removing logs would make debugging worse."
     }
   ]
 }

@@ -1,6 +1,6 @@
 ---
 title: "Map Recovery Needs"
-sectionSlug: the-recovery-map-for-orders
+sectionSlug: sample-recovery-map
 order: 1
 ---
 

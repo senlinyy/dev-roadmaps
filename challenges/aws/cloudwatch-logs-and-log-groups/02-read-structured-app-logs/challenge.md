@@ -1,6 +1,6 @@
 ---
 title: "Read Structured App Logs"
-sectionSlug: structured-logs-from-the-orders-api
+sectionSlug: structured-logs
 order: 2
 ---
 

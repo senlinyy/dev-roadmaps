@@ -1,6 +1,6 @@
 ---
 title: "Inspect ECS Service And Tasks"
-sectionSlug: services-desired-count-and-deployments
+sectionSlug: services
 order: 4
 ---
 

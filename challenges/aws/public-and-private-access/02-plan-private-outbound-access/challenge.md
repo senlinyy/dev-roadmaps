@@ -1,6 +1,6 @@
 ---
 title: "Plan Private Outbound Access"
-sectionSlug: private-apps-still-need-outbound-access
+sectionSlug: private-workloads-still-need-outbound-paths
 order: 2
 ---
 

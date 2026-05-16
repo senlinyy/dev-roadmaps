@@ -1,6 +1,6 @@
 ---
 title: "Prove The Name With TLS"
-sectionSlug: acm-certificates-prove-the-name-is-yours
+sectionSlug: acm-uses-dns-to-prove-domain-control
 order: 2
 ---
 

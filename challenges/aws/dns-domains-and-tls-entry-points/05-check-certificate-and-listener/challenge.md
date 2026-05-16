@@ -1,6 +1,6 @@
 ---
 title: "Check Certificate And Listener"
-sectionSlug: https-listeners-terminate-tls
+sectionSlug: the-https-listener-terminates-tls
 order: 5
 ---
 

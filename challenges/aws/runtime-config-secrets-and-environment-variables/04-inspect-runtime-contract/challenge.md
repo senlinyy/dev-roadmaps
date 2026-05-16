@@ -1,6 +1,6 @@
 ---
 title: "Inspect Runtime Contract"
-sectionSlug: how-ecs-delivers-values-to-the-container
+sectionSlug: ecs-delivery
 order: 4
 ---
 

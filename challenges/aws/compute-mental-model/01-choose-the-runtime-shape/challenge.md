@@ -1,6 +1,6 @@
 ---
 title: "Choose The Runtime Shape"
-sectionSlug: the-five-compute-questions
+sectionSlug: the-workload-shape
 order: 1
 ---
 

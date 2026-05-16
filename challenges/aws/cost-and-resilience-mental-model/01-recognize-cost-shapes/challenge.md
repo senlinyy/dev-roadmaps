@@ -1,6 +1,6 @@
 ---
 title: "Recognize Cost Shapes"
-sectionSlug: five-cost-shapes-to-recognize
+sectionSlug: cost-shapes
 order: 1
 ---
 

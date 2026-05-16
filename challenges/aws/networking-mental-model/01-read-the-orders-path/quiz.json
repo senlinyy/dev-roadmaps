@@ -56,7 +56,7 @@
     {
       "id": "q5",
       "type": "single",
-      "scenario": "The team has this first access sketch:\n\nALB inbound: TCP 443 from 0.0.0.0/0\nTask inbound: TCP 3000 from sg-orders-alb\nDB inbound: TCP 5432 from sg-admin-bastion\n\nCheckout returns 503 and app logs later show database timeouts. Which rule is missing from the intended path?",
+      "scenario": "The team has this first access sketch:\n\nALB inbound: TCP 443 from 0.0.0.0/0\nTask inbound: TCP 3000 from sg-orders-alb\nDB inbound: TCP 5432 from sg-admin-bastion\n\nCheckout returns 500 and app logs later show database timeouts. Which rule is missing from the intended path?",
       "options": [
         { "id": "a", "text": "DB inbound TCP 5432 from `sg-orders-task`." },
         { "id": "b", "text": "Task inbound TCP 3000 from `0.0.0.0/0`." },

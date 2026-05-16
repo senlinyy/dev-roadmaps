@@ -1,6 +1,6 @@
 ---
 title: "Design Object Keys"
-sectionSlug: buckets-keys-and-objects
+sectionSlug: keys
 order: 1
 ---
 

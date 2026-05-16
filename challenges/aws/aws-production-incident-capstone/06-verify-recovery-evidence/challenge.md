@@ -1,6 +1,6 @@
 ---
 title: "Verify Recovery Evidence"
-sectionSlug: rollback-target-and-recovery-thinking
+sectionSlug: rollback
 order: 6
 ---
 

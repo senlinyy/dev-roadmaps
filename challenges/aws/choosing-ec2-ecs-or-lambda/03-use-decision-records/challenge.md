@@ -1,6 +1,6 @@
 ---
 title: "Use Decision Records"
-sectionSlug: decision-records-you-can-reuse
+sectionSlug: putting-it-all-together
 order: 3
 ---
 

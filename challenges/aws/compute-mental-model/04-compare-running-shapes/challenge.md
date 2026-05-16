@@ -1,6 +1,6 @@
 ---
 title: "Compare Running Shapes"
-sectionSlug: where-scaling-and-failures-show-up
+sectionSlug: sample-compute-map
 order: 4
 ---
 

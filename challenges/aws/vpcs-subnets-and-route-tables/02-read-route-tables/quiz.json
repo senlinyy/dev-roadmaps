@@ -25,7 +25,7 @@
         { "id": "d", "text": "The public ALB route table, because RDS traffic must pass through the load balancer." }
       ],
       "correct": ["a"],
-      "explanation": "AWS uses the most specific matching destination. `10.20.21.18` fits inside `10.20.0.0/16`, so the local route keeps the packet inside the VPC. NAT is for destinations outside the VPC, not for this database hop."
+      "explanation": "AWS uses the most specific matching destination. `10.20.21.18` fits inside `10.20.0.0/16`, so the local route keeps the packet inside the VPC. NAT is for destinations outside the VPC; this database hop stays local."
     },
     {
       "id": "q3",
@@ -60,7 +60,7 @@
       "options": [
         { "id": "a", "text": "It is cheaper than two NAT gateways, but tasks in AZ b depend on a NAT gateway in AZ a." },
         { "id": "b", "text": "It is safer because both app subnets become public and can skip the ALB." },
-        { "id": "c", "text": "It improves database reachability because RDS traffic now uses NAT instead of local." },
+        { "id": "c", "text": "It improves database reachability because RDS traffic now uses NAT for the database hop." },
         { "id": "d", "text": "It makes IAM unnecessary for ECR, Secrets Manager, and CloudWatch Logs." }
       ],
       "correct": ["a"],

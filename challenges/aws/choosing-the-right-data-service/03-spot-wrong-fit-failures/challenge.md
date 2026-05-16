@@ -1,6 +1,6 @@
 ---
 title: "Spot Wrong Fit Failures"
-sectionSlug: failure-patterns-that-tell-you-the-choice-is-wrong
+sectionSlug: putting-it-all-together
 order: 3
 ---
 

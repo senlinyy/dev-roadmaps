@@ -1,6 +1,6 @@
 ---
 title: "Inspect RDS Instance Shape"
-sectionSlug: the-rds-shape-in-aws
+sectionSlug: sample-database-shape
 order: 4
 ---
 

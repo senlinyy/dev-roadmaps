@@ -1,6 +1,6 @@
 ---
 title: "Read Traffic and Scaling Signals"
-sectionSlug: where-traffic-reaches-each-option
+sectionSlug: traffic-and-events
 order: 2
 ---
 

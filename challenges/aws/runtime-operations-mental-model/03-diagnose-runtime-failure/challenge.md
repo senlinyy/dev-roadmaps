@@ -1,6 +1,6 @@
 ---
 title: "Diagnose Runtime Failure"
-sectionSlug: when-the-image-exists-but-the-service-fails
+sectionSlug: evidence
 order: 3
 ---
 

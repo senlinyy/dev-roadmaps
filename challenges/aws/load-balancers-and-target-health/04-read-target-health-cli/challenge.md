@@ -1,6 +1,6 @@
 ---
 title: "Read Target Health With AWS CLI"
-sectionSlug: what-target-health-really-means
+sectionSlug: read-target-health-as-evidence
 order: 4
 ---
 

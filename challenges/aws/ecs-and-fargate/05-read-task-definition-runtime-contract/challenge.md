@@ -1,6 +1,6 @@
 ---
 title: "Read Task Definition Runtime Contract"
-sectionSlug: from-ecr-image-to-task-definition
+sectionSlug: task-definitions
 order: 5
 ---
 

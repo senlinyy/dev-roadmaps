@@ -1,8 +1,8 @@
 ---
-title: "Networking Mental Model"
-description: "Practice reading an AWS network by separating reachability from path, then diagnosing the orders API one hop at a time."
+title: "Trace One Request Through AWS Networking"
+description: "Practice tracing a failing orders API request through DNS, an ALB, subnets, routes, security groups, target health, and app evidence."
 articleId: article-cloud-providers-aws-networking-connectivity-networking-mental-model
-articleSlug: networking-mental-model
+articleSlug: trace-one-request-through-aws-networking
 difficulty: easy
 order: 9
 tags: ["aws", "networking", "vpc", "alb", "diagnosis"]

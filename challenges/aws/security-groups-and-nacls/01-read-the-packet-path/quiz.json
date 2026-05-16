@@ -34,7 +34,7 @@
       "options": [
         { "id": "a", "text": "The ALB security group can allow public HTTPS while the task security group stays private." },
         { "id": "b", "text": "The ECS task role can read Secrets Manager without opening TCP 5432 to RDS." },
-        { "id": "c", "text": "A database security group can allow Postgres from the task security group instead of from all private IPs." },
+        { "id": "c", "text": "A database security group can allow Postgres from the task security group as the named source." },
         { "id": "d", "text": "If IAM allows the task role, security groups are optional for the database hop." }
       ],
       "correct": ["a", "b", "c"],
@@ -51,7 +51,7 @@
         { "id": "d", "text": "The task may initiate outbound database connections on TCP 3000." }
       ],
       "correct": ["a"],
-      "explanation": "`UserIdGroupPairs` is the CLI shape for a security group reference. It describes a network source group, not an IAM group. The rule is inbound to the task on the app port."
+      "explanation": "`UserIdGroupPairs` is the CLI shape for a security group reference. It describes a network source group; IAM groups are a separate access concept. The rule is inbound to the task on the app port."
     },
     {
       "id": "q5",

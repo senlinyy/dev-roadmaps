@@ -1,553 +1,237 @@
 ---
-title: "Runtime Operations Mental Model"
-description: "Understand what AWS needs to keep an application running after the CI/CD pipeline has produced a release."
-overview: "A deployment does not end when an artifact exists. AWS still needs runtime config, health checks, capacity, secrets, logs, and a clear rollback target."
-tags: ["ecs", "health-checks", "scaling"]
+title: "What Is Runtime Operations"
+description: "Understand what still has to be true after a build produces an artifact so an AWS application can run, stay healthy, and be rolled back safely."
+overview: "A release is not alive just because a container image exists. This article explains runtime operations as the contract between artifact, configuration, permissions, health, capacity, observability, and rollback."
+tags: ["ecs", "deployments", "runtime", "operations"]
 order: 1
 id: article-cloud-providers-aws-deployment-runtime-operations-runtime-operations-mental-model
+aliases:
+  - runtime-operations-mental-model
+  - cloud-providers/aws/deployment-runtime-operations/runtime-operations-mental-model.md
 ---
 
 ## Table of Contents
 
-1. [The Build Is Done, But Runtime Work Starts](#the-build-is-done-but-runtime-work-starts)
-2. [The Running Example](#the-running-example)
-3. [The Runtime Contract](#the-runtime-contract)
-4. [The Release Record](#the-release-record)
-5. [From Artifact To Running Version](#from-artifact-to-running-version)
-6. [Config, Secrets, And Permissions](#config-secrets-and-permissions)
-7. [Health, Capacity, And Traffic](#health-capacity-and-traffic)
-8. [Logs And The First Useful Question](#logs-and-the-first-useful-question)
-9. [When The Image Exists But The Service Fails](#when-the-image-exists-but-the-service-fails)
-10. [Rollback Target And Recovery Thinking](#rollback-target-and-recovery-thinking)
-11. [Flexibility And Operational Surface Area](#flexibility-and-operational-surface-area)
+1. [The Problem](#the-problem)
+2. [What Is Runtime Operations](#what-is-runtime-operations)
+3. [Running Services](#running-services)
+4. [Artifacts](#artifacts)
+5. [Runtime Contract](#runtime-contract)
+6. [Health](#health)
+7. [Capacity](#capacity)
+8. [Evidence](#evidence)
+9. [Rollback](#rollback)
+10. [Operational Surface Area](#operational-surface-area)
+11. [Putting It All Together](#putting-it-all-together)
+12. [What's Next](#whats-next)
 
-## The Build Is Done, But Runtime Work Starts
+## The Problem
 
-A CI/CD pipeline can produce a good artifact and still leave production with unfinished work.
-CI/CD means continuous integration and continuous delivery, the automation that tests code, builds a release, and prepares it for deployment.
-An artifact is the thing that came out of that process, such as a container image in Amazon ECR.
-That image proves the build happened.
-It does not prove customers can use the service.
+The CI pipeline is green. The Docker image exists in Amazon ECR. The release notes are ready. From the build system's point of view, the work looks finished.
 
-Runtime operations is the work of keeping a released application correctly running after the artifact exists.
-It exists because production is more than a file in a registry.
-Production needs a version to run, configuration to read, secrets to connect with, permissions to call other AWS services, health checks to decide whether traffic is safe, enough capacity to handle requests, logs to explain behavior, and a known rollback target if the new version is wrong.
+Production has a different question:
 
-This sits immediately after the CI/CD pipeline has produced a release candidate.
-The pipeline may say, "image pushed."
-Runtime operations asks, "is that image the version production is running, and is the running service healthy?"
+- Which version is actually running behind customer traffic?
+- Did the new task receive the config and secrets it needs at startup?
+- Can the task role call the AWS services the application uses?
+- Will the load balancer send traffic only to healthy tasks?
+- Is there enough capacity for current traffic?
+- If the release fails, what exact version can the team return to?
 
-The running example is a Node.js service called `devpolaris-orders-api`.
-It runs on Amazon ECS with Fargate behind an Application Load Balancer, usually shortened to ALB.
-The image lives in Amazon ECR.
-The service runs from an ECS task definition.
-Environment variables provide normal config.
-AWS Secrets Manager provides sensitive values.
-CloudWatch Logs stores stdout and stderr from the container.
-The ALB health check decides whether each task is safe to receive traffic.
+An artifact proves that something was built. It does not prove that customers can use it. Runtime operations is the work that turns a release artifact into a safe running service.
 
-This article gives you a mental checklist for the moment after the build is green.
-If you can name what must remain true at runtime, you can debug failed deployments without treating AWS as one large mystery box.
+## What Is Runtime Operations
 
-> A release is not alive because an image exists. It is alive because the right version is running, healthy, observable, and reversible.
+Runtime operations is the work of keeping a released application correctly running after the build exists. It sits between CI/CD and day-to-day incident response.
 
-## The Running Example
+For an AWS service, runtime operations answers a simple set of questions:
 
-`devpolaris-orders-api` accepts order requests for a small learning platform.
-The public URL is `https://orders.devpolaris.com`.
-Customers never call ECS directly.
-They call the ALB, and the ALB forwards safe requests to healthy ECS tasks.
+| Question | Runtime concern |
+| --- | --- |
+| What version should run? | Image, task definition, service deployment |
+| What values should it receive? | Environment variables, secret references, config |
+| What is it allowed to call? | Task role, execution role, IAM permissions |
+| Should traffic trust it? | Health checks and target registration |
+| Can it handle the work? | Desired count, scaling, queues, limits |
+| Can we explain behavior? | Logs, metrics, traces, alarms |
+| Can we recover? | Previous known-good version and rollback path |
 
-The service shape is intentionally ordinary:
+The useful mental model is that a release has to become alive. A container image is the body of code. Runtime operations is the surrounding contract that decides where the code runs, what world it wakes up in, how traffic reaches it, and how operators know it is safe.
 
-| Piece | Example |
-|-------|---------|
-| Application | Node.js API named `devpolaris-orders-api` |
-| Image registry | ECR repository `devpolaris-orders-api` |
-| Runtime | ECS service on Fargate |
-| Public entry | ALB listener on HTTPS |
-| App port | Container port `3000` |
-| Config | `NODE_ENV`, `PORT`, `ORDER_TABLE_NAME`, `AWS_REGION` |
-| Secrets | `DATABASE_URL`, `STRIPE_WEBHOOK_SECRET` |
-| Logs | CloudWatch log group `/ecs/devpolaris-orders-api` |
-| Health check | ALB requests `GET /healthz` |
-| Steady capacity | Desired count `2` |
-| Rollback target | Previous task definition revision and image digest |
+## Running Services
 
-This is the kind of service a junior developer can understand.
-There is an HTTP process, a container image, a service that keeps copies running, and a load balancer that sends traffic to those copies.
-Still, there are enough moving parts to teach the real runtime lesson.
-
-If the image starts with the wrong port, the ALB sees unhealthy targets.
-If the secret ARN is wrong, the task may never start.
-If the app lacks permission to write to CloudWatch Logs, the deployment may be harder to diagnose.
-If desired count is too low, one task crash can become customer-visible.
-If nobody wrote down the previous good revision, rollback becomes a search exercise during a stressful moment.
-
-Those are runtime operations problems.
-They are not solved by saying "the Docker image built successfully."
-
-## The Runtime Contract
-
-A helpful way to think about runtime operations is to separate the artifact from the contract around it.
-The artifact is the image.
-The contract is everything production must know to run that image safely.
-
-For `devpolaris-orders-api`, the contract has seven parts:
-
-| Runtime Need | Plain-English Meaning | AWS Place To Check |
-|--------------|-----------------------|--------------------|
-| Running version | Which build is production using? | ECS service task definition |
-| Config | What normal values does the app read? | Task definition environment |
-| Secrets | What sensitive values does the app read? | Task definition secrets and Secrets Manager |
-| Health | How does AWS know a task can receive traffic? | ALB target group health check |
-| Capacity | How many copies should exist? | ECS service desired count |
-| Logs | Where can humans read runtime evidence? | CloudWatch Logs |
-| Rollback target | What known-good version can we return to? | Previous task definition and image digest |
-
-This diagram keeps the same idea in one path.
-Read it from top to bottom.
-The image is only the first step.
+This module follows `devpolaris-orders-api`, a Node.js checkout service.
 
 ```mermaid
 flowchart TD
-    IMAGE["Built package<br/>(ECR image)"] --> RECIPE["Run recipe<br/>(task definition)"]
-    RECIPE --> SERVICE["Running version<br/>(ECS service)"]
-    SERVICE --> TASKS["Healthy copies<br/>(Fargate tasks)"]
-    TASKS --> TRAFFIC["Customer traffic<br/>(ALB target group)"]
-    TASKS --> LOGS["Runtime evidence<br/>(CloudWatch Logs)"]
+    User["Customer"] --> ALB["ALB"]
+    ALB --> Service["ECS service"]
+    Service --> TaskA["Task"]
+    Service --> TaskB["Task"]
+    TaskA --> RDS["RDS"]
+    TaskA --> S3["S3"]
+    TaskA --> SQS["SQS"]
+    TaskB --> RDS
+    TaskB --> S3
+    TaskB --> SQS
 ```
 
-The task definition is the most important bridge in this map.
-It is the versioned recipe that tells ECS which image to run and how to run it.
-Changing the image tag, environment variables, secrets, CPU, memory, port mapping, roles, or log configuration creates a new revision.
-
-The ECS service is the long-running promise.
-It says, "keep this many tasks running from this task definition, and connect them to this load balancer."
-That promise is what makes a backend feel like a service instead of a one-time container start.
-
-The ALB target group is the traffic filter.
-It should only send user requests to task IPs that pass the health check.
-Your health endpoint is part of the runtime contract.
-
-CloudWatch Logs is the evidence trail.
-When a task exits, loops, rejects a request, or fails startup, the logs should help the next engineer ask a better question.
-Without logs, the team often falls back to guessing from status fields.
-
-## The Release Record
-
-Runtime operations gets easier when every release has a small record.
-This record does not need to be fancy.
-It needs to answer the questions a teammate will ask when production changes.
-
-Here is a realistic snapshot for `devpolaris-orders-api` after a healthy deployment:
-
-```text
-Release: orders-api-prod-2026-05-02.1
-Service: devpolaris-orders-api
-Cluster: devpolaris-prod
-Environment: production
-Image tag: 2026-05-02.1
-Image digest: sha256:9f4c4f6a0a4c2b7c8e9a61d15f2b0e7f5c2a8e61a4b7c0d9a1b2c3d4e5f67890
-Task definition: devpolaris-orders-api:42
-Previous good task definition: devpolaris-orders-api:41
-Desired count: 2
-Running count: 2
-Healthy targets: 2/2
-Health path: GET /healthz
-Log group: /ecs/devpolaris-orders-api
-Rollback target: devpolaris-orders-api:41
-```
-
-Notice what this record does.
-It ties the human release name to the image, image digest, task definition revision, desired count, health, logs, and rollback target.
-If a teammate says "production is on the new release," this is the evidence that makes the sentence meaningful.
-
-The same state can be checked from ECS.
-A trimmed command output might look like this:
-
-```bash
-$ aws ecs describe-services \
-  --cluster devpolaris-prod \
-  --services devpolaris-orders-api \
-  --query 'services[0].{taskDefinition:taskDefinition,desired:desiredCount,running:runningCount,pending:pendingCount,rollout:deployments[0].rolloutState}'
-
-{
-  "taskDefinition": "arn:aws:ecs:us-east-1:111122223333:task-definition/devpolaris-orders-api:42",
-  "desired": 2,
-  "running": 2,
-  "pending": 0,
-  "rollout": "COMPLETED"
-}
-```
-
-The command is not the lesson.
-The lesson is the distinction between intent and reality.
-Desired count is what the service is supposed to keep alive.
-Running count is what ECS currently has alive.
-Pending count means ECS is trying to start tasks.
-Rollout state tells you whether ECS thinks the deployment finished.
-
-You still need target health too, because "running" does not always mean "receiving traffic."
-A process can be running while the ALB rejects it as unhealthy.
-That is why the release record includes `Healthy targets: 2/2` alongside `Running count: 2`.
-
-## From Artifact To Running Version
-
-The image in ECR is the output of the build.
-For this example, the image name is:
-
-```text
-111122223333.dkr.ecr.us-east-1.amazonaws.com/devpolaris-orders-api:2026-05-02.1
-```
-
-That image is still passive.
-Nothing serves customer traffic because a tag exists.
-ECS must start tasks from a task definition that points to the image.
-
-Here is a short task definition excerpt.
-It is not the whole file.
-It shows the runtime details that matter for the mental model.
-
-```json
-{
-  "family": "devpolaris-orders-api",
-  "requiresCompatibilities": ["FARGATE"],
-  "networkMode": "awsvpc",
-  "cpu": "512",
-  "memory": "1024",
-  "executionRoleArn": "arn:aws:iam::111122223333:role/ecsTaskExecutionRole",
-  "taskRoleArn": "arn:aws:iam::111122223333:role/devpolaris-orders-api-task",
-  "containerDefinitions": [
-    {
-      "name": "orders-api",
-      "image": "111122223333.dkr.ecr.us-east-1.amazonaws.com/devpolaris-orders-api:2026-05-02.1",
-      "portMappings": [{ "containerPort": 3000, "protocol": "tcp" }],
-      "environment": [
-        { "name": "NODE_ENV", "value": "production" },
-        { "name": "PORT", "value": "3000" }
-      ],
-      "secrets": [
-        { "name": "DATABASE_URL", "valueFrom": "arn:aws:secretsmanager:us-east-1:111122223333:secret:prod/orders/database-AbCdEf" }
-      ],
-      "logConfiguration": {
-        "logDriver": "awslogs",
-        "options": {
-          "awslogs-group": "/ecs/devpolaris-orders-api",
-          "awslogs-region": "us-east-1",
-          "awslogs-stream-prefix": "ecs"
-        }
-      }
-    }
-  ]
-}
-```
-
-The first important line is the image.
-That is the bridge from CI/CD into runtime.
-The second important line is the port mapping.
-The app listens on port `3000`, so ECS and the ALB must agree that `3000` is the container port.
-
-The roles are easy to mix up, so slow down here.
-The task execution role is used by ECS to do runtime setup work, such as pulling the ECR image, retrieving configured secrets, and sending logs through the configured log driver.
-The task role is the identity your application code receives when it calls AWS APIs.
-
-If the execution role is wrong, the task may fail before your Node.js process starts.
-If the task role is wrong, the app may start and then fail when it tries to read or write an AWS resource.
-That difference matters because it changes where you look first.
-
-The task definition revision is the runtime version boundary.
-`devpolaris-orders-api:42` is a complete runtime recipe, not merely the same app with a new image.
-Rollback usually means pointing the ECS service back to a previous known-good recipe, not manually editing one field during an incident.
-
-## Config, Secrets, And Permissions
-
-Your laptop often hides configuration problems.
-You may have a `.env` file, a local shell variable, a database URL in your terminal history, or credentials already loaded by your AWS profile.
-Production has none of that unless you provide it.
-
-Runtime config is the set of non-secret values the app needs to behave correctly.
-For `devpolaris-orders-api`, examples are `NODE_ENV`, `PORT`, `ORDER_TABLE_NAME`, and `AWS_REGION`.
-These values are not passwords.
-They are still important because the app makes decisions from them.
-
-Secrets are sensitive values.
-For this service, `DATABASE_URL` and `STRIPE_WEBHOOK_SECRET` should not live in plain text in Git.
-The task definition references secrets from Secrets Manager so ECS can inject them into the container at startup.
-
-Permissions decide who can fetch and use those values.
-The execution role needs permission to retrieve the configured secret value for injection.
-The task role needs permission for whatever the running Node.js app does after startup, such as writing to DynamoDB or reading from S3.
-
-Here is the beginner map:
-
-| Runtime Item | Safe Home | Common Mistake |
-|--------------|-----------|----------------|
-| `PORT=3000` | Task definition environment | App listens on `8080` while ALB checks `3000` |
-| `NODE_ENV=production` | Task definition environment | App starts in development behavior |
-| `DATABASE_URL` | Secrets Manager reference | Secret ARN points to staging or does not exist |
-| ECR pull permission | Execution role | Task cannot pull the image |
-| App AWS API permission | Task role | App starts, then gets `AccessDenied` |
-| CloudWatch log write setup | Log configuration and execution role | Task fails silently from the team's point of view |
-
-One subtle point: injected secrets are read when the task starts.
-If the secret value changes later, already-running tasks keep the value they received at startup.
-You normally need to start fresh tasks, often by forcing a new deployment, so the running process sees the new value.
-
-That behavior is not strange once you compare it to Node.js.
-If a Node process reads `process.env.DATABASE_URL` at startup, changing a secret store somewhere else does not rewrite memory inside that already-running process.
-You need a new process or explicit reload logic.
-
-Good runtime operations makes these assumptions visible.
-The release record should say which task definition revision is running.
-The task definition should show which secret ARN is referenced.
-The service events and logs should show whether the task started and whether the app could use the values it received.
-
-## Health, Capacity, And Traffic
-
-Health checks answer a simple question: should this running copy receive customer traffic?
-That question is different from "did the process start?"
-A Node.js process can start, bind a port, and still be unable to serve real requests because it cannot reach the database or has not finished startup.
-
-For `devpolaris-orders-api`, the ALB target group checks:
-
-```text
-Protocol: HTTP
-Path: /healthz
-Port: traffic-port
-Expected status: 200
-```
-
-The app should return `200` only when it is ready for normal traffic.
-A health endpoint that always returns `200` is not useful.
-A health endpoint that checks too many deep dependencies can also be painful, because a temporary downstream issue can remove every task from traffic at once.
-
-For a beginner service, a practical health check usually confirms the process is alive, the HTTP server is accepting requests, and the app has completed its startup setup.
-As the service matures, the team decides whether deeper dependency checks belong in the load balancer health path or in separate alarms.
-
-Capacity is the other half of the runtime promise.
-Desired count says how many task copies ECS should keep running.
-For this service, desired count `2` gives the ALB two targets when everything is healthy.
-If one task is replaced during deployment, the other can keep serving traffic.
-
-Here is a healthy target snapshot:
-
-```text
-Target group: prod-orders-api
-Health check: GET /healthz
-
-Target IP       Port   State     Reason
-10.0.18.42      3000   healthy   Health checks passed
-10.0.27.113     3000   healthy   Health checks passed
-```
-
-This is the kind of evidence you want after a deployment.
-The ECS service says two tasks are running.
-The target group says two targets are healthy.
-The logs show the app started with the expected release.
-Those three signals together are much stronger than any one signal alone.
-
-A mismatch tells you where to look.
-If ECS says `running: 2` but the target group says `healthy: 0`, investigate port mapping, security groups, health path, startup time, and app readiness.
-If ECS says `pending: 2`, investigate image pull, role permissions, subnet capacity, CPU and memory settings, and service events.
-If ECS says `running: 1` while desired count is `2`, the service is trying to recover but cannot hold the promised shape.
-
-## Logs And The First Useful Question
-
-Logs are where the running service explains itself.
-For Fargate tasks, you usually send container stdout and stderr to CloudWatch Logs with the `awslogs` log driver.
-That means the ordinary output your container writes becomes searchable runtime evidence.
-
-The first useful question is not "what failed?"
-That is too broad.
-The first useful question is "which layer produced the first meaningful error?"
-
-A good startup log helps:
-
-```text
-2026-05-02T10:14:08.219Z INFO service=devpolaris-orders-api release=2026-05-02.1 task_revision=42 message="starting orders api"
-2026-05-02T10:14:08.427Z INFO service=devpolaris-orders-api port=3000 message="http server listening"
-2026-05-02T10:14:08.810Z INFO service=devpolaris-orders-api route=GET /healthz status=200 message="health check ready"
-```
-
-These lines are small, but they teach a lot.
-They confirm the release, task revision, port, and health endpoint.
-If the ALB still marks the target unhealthy, the next question is likely outside the Node process: target group path, target port, security group, or subnet routing.
-
-A useful failure log is just as direct:
-
-```text
-2026-05-02T10:21:33.612Z ERROR service=devpolaris-orders-api release=2026-05-02.1
-step=startup
-error_name=ConfigError
-message="DATABASE_URL is required"
-```
-
-That message points at runtime config, not the image build.
-The image can be perfectly valid and still fail because production did not inject the secret the app expects.
-
-Another common shape appears after startup:
-
-```text
-2026-05-02T10:24:09.155Z ERROR service=devpolaris-orders-api request_id=req_01HX9A0J3DF
-route=POST /v1/orders
-step=write_order
-error_name=AccessDeniedException
-message="not authorized to write order item"
-```
-
-This points at the task role.
-The service started.
-The health check may pass.
-The first real request fails because the app identity cannot perform the AWS action it needs.
-
-Logs do not replace metrics or health checks.
-They give the detail you need after those higher-level signals tell you something changed.
-
-## When The Image Exists But The Service Fails
-
-The most important runtime failure pattern is this: the image exists, but the service does not become a healthy production service.
-That sounds frustrating at first.
-It becomes manageable when you split the failure by layer.
-
-| Symptom | Likely Layer | First Check | Fix Direction |
-|---------|--------------|-------------|---------------|
-| Task never starts | Image pull or execution role | ECS stopped reason and service events | Fix image URI, tag, ECR access, or execution role |
-| Task stops during startup | Config or secret | CloudWatch startup logs | Add missing env var or correct secret ARN |
-| Task runs but target is unhealthy | Health check or networking | ALB target health reason | Fix port, path, security group, or readiness behavior |
-| Task runs but requests fail | App permission or dependency | App logs for first request error | Fix task role or dependency config |
-| Deployment stays pending | Capacity or placement | ECS service events | Adjust CPU, memory, subnets, or desired count |
-| No useful logs appear | Logging setup | Task definition log configuration | Fix `awslogs` config or execution role |
-
-Here is the kind of ECS event that sends you toward secret retrieval:
-
-```text
-(service devpolaris-orders-api) was unable to start a task.
-Reason: ResourceInitializationError: unable to retrieve secret from Secrets Manager.
-Task definition: devpolaris-orders-api:42
-```
-
-The right response is not to rebuild the image first.
-The image may be fine.
-The runtime recipe is asking ECS to fetch a secret it cannot retrieve.
-You would inspect the secret ARN, Region, and execution role permission.
-
-Here is the kind of target health snapshot that sends you toward the health path:
-
-```text
-Target IP       Port   State       Reason
-10.0.18.42      3000   unhealthy   Health checks failed with status code 404
-10.0.27.113     3000   unhealthy   Health checks failed with status code 404
-```
-
-This says the task is reachable enough to answer, but the ALB is checking a path the app does not serve successfully.
-Maybe the app exposes `/healthz` but the target group checks `/health`.
-Maybe the app changed its base path.
-Maybe the health route exists but returns `404` until startup finishes.
-
-Here is a capacity-shaped event:
-
-```text
-(service devpolaris-orders-api) has started 0 tasks:
-insufficient CPU or memory configuration for requested task size in selected capacity.
-desiredCount=2 taskDefinition=devpolaris-orders-api:42
-```
-
-The exact wording can vary, but the diagnosis path is the same.
-Do not stare at the Node.js code first.
-Check service events, pending tasks, task CPU and memory, Fargate capacity configuration, and subnet placement.
-
-The failure mode section matters because it protects your attention.
-When production is broken, your first instinct may be to rebuild, redeploy, or change code.
-Runtime operations teaches you to ask what part of the contract is false.
-
-## Rollback Target And Recovery Thinking
-
-Rollback means returning production to a known-good runtime version.
-For this ECS service, the clean rollback target is usually the previous task definition revision that points to the previous image digest and previous runtime settings.
-
-That target should be known before you need it.
-The release record above kept `devpolaris-orders-api:41` as the previous good revision, so the team can recover without searching through old pipeline runs during an incident.
-
-A rollback command might look like this:
-
-```bash
-$ aws ecs update-service \
-  --cluster devpolaris-prod \
-  --service devpolaris-orders-api \
-  --task-definition devpolaris-orders-api:41
-```
-
-You do not run this because a dashboard is red for one minute.
-You run it when the evidence says the new revision is the problem and the previous revision is safer.
-For example, revision `42` may reference a wrong secret, use the wrong port, or include an image that fails startup.
-
-Rollback is not defeat.
-It is a recovery tool.
-The team can restore service first, then debug the broken revision without customers waiting on the answer.
-
-A good rollback target includes more than an image tag.
-Tags can be convenient for humans, but the strongest record includes the image digest.
-The digest identifies the exact image content.
-The task definition identifies the exact runtime recipe around that image.
-
-After rollback, you still verify runtime state:
-
-```text
-Service: devpolaris-orders-api
-Task definition: devpolaris-orders-api:41
-Desired count: 2
-Running count: 2
-Healthy targets: 2/2
-Recent 5xx: back to normal
-Startup logs: release=2026-04-30.3 task_revision=41
-```
-
-This closes the loop.
-The service is not "fixed" because the rollback command returned.
-It is safer because the running version, health, traffic, and logs agree again.
-
-## Flexibility And Operational Surface Area
-
-ECS and Fargate give you useful flexibility.
-You can choose the container image, CPU, memory, environment variables, secrets, IAM roles, subnets, security groups, health checks, desired count, deployment settings, and logging destination.
-That flexibility is why the same platform can run many different backend services.
-
-The cost is operational surface area.
-Every configurable part is another place where production can be slightly wrong.
-A wrong image tag, missing secret permission, strict health check, low memory limit, bad security group, or missing log configuration can turn a good build into a failed service.
-
-This is the main tradeoff:
-
-| You Gain | You Also Own |
-|----------|--------------|
-| One image can run in different environments | Environment-specific config must be correct |
-| Secrets stay out of Git | Secret references and permissions must be maintained |
-| Fargate removes host management | Task CPU, memory, network, and roles still matter |
-| ALB protects traffic with health checks | Health path and readiness behavior must be designed |
-| ECS can roll services forward and back | Task definition revisions must be tracked |
-| CloudWatch centralizes logs | The app must emit useful startup and request evidence |
-
-The practical answer is not to fear configuration.
-The practical answer is to make the runtime contract visible.
-Write down the release record.
-Keep task definition changes reviewable.
-Name the health endpoint clearly.
-Log the release and task revision at startup.
-Know which role does setup work and which role the app uses.
-Keep the previous good task definition close.
-
-That is the runtime operations mental model.
-CI/CD produces the artifact.
-Runtime operations keeps the artifact alive as a healthy, configured, observable, and reversible service.
+Customers do not call the task directly. They call the Application Load Balancer, usually shortened to ALB. The ALB forwards requests to healthy ECS tasks. The ECS service tries to keep the desired number of tasks running. The tasks read config, use secrets, write logs, and call data and messaging services.
+
+That service controller matters. A production API should not depend on one manual container start. If a task exits, the service can replace it. If a deployment starts new tasks, the service can stop older tasks when the deployment rules allow it. If traffic rises, scaling can change the desired count.
+
+The first runtime habit is to name the controller responsible for keeping the workload alive.
+
+## Artifacts
+
+An artifact is the built thing that can be deployed. For an ECS service, the artifact is usually a container image stored in Amazon ECR.
+
+The artifact answers one question: what code and dependencies were packaged?
+
+It does not answer:
+
+| Missing answer | Why the artifact cannot answer it |
+| --- | --- |
+| Which environment is this? | Environment is attached at runtime |
+| Which database should it use? | Connection details are config or secrets |
+| Which port is exposed to the service? | ECS task definition maps container behavior |
+| Which AWS APIs can it call? | IAM roles decide permissions |
+| Is it healthy under traffic? | Runtime health checks and metrics decide |
+
+This is why "image pushed" and "deployment successful" are not the same sentence. The image is a candidate. The running service is the production fact.
+
+The gotcha is tag drift. A tag such as `latest` can move. A release should record the exact image digest or immutable image reference when possible so the team knows what ran and what rollback means.
+
+## Runtime Contract
+
+The runtime contract is everything the application expects when it starts: environment variables, secret references, ports, CPU and memory, command, log routing, roles, and health behavior.
+
+In ECS, much of this contract lives in the task definition. A task definition is a recipe for starting one or more containers. A task definition revision is a numbered version of that recipe.
+
+For `devpolaris-orders-api`, the runtime contract might include:
+
+| Contract item | Example |
+| --- | --- |
+| Image | `orders-api` image in ECR |
+| Port | Container listens on `3000` |
+| Environment | `NODE_ENV=production` |
+| Secret reference | `DATABASE_URL` from Secrets Manager |
+| Task role | Permission to read S3 and send SQS messages |
+| Execution role | Permission for ECS to pull images and write logs |
+| Logs | Container output goes to CloudWatch Logs |
+| Health path | `/healthz` responds when the app is ready |
+
+The contract can break even when the image is good. A missing secret, wrong port, bad health path, or under-sized memory limit can make a healthy build fail in production.
+
+## Health
+
+Health is the runtime answer to "should traffic trust this workload?"
+
+There are several health layers. The container process can be running. The ECS task can be running. The ALB target can be healthy. The application can still be unable to serve checkout because a dependency is unavailable. Those are related signals, not the same signal.
+
+| Health layer | What it proves |
+| --- | --- |
+| Process is running | The container did not exit |
+| ECS task is running | ECS placed and started the task |
+| ALB target is healthy | The target responded to the configured health check |
+| App readiness check passes | The app believes it can accept traffic |
+| User metrics look healthy | Real requests are succeeding |
+
+The practical mistake is making one health check prove too much. A load balancer health check should usually be quick and stable. Deep dependency checks may belong in separate metrics and alarms so one slow downstream service does not cause every task to churn.
+
+Health checks decide traffic movement during deployments. That makes them release controls, not just monitoring details.
+
+## Capacity
+
+Capacity is the runtime answer to "can this service handle the current work?"
+
+For ECS services, the simplest capacity control is desired count: how many tasks the service should try to keep running. Autoscaling can adjust that count based on signals such as CPU, memory, request count, or custom metrics.
+
+Capacity is not a cure for every failure. More tasks help when the service is overloaded and dependencies can handle more callers. More tasks can hurt when the database is already saturated, an external API is rate limited, or each task repeats the same failing work.
+
+The safe habit is to ask what pressure moves:
+
+| Control | Pressure it may move | Pressure it may create |
+| --- | --- | --- |
+| More API tasks | More request handling | More database connections |
+| More workers | Faster queue drain | More downstream API calls |
+| Lower concurrency | Less downstream pressure | Slower backlog drain |
+| Pause schedule | Stops repeated work | Delays expected jobs |
+
+Capacity changes are operational moves. They should be made with evidence, not hope.
+
+## Evidence
+
+Runtime operations needs evidence because production behavior is not visible from one terminal.
+
+The basic evidence path is:
+
+| Evidence | Runtime question |
+| --- | --- |
+| ECS service events | What did the service try to do? |
+| Task definition revision | What recipe started the task? |
+| Target health | Does the load balancer trust the task? |
+| CloudWatch logs | What did the application report? |
+| Metrics and alarms | Is user impact or resource pressure rising? |
+| CloudTrail | Who changed AWS resources or configuration? |
+
+Evidence should be captured before frantic changes erase context. If a deployment failed, the service events, task revision, logs, target health, and alarms tell the story of what happened.
+
+The first useful question is usually not "which setting should I change?" It is "what is the system trying to run right now, and where does the evidence stop matching the expected path?"
+
+## Rollback
+
+Rollback means returning the running service to a previous known-good runtime contract. For ECS, that usually means updating the service back to a previous task definition revision or letting deployment rollback behavior recover from a failed deployment.
+
+The word "previous" is not enough. A rollback target should be specific:
+
+| Rollback evidence | Why it matters |
+| --- | --- |
+| Previous task definition revision | Names the runtime recipe |
+| Image digest or immutable reference | Names the exact code package |
+| Config and secret version expectations | Avoids rolling code back into incompatible config |
+| Health and metric baseline | Shows what "recovered" should look like |
+| Deployment record | Explains when the bad version started |
+
+The gotcha is config drift. Rolling back only the image may not recover the service if the failure came from a changed secret, environment variable, IAM role, target group, or scaling setting. Runtime operations treats rollback as returning to a known-good contract, not only an older image.
+
+## Operational Surface Area
+
+Every runtime feature creates a surface someone must understand.
+
+Task definitions create revision history. Secrets create rotation and permission boundaries. Health checks decide traffic trust. Autoscaling changes capacity. Logs, metrics, and alarms create evidence and attention. Schedules and queues move work out of request paths. Each piece helps the system run, but each piece can also be misconfigured.
+
+This is why simple systems are valuable. A small service with one clear deployment path, a small runtime contract, stable health checks, and useful evidence is easier to operate than a flexible service with hidden switches everywhere.
+
+The operating habit is to make each control visible:
+
+| Runtime surface | Record the answer |
+| --- | --- |
+| Version | Which task definition revision is live? |
+| Config | Which values are expected at startup? |
+| Secrets | Where do sensitive values come from? |
+| Health | What check decides traffic trust? |
+| Capacity | What metric changes task count? |
+| Recovery | What exact revision is safe to restore? |
+
+## Putting It All Together
+
+The opening build was green, but the release was not alive yet. Production still needed a running version, runtime config, secrets, permissions, health, capacity, evidence, and rollback.
+
+Runtime operations is the work that keeps those facts understandable. ECS services keep tasks running. Artifacts provide deployable code. Task definitions describe the runtime contract. Health checks decide traffic trust. Capacity controls adjust work handling. Evidence explains behavior. Rollback returns to a known-good contract.
+
+The system is healthy when a team can answer: what is running, why is it trusted, what evidence says it is working, and how do we recover if it is not?
+
+## What's Next
+
+The next article follows the most concrete runtime moment: an ECS deployment. It shows how a new image becomes a task definition revision, how an ECS service starts new tasks, how target health moves traffic, and what rollback really changes.
 
 ---
 
 **References**
 
-- [Amazon ECS task definitions](https://docs.aws.amazon.com/AmazonECS/latest/userguide/task_definitions.html) - Explains task definitions as the versioned application blueprint that includes image, CPU, memory, roles, networking, and logging.
-- [Deploy Amazon ECS services by replacing tasks](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/deployment-type-ecs.html) - Describes how ECS services replace running tasks during rolling deployments and how desired count interacts with deployment behavior.
-- [Amazon ECS task execution IAM role](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task_execution_IAM_role.html) - Clarifies the role ECS uses to pull images, retrieve setup-time resources, and prepare tasks.
-- [Pass Secrets Manager secrets through Amazon ECS environment variables](https://docs.aws.amazon.com/AmazonECS/latest/userguide/secrets-envvar-secrets-manager.html) - Shows how ECS injects Secrets Manager values into containers and notes that running tasks need replacement to see updated secret values.
-- [Health checks for Application Load Balancer target groups](https://docs.aws.amazon.com/elasticloadbalancing/latest/application/target-group-health-checks.html) - Explains how ALB target groups decide whether targets are healthy enough to receive traffic.
-- [Send Amazon ECS logs to CloudWatch](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/using_awslogs.html) - Covers the `awslogs` log driver path from ECS container output to CloudWatch Logs.
+- [Amazon ECS services](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/ecs_services.html). Supports the explanation of services maintaining desired task count and integrating with load balancers and deployments.
+- [Amazon ECS task definitions](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task_definitions.html). Supports the task definition as the runtime recipe for containers, resources, roles, ports, environment, secrets, and logging.
+- [Task definition parameters](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task_definition_parameters.html). Supports the details about image, CPU, memory, container ports, environment values, secrets, and log configuration.
+- [Amazon ECS deployment types](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/deployment-types.html). Supports the release and rollback discussion around service deployments.
+- [Amazon ECS service auto scaling](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/service-auto-scaling.html). Supports the capacity and desired-count discussion.

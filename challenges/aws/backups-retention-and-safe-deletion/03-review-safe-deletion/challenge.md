@@ -1,6 +1,6 @@
 ---
 title: "Review Safe Deletion"
-sectionSlug: safe-deletion-is-a-review-not-a-command
+sectionSlug: safe-deletion
 order: 3
 ---
 

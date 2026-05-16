@@ -1,6 +1,6 @@
 ---
 title: "Move Slow Work To Workers"
-sectionSlug: slow-work-belongs-behind-a-queue
+sectionSlug: queues-and-workers
 order: 2
 ---
 

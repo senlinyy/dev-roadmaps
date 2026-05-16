@@ -1,10 +1,10 @@
 ---
 title: "Inspect Request Path Evidence"
-sectionSlug: the-orders-api-path
+sectionSlug: a-diagnostic-path-for-one-request
 order: 4
 ---
 
-The `devpolaris-orders-api` service is reachable through several network pieces, not one magic service. Collect evidence for public front door `devpolaris-orders-alb`, public subnet `subnet-public-a`, private app subnet `subnet-private-a`, and security groups `sg-orders-alb` and `sg-orders-api`.
+The `devpolaris-orders-api` service is reachable through several network pieces. Collect evidence for public front door `devpolaris-orders-alb`, public subnet `subnet-public-a`, private app subnet `subnet-private-a`, and security groups `sg-orders-alb` and `sg-orders-api`.
 
 Your job:
 

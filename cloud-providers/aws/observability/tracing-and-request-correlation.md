@@ -1,418 +1,240 @@
 ---
-title: "Tracing and Request Correlation"
-description: "Follow one checkout request across logs and traces by using correlation IDs before adding tracing tools."
-overview: "Tracing is easier when you first understand request correlation. Learn how one checkout request keeps the same identity as it moves through ALB, ECS, RDS, S3, DynamoDB, and Lambda side jobs."
-tags: ["tracing", "x-ray", "opentelemetry"]
+title: "Tracing And Correlation"
+description: "Follow one request or event chain across AWS services by using correlation IDs, trace context, spans, OpenTelemetry, and AWS tracing tools."
+overview: "Tracing is easier when one unit of work has a stable identity. This article explains correlation IDs, trace context, spans, asynchronous boundaries, OpenTelemetry, CloudWatch Application Signals, X-Ray, and sampling through one slow checkout path."
+tags: ["tracing", "opentelemetry", "x-ray", "correlation"]
 order: 4
 id: article-cloud-providers-aws-observability-tracing-request-correlation
+aliases:
+  - tracing-and-request-correlation
+  - tracing
+  - request-correlation
+  - cloud-providers/aws/observability/tracing-and-request-correlation.md
 ---
 
 ## Table of Contents
 
-1. [Why One Request Needs A Name](#why-one-request-needs-a-name)
-2. [Correlation IDs First](#correlation-ids-first)
-3. [The Checkout Path](#the-checkout-path)
-4. [Logs With Shared IDs](#logs-with-shared-ids)
-5. [Traces And Spans](#traces-and-spans)
-6. [AWS X-Ray Without Tool Worship](#aws-x-ray-without-tool-worship)
-7. [OpenTelemetry In Plain English](#opentelemetry-in-plain-english)
-8. [Following A Slow Checkout](#following-a-slow-checkout)
-9. [Tradeoffs And Sampling](#tradeoffs-and-sampling)
+1. [The Problem](#the-problem)
+2. [Correlation IDs](#correlation-ids)
+3. [Trace Context](#trace-context)
+4. [Spans](#spans)
+5. [The Checkout Path](#the-checkout-path)
+6. [Async Boundaries](#async-boundaries)
+7. [OpenTelemetry](#opentelemetry)
+8. [AWS Tracing Tools](#aws-tracing-tools)
+9. [Sampling](#sampling)
+10. [Putting It All Together](#putting-it-all-together)
+11. [What's Next](#whats-next)
 
-## Why One Request Needs A Name
+## The Problem
 
-One checkout request can touch many pieces.
-The customer calls an API endpoint.
-The load balancer sends the request to an ECS task.
-The Node.js app writes to RDS, stores an idempotency record in DynamoDB, writes a receipt object to S3, and may trigger a Lambda side job.
+The previous article showed that metrics can reveal a shape: checkout p95 latency rose, 5xx increased, and the receipt queue started aging. The next question is about one unit of work.
 
-If every piece logs separately with no shared ID, the team gets fragments.
-The app says something failed.
-Lambda says an email job failed.
-S3 says an object was missing.
-RDS metrics say connections rose.
-You can suspect they are related, but suspicion is not evidence.
+A customer says order `order-1042` took 8 seconds and then returned an error. The system has fragments:
 
-Request correlation is the habit of giving one unit of work a shared name.
-That name is often called a correlation ID, request ID, or trace ID.
-The exact field name matters less than the discipline:
-the same ID should travel with the work.
+- API Gateway saw the request.
+- The ECS service logged a checkout start and a checkout failure.
+- RDS metrics show connection pressure.
+- S3 request latency rose for receipt uploads.
+- SQS accepted a receipt job.
+- Lambda retried the email provider later.
 
-Tracing is the richer version of this idea.
-It connects events with one ID and records timing and parent-child relationships between steps.
-But a beginner should learn correlation first.
-If your logs cannot follow one request, adding a tracing tool will feel confusing.
+Those fragments may belong together, or they may be separate symptoms from the same time window. Tracing and correlation give the work a shared identity so the team can follow the path instead of guessing.
 
-For `devpolaris-orders-api`, the practical question is:
-when a customer says checkout was slow, can you follow that one checkout from API entry to database write to receipt upload to side job?
+## Correlation IDs
+
+A correlation ID is a stable name for one unit of work. It is often created at the edge of the system, then carried through logs, messages, events, and downstream calls.
+
+For checkout, the edge might assign:
+
+```text
+requestId=req-7b91
+```
+
+Every component that handles the work should include that ID in its logs when it can:
+
+```json
+{
+  "service": "orders-api",
+  "operation": "POST /checkout",
+  "requestId": "req-7b91",
+  "orderId": "order-1042",
+  "message": "receipt job published"
+}
+```
+
+The ID does not need to be meaningful. In fact, it is often safer when it is meaningless. Do not use raw email addresses, card numbers, tokens, or private customer data as correlation IDs. A generated request ID plus safe business identifiers is usually enough.
+
+Correlation is the beginner foundation for tracing. If logs cannot follow one request by a shared field, a tracing tool will feel like a mysterious extra screen rather than an extension of the request story.
+
+## Trace Context
+
+Trace context is the tracing version of shared identity. It carries information that lets tools connect spans into one trace.
+
+A common shape is:
+
+| Field | Plain meaning |
+| --- | --- |
+| Trace ID | The whole unit of work |
+| Span ID | One operation inside that work |
+| Parent span ID | The operation that caused this operation |
+| Attributes | Searchable facts about the operation |
+
+The application, libraries, proxies, and SDKs need to propagate this context. For HTTP calls, it may travel in headers. For queues or events, it may travel in message attributes or event payload fields. For function calls, it may arrive through invocation context or headers depending on the path.
+
+The gotcha is that context can be dropped at boundaries. A trace may look complete through API Gateway and ECS, then disappear when the app publishes to SQS. That does not mean the background work did not happen. It means the trace context did not cross the boundary, or the consumer was not instrumented to continue it.
+
+Treat trace context like a relay baton. Every hop that should be part of the story needs a way to receive it and pass it on.
+
+## Spans
+
+A span represents one operation inside a trace. It has a start time, end time, name, parent relationship, and attributes. A trace is the tree or graph of spans that belong to the same unit of work.
+
+For one checkout request, spans might look like this:
 
 ```mermaid
 flowchart TD
-    REQ["One checkout request<br/>(request_id)"] --> ALB["Entry point<br/>(ALB)"]
-    ALB --> APP["App logs<br/>(ECS task)"]
-    APP --> RDS["Order write<br/>(RDS)"]
-    APP --> DDB["Idempotency item<br/>(DynamoDB)"]
-    APP --> S3["Receipt object<br/>(S3)"]
-    APP --> LAMBDA["Side job<br/>(Lambda)"]
-    APP -.-> TRACE["Timing story<br/>(trace)"]
+    Trace["Trace req-7b91"] --> Api["API route"]
+    Api --> App["Orders API"]
+    App --> RDS["Insert order"]
+    App --> S3["Write receipt"]
+    App --> Queue["Send SQS"]
+    Queue --> Worker["Email worker"]
 ```
 
-The request ID is the thread.
-The trace is the timing story built around that thread.
+The span names should be useful to a human. `POST /checkout`, `rds insert order`, and `s3 put receipt` are clearer than generic names such as `handler` or `call`.
 
-## Correlation IDs First
+Span attributes should help the team filter without leaking private data:
 
-A correlation ID is a value that lets you connect related work across logs and services.
-It should appear in every important log line for the request.
-It should also be passed to side jobs and downstream calls when that makes sense.
+| Attribute | Good use |
+| --- | --- |
+| `service.name` | Which service handled the work |
+| `http.route` | Which route was called |
+| `aws.queue.name` | Which queue was used |
+| `db.system` | Which database type was called |
+| `error.type` | What kind of failure occurred |
+| `order.id` | Safe business identifier when allowed |
 
-For a public API, the request may arrive with a header from an upstream system.
-If it does not, the app can create an ID at the edge of the service.
-The important part is to use one value consistently for the life of the work.
-
-A beginner-friendly request context might look like this:
-
-```text
-request_id:
-  req_01J8K2M6TK7S1E9R0Y6Q
-
-route:
-  POST /v1/orders
-
-order_id:
-  ord_8x7k2n
-
-release:
-  2026-05-02.4
-```
-
-The `request_id` follows the technical request.
-The `order_id` follows the business object after the order is created.
-Both are useful.
-
-Do not use a customer email or payment token as a correlation ID.
-A correlation ID should be safe to write into logs.
-It should connect events without exposing private data.
-
-When the app starts a side job, pass the ID forward:
-
-```json
-{
-  "type": "receipt.email.requested",
-  "request_id": "req_01J8K2M6TK7S1E9R0Y6Q",
-  "order_id": "ord_8x7k2n",
-  "receipt_key": "receipts/2026/05/02/order_ord_8x7k2n/devpolaris-orders-receipt.pdf"
-}
-```
-
-Now the Lambda that sends the receipt email can log the same request and order IDs.
-If the email fails, the team can connect it to the checkout that created the order.
+The gotcha is over-instrumentation. A trace with hundreds of tiny internal spans can be harder to read than one with clear service and dependency boundaries. Instrument what helps explain time, failure, and ownership.
 
 ## The Checkout Path
 
-A request path is the route one unit of work takes through the system.
-For tracing, it helps to name the path before naming tools.
+Tracing becomes useful when it follows a path the team already understands.
 
-For DevPolaris checkout, the path is:
+For the orders system, the path starts with the customer's API call. The API layer forwards to the orders service. The service writes to RDS, writes a receipt object to S3, stores idempotency state in DynamoDB, sends a receipt job to SQS, and emits an event for later workflows.
 
-| Step | Component | What It Does |
-|------|-----------|--------------|
-| 1 | ALB | accepts `POST /v1/orders` |
-| 2 | ECS task | runs `devpolaris-orders-api` |
-| 3 | RDS | stores order and line items |
-| 4 | DynamoDB | records idempotency or job status |
-| 5 | S3 | stores receipt or export object |
-| 6 | Lambda | sends side job output, such as email |
+```mermaid
+sequenceDiagram
+    participant API as API
+    participant App as Orders
+    participant DB as RDS
+    participant S3 as S3
+    participant Q as SQS
+    participant Fn as Lambda
 
-Not every checkout uses every step.
-That is fine.
-A trace or correlated log story should show the steps that happened for that request.
-
-The request path helps avoid a common mistake:
-debugging from the service you personally know best.
-If you are comfortable with Node.js, you may stare at app logs.
-If you are comfortable with databases, you may stare at RDS.
-The request path asks a more specific question:
-where did this request actually go, and where did the first bad signal appear?
-
-A healthy path might look like this:
-
-```text
-req_01J8K2M6TK7S1E9R0Y6Q
-
-ALB accepted request
-ECS task started handler
-RDS order insert succeeded
-DynamoDB idempotency write succeeded
-S3 receipt upload succeeded
-Lambda email request queued
-API returned 201
+    API->>App: requestId req-7b91
+    App->>DB: create order
+    App->>S3: write receipt
+    App->>Q: send email job
+    Q->>Fn: process later
 ```
 
-A failing path might stop earlier:
+If checkout is slow, traces help answer where time went. Did the API wait on the app? Did the app wait on RDS? Did S3 upload latency dominate? Did the synchronous path finish quickly while asynchronous email failed later?
 
-```text
-req_01J8K2M6TK7S1E9R0Y6Q
+The path also shows what tracing cannot do alone. If the business rule is wrong, the trace may show a fast and successful request that still created the wrong order. Logs, tests, and domain checks still matter.
 
-ALB accepted request
-ECS task started handler
-RDS order insert timed out
-API returned 500
-S3 receipt upload did not run
-Lambda email request did not run
-```
+## Async Boundaries
 
-That path already teaches you something.
-There is no point debugging Lambda receipt email for this request because the order never reached that step.
+Queues and events break the simple request-response path. The producer may finish before the consumer starts. A message can wait. A consumer can retry. A scheduled workflow can run long after the original API request.
 
-## Logs With Shared IDs
+That is why asynchronous boundaries need explicit design.
 
-Correlation works only if the ID appears in the logs you actually search.
-That means every important step should include the same request ID.
+For SQS, include safe correlation fields in the message body or attributes. For SNS and EventBridge, include the event ID, trace context if supported by the instrumentation path, and stable business identifiers. For Step Functions, make sure execution names, input fields, logs, and traces can connect the workflow back to the initiating event when needed.
 
-Here are three logs from the same checkout:
+| Boundary | Correlation habit |
+| --- | --- |
+| HTTP call | Propagate trace headers and request ID |
+| SQS message | Include correlation fields in message attributes or body |
+| SNS topic | Publish stable event ID and safe business identifiers |
+| EventBridge event | Use clear `source`, `detail-type`, and correlation fields in `detail` |
+| Step Functions | Preserve initiating IDs in execution input and logs |
 
-```json
-{
-  "level": "info",
-  "service": "devpolaris-orders-api",
-  "request_id": "req_01J8K2M6TK7S1E9R0Y6Q",
-  "route": "POST /v1/orders",
-  "step": "checkout.start"
-}
-```
+The gotcha is duplicate work. Async systems retry. A trace may show one attempt, several attempts, or only the successful path depending on instrumentation and sampling. Correlation IDs help connect the attempts. Idempotency still protects side effects.
 
-```json
-{
-  "level": "info",
-  "service": "devpolaris-orders-api",
-  "request_id": "req_01J8K2M6TK7S1E9R0Y6Q",
-  "order_id": "ord_8x7k2n",
-  "step": "rds.insert_order",
-  "duration_ms": 43
-}
-```
+## OpenTelemetry
 
-```json
-{
-  "level": "error",
-  "service": "devpolaris-receipt-email",
-  "request_id": "req_01J8K2M6TK7S1E9R0Y6Q",
-  "order_id": "ord_8x7k2n",
-  "step": "email.send",
-  "error_name": "TemplateNotFound"
-}
-```
+OpenTelemetry is an open standard for instrumenting applications and collecting telemetry such as traces, metrics, and logs. The important beginner idea is portability: the application can use a common telemetry model and send data through collectors or supported backends.
 
-The third log is from a different service, but the request and order IDs connect it to the same business flow.
-That is the practical value.
+For new tracing work on AWS, OpenTelemetry should be the default mental model. AWS documentation says the X-Ray SDKs and daemon entered maintenance mode on February 25, 2026, and recommends migration to OpenTelemetry-based instrumentation. The X-Ray service and CloudWatch tracing features still matter, but new application instrumentation should avoid building around the older X-Ray SDK/daemon path.
 
-With CloudWatch Logs Insights, a search can follow the request across log groups if you query the relevant groups:
+That distinction matters:
 
-```text
-fields @timestamp, service, request_id, order_id, step, error_name, duration_ms
-| filter request_id = "req_01J8K2M6TK7S1E9R0Y6Q"
-| sort @timestamp asc
-```
+| Choice | What it means |
+| --- | --- |
+| OpenTelemetry instrumentation | Application emits standard telemetry |
+| Collector or agent | Receives, processes, and exports telemetry |
+| CloudWatch and X-Ray backends | Places where AWS can store, search, and visualize traces |
+| Application Signals | CloudWatch application view built from metrics and traces |
 
-The query is simple because the logs are structured.
-If each service uses a different field name, such as `reqId`, `request`, and `trace`, the query becomes harder.
-Consistency is part of the design.
+OpenTelemetry does not remove the need for good names. A badly named span is still hard to use. A trace without safe attributes is still hard to filter. A collector misconfigured at the network or permission boundary still drops evidence.
 
-## Traces And Spans
+## AWS Tracing Tools
 
-A trace is a record of one request's journey.
-A span is one timed piece of work inside that journey.
-The whole checkout is a trace.
-The RDS insert is a span.
-The S3 upload is another span.
+AWS gives several ways to use tracing data.
 
-The trace adds timing and nesting.
-That makes it useful when the request is slow but not clearly failing.
+AWS X-Ray receives trace data and groups related segments into traces. It can produce a service graph that shows application components and downstream dependencies. X-Ray terminology includes segments and subsegments. A beginner can think of those as AWS's trace records for work and child work.
 
-Here is a trace-shaped view:
+CloudWatch Application Signals gives an application-centered view when services are instrumented. It can show services, operations, dependencies, latency, availability, faults, errors, and service-level objectives. It is useful when the team wants a higher-level operating view instead of only raw traces.
 
-```text
-trace_id=1-6634f87a-9fb2c6d2c5a1b8d31460
-request_id=req_01J8K2M6TK7S1E9R0Y6Q
+CloudWatch Transaction Search can make spans searchable and connects tracing data with CloudWatch analysis. OpenTelemetry and AWS Distro for OpenTelemetry can feed these AWS views depending on the setup.
 
-POST /v1/orders                         1260 ms
-  validate cart                            7 ms
-  authorize payment                       52 ms
-  insert order in RDS                   1030 ms
-  write idempotency item in DynamoDB      12 ms
-  write receipt to S3                     31 ms
-  build response                           5 ms
-```
+The tool choice should follow the question:
 
-The trace points at the slow step.
-The request took 1260 ms, and most of that time was the RDS insert.
-That does not automatically prove RDS is broken.
-It tells you where the time went.
+| Question | Useful AWS view |
+| --- | --- |
+| Which service or dependency is slow? | Application Signals or trace map |
+| What happened inside one request? | Trace details and spans |
+| Which spans match a business attribute? | Transaction Search |
+| Is this service meeting latency or availability goals? | Application Signals SLOs |
+| Which exact log line explains the error? | CloudWatch Logs with trace or request ID |
 
-The log then gives detail:
+Do not let tool names replace the request story. The tool is good when it helps answer the next operational question.
 
-```json
-{
-  "level": "warn",
-  "service": "devpolaris-orders-api",
-  "request_id": "req_01J8K2M6TK7S1E9R0Y6Q",
-  "step": "rds.insert_order",
-  "duration_ms": 1030,
-  "message": "slow database write"
-}
-```
+## Sampling
 
-The trace and log support each other.
-The trace shows timing.
-The log shows context.
+Tracing every request can be expensive and noisy. Sampling controls which requests become full traces.
 
-## AWS X-Ray Without Tool Worship
+Sampling is useful because normal high-volume traffic may not need every trace. But it creates a practical surprise: the exact failed request a customer reports may not have a sampled trace. That does not mean observability failed completely. Logs should still contain the request ID and useful fields. Metrics should still show the shape. Alarms should still show whether the issue was broad.
 
-AWS X-Ray is AWS's tracing service for collecting and viewing traces.
-It can help you see service maps, traces, segments, and timing across supported services and instrumented code.
-For a beginner, the tool is less important than the questions it answers.
+Sampling strategy depends on risk:
 
-Use X-Ray when you need to follow a request across components and see where time or errors appear.
-Do not use it as a substitute for clear app logs.
-If your spans are named badly and your logs lack request IDs, the trace view may still leave you confused.
+| Workload | Sampling thought |
+| --- | --- |
+| Normal high-volume success traffic | Sample a small enough portion to see shape |
+| Errors | Prefer keeping more failed traces |
+| Rare business-critical operations | Consider higher sampling |
+| Background retries | Preserve correlation fields even if not every attempt is traced |
 
-In an AWS-shaped checkout path, X-Ray might help show:
+The gotcha is assuming traces are a complete legal record or perfect audit trail. They are operational evidence, not a replacement for logs, CloudTrail, database records, or business state.
 
-| Trace Part | What It Could Show |
-|------------|--------------------|
-| API or ALB edge | request entry timing |
-| ECS app segment | app handler timing |
-| RDS call annotation | database call duration |
-| DynamoDB call | item write timing or error |
-| S3 call | receipt upload timing |
-| Lambda segment | side job timing |
+## Putting It All Together
 
-The exact instrumentation depends on your app, libraries, and runtime setup.
-Avoid pretending that tracing appears perfectly by magic.
-The app must be instrumented well enough to name useful work.
+The opening problem was fragmented evidence. API Gateway, ECS, RDS, S3, SQS, EventBridge, Lambda, and workflows all held pieces of the same checkout story.
 
-A good span name is boring and clear:
-`rds.insert_order`, `dynamodb.put_idempotency_key`, `s3.write_receipt`.
-Those names match the operations your team talks about.
+Correlation IDs give one unit of work a shared name. Trace context connects operations into a trace. Spans show the timing and relationship of each meaningful step. Async boundaries require deliberate propagation through messages, events, and workflows. OpenTelemetry is the forward-looking instrumentation model for AWS applications. X-Ray, CloudWatch Application Signals, and Transaction Search are AWS views that can store, connect, and visualize trace data. Sampling controls volume, but logs and metrics still need to carry enough evidence when a trace is missing.
 
-That is better than vague spans like `db`, `aws`, or `handler`.
-Vague spans force humans to translate during an incident.
+The design is healthy when a responder can start from a request ID or trace, follow the path across services, and know where the story stops because the business process became asynchronous.
 
-## OpenTelemetry In Plain English
+## What's Next
 
-OpenTelemetry is an open standard and toolkit for collecting telemetry such as traces, metrics, and logs.
-For this article, think of it as a way to instrument your code without tying every idea to one vendor API.
-
-You may use OpenTelemetry to create spans in your Node.js app.
-Those spans can be exported to different backends depending on the team's setup.
-AWS also has ways to work with OpenTelemetry in AWS environments.
-
-The first useful tracing skill is to instrument the work in your app, keep names clear, and carry context across boundaries.
-
-For `devpolaris-orders-api`, useful instrumentation points might be:
-
-| Operation | Span Name |
-|-----------|-----------|
-| HTTP handler | `http.post_orders` |
-| Database insert | `rds.insert_order` |
-| Idempotency write | `dynamodb.put_idempotency_key` |
-| Receipt upload | `s3.write_receipt` |
-| Email side job | `lambda.receipt_email` |
-
-Do not start by instrumenting every tiny helper function.
-Start with boundaries that explain request time:
-incoming request, database call, object storage call, key-value write, and side job.
-
-The tracing tool should make the story easier to read.
-If the tool creates a thousand tiny spans that nobody understands, simplify.
-
-## Following A Slow Checkout
-
-Imagine support reports that checkout was slow for one customer.
-The user-facing response eventually succeeded, but it took several seconds.
-You have the request ID from the response header:
-`req_01J8K2M6TK7S1E9R0Y6Q`.
-
-Start with logs:
-
-```text
-fields @timestamp, service, request_id, step, duration_ms, error_name
-| filter request_id = "req_01J8K2M6TK7S1E9R0Y6Q"
-| sort @timestamp asc
-```
-
-The result shows:
-
-```text
-09:42:17.101 devpolaris-orders-api checkout.start
-09:42:17.157 devpolaris-orders-api payment.authorize duration_ms=51
-09:42:18.192 devpolaris-orders-api rds.insert_order duration_ms=1030
-09:42:18.206 devpolaris-orders-api dynamodb.put_idempotency_key duration_ms=12
-09:42:18.238 devpolaris-orders-api s3.write_receipt duration_ms=31
-09:42:18.244 devpolaris-orders-api checkout.complete duration_ms=1143
-```
-
-The logs already suggest RDS was the slow step.
-Now open the trace for the same request or trace ID.
-The trace confirms the same shape:
-
-```text
-POST /v1/orders              1143 ms
-  payment.authorize            51 ms
-  rds.insert_order           1030 ms
-  dynamodb.put_idempotency      12 ms
-  s3.write_receipt             31 ms
-```
-
-Now inspect metrics around that time.
-If RDS latency or connections also rose, the single request fits a wider pattern.
-If RDS metrics look normal, the slow request may be isolated or caused by a specific query shape.
-
-That is the workflow:
-request ID to logs, logs to trace, trace to the slow span, metrics to the wider shape.
-
-## Tradeoffs And Sampling
-
-Tracing has costs.
-It adds instrumentation work.
-It can add runtime overhead.
-It creates data to store and review.
-If every request is traced in full detail forever, the team may spend too much money and too much attention.
-
-Many tracing systems use sampling.
-Sampling means keeping traces for some requests instead of every request.
-That can reduce cost and noise.
-The tradeoff is that you may not have a trace for one exact request.
-
-That is why correlation IDs in logs still matter.
-Even when a trace is not sampled, logs with request IDs can still follow the request.
-When a trace is sampled, the shared ID helps you connect the log detail and timing detail.
-
-The beginner standard is:
-
-| Habit | Why It Helps |
-|-------|--------------|
-| Always create or accept a request ID | every request can be searched |
-| Put request ID in logs | logs become connectable |
-| Put order ID in business events | support can connect user reports |
-| Trace main boundaries first | timing story stays readable |
-| Sample intentionally | cost and detail stay balanced |
-| Name spans in team language | traces are easier during incidents |
-
-Tracing is not about drawing beautiful graphs.
-It is about making one production request understandable.
-If the checkout request is slow, the team should be able to follow it without guessing.
-
-Start with correlation.
-Then add tracing where timing across boundaries matters.
+Observability shows what production is doing. The next AWS module moves into deployment and runtime operations: how services are updated, configured, scaled, rolled back, and operated safely while those signals are watching.
 
 ---
 
 **References**
 
-- [What is AWS X-Ray?](https://docs.aws.amazon.com/xray/latest/devguide/aws-xray.html) - Introduces AWS tracing concepts, traces, segments, and service maps.
-- [AWS X-Ray concepts](https://docs.aws.amazon.com/xray/latest/devguide/xray-concepts.html) - Defines core X-Ray terms used when reading trace data.
-- [OpenTelemetry overview](https://opentelemetry.io/docs/what-is-opentelemetry/) - Official OpenTelemetry explanation of telemetry signals and instrumentation.
-- [AWS Distro for OpenTelemetry](https://aws-otel.github.io/docs/introduction/) - AWS-supported distribution information for OpenTelemetry in AWS environments.
-- [Analyze log data with CloudWatch Logs Insights](https://docs.aws.amazon.com/AmazonCloudWatch/latest/logs/AnalyzingLogData.html) - Useful for connecting request IDs across structured logs.
+- [AWS X-Ray concepts](https://docs.aws.amazon.com/xray/latest/devguide/xray-concepts.html). Supports the explanation of traces, segments, subsegments, service graphs, tracing headers, sampling, annotations, and metadata.
+- [Migrating from X-Ray instrumentation to OpenTelemetry instrumentation](https://docs.aws.amazon.com/xray/latest/devguide/xray-sdk-migration.html). Supports the OpenTelemetry-first guidance and the February 25, 2026 X-Ray SDK/daemon maintenance notice.
+- [OpenTelemetry in Amazon CloudWatch](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/CloudWatch-OpenTelemetry-Sections.html). Supports the OpenTelemetry telemetry model and CloudWatch support for metrics, logs, traces, PromQL, Logs Insights, and Transaction Search.
+- [Application Signals](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/CloudWatch-Application-Monitoring-Sections.html). Supports the Application Signals explanation for services, dependencies, latency, availability, faults, errors, and SLOs.
+- [Transaction Search](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/CloudWatch-Transaction-Search.html). Supports the span search, `aws/spans` log group, and Application Signals/Transaction Search relationship.

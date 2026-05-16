@@ -1,6 +1,6 @@
 ---
 title: "Diagnose Storage Failures"
-sectionSlug: when-checkout-fails-find-the-storage-layer
+sectionSlug: putting-it-all-together
 order: 3
 ---
 

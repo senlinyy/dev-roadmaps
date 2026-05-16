@@ -1,6 +1,6 @@
 ---
 title: "Read Before Changing"
-sectionSlug: reading-signals-before-changing-resources
+sectionSlug: signals-before-changes
 order: 3
 ---
 

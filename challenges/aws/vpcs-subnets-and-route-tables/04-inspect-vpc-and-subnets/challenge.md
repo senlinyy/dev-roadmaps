@@ -1,6 +1,6 @@
 ---
 title: "Inspect VPC And Subnets"
-sectionSlug: subnets-put-resources-in-availability-zones
+sectionSlug: subnets-put-workloads-in-availability-zones
 order: 4
 ---
 

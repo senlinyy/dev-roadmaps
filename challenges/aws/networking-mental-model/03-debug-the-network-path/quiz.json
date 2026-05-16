@@ -4,15 +4,15 @@
     {
       "id": "q1",
       "type": "single",
-      "scenario": "Customers report checkout failures at 10:31.\n\nGET https://orders.devpolaris.com/checkout\nresponse: 503 Service Unavailable\n\nTarget health shows both task targets as `unhealthy` with `Target.ResponseCodeMismatch`. What is the next best check?",
+      "scenario": "Customers report checkout failures at 10:31.\n\nGET https://orders.devpolaris.com/checkout\nresponse: 500 Internal Server Error\n\nTarget health shows both task targets as `unhealthy` with `Target.ResponseCodeMismatch`. What is the next best check?",
       "options": [
         { "id": "a", "text": "Read app logs for `/health` and compare the health response with the target group matcher." },
-        { "id": "b", "text": "Replace the Route 53 record because a 503 means DNS did not resolve." },
-        { "id": "c", "text": "Request a new ACM certificate because all 503 responses are TLS failures." },
+        { "id": "b", "text": "Replace the Route 53 record because a 500 means DNS did not resolve." },
+        { "id": "c", "text": "Request a new ACM certificate because all 500 responses are TLS failures." },
         { "id": "d", "text": "Open the database port to the internet so the ALB can query RDS directly." }
       ],
       "correct": ["a"],
-      "explanation": "A 503 from the ALB plus target health evidence means the public front door was reached, but usable backend targets are missing. `Target.ResponseCodeMismatch` means the app answered with a status the health check did not accept. The next hop is the app health evidence."
+      "explanation": "A 500 after the public HTTPS path plus target health evidence means the name and front door worked well enough to reach backend behavior. `Target.ResponseCodeMismatch` means the app answered the health check with a status the target group did not accept. The next hop is the app health evidence."
     },
     {
       "id": "q2",
@@ -25,7 +25,7 @@
         { "id": "d", "text": "Delete the health check so unhealthy tasks can still receive customer traffic." }
       ],
       "correct": ["a"],
-      "explanation": "The app reached its health handler, then failed on the private database hop. The database only allows the admin group, not the app task group. The fix should add the intended app source, not route customers or the ALB to the database."
+      "explanation": "The app reached its health handler, then failed on the private database hop. The database allows only the admin group today. The fix is to add the intended app task group as a source while keeping customer and ALB traffic out of the database path."
     },
     {
       "id": "q3",
@@ -64,7 +64,7 @@
         { "id": "d", "text": "Avoid the task role, because S3 permissions are controlled by target groups." }
       ],
       "correct": ["a"],
-      "explanation": "The public path is already proven healthy enough to reach the app. The remaining error names an AWS API action and an authorization failure. That points to the task role or bucket policy, not to DNS or ALB routing."
+      "explanation": "The public path is already proven healthy enough to reach the app. The remaining error names an AWS API action and an authorization failure. That points to the task role or bucket policy."
     }
   ]
 }

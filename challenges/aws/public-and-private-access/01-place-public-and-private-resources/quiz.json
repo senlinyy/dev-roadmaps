@@ -25,7 +25,7 @@
         { "id": "d", "text": "The subnet is private only if every resource inside it has no security group." }
       ],
       "correct": ["a"],
-      "explanation": "Public and private behavior comes from routing, not labels. Without a route to an internet gateway, the subnet name alone does not make internet-bound traffic public. Names help humans, but route tables decide behavior."
+      "explanation": "Public and private behavior comes from routing. Without a route to an internet gateway, the subnet name alone does not make internet-bound traffic public. Names help humans, but route tables decide behavior."
     },
     {
       "id": "q3",
@@ -38,7 +38,7 @@
         { "id": "d", "text": "A private subnet name that includes the word `public` for the AWS console." }
       ],
       "correct": ["a", "b", "c"],
-      "explanation": "Public reachability usually needs routing, an internet-routable address or public load balancer, and allowed traffic rules. Missing any one of those can break the path. A name is useful documentation, not a network control."
+      "explanation": "Public reachability usually needs routing, an internet-routable address or public load balancer, and allowed traffic rules. Missing any one of those can break the path. A name is useful documentation; route tables and traffic rules control behavior."
     },
     {
       "id": "q4",

@@ -20,7 +20,7 @@
       "scenario": "The target group is configured for port `3000`, but the new task log says:\n\nHTTP server listening on 0.0.0.0:8080\n\nTarget health shows `Target.Timeout`. What is the most likely mismatch?",
       "options": [
         { "id": "a", "text": "The ALB is checking or forwarding to port `3000`, but the app process is listening on `8080`." },
-        { "id": "b", "text": "The Route 53 alias points to a private hosted zone instead of public DNS." },
+        { "id": "b", "text": "The Route 53 alias points to a private hosted zone while public DNS has no usable answer." },
         { "id": "c", "text": "The ACM certificate does not cover the task's private IP address." },
         { "id": "d", "text": "The database security group is missing outbound TCP 443 to the ALB." }
       ],
@@ -51,7 +51,7 @@
         { "id": "d", "text": "Remove the target group so ECS can route browser requests directly." }
       ],
       "correct": ["a"],
-      "explanation": "The health check is a small contract between the ALB and the app. It should be fast and meaningful, not a slow integration test. Always returning `200` hides readiness problems and can send users to a task that is not ready."
+      "explanation": "The health check is a small contract between the ALB and the app. It should stay fast and meaningful. Always returning `200` hides readiness problems and can send users to a task that is still waiting on a dependency."
     },
     {
       "id": "q5",

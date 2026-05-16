@@ -1,6 +1,6 @@
 ---
 title: "Networking and Connectivity"
-description: "Understand VPCs, subnets, routes, load balancers, DNS, and safe public or private access in AWS."
-tags: ["VPC", "Subnets", "Load Balancers"]
+description: "Build the AWS networking spine: private topology, packet controls, and connectivity beyond one VPC."
+tags: ["VPC", "Subnets", "Security Groups", "Hybrid Networking"]
 order: 3
 ---

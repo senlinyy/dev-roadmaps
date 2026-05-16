@@ -1,6 +1,6 @@
 ---
 title: "Design Actionable Alarms"
-sectionSlug: alarms-turn-signals-into-action
+sectionSlug: alarms
 order: 3
 ---
 

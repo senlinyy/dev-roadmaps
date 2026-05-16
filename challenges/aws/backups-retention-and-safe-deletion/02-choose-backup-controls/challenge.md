@@ -1,6 +1,6 @@
 ---
 title: "Choose Backup Controls"
-sectionSlug: rds-snapshots-and-point-in-time-recovery
+sectionSlug: recovery-points
 order: 2
 ---
 

@@ -43,7 +43,7 @@
     {
       "id": "q4",
       "type": "single",
-      "scenario": "A junior engineer asks why the design uses separate public, app, and database subnets instead of one flat subnet. Which answer best matches the article?",
+      "scenario": "A junior engineer asks why the design uses separate public, app, and database subnets. Which answer best matches the article?",
       "options": [
         { "id": "a", "text": "Different layers have different jobs, so subnet placement and route tables can describe those jobs clearly." },
         { "id": "b", "text": "AWS requires every resource type to have a subnet whose name matches the service name." },

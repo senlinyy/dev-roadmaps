@@ -1,6 +1,6 @@
 ---
 title: "Watch Tasks Earn Traffic"
-sectionSlug: watching-new-tasks-earn-traffic
+sectionSlug: health-checks
 order: 2
 ---
 

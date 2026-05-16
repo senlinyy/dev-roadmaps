@@ -1,6 +1,6 @@
 ---
 title: "Read The Service Update"
-sectionSlug: what-an-ecs-service-update-really-changes
+sectionSlug: ecs-service
 order: 1
 ---
 

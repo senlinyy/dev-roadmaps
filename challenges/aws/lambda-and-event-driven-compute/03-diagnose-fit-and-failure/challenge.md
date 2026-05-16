@@ -1,6 +1,6 @@
 ---
 title: "Diagnose Fit and Failure"
-sectionSlug: failure-modes-and-a-diagnostic-path
+sectionSlug: retries
 order: 3
 ---
 
