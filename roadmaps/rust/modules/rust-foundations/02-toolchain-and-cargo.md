@@ -57,6 +57,33 @@ rustup component add rustfmt clippy
 
 That command matters because Rust formatting and linting are not a separate culture layered on top later. They are part of the normal feedback loop.
 
+:::expand[Pin a toolchain when the project needs one]{kind="pattern"}
+Most beginner projects can use whatever stable Rust is current on the machine. Some real projects need a more exact setup because contributors, CI, docs, and examples should all agree on the same channel and components.
+
+For that, a repository can include `rust-toolchain.toml` at the project root:
+
+```toml
+[toolchain]
+channel = "stable"
+components = ["rustfmt", "clippy"]
+targets = ["wasm32-unknown-unknown"]
+```
+
+When you run Rust commands inside that project, rustup can use this file as a local override. A teammate who enters the repo and runs `cargo test` does not need to remember a separate setup note for Clippy or the WebAssembly target.
+
+The file can also pin a specific version:
+
+```toml
+[toolchain]
+channel = "1.84.0"
+components = ["rustfmt", "clippy"]
+```
+
+That is useful when a production project needs controlled upgrades. It is also useful for a workshop or course where every learner should see the same compiler behavior.
+
+The beginner rule is simple: do not pin just because the file exists. Start with stable. Add `rust-toolchain.toml` when the project has a real coordination problem: CI needs repeatability, a target must be installed, nightly is required for a specific feature, or a team wants Rust upgrades to happen as intentional pull requests.
+:::
+
 ## Cargo
 
 Cargo is Rust's build system and package manager. It creates projects, reads project metadata, downloads dependencies, builds your code, runs tests, generates docs, and talks to the Rust package registry.
@@ -72,6 +99,36 @@ Think of Cargo as doing three jobs at once:
 | Dependency workflow | Records dependencies, resolves versions, and builds dependency crates |
 
 That is why learning Cargo early is not a distraction from learning Rust. Cargo is how Rust code becomes a project.
+
+:::expand[Cargo is the project interface, rustc is the engine]{kind="design"}
+`rustc` is the compiler. Cargo is the project interface that knows when and how to call the compiler.
+
+That distinction matters once the project is more than one file:
+
+```text
+rust-notes/
+  Cargo.toml
+  src/
+    main.rs
+    lib.rs
+  tests/
+    parser_test.rs
+```
+
+If you run `rustc src/main.rs`, you are asking the compiler to treat one file as the whole world. That skips the package manifest, dependency resolution, integration tests, feature flags, examples, docs, and the normal target layout.
+
+When you run `cargo test`, Cargo does several jobs around `rustc`:
+
+| Cargo knows | Why it matters |
+| --- | --- |
+| Which package this is | It finds `Cargo.toml` and package metadata |
+| Which crates exist | It builds the library, binary, tests, and examples as needed |
+| Which dependencies are required | It downloads and builds dependency crates first |
+| Which features are enabled | It passes the right configuration to the compiler |
+| Where artifacts go | It stores build output under `target/` |
+
+You can still call `rustc` directly for a tiny one-file experiment. In normal Rust work, Cargo is the command you talk to because Cargo understands the project graph around the compiler.
+:::
 
 ## First Project
 
@@ -156,6 +213,35 @@ After you build, Cargo may create `Cargo.lock`. The lockfile records exact depen
 
 The important distinction is simple: `Cargo.toml` says what your project asks for; `Cargo.lock` records what Cargo actually selected.
 
+:::expand[Why applications usually commit Cargo.lock]{kind="pitfall"}
+`Cargo.toml` usually describes acceptable dependency versions. `Cargo.lock` records the exact versions Cargo resolved at the time of a successful build.
+
+For example, the manifest may say:
+
+```toml
+[dependencies]
+serde = "1"
+```
+
+That line allows compatible `1.x` versions according to Cargo's resolver rules. After resolution, the lockfile records the exact selected package version:
+
+```toml
+[[package]]
+name = "serde"
+version = "1.0.217"
+```
+
+If this is an application or command-line tool, that exact graph is part of the build. Another developer, CI, or a deploy machine should not accidentally pick a different dependency set just because time passed and newer compatible versions were published.
+
+The pitfall is subtle. Your source code did not change, but the dependency graph did. Now one person sees a failure and another cannot reproduce it. Committing `Cargo.lock` makes dependency changes visible. When you want to update, you run a command such as:
+
+```bash
+cargo update
+```
+
+That turns dependency movement into an intentional change that code review can see. Library crates have a more nuanced decision because downstream users resolve their own graph. For beginners, the useful rule is: applications and tools usually commit `Cargo.lock`.
+:::
+
 ## Tooling Gotchas
 
 Three gotchas save time early.
@@ -198,6 +284,8 @@ The next article reads ordinary Rust code. You will look at `fn main`, variable 
 - [Install Rust](https://rust-lang.org/tools/install). Supports the official rustup installation and update path.
 - [The rustup book: Basic usage](https://rust-lang.github.io/rustup/basics.html). Supports `rustup update`, stable channel usage, and the rustup help system.
 - [The rustup book: Profiles](https://rust-lang.github.io/rustup/concepts/profiles.html). Supports the default profile components, including rustfmt and Clippy.
+- [The rustup book: Overrides](https://rust-lang.github.io/rustup/overrides.html). Supports project-level toolchain override behavior and `rust-toolchain.toml`.
 - [Hello, Cargo!](https://doc.rust-lang.org/stable/book/ch01-03-hello-cargo.html). Supports Cargo's role as Rust's build system and package manager.
 - [First Steps with Cargo](https://doc.rust-lang.org/stable/cargo/getting-started/first-steps.html). Supports `cargo new`, generated project structure, `Cargo.toml`, and `cargo run`.
 - [cargo(1)](https://doc.rust-lang.org/cargo/commands/cargo.html). Supports the Cargo command families used in the article.
+- [Cargo FAQ: Why have Cargo.lock in version control?](https://doc.rust-lang.org/cargo/faq.html#why-have-cargolock-in-version-control). Supports the role of `Cargo.lock` in deterministic builds and version-control decisions.

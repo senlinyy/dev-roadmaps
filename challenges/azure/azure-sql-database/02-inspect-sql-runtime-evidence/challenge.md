@@ -1,6 +1,6 @@
 ---
 title: "Inspect SQL Runtime Evidence"
-sectionSlug: connections-need-network-and-identity-to-agree
+sectionSlug: connections
 order: 2
 ---
 

@@ -1,6 +1,6 @@
 ---
 title: "Compute and Application Hosting"
-description: "Choose where application code runs in Azure, from managed web apps to containers, functions, and virtual machines."
-tags: ["App Service", "Container Apps", "Functions"]
+description: "Choose where Azure application code runs: managed web apps, containers, event functions, virtual machines, and Kubernetes."
+tags: ["compute", "app-service", "container-apps", "functions", "aks"]
 order: 4
 ---

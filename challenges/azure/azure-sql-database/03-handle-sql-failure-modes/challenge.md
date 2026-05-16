@@ -1,6 +1,6 @@
 ---
 title: "Handle SQL Failure Modes"
-sectionSlug: failure-modes-and-first-checks
+sectionSlug: connections
 order: 3
 ---
 

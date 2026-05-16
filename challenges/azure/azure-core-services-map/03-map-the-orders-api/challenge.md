@@ -1,6 +1,6 @@
 ---
 title: "Map The Orders API"
-sectionSlug: the-first-production-map
+sectionSlug: the-orders-api
 order: 3
 ---
 

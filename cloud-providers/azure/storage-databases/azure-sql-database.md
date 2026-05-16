@@ -1,77 +1,67 @@
 ---
 title: "Azure SQL Database"
-description: "Use Azure SQL Database for relational application records that need transactions, constraints, flexible queries, and a clear recovery path."
-overview: "Azure SQL Database is a strong fit for order records, payment state, and other business data where the app needs consistency, relationships, and query flexibility."
-tags: ["azure-sql", "sql", "transactions", "backups"]
+description: "Use Azure SQL Database for relational application records that need tables, transactions, constraints, query flexibility, and restore."
+overview: "Azure SQL Database is a managed relational database for business records such as orders, payments, and line items. This article explains logical servers, databases, tables, transactions, connections, schema changes, and restore."
+tags: ["azure", "azure-sql", "sql", "transactions", "restore"]
 order: 3
 id: article-cloud-providers-azure-storage-databases-azure-sql-database
 ---
 
 ## Table of Contents
 
-1. [Business Records Need More Than A File](#business-records-need-more-than-a-file)
-2. [If You Know RDS](#if-you-know-rds)
-3. [The Database Fits The Order Shape](#the-database-fits-the-order-shape)
-4. [The Logical Server Is Not Your Application Server](#the-logical-server-is-not-your-application-server)
-5. [Connections Need Network And Identity To Agree](#connections-need-network-and-identity-to-agree)
-6. [Transactions Protect Checkout From Half-Writes](#transactions-protect-checkout-from-half-writes)
-7. [Schema Changes Are Part Of Deployment](#schema-changes-are-part-of-deployment)
-8. [Backups Matter Only If Restore Is Usable](#backups-matter-only-if-restore-is-usable)
-9. [Failure Modes And First Checks](#failure-modes-and-first-checks)
-10. [A Practical Azure SQL Review](#a-practical-azure-sql-review)
+1. [The Problem](#the-problem)
+2. [What Is Azure SQL Database](#what-is-azure-sql-database)
+3. [Logical Server](#logical-server)
+4. [Database](#database)
+5. [Tables](#tables)
+6. [Transactions](#transactions)
+7. [Connections](#connections)
+8. [Schema Changes](#schema-changes)
+9. [Restore](#restore)
+10. [Putting It All Together](#putting-it-all-together)
+11. [What's Next](#whats-next)
 
-## Business Records Need More Than A File
+## The Problem
 
-Some application data needs rules. An order should
-belong to one customer. An order should have line
-items. A payment attempt should point to the order it
-tried to pay for. A receipt row should point to a
-receipt file that the right customer can access. Those
-facts are not just bytes. They are business records.
-Azure SQL Database exists for this kind of data. It is
-a managed relational database service. Relational means
-the data lives in tables and the tables can refer to
-each other. Managed means Azure runs the database
-service, but your team still owns schema, queries,
-permissions, migrations, connection behavior, and
-recovery decisions.
+The previous article put receipt PDFs and export files in Blob Storage. The order itself is different. It is not a file the app stores and downloads as one object. It is a set of related business facts.
 
-The key beginner idea is to use a relational database when the data has
-relationships, rules, transactions, and changing business questions. SQL
-gives the team room to ask new questions without redesigning every
-object name or key pattern.
+The checkout path needs rules:
 
-## If You Know RDS
+- An order belongs to one customer.
+- An order has line items.
+- A payment attempt belongs to one order.
+- The system should not store a paid order without its line items.
+- Support may ask for failed payment attempts for one customer this week.
 
-If you know AWS RDS, Azure SQL Database will feel
-familiar in the broad sense. Both are managed
-relational database services. Both can host application
-records. Both require careful connection, network,
-identity, backup, and schema decisions. The Azure shape
-still has its own nouns.
+That data wants relational structure. The app needs transactions, constraints, indexes, queries, migrations, connection rules, and restore. Azure SQL Database is the usual Azure starting point for that shape.
 
-| AWS idea you may know | Azure idea to learn | Why it matters |
-|---|---|---|
-| RDS DB instance or cluster | Azure SQL logical server plus database | The logical server is a management boundary, not your app server |
-| Security group access | Firewall rules, private endpoint, and network integration | Network access is designed with Azure networking primitives |
-| IAM auth patterns | Microsoft Entra authentication, database users, and managed identity | Identity may flow through Entra and Azure RBAC-related setup |
-| Automated backups | Azure SQL automated backups and point-in-time restore | Restore design is still your operational responsibility |
+## What Is Azure SQL Database
 
-The useful callback is this: if you would reach for RDS
-because the feature needs SQL records, Azure SQL
-Database is the first Azure service to inspect. Then
-learn the Azure connection model instead of assuming
-the AWS details carry over.
+Azure SQL Database is a managed relational database service. Relational data lives in tables, and tables can relate to each other through keys and constraints. Managed means Azure operates the database service infrastructure, but your team still owns schema design, queries, permissions, migrations, connection behavior, and recovery decisions.
 
-## The Database Fits The Order Shape
+If you know AWS RDS, Azure SQL Database lives in the same broad mental bucket: managed relational database for application records. The Azure shape has its own nouns. A logical server is a management and connection boundary. A database holds the actual application data. Network access, Microsoft Entra authentication, firewall rules, private endpoints, and backup retention are Azure-specific details.
 
-The orders system has connected facts. The customer
-places an order. The order has line items. The payment
-provider returns attempts and status changes. The
-receipt file is generated later. The admin export reads
-many paid orders and writes a CSV to Blob Storage. That
-shape is relational. Here is a small sketch of the
-data.
+The useful beginner sentence is this: use Azure SQL when the data is a set of connected records and the app needs the database to protect relationships.
+
+## Logical Server
+
+An Azure SQL logical server is not the server that runs your application. It is a logical management boundary for one or more databases. It provides the server name clients connect to, admin settings, firewall rules, identity integration, and other shared database management behavior.
+
+This distinction matters because beginners often see the word server and imagine a VM. Azure SQL Database is a managed database service. You do not SSH into the logical server and install packages. You manage databases, access, configuration, performance, and restore through Azure and SQL tools.
+
+For the orders system, the logical server might be `sql-orders-prod-weu`. The database might be `orders`. The app connection string points at the server and database, but the app should not treat that logical server as an application host.
+
+## Database
+
+The database is where the application records live. It has tables, indexes, users, permissions, performance settings, backup behavior, and the schema your application expects.
+
+A database boundary is important for ownership. A production orders database should not be a casual shared dumping ground for unrelated services. If many teams share one database, schema changes and permissions become tangled. If every tiny feature creates its own database, reporting and transactions may become harder. The right boundary follows the business domain and operational ownership.
+
+For `orders-api`, the database owns order state. It can store a pointer to a receipt blob, but it should not store the PDF bytes unless there is a very specific reason. The database keeps the facts. Blob Storage keeps the file.
+
+## Tables
+
+Tables turn business facts into structured rows and columns. For checkout, a small model might have `customers`, `orders`, `order_items`, and `payment_attempts`.
 
 ```text
 customers
@@ -82,273 +72,79 @@ orders
   id
   customer_id
   status
-  total_cents
   created_at
 
 order_items
-  id
   order_id
   sku
   quantity
-  unit_price_cents
 
 payment_attempts
   id
   order_id
-  provider_reference
   status
-  created_at
+  provider_reference
 ```
 
-This small schema shows why the data is more than a document or file.
-The order row and order item rows should agree, payment attempts should
-stay attached to the order, and the app should be able to query across
-those tables. If the team stored every order as one JSON blob in Blob
-Storage, simple downloads might work at first. Then support asks for
-failed payments by customer and time range, finance asks for revenue by
-day, and product asks for common product bundles. The app now has to
-list, download, parse, and filter files to answer database questions.
+The point of the sketch is not to teach SQL syntax. It shows why this is relational data. The rows refer to each other. The database can enforce rules. Queries can join facts when support, finance, or the application needs a new view.
 
-That is a sign the data shape was wrong for object
-storage.
+## Transactions
 
-## The Logical Server Is Not Your Application Server
+A transaction lets the app group changes so they succeed or fail together. Checkout often needs this. If the app creates an order row but fails before inserting line items, the system has an incomplete business fact. If it records a payment success but not the order status update, support sees conflicting state.
 
-Azure SQL uses a logical server as a management
-boundary for databases. The word server can confuse
-beginners. It does not mean the same thing as the Linux
-server or VM that runs your app. Your
-`devpolaris-orders-api` might run in Azure Container
-Apps. Azure SQL Database runs as a managed database
-service. The logical server gives the database a name,
-endpoint, firewall settings, identity settings, and
-administrative boundary. The database is where your
-tables and data live. Here is the small picture.
+Transactions do not remove all application bugs. They give the app a tool for protecting a unit of work. The developer still has to choose the right boundary. A transaction that includes slow external API calls can create its own problems. A transaction that is too small may not protect the actual business invariant.
 
-```mermaid
-flowchart TD
-    App["Orders backend"]
-    Network["Network path"]
-    Server["SQL server"]
-    Database["Orders database"]
-    Identity["Caller permission"]
+For a beginner, the habit is enough: when several related records must change together, ask whether the database should protect that change with a transaction.
 
-    App --> Network
-    Network --> Server
-    Server --> Database
-    Identity -.-> Database
-```
+## Connections
 
-The app needs a path to the server. The caller also
-needs permission inside the database. Those are
-separate checks. A network path can exist while the
-login still fails. A login can be valid while the
-network path is blocked. This distinction helps debug
-most first Azure SQL problems.
+An app reaches Azure SQL through a connection path. That path includes the server name, database name, authentication method, network access, firewall or private endpoint behavior, and the app's identity or secret.
 
-## Connections Need Network And Identity To Agree
+Connection failures often look like one generic "database unavailable" problem. In reality, the failure might sit in different layers:
 
-A database connection is not just a string copied into
-an environment variable. It is an agreement between the
-app, the network, the database server, and the database
-identity. The app needs the right server name. It needs
-the right database name. It needs credentials or a
-managed identity flow. It needs a network path that
-Azure SQL accepts. It needs database permission to
-perform the query. If any one of those is wrong, the
-app says "database is down" even when the database is
-healthy. For a Node.js app, the configuration might
-include values like this:
+| Layer | Question |
+| --- | --- |
+| Name | Is the app connecting to the right server and database? |
+| Network | Is public access, firewall, or private endpoint behavior allowing the path? |
+| Identity | Is the app using SQL auth, Microsoft Entra auth, or managed identity correctly? |
+| Permission | Does that principal have database access? |
+| Capacity | Is the database throttled or under resource pressure? |
 
-```text
-DB_SERVER=devpolaris-prod-sql.database.windows.net
-DB_NAME=orders
-DB_AUTH=managed-identity
-DB_ENCRYPT=true
-```
+Do not hide the connection model in one unreviewed secret. A production app should make the intended path clear: which database, which network path, which identity, and which permissions.
 
-The exact library settings depend on the driver and
-authentication method. The teaching point is the
-checklist. Server name, database name, encryption,
-identity, network path, and database permissions must
-line up. A common beginner mistake is to fix only the
-connection string. The string can be correct while the
-database firewall rejects the app. The firewall can
-allow the app while the managed identity has no
-database user. The identity can exist while the SQL
-role does not allow the needed operation. Break the
-problem into layers. That is slower for one minute and
-faster for the whole incident.
+## Schema Changes
 
-## Transactions Protect Checkout From Half-Writes
+Schema changes are application deployments. Adding a column, changing a constraint, creating an index, or splitting a table can change how old and new application versions behave.
 
-Checkout is dangerous because several facts must change
-together. The app creates an order. It inserts line
-items. It records a payment attempt. It may write an
-idempotency key. If only some of those writes succeed,
-the customer experience becomes confusing. A
-transaction protects that group. In plain English, a
-transaction says: make all of these database changes
-together, or leave the database as if none of them
-happened. That does not solve every distributed systems
-problem. It does solve an important local database
-problem.
+The danger is not only that a migration fails. It is that a migration succeeds at the wrong time. If the database schema changes before all app instances understand it, a rollout can break. If a column is removed while old code still reads it, the application can fail after the database did exactly what the migration requested.
 
-For `devpolaris-orders-api`, the transaction boundary
-might include:
+Treat schema changes as part of the release plan. Make migrations repeatable, review them like code, and think about forward and backward compatibility when the app rolls across multiple instances.
 
-| Write | Why it belongs in the same transaction |
-|---|---|
-| Insert order row | The order is the main business object |
-| Insert order item rows | The order should not exist without items |
-| Insert payment attempt row | The payment trail must match the order |
-| Insert idempotency marker, if kept in SQL | Duplicate requests should not create duplicate orders |
+## Restore
 
-The receipt PDF upload to Blob Storage is different.
-Azure SQL Database cannot put a Blob Storage upload in
-the same SQL transaction. That means the app must
-design the workflow carefully. One common pattern is:
-create the order and payment records in SQL. Generate
-the receipt. Upload the receipt blob. Then mark the
-receipt row ready only after the upload succeeds. If
-the upload fails, the database can show
-`receipt_status=failed` or `pending_retry`. That state
-is much easier to repair than pretending the receipt is
-ready when the blob is missing.
+Azure SQL Database includes automated backups and point-in-time restore behavior. That does not mean recovery is solved. The team still needs to know the retention period, whether long-term retention is needed, where a restored database will land, who can access it, and how the app or humans will compare restored data with current data.
 
-## Schema Changes Are Part Of Deployment
+Changing backup retention can affect available restore points. Restoring can create a new database rather than magically undoing one bad row in place. A real recovery plan says what the team will restore, where it will restore it, and how it will safely move or compare the recovered data.
 
-Application code and database schema move together. If
-the code writes a new column before the column exists,
-the deployment fails. If the schema removes a column
-while old app instances still read it, the deployment
-fails in a different way. That is why database
-migrations are part of runtime operations, not an
-afterthought. A migration is a controlled change to the
-database schema or data.
+The useful phrase is: backups are a feature only after restore has been tested.
 
-For example, the team may add `receipt_status` to the
-`orders` table. The safe deployment question is: can
-the old code and new code both survive while the change
-rolls out? A common safe pattern is expand, deploy,
-contract. First expand the schema by adding the new
-column in a backward-compatible way. Then deploy code
-that writes and reads the new column. Later, after old
-code is gone, contract by removing old columns or
-paths. This matters in Azure the same way it matters in
-AWS, Linux VMs, or any other production environment.
-The database remembers old and new app versions at the
-same time during a rollout.
+## Putting It All Together
 
-Your migration plan should respect that.
+The opener had order records, payment attempts, line items, support queries, and the need to avoid half-written checkout state. Azure SQL Database gives those records a relational home.
 
-## Backups Matter Only If Restore Is Usable
+The logical server is the management and connection boundary. The database holds the application records. Tables model business facts. Transactions protect units of work. Connections combine name, network, identity, and permission. Schema changes belong to deployment. Restore turns backup promises into an operational path.
 
-Azure SQL Database includes automated backup and restore features. That
-is helpful, but the operational question is whether the team can restore
-the data to a usable place when something goes wrong. Usable means the
-restored database has a name, network path, permissions, secrets, and
-application plan around it. If a developer accidentally deletes paid
-orders, the team may need point-in-time restore, which recovers the
-database to an earlier moment. The restored database still needs a safe
-plan for comparing data, copying back affected rows, or switching an app
-if full replacement is the chosen recovery path.
+Use Azure SQL when the data needs relational rules, not because every piece of application data must go into one database.
 
-For `devpolaris-orders-api`, a backup review should
-include:
+## What's Next
 
-| Question | Why it matters |
-|---|---|
-| What restore point would we choose after a bad migration? | The team needs a time boundary |
-| Where does the restored database live? | The app and humans need a target |
-| Who can access it? | Restore data can contain customer information |
-| How do we test the restored database? | A backup is only useful if it opens correctly |
-| How do we avoid overwriting newer valid orders? | Recovery may need selective repair |
-
-Backups are not a checkbox. They are part of the
-operating plan for data mistakes.
-
-## Failure Modes And First Checks
-
-Azure SQL failures usually fall into recognizable
-groups. The app cannot reach the server.
-
-```text
-error=ETIMEOUT
-server=devpolaris-prod-sql.database.windows.net
-database=orders
-message="connection timeout"
-```
-
-First check network path, firewall rules, private
-endpoint configuration, DNS, and whether the app is
-running in the expected network. The app reaches the
-server but cannot log in.
-
-```text
-error="Login failed for user '<token-identified principal>'"
-auth=managed-identity
-```
-
-First check managed identity assignment, database user
-mapping, and database roles. The app logs in but cannot
-run the query.
-
-```text
-error="The SELECT permission was denied on the object 'orders'"
-```
-
-First check database permissions for that user or role.
-The query runs but violates a rule.
-
-```text
-error="Violation of UNIQUE KEY constraint 'uq_orders_idempotency_key'"
-```
-
-First check whether the database is correctly blocking
-a duplicate request. Do not remove the constraint just
-because it caused an error. Understand which invariant
-it protected. The database works but the app is slow.
-First check query plans, indexes, connection pool
-behavior, long transactions, and whether the app is
-doing repeated queries for data it could fetch once.
-The important habit is to inspect the layer that
-matches the error. Randomly changing the connection
-string, scaling the database, and restarting the app
-may hide the real issue.
-
-## A Practical Azure SQL Review
-
-Before building a feature on Azure SQL Database, answer
-these questions in plain English. What business facts
-are stored in this database? Which facts must stay
-consistent? Which writes need a transaction? Which
-queries must be fast on day one? Which future questions
-are likely? How will the app connect? Which identity
-does the app use? Which network path allows the
-connection? Where do migrations run? What is the
-rollback or repair plan for a bad migration? How would
-the team restore data after accidental deletion? Here
-is a compact review for the orders system.
-
-| Area | Good first answer |
-|---|---|
-| Data shape | Orders, items, payments, receipt metadata |
-| Service | Azure SQL Database |
-| Main reason | Relationships, transactions, and flexible queries |
-| Connection | Managed identity from app environment, private network path if required |
-| Migration habit | Backward-compatible schema changes during rollout |
-| Recovery habit | Test point-in-time restore and document repair path |
-
-That review is short, but it prevents a lot of pain. The database is
-where the business rules become durable, so treat it with the same care
-you give the application code that writes to it.
+Next we will look at Cosmos DB, where the data is item-shaped and the design starts from known access patterns rather than relational joins.
 
 ---
 
 **References**
 
-- [What is Azure SQL Database?](https://learn.microsoft.com/en-us/azure/azure-sql/database/sql-database-paas-overview) - Microsoft describes Azure SQL Database as a managed relational database service.
-- [Azure SQL Database automated backups](https://learn.microsoft.com/en-us/azure/azure-sql/database/automated-backups-overview) - Microsoft explains the backup behavior and retention model for Azure SQL Database.
-- [Recover an Azure SQL database using backups](https://learn.microsoft.com/en-us/azure/azure-sql/database/recovery-using-backups) - Microsoft explains point-in-time restore and related recovery operations.
-- [Microsoft Entra authentication with Azure SQL](https://learn.microsoft.com/en-us/azure/azure-sql/database/authentication-aad-overview) - Microsoft explains identity-based authentication options for Azure SQL.
+- [Azure SQL Database documentation](https://learn.microsoft.com/en-us/azure/azure-sql/database/)
+- [What is Azure SQL Database?](https://learn.microsoft.com/en-us/azure/azure-sql/database/sql-database-paas-overview?view=azuresql)
+- [Automated backups in Azure SQL Database](https://learn.microsoft.com/en-us/azure/azure-sql/database/automated-backups-change-settings?view=azuresql)
+- [Point-in-time restore in Azure SQL Database](https://learn.microsoft.com/en-us/azure/azure-sql/database/recovery-using-backups?view=azuresql)

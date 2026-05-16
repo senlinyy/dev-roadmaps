@@ -92,6 +92,40 @@ let title: &str = "Rust notes";
 
 Do not annotate every type just to prove you can. Add annotations when the compiler needs them or when a reader benefits from seeing the exact shape.
 
+:::expand[Why Rust makes mutation visible]{kind="design"}
+Rust does not make bindings immutable by default because mutation is bad. It makes mutation visible because change is one of the first things a maintainer has to trust.
+
+In a small function, that signal is easy to see:
+
+```rust
+fn summarize(words: &[&str]) -> String {
+    let title = "notes";
+    let mut count = 0;
+
+    for word in words {
+        if !word.is_empty() {
+            count += 1;
+        }
+    }
+
+    format!("{title}: {count} words")
+}
+```
+
+Only `count` is marked `mut`, so the reader knows where to look for changing state. `title` does not change. `words` is borrowed as a slice and read through the loop. That makes the function easier to scan before you understand every detail of borrowing.
+
+The same habit scales into larger Rust code. When you enter a block, look for these signals:
+
+| Signal | Reading habit |
+| --- | --- |
+| `let name = ...` | The binding will not be reassigned |
+| `let mut name = ...` | This binding may change later |
+| `&value` | The function is borrowing for read-style access |
+| `&mut value` | The function needs exclusive mutable access |
+
+`mut` is not only about assignment. It prepares you for Rust's later rule that shared reads and exclusive mutation are different modes. When code marks mutation explicitly, both the compiler and the reader get a clearer map of where change can happen.
+:::
+
 ## Expressions
 
 Rust is expression-oriented. An expression produces a value. A statement does some work and does not produce a value you can bind.
@@ -120,6 +154,49 @@ fn double(value: i32) -> i32 {
 ```
 
 The arrow says the function returns `i32`. The body returns `value * 2` because that expression has no semicolon.
+
+:::expand[The semicolon changes the type]{kind="pitfall"}
+The common mistake is adding a semicolon because the line "looks unfinished" without one.
+
+This function returns an integer:
+
+```rust
+fn score() -> i32 {
+    let base = 10;
+    base + 5
+}
+```
+
+This version looks almost the same, but it no longer returns the integer:
+
+```rust
+fn score() -> i32 {
+    let base = 10;
+    base + 5;
+}
+```
+
+The second version still evaluates `base + 5`, but the semicolon turns that expression into a statement. A statement does work and then produces Rust's unit value, written `()`.
+
+The compiler will complain in that direction:
+
+```text
+expected `i32`, found `()`
+```
+
+You will see the same shape inside blocks:
+
+```rust
+let score = {
+    let base = 10;
+    base + 5
+};
+```
+
+The block hands `15` back to `score`. If `base + 5` becomes `base + 5;`, the block hands back `()` instead.
+
+The rule of thumb is: when the last line of a block or function is meant to be the value, leave off the semicolon. If you see an unexpected `()` type error, inspect the final expression first.
+:::
 
 ## Functions
 
@@ -175,6 +252,42 @@ fn main() {
 ```
 
 This example consumes the vector as it loops. Later, ownership will explain exactly what that means. For now, notice the loop shape and the `vec!` macro, which creates a vector with initial values.
+
+:::expand[Read loops by asking what happens to the collection]{kind="pattern"}
+When you see a `for` loop, ask whether the loop consumes the collection, borrows it, or mutably borrows it.
+
+```rust
+for word in words.into_iter() {
+    println!("{word}");
+}
+```
+
+This takes each value out of `words`. For a vector of owned values, the vector cannot be used afterward as the same collection.
+
+```rust
+for word in words.iter() {
+    println!("{word}");
+}
+```
+
+This borrows each value. The vector stays available after the loop.
+
+```rust
+for word in words.iter_mut() {
+    word.push('!');
+}
+```
+
+This mutably borrows each value so the loop can change it. You do not need the full ownership model yet, but this reading habit will make the next module much easier.
+
+| Loop shape | What the loop receives | Can the collection be used after? | Typical use |
+| --- | --- | --- | --- |
+| `for item in values` | Owned items for many collections | Usually no, because the collection is consumed | Transform or print values when you are done with the collection |
+| `for item in values.iter()` | Shared references | Yes | Read every item |
+| `for item in values.iter_mut()` | Mutable references | Yes, after the loop ends | Update items in place |
+
+The important part is not memorizing every trait yet. The useful reading question is: "after this loop, does the code still need the collection?" If yes, expect `iter()` or `iter_mut()`. If no, consuming the collection may be simpler.
+:::
 
 ## Strings And Vectors
 

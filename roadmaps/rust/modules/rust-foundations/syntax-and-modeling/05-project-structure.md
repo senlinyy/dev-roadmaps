@@ -61,6 +61,39 @@ rust-notes/
 
 This is a common shape for command-line apps. The binary crate handles startup, input, and output. The library crate holds behavior that can be tested and reused.
 
+:::expand[One package can have several crate roots]{kind="design"}
+The package is the project Cargo manages. The crate root is where the compiler starts building one crate inside that package.
+
+That means one package can contain several starting points:
+
+```text
+rust-notes/
+  Cargo.toml
+  src/
+    lib.rs
+    main.rs
+    bin/
+      import_notes.rs
+      export_notes.rs
+```
+
+`src/lib.rs` is the library crate root. `src/main.rs` is the default binary crate root. Files under `src/bin/` are extra binary crate roots.
+
+That layout gives you several executables that can share one library:
+
+```bash
+cargo run
+cargo run --bin import_notes
+cargo run --bin export_notes
+```
+
+The default `cargo run` uses `src/main.rs`. The `--bin` flag selects one of the extra binaries under `src/bin/`.
+
+Each binary should stay thin. For example, `src/bin/import_notes.rs` might parse command-line arguments and then call `rust_notes::import_from_file(path)`. The real import behavior belongs in `src/lib.rs` or a module under it, where it can be tested and reused.
+
+This is the design reason behind the layout: a package is allowed to contain multiple products, but the shared behavior should not be copied between them. The import tool, export tool, and main app can all call the same parsing, model, and storage code from the library crate.
+:::
+
 ## main.rs And lib.rs
 
 `main.rs` should answer one question: how does the program start?
@@ -155,6 +188,60 @@ Callers can read `title`, but they cannot directly read or change `body`. They m
 
 This is not about hiding code for its own sake. It is about making promises smaller. Public items are promises to other code. Private items are implementation details you can reshape.
 
+:::expand[Keep modules private, re-export the API you mean]{kind="pattern"}
+A common library pattern is to keep the file layout private and re-export the small API callers should use.
+
+The project might look like this:
+
+```text
+rust-notes/
+  src/
+    lib.rs
+    parser.rs
+    model.rs
+```
+
+In `lib.rs`:
+
+```rust
+mod parser;
+mod model;
+
+pub use parser::count_words;
+pub use model::Note;
+```
+
+In `parser.rs`:
+
+```rust
+pub fn count_words(text: &str) -> usize {
+    text.split_whitespace().count()
+}
+```
+
+Now callers write:
+
+```rust
+let count = rust_notes::count_words("one two three");
+```
+
+They do not depend on the fact that the function currently lives in `parser.rs`.
+
+Later, the internal layout might become:
+
+```text
+src/
+  lib.rs
+  text/
+    mod.rs
+    parser.rs
+```
+
+If `lib.rs` still re-exports `count_words`, outside callers do not change. That is the point of this pattern. Modules organize your implementation. Re-exports define the public path you want other code to rely on.
+
+The trap is making every module `pub mod` too early. That exposes the file layout as part of your API. Start private, then re-export the names that form the real interface.
+:::
+
 ## Integration Tests
 
 Rust supports tests inside modules, but integration tests live in `tests/` and use the library from the outside.
@@ -211,6 +298,45 @@ One possible responsibility split:
 | `tests/parser_test.rs` | Test behavior from the outside |
 
 This is not the only valid structure. It is a starting map. The better rule is: split code when the split gives a reader a clearer place to look.
+
+:::expand[Split by responsibility, not by noun count]{kind="pitfall"}
+A new Rust file should earn its place by giving the reader a better map. It should not exist just because you introduced one more struct.
+
+This looks organized at first:
+
+```text
+src/
+  note.rs
+  note_status.rs
+  notebook.rs
+  word.rs
+  word_count.rs
+```
+
+But if those files are tiny and always change together, the split creates navigation tax. A reader has to open five files to understand one small model.
+
+For a beginner notes app, this may be clearer:
+
+```text
+src/
+  model.rs
+  parser.rs
+  storage.rs
+```
+
+`model.rs` can hold related types such as `Note`, `NoteStatus`, and `Notebook`. `parser.rs` earns its file because parsing has its own edge cases and tests. `storage.rs` earns its file once paths, serialization, and I/O errors become their own concern.
+
+Good reasons to split include:
+
+| Split pressure | What it means |
+| --- | --- |
+| Different tests | The behavior has its own edge cases |
+| Different dependencies | One area needs `serde`, another does not |
+| Different change rate | Storage changes often, model types stay stable |
+| Different audience | Some items are public API, others are internal helpers |
+
+Structure should reduce thinking load, not perform tidiness. If a split makes the reader ask "where did the code go?", it may be too early.
+:::
 
 ## Putting It All Together
 

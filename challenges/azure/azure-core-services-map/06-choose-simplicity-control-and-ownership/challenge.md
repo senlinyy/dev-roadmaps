@@ -1,6 +1,6 @@
 ---
 title: "Choose Simplicity Control And Ownership"
-sectionSlug: tradeoffs-simplicity-control-and-ownership
+sectionSlug: putting-it-all-together
 order: 6
 ---
 

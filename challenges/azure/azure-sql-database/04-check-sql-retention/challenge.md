@@ -1,6 +1,6 @@
 ---
 title: "Check SQL Retention"
-sectionSlug: backups-matter-only-if-restore-is-usable
+sectionSlug: restore
 order: 4
 ---
 

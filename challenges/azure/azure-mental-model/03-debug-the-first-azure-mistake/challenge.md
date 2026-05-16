@@ -1,6 +1,6 @@
 ---
 title: "Debug The First Azure Mistake"
-sectionSlug: failure-modes-for-beginners
+sectionSlug: scopes-and-callers
 order: 3
 ---
 

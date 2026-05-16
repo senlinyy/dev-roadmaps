@@ -153,6 +153,74 @@ enum Command {
 
 This is one of Rust's strengths. A command is not just a string that you parse and hope everyone remembers. It can be a named shape. `Add` carries a title and body. `Search` carries a query. `List` carries nothing.
 
+:::expand[Make impossible states impossible]{kind="design"}
+The deeper design idea behind enums is that a type can rule out bad combinations before the program runs.
+
+Imagine a note model that tries to describe every state with separate fields:
+
+```rust
+struct Note {
+    title: String,
+    body: String,
+    is_draft: bool,
+    published_at: Option<String>,
+    archived_reason: Option<String>,
+}
+```
+
+This can represent valid notes, but it can also represent nonsense:
+
+```rust
+let note = Note {
+    title: String::from("Rust notes"),
+    body: String::from("Cargo creates projects"),
+    is_draft: true,
+    published_at: Some(String::from("2026-05-16")),
+    archived_reason: Some(String::from("duplicate")),
+};
+```
+
+Is this note a draft, a published note, or an archived note? The struct allowed all three meanings to exist at once. It can also represent quieter invalid states, such as `is_draft: false` with no publish date and no archive reason. That forces every caller to remember the same business rules.
+
+An enum can make each state carry only the data that belongs to that state:
+
+```rust
+enum NoteState {
+    Draft,
+    Published { published_at: String },
+    Archived { reason: String },
+}
+```
+
+Then `Note` can keep the shared data separate from the state-specific data:
+
+```rust
+struct Note {
+    title: String,
+    body: String,
+    state: NoteState,
+}
+```
+
+The payoff appears when the code handles the state:
+
+```rust
+fn status_line(note: &Note) -> String {
+    match &note.state {
+        NoteState::Draft => String::from("draft"),
+        NoteState::Published { published_at } => {
+            format!("published at {published_at}")
+        }
+        NoteState::Archived { reason } => {
+            format!("archived: {reason}")
+        }
+    }
+}
+```
+
+The `Published` arm has access to `published_at` because that field only exists for published notes. The `Draft` arm cannot accidentally read an archive reason because drafts do not carry one. Experienced Rust code leans on this style because it moves rules out of scattered `if` checks and into the data model itself.
+:::
+
 ## Match
 
 `match` runs different code for different shapes:
@@ -202,6 +270,66 @@ fn run(command: Command) {
 
 Read the arms as a decision table. Each command variant gets its own shape and behavior.
 
+:::expand[Parse commands into data first]{kind="pattern"}
+A common Rust pattern is to turn loose input into typed data early, then run the rest of the program against that typed shape.
+
+For a notes CLI, the raw input might start as strings:
+
+```text
+add "Rust notes" "Cargo creates projects"
+search Cargo
+list --pinned
+```
+
+The weak version is to keep passing strings around:
+
+```rust
+fn run(action: &str, first: Option<&str>, second: Option<&str>, pinned: bool) {
+    if action == "add" {
+        println!("saving {}", first.unwrap_or(""));
+    } else if action == "search" {
+        println!("searching for {}", first.unwrap_or(""));
+    } else if action == "list" {
+        println!("listing notes, pinned only: {pinned}");
+    }
+}
+```
+
+Now every caller has to remember which argument means what for each command. `second` matters for `add`, but not for `search`. `pinned` matters for `list`, but not for `add`.
+
+The Rust-shaped version parses once:
+
+```rust
+enum Command {
+    Add { title: String, body: String },
+    Search { query: String },
+    List { pinned_only: bool },
+}
+```
+
+Then the behavior code can focus on real cases:
+
+```rust
+fn run(command: Command) {
+    match command {
+        Command::Add { title, body } => {
+            println!("saving {title}: {} characters", body.len());
+        }
+        Command::Search { query } => {
+            println!("searching for {query}");
+        }
+        Command::List { pinned_only } => {
+            println!("listing notes, pinned only: {pinned_only}");
+        }
+    }
+}
+```
+
+This split matters more as programs grow. Parsing is where you deal with messy input, missing arguments, invalid flags, and help text. After parsing succeeds, the rest of the program receives a `Command`.
+
+That creates a useful boundary: outside the parser, invalid command shapes should not exist. `Add` always has the fields it needs. `List` carries the `pinned_only` choice directly. The rest of the program can match the enum instead of repeatedly asking what a string means.
+:::
+
 ## Option
 
 Rust does not use null as the normal way to say "maybe no value." It uses `Option<T>`:
@@ -230,6 +358,53 @@ match first_match(&notes, "Cargo") {
 ```
 
 That is Rust's modeling style in miniature. Uncertainty is not hidden. The type tells the caller what can happen.
+
+:::expand[Option is a promise]{kind="pattern"}
+`Option<T>` is strongest when absence is an expected part of the operation.
+
+A search that finds no matching note is not broken. It is a normal outcome:
+
+```rust
+fn first_match<'a>(notes: &'a [Note], query: &str) -> Option<&'a Note>
+```
+
+The return type promises callers exactly two possibilities: `Some(note)` or `None`.
+
+That promise would be too weak for a file read:
+
+```rust
+fn read_notes(path: &str) -> Option<String>
+```
+
+If this returns `None`, the caller does not know what happened. Was the file missing? Was permission denied? Was the data not valid UTF-8? For that kind of failure, `Result<T, E>` is usually a better model because it can carry the reason.
+
+Use the return type to tell the caller what kind of uncertainty they are handling:
+
+| Situation | Better shape | Why |
+| --- | --- | --- |
+| Search may find nothing | `Option<&Note>` | No match is expected and needs no explanation |
+| Read may fail | `Result<String, std::io::Error>` | The caller needs the reason |
+| List may be empty | `Vec<Note>` | An empty list already says there are no items |
+
+Here is the file-read shape:
+
+```rust
+fn read_notes(path: &str) -> Result<String, std::io::Error> {
+    std::fs::read_to_string(path)
+}
+```
+
+Now the caller can decide what to do with the error:
+
+```rust
+match read_notes("notes.txt") {
+    Ok(contents) => println!("{contents}"),
+    Err(error) => eprintln!("could not read notes: {error}"),
+}
+```
+
+The rule of thumb is: use `Option` when "nothing there" is enough information. Use `Result` when the caller needs to know why the operation failed.
+:::
 
 ## Debug Output
 
@@ -287,3 +462,4 @@ The next article shows how to organize this code once one file becomes crowded. 
 - [Enums and Pattern Matching](https://doc.rust-lang.org/book/ch06-00-enums.html). Supports enums, `Option`, and pattern matching as core modeling tools.
 - [Defining an Enum](https://doc.rust-lang.org/stable/book/ch06-01-defining-an-enum.html). Supports enums as named variants and `Option<T>` as the standard present-or-absent type.
 - [match](https://doc.rust-lang.org/std/keyword.match.html). Supports `match` as pattern-based control flow with exhaustive handling.
+- [Recoverable Errors with Result](https://doc.rust-lang.org/book/ch09-02-recoverable-errors-with-result.html). Supports the distinction between expected absence and recoverable failure that should carry an error reason.

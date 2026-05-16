@@ -1,6 +1,6 @@
 ---
 title: "Place The Orders API"
-sectionSlug: the-example-one-orders-api-needs-a-home
+sectionSlug: the-first-azure-map
 order: 2
 ---
 

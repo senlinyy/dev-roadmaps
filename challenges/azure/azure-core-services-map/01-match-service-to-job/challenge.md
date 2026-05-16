@@ -1,6 +1,6 @@
 ---
 title: "Match Service To Job"
-sectionSlug: start-with-the-job
+sectionSlug: the-job-based-map
 order: 1
 ---
 

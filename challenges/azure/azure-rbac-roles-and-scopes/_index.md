@@ -1,9 +1,9 @@
 ---
-title: "Azure RBAC, Roles, and Scopes"
-description: "Practice reading Azure RBAC as principal, role, and scope, inspecting assignments, creating a least-privilege assignment, and reviewing access before approval."
+title: "What Is Azure RBAC"
+description: "Practice reading Azure RBAC through caller identity, object IDs, scope, role assignments, least privilege, and one focused evidence check."
 articleId: article-cloud-providers-azure-identity-security-azure-identity-and-security-mental-model
-articleSlug: azure-identity-and-access-control
+articleSlug: what-is-azure-rbac
 difficulty: medium
-order: 8
-tags: ["azure","rbac","roles","scopes","least-privilege","az-cli"]
+order: 5
+tags: ["azure","rbac","entra","roles","scopes","az-cli"]
 ---

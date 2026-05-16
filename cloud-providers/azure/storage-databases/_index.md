@@ -1,6 +1,6 @@
 ---
 title: "Storage and Databases"
-description: "Store files, relational records, NoSQL items, attached disks, and recoverable state with the right Azure service."
-tags: ["blob-storage", "azure-sql", "cosmos-db"]
+description: "Choose where Azure data lives by separating files, relational records, NoSQL items, disks, file shares, and recovery promises."
+tags: ["storage", "blob-storage", "azure-sql", "cosmos-db", "backups"]
 order: 5
 ---

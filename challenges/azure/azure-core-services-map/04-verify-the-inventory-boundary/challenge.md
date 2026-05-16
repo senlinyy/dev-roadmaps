@@ -1,6 +1,6 @@
 ---
 title: "Verify The Inventory Boundary"
-sectionSlug: deployment-images-resource-groups-and-inventory
+sectionSlug: operations-deployment-cost-and-recovery
 order: 4
 ---
 

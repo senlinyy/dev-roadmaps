@@ -28,6 +28,10 @@ const ROADMAP_ACCENT_ORDER = [
   COLORS.lavender,
 ];
 
+const ARTICLE_EXPANDABLE_KINDS = new Set(['design', 'pattern', 'pitfall', 'history', 'example']);
+const ARTICLE_EXPANDABLE_START_RE = /^:::expand(?:\[([^\]]+)\])?(?:\{([^}]*)\})?\s*$/;
+const ARTICLE_EXPANDABLE_END_RE = /^:::\s*$/;
+
 const DEFAULT_ROADMAP_SLUG = 'devops';
 
 const DEFAULT_ROADMAP_BASE: Omit<RoadmapSummary, 'rootCount' | 'articleCount'> = {
@@ -407,6 +411,99 @@ function readMeta(filePath: string): MetaRecord {
   return readMatter(filePath).data;
 }
 
+function parseExpandableAttributes(raw: string): Record<string, string> {
+  const attrs: Record<string, string> = {};
+  const attrRe = /([A-Za-z][\w-]*)=(?:"([^"]*)"|'([^']*)'|([^\s"'}]+))/g;
+  let match: RegExpExecArray | null;
+
+  while ((match = attrRe.exec(raw)) !== null) {
+    attrs[match[1]] = match[2] ?? match[3] ?? match[4] ?? '';
+  }
+
+  return attrs;
+}
+
+function validateArticleExpandables(content: string, filePath: string): void {
+  const lines = content.split(/\r?\n/);
+  let count = 0;
+  let inBlock = false;
+  let inFence = false;
+  let blockStartLine = 0;
+  let blockHasContent = false;
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index] ?? '';
+    const trimmed = line.trim();
+    const lineNo = index + 1;
+    const fence = /^\s*(```|~~~)/.test(line);
+
+    if (fence) {
+      inFence = !inFence;
+      if (inBlock) blockHasContent = true;
+      continue;
+    }
+
+    if (inFence) {
+      if (inBlock && trimmed) {
+        blockHasContent = true;
+      }
+      continue;
+    }
+
+    if (!inBlock && !inFence) {
+      const start = ARTICLE_EXPANDABLE_START_RE.exec(trimmed);
+      if (!start) continue;
+
+      count += 1;
+      blockStartLine = lineNo;
+      blockHasContent = false;
+
+      const title = start[1]?.trim();
+      if (!title) {
+        throw new Error(`${filePath}:${lineNo} expandable block is missing a title.`);
+      }
+
+      const attrs = parseExpandableAttributes(start[2] ?? '');
+      if (!attrs.kind || !ARTICLE_EXPANDABLE_KINDS.has(attrs.kind)) {
+        throw new Error(`${filePath}:${lineNo} expandable block must use kind="${Array.from(ARTICLE_EXPANDABLE_KINDS).join('|')}".`);
+      }
+
+      inBlock = true;
+      continue;
+    }
+
+    if (!inBlock) continue;
+
+    if (ARTICLE_EXPANDABLE_START_RE.test(trimmed)) {
+      throw new Error(`${filePath}:${lineNo} nested expandable blocks are not supported.`);
+    }
+
+    if (ARTICLE_EXPANDABLE_END_RE.test(trimmed)) {
+      if (!blockHasContent) {
+        throw new Error(`${filePath}:${blockStartLine} expandable block must contain content.`);
+      }
+      inBlock = false;
+      continue;
+    }
+
+    if (/^#{2,3}\s+/.test(trimmed)) {
+      throw new Error(`${filePath}:${lineNo} expandable blocks cannot contain ## or ### headings.`);
+    }
+
+    if (trimmed) {
+      blockHasContent = true;
+    }
+  }
+
+  if (inBlock) {
+    throw new Error(`${filePath}:${blockStartLine} expandable block is missing a closing ::: line.`);
+  }
+
+  if (count > 3) {
+    throw new Error(`${filePath} has ${count} expandable blocks. Keep article expandables to 0-3 high-signal blocks.`);
+  }
+}
+
 function dirs(parent: string): string[] {
   return fs
     .readdirSync(parent, { withFileTypes: true })
@@ -427,7 +524,9 @@ function hasNestedSubs(dir: string): boolean {
 }
 
 function loadChildArticle(filePath: string, slug: string, contentPath: string): Ordered<ChildModule> {
-  const childMeta = readMeta(filePath);
+  const childMatter = readMatter(filePath);
+  validateArticleExpandables(childMatter.content, filePath);
+  const childMeta = childMatter.data;
   const frontmatterId = asOptionalString(childMeta.id)?.trim();
 
   return {

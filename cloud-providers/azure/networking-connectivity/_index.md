@@ -1,6 +1,6 @@
 ---
 title: "Networking and Connectivity"
-description: "Trace Azure traffic through public entry points, virtual networks, routes, packet rules, and private service access."
-tags: ["Virtual Network", "Front Door", "Private Link"]
+description: "Build the Azure networking spine: virtual networks, packet rules, public entry points, and private service connectivity."
+tags: ["vnet", "nsg", "front-door", "private-link"]
 order: 3
 ---

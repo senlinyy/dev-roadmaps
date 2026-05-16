@@ -1,6 +1,6 @@
 ---
 title: "Read The Azure Shape"
-sectionSlug: what-the-cloud-is-trying-to-organize
+sectionSlug: the-same-app-jobs
 order: 1
 ---
 

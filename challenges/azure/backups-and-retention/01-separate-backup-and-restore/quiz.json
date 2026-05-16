@@ -1,0 +1,61 @@
+{
+  "passThreshold": 0.75,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A teammate says the orders database has automated backups, so a bad migration is safe. What is the best next question?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Where would we restore the database, and how would we compare or repair the affected data safely?"
+        },
+        {
+          "id": "b",
+          "text": "Can we delete the migration review because backups exist?"
+        },
+        {
+          "id": "c",
+          "text": "Can we store the database backup in the receipt container?"
+        },
+        {
+          "id": "d",
+          "text": "Can we lower retention before the migration to reduce cost?"
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Backups matter only when restore is understood. A bad migration needs a restore target, comparison path, and repair plan."
+    },
+    {
+      "id": "q2",
+      "type": "multiple",
+      "scenario": "Which statements separate backup from restore correctly?",
+      "options": [
+        {
+          "id": "a",
+          "text": "A backup is a recovery point or copy."
+        },
+        {
+          "id": "b",
+          "text": "Restore is bringing data back to a usable place."
+        },
+        {
+          "id": "c",
+          "text": "A backup automatically decides which production rows should be repaired."
+        },
+        {
+          "id": "d",
+          "text": "A restore drill proves whether the recovery path actually works."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "d"
+      ],
+      "explanation": "The backup provides the source. The team still needs the restore process and judgment."
+    }
+  ]
+}

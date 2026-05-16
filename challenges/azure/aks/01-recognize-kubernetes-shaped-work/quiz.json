@@ -1,0 +1,88 @@
+{
+  "passThreshold": 0.75,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A team has one containerized HTTP API, simple public ingress, and no existing Kubernetes tooling. They mainly want Azure to run the image and scale it. Which answer fits the article best?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Start with AKS because every container eventually needs Kubernetes."
+        },
+        {
+          "id": "b",
+          "text": "Consider Container Apps first because the workload needs a managed container runtime, not necessarily a Kubernetes platform."
+        },
+        {
+          "id": "c",
+          "text": "Use a VM because containers cannot run without direct server access."
+        },
+        {
+          "id": "d",
+          "text": "Use Functions because every HTTP API should become event-triggered code."
+        }
+      ],
+      "correct": [
+        "b"
+      ],
+      "explanation": "AKS fits when Kubernetes itself is the operating model. One simple container often fits a smaller managed container service first."
+    },
+    {
+      "id": "q2",
+      "type": "multiple",
+      "scenario": "Which signs make AKS a more reasonable choice?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The organization already standardizes deployments around Kubernetes manifests, Helm charts, and shared ingress controllers."
+        },
+        {
+          "id": "b",
+          "text": "The platform team needs node pools with different VM sizes or isolation rules for different workloads."
+        },
+        {
+          "id": "c",
+          "text": "The team wants fewer concepts than Container Apps for a single service."
+        },
+        {
+          "id": "d",
+          "text": "Developers need Kubernetes services, deployments, pods, and policy to be the shared control layer."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "d"
+      ],
+      "explanation": "AKS is useful when Kubernetes gives the organization shared platform leverage. It is not the smaller option for one simple container."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "A teammate says AKS is fully managed, so the team will not need to understand Kubernetes objects. What is the best response?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Correct. Azure hides pods, services, node pools, and deployments."
+        },
+        {
+          "id": "b",
+          "text": "Mostly wrong. Azure manages much of the control plane, but the team still operates Kubernetes workloads and cluster choices."
+        },
+        {
+          "id": "c",
+          "text": "Correct if the app uses an external load balancer."
+        },
+        {
+          "id": "d",
+          "text": "Wrong only for Windows containers."
+        }
+      ],
+      "correct": [
+        "b"
+      ],
+      "explanation": "AKS is managed Kubernetes, not a managed application runtime that hides Kubernetes from the team."
+    }
+  ]
+}

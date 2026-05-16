@@ -54,6 +54,61 @@ flowchart TD
 
 Rust does not remove all bugs. It does not make architecture decisions for you. It does not make slow algorithms fast. It gives you a language and toolchain that make certain classes of mistakes much harder to ship by accident.
 
+:::expand[Memory safety is a security boundary]{kind="design"}
+Memory bugs are not only annoying crashes. In low-level code, they can become the boundary an attacker tries to cross.
+
+Imagine a network service that accepts a small binary message, parses a length field, and copies the payload into memory. If the code trusts the length too much, the payload can spill past the buffer. If the parser keeps a pointer to data that has already been freed, later code may read memory that now belongs to something else. If two threads mutate shared state without coordination, a check in one thread can be invalid by the time another thread acts on it.
+
+Here is the smallest version of that length-field idea. Imagine a simplified login packet stored beside an admin flag:
+
+```text
+memory for one request:
+
+[ payload: 8 bytes ][ is_admin: false ]
+```
+
+A buggy parser reads the first byte as a length and copies that many bytes into `payload`:
+
+```text
+incoming packet:
+
+length = 12
+data   = 8 bytes for payload + 4 extra bytes
+```
+
+If the parser blindly copies 12 bytes into an 8-byte payload area, the first 8 bytes fill `payload` and the extra bytes spill into whatever sits next in memory. In this toy layout, the next field is `is_admin`. Real exploits are more complex than this sketch, but the shape is the same: untrusted input controls how far a write goes.
+
+In Rust, the default style is to keep that boundary check attached to the data. The first byte says how many payload bytes should follow:
+
+```rust
+fn payload(packet: &[u8]) -> Option<&[u8]> {
+    let length = *packet.first()? as usize;
+    packet.get(1..1 + length)
+}
+
+fn main() {
+    let packet = [5, b'h', b'i'];
+
+    match payload(&packet) {
+        Some(bytes) => println!("{bytes:?}"),
+        None => println!("packet claimed more bytes than it contained"),
+    }
+}
+```
+
+The packet claims there are five payload bytes, but only two are present. The `get` call checks the slice bounds and returns `None` instead of reading past the packet. That does not make every parser correct, but it shows the default shape Rust pushes you toward: suspicious input becomes a checked case the code has to handle.
+
+| Bug class | What can go wrong | What safe Rust makes harder |
+| --- | --- | --- |
+| Buffer overrun | Input writes past the intended memory | Slices carry length, and indexing is checked |
+| Use-after-free | Code reads memory after the owner is gone | References cannot outlive the value they borrow |
+| Data race | Threads read and write the same memory unsafely | Shared mutation must use thread-safe types |
+
+Rust's promise is not that security becomes automatic. You can still design a bad protocol, trust the wrong user, expose a secret, or use `unsafe` incorrectly. The narrower promise is still important: in safe Rust, many memory-use patterns that would depend on discipline and review in C or C++ are rejected before the program runs.
+
+That is why Rust shows up in parsers, network-facing code, and platform components. Those are places where untrusted input touches low-level control, and where one ordinary memory mistake can become more than an ordinary bug.
+:::
+
 ## What Rust Optimizes For
 
 Rust is usually introduced with three words: performance, reliability, and productivity. That slogan is easy to repeat and easy to misunderstand.
@@ -75,6 +130,56 @@ Here is the tradeoff:
 
 This is the reason Rust often clicks through small projects. The first few compiler errors feel personal. Then you notice the compiler is forcing you to describe the program more honestly.
 
+:::expand[No garbage collector is a constraint, not a flex]{kind="design"}
+Rust developers sometimes mention "no garbage collector" as if it is only a speed claim. The deeper point is predictability and placement.
+
+A garbage collector can be a good design for many applications. It removes a large amount of memory-management burden. For a web app, business service, or internal tool, that tradeoff can be excellent. Rust is aimed at cases where teams want memory safety but also need more direct control over when values are cleaned up.
+
+Rust does not ask you to manually call `free` in normal code. Instead, each value has an owner. A scope is the region of code where a name is valid, usually marked by braces. When execution leaves that region, the name goes out of scope, which means later code cannot use that name anymore. At that point, Rust automatically drops the value. For types that own heap memory, such as `String`, dropping the value also releases the heap allocation it owns.
+
+Here is a small scope where the cleanup point is visible:
+
+```rust
+fn main() {
+    {
+        let scratch = String::from("temporary notes");
+        println!("{scratch}");
+    } // scratch is dropped here, so its heap buffer is released
+
+    println!("scratch is gone");
+}
+```
+
+`scratch` owns a `String`. The `String` value tracks a heap buffer that contains the text. The name `scratch` is valid only inside the inner pair of braces. When the inner block ends, execution has left that scope. `scratch` is no longer a usable name, so Rust calls the cleanup code for `String`, and that cleanup releases the heap buffer. There is no later garbage collector pass that searches for it.
+
+Moving a value changes where cleanup happens:
+
+```rust
+fn make_name() -> String {
+    let name = String::from("Ada");
+    name
+}
+
+fn main() {
+    let saved = make_name();
+    println!("{saved}");
+} // saved is dropped here, so the "Ada" buffer is released here
+```
+
+`name` is not dropped inside `make_name` because the final `name` expression moves the `String` out to the caller. `saved` becomes the owner. When `saved` leaves scope at the end of `main`, Rust drops it there.
+
+That is the core memory idea: Rust frees owned resources at known points in the program, usually when their owner leaves scope. Simple values like integers may have nothing special to release. Owning types like `String`, `Vec<T>`, and `Box<T>` use this drop step to release heap memory or other resources.
+
+| Environment | Why no built-in GC can matter |
+| --- | --- |
+| CLI tools | Fast startup and small distribution are valuable |
+| Embedded code | Memory and runtime support may be constrained |
+| Low-latency services | Teams may care exactly when cleanup work happens |
+| FFI boundaries | Rust can fit beside C APIs without carrying a managed runtime |
+
+The important tone is humility. "No GC" is not a moral victory over other languages. It is a constraint Rust chooses so it can work in places where a runtime collector would be awkward.
+:::
+
 ## Where Rust Shows Up
 
 Rust is a systems language, but "systems" is broader than kernels and device drivers. It appears wherever teams care about predictable performance, safe concurrency, binary distribution, or running close to the platform.
@@ -86,6 +191,24 @@ Google's Android security team has published concrete production evidence for Ru
 Rust is also present near the Linux kernel world. The kernel documentation has a Rust section for people working with Rust support in the kernel, including notes on `no_std` and generated Rust documentation. That is a useful signal: Rust is not only a web backend language wearing systems clothing. It is being used in places where the runtime environment is constrained and the safety bar is high.
 
 The Rust Foundation's technology work points in the same direction: supply-chain security, critical infrastructure, safety-critical readiness, and C++ interoperability. Those are not beginner topics, but they explain why Rust's design matters beyond hobby projects.
+
+:::expand[Adoption often starts at the edges]{kind="pattern"}
+Most teams do not begin by rewriting a whole product in Rust. They start where Rust's strengths match a clear pressure point and where the blast radius is small.
+
+A realistic adoption ladder often looks like this:
+
+| First Rust project | Why it is a good edge |
+| --- | --- |
+| Internal CLI | Clear input and output, easy to ship as one binary |
+| Log or config parser | Untrusted text, useful tests, limited scope |
+| WebAssembly module | One hot path can be isolated from the rest of the app |
+| C/C++ replacement component | Rust can improve one risky area without a rewrite |
+| Infrastructure helper | Performance and reliability matter, but the domain is bounded |
+
+A poor first project is usually the opposite: a broad rewrite with unclear success criteria. If the team is also learning ownership, Cargo, crates, testing, error handling, CI, and deployment, a full rewrite forces every unknown to arrive at once.
+
+The edge-first path lets Rust prove its value on a real problem. The first project should have a sentence like "we want Rust here because this parser handles untrusted input" or "this tool needs to be fast, portable, and easy to distribute." Without that sentence, the team is probably learning Rust and migration risk at the same time.
+:::
 
 ## The Rust Community
 

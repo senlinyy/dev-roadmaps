@@ -1,0 +1,88 @@
+{
+  "passThreshold": 0.75,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "The cluster has critical system pods and normal application pods. Which node pool habit matches the article?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Use a system node pool for critical system pods and user node pools for application workloads."
+        },
+        {
+          "id": "b",
+          "text": "Put every pod in the default namespace so scheduling is simpler."
+        },
+        {
+          "id": "c",
+          "text": "Run all pods on one tiny node because Kubernetes will ignore capacity."
+        },
+        {
+          "id": "d",
+          "text": "Avoid node pools because AKS does not use worker VMs."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "AKS uses node pools of worker VMs. System and user pools help separate cluster-critical pods from application capacity."
+    },
+    {
+      "id": "q2",
+      "type": "multiple",
+      "scenario": "Which reasons can justify a separate user node pool?",
+      "options": [
+        {
+          "id": "a",
+          "text": "A workload needs GPU nodes."
+        },
+        {
+          "id": "b",
+          "text": "A memory-heavy service needs a different VM size family."
+        },
+        {
+          "id": "c",
+          "text": "A sensitive workload needs isolation through labels, taints, or policy."
+        },
+        {
+          "id": "d",
+          "text": "A pod needs a prettier name."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "Node pools are capacity and isolation boundaries. Naming alone is not a reason to create a new pool."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "A team asks why an AKS cluster still has compute cost when few requests arrive. Which answer is best?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The node pools are Azure VMs, and their capacity exists even when application traffic is low."
+        },
+        {
+          "id": "b",
+          "text": "Pods are billed as separate physical servers."
+        },
+        {
+          "id": "c",
+          "text": "Ingress controllers create paid Azure subscriptions."
+        },
+        {
+          "id": "d",
+          "text": "Kubernetes services store all application data by default."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "AKS worker nodes are Azure VMs. The team needs to reason about node pool capacity, autoscaling, and idle cost."
+    }
+  ]
+}

@@ -1,9 +1,9 @@
 ---
 title: "Azure Mental Model"
-description: "Practice reading Azure as organised resources, boundaries, locations, identities, and managed services instead of a wall of product names."
+description: "Practice transferring the AWS job-based cloud map into Azure resources, scopes, callers, and first service choices."
 articleId: article-cloud-providers-azure-foundations-azure-mental-model
-articleSlug: how-azure-organises-resources
+articleSlug: azure-mental-model
 difficulty: easy
 order: 1
-tags: ["azure", "resources", "subscriptions", "identity", "managed-services"]
+tags: ["azure", "mental-model", "aws-bridge", "resources", "scopes"]
 ---

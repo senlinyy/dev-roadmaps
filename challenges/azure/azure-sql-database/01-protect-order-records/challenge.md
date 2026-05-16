@@ -1,6 +1,6 @@
 ---
 title: "Protect Order Records"
-sectionSlug: business-records-need-more-than-a-file
+sectionSlug: what-is-azure-sql-database
 order: 1
 ---
 
