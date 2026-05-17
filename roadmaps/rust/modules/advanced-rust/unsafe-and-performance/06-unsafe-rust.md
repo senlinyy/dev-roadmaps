@@ -10,13 +10,14 @@ id: article-rust-advanced-rust-unsafe-rust
 ## Table of Contents
 
 1. [The Problem](#the-problem)
-2. [What Unsafe Means](#what-unsafe-means)
-3. [Unsafe Blocks](#unsafe-blocks)
-4. [Invariants](#invariants)
-5. [Safe Wrappers](#safe-wrappers)
-6. [When To Avoid Unsafe](#when-to-avoid-unsafe)
-7. [Putting It All Together](#putting-it-all-together)
-8. [What's Next](#whats-next)
+2. [References vs Raw Pointers](#references-vs-raw-pointers)
+3. [What Unsafe Means](#what-unsafe-means)
+4. [Unsafe Blocks](#unsafe-blocks)
+5. [Invariants](#invariants)
+6. [Safe Wrappers](#safe-wrappers)
+7. [When To Avoid Unsafe](#when-to-avoid-unsafe)
+8. [Putting It All Together](#putting-it-all-together)
+9. [What's Next](#whats-next)
 
 ## The Problem
 
@@ -25,6 +26,25 @@ The notes indexer is fast enough for small folders, but a hot parser path is now
 That may or may not be reasonable. The important point is that `unsafe` is not a performance mode. It is a way to perform a small set of operations where Rust cannot enforce all safety rules for you.
 
 Unsafe Rust asks a serious question: what invariant are you promising the compiler that it cannot prove?
+
+## References vs Raw Pointers
+
+A Rust reference, such as `&T` or `&mut T`, carries compiler-checked guarantees. It must point to valid data, respect borrowing rules, and stay within its lifetime.
+
+A raw pointer, such as `*const T` or `*mut T`, is a lower-level address-like value. It can be null, dangling, misaligned, or point to uninitialized data. Rust cannot prove otherwise.
+
+That is why creating a raw pointer can be safe, but dereferencing it is unsafe:
+
+```rust
+let value = 42;
+let ptr = &value as *const i32;
+
+unsafe {
+    println!("{}", *ptr);
+}
+```
+
+The unsafe block is where you promise that this raw pointer is valid to read.
 
 ## What Unsafe Means
 

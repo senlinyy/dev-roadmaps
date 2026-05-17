@@ -11,14 +11,15 @@ id: article-rust-rust-foundations-reading-rust
 
 1. [The Problem](#the-problem)
 2. [The Main Function](#the-main-function)
-3. [Bindings](#bindings)
-4. [Expressions](#expressions)
-5. [Functions](#functions)
-6. [Control Flow](#control-flow)
-7. [Strings And Vectors](#strings-and-vectors)
-8. [A Small Program](#a-small-program)
-9. [Putting It All Together](#putting-it-all-together)
-10. [What's Next](#whats-next)
+3. [A Small Reading Key](#a-small-reading-key)
+4. [Bindings](#bindings)
+5. [Expressions](#expressions)
+6. [Functions](#functions)
+7. [Control Flow](#control-flow)
+8. [Strings And Vectors](#strings-and-vectors)
+9. [A Small Program](#a-small-program)
+10. [Putting It All Together](#putting-it-all-together)
+11. [What's Next](#whats-next)
 
 ## The Problem
 
@@ -47,6 +48,25 @@ fn main() {
 `println!` prints a line. The `!` tells you this is a macro call, not an ordinary function call. You do not need to understand macros deeply yet. For now, read `println!` as Rust's common print-line tool.
 
 The string literal `"Hello, Rust"` is text built into the program. Later, the difference between a literal, `&str`, and `String` will matter. At this stage, it is enough to know that string literals are borrowed views of text stored with the program, while `String` is an owned, growable string value.
+
+The `&` in `&str` is the first Rust symbol worth slowing down for. It means code is looking at data it does not own. A `String` owns growable text. A `&str` views text that already lives somewhere else.
+
+## A Small Reading Key
+
+Rust type syntax carries more information than many beginner examples in JavaScript, TypeScript, or Python. You do not need every rule yet, but you do need a small decoding key.
+
+| Shape | How to read it |
+| --- | --- |
+| `String` | Owned, growable UTF-8 text |
+| `&str` | Borrowed view of UTF-8 text |
+| `&T` | Borrowed access to a value of type `T` |
+| `[T]` | A sequence of `T` values with no fixed compile-time length by itself |
+| `&[T]` | Borrowed view of a sequence of `T` values |
+| `Vec<T>` | Owned, growable list of `T` values |
+| `usize` | Rust's standard integer type for counts, lengths, and indexes |
+| `T<U>` | A generic type `T` filled with another type `U`, such as `Vec<String>` |
+
+Read nested types from the inside out. In `&[&str]`, start with `str`, then `&str` as a borrowed string view, then `[&str]` as a sequence of those views, and finally `&[&str]` as a borrowed view of that sequence.
 
 ## Bindings
 
@@ -213,7 +233,7 @@ fn main() {
 }
 ```
 
-The parameter `text: &str` says this function reads a string slice. The return type `usize` is a pointer-sized unsigned integer commonly used for counts and indexes.
+The parameter `text: &str` says this function reads borrowed text. The return type `usize` is Rust's standard count and index type. Its size matches the platform, so it is large enough to index memory on the machine Rust is compiling for, but as a beginner you can read it as "the type Rust normally uses for lengths."
 
 The body uses method calls chained together. `split_whitespace()` creates an iterator over words. `count()` consumes that iterator and returns how many items it saw.
 
@@ -237,7 +257,7 @@ fn label(count: usize) -> &'static str {
 }
 ```
 
-Each branch returns the same kind of value. The last expression in each branch has no semicolon because the `if` expression is producing a value.
+Each branch returns the same kind of value. The `&'static str` return type means the function returns borrowed text that is built into the program and lives for the whole run. The last expression in each branch has no semicolon because the `if` expression is producing a value.
 
 A `for` loop reads naturally:
 

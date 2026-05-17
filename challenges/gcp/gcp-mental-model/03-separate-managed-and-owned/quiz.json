@@ -1,0 +1,44 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "The team uses Cloud Run for the Orders API. Which responsibility still belongs to the team?",
+      "options": [
+        { "id": "a", "text": "Choosing runtime configuration, service account, traffic behavior, and health expectations." },
+        { "id": "b", "text": "Replacing Google's physical datacenter network." },
+        { "id": "c", "text": "Manually patching every host that runs the serverless platform." },
+        { "id": "d", "text": "Creating a new GCP organization for every request." }
+      ],
+      "correct": ["a"],
+      "explanation": "Cloud Run removes server management from the team, but the team still owns how the service is configured and operated."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "The team uses Cloud SQL. What is the safest way to describe responsibility?",
+      "options": [
+        { "id": "a", "text": "GCP manages much of the database platform, while the team still owns data model, access, backup choices, and restore practice." },
+        { "id": "b", "text": "GCP owns the business meaning of every order row." },
+        { "id": "c", "text": "The team no longer needs to test database recovery." },
+        { "id": "d", "text": "Cloud SQL removes the need for application permissions." }
+      ],
+      "correct": ["a"],
+      "explanation": "Managed database services handle platform work, but the team still owns data meaning, access, and recovery promises."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "Which choices are still team-owned design decisions in a managed GCP system?",
+      "options": [
+        { "id": "a", "text": "Which project and billing account own production." },
+        { "id": "b", "text": "Which service account the app uses at runtime." },
+        { "id": "c", "text": "Which logs and metrics prove checkout is healthy." },
+        { "id": "d", "text": "Whether Google Cloud should have physical servers." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "Project ownership, identity, and evidence are team decisions. The provider owns the underlying infrastructure machinery."
+    }
+  ]
+}

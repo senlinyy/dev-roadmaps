@@ -11,16 +11,18 @@ id: article-rust-ownership-and-reliability-error-flow-and-apis
 
 1. [The Problem](#the-problem)
 2. [Return Result](#return-result)
-3. [The Question Mark Operator](#the-question-mark-operator)
-4. [Error Boundaries](#error-boundaries)
-5. [Borrow Or Own Inputs](#borrow-or-own-inputs)
-6. [Small Flexible APIs](#small-flexible-apis)
-7. [Putting It All Together](#putting-it-all-together)
-8. [Toward Idiomatic Rust](#toward-idiomatic-rust)
+3. [Wrapping An Error](#wrapping-an-error)
+4. [The Question Mark Operator](#the-question-mark-operator)
+5. [Error Boundaries](#error-boundaries)
+6. [From Option To Result](#from-option-to-result)
+7. [Borrow Or Own Inputs](#borrow-or-own-inputs)
+8. [Small Flexible APIs](#small-flexible-apis)
+9. [Putting It All Together](#putting-it-all-together)
+10. [Toward Idiomatic Rust](#toward-idiomatic-rust)
 
 ## The Problem
 
-The previous article gave us the two basic shapes: `Option` for ordinary absence and `Result` for recoverable failure. Now the notes app needs a real fallible function.
+The previous article gave us the two basic shapes: `Option` for ordinary absence and `Result` for recoverable failure. Fallible means "can fail during normal operation." Now the notes app needs a real fallible function.
 
 The feature is small. Read a config file, find a `default=` line, and return the notebook name to the rest of the program.
 
@@ -90,6 +92,24 @@ The function now says what can happen. If it succeeds, callers get a `String`. I
 
 This is the important API shift. A function that returns `String` says, "I can give you a string." A function that returns `Result<String, ConfigError>` says, "I can try to give you a string, and if I cannot, I will tell you why."
 
+## Wrapping An Error
+
+This line is compact enough that it deserves a slower reading:
+
+```rust
+let text = std::fs::read_to_string(path)
+    .map_err(ConfigError::Read)?;
+```
+
+`std::fs::read_to_string(path)` returns `Result<String, io::Error>`. The notes app does not want to expose raw `io::Error` as the whole public error story, so `map_err(ConfigError::Read)` converts the error side:
+
+```text
+Ok(text)           stays Ok(text)
+Err(io_error)      becomes Err(ConfigError::Read(io_error))
+```
+
+Only after that conversion does `?` run. If the read succeeded, the `String` is taken out of `Ok` and stored in `text`. If the read failed, the function returns `Err(ConfigError::Read(error))` immediately.
+
 ## The Question Mark Operator
 
 The `?` operator keeps fallible code from becoming a staircase of nested `match` blocks.
@@ -97,7 +117,7 @@ The `?` operator keeps fallible code from becoming a staircase of nested `match`
 In a function that returns `Result`, placing `?` after another `Result` means:
 
 ```text
-If this is Ok(value), unwrap the value and keep going.
+If this is Ok(value), take the value out and keep going.
 If this is Err(error), return the error from this function now.
 ```
 
@@ -255,6 +275,74 @@ This pattern becomes more valuable as programs grow:
 A string is fine at the final edge. Inside the program, structured errors let different callers make different choices.
 :::
 
+## From Option To Result
+
+The search helper returns `Option<&str>` because not finding `default=` is an ordinary search result:
+
+```rust
+fn find_default(text: &str) -> Option<&str> {
+    text.lines()
+        .find(|line| line.starts_with("default="))
+        .map(|line| line.trim_start_matches("default="))
+}
+```
+
+The public loader needs `Result<String, ConfigError>`, so it turns that absence into a domain error:
+
+```rust
+find_default(&text)
+    .map(str::to_string)
+    .ok_or(ConfigError::MissingDefault)
+```
+
+Read it in two steps. `map(str::to_string)` changes `Some(&str)` into `Some(String)`. It leaves `None` alone. Then `ok_or(ConfigError::MissingDefault)` changes `Option<String>` into `Result<String, ConfigError>`:
+
+```text
+Some(name)    -> Ok(name)
+None          -> Err(ConfigError::MissingDefault)
+```
+
+That is the pattern: use `Option` while searching, then convert to `Result` at the boundary where the caller needs an explanation.
+
+:::expand[map_err and ok_or are adapters]{kind="pattern"}
+Rust has many small adapter methods. They can look cryptic until you connect each one to the longer `match` it replaces.
+
+`map_err` changes only the error side of a `Result`:
+
+```rust
+let text = match std::fs::read_to_string(path) {
+    Ok(text) => text,
+    Err(error) => return Err(ConfigError::Read(error)),
+};
+```
+
+The compact version is:
+
+```rust
+let text = std::fs::read_to_string(path)
+    .map_err(ConfigError::Read)?;
+```
+
+`ok_or` changes an `Option` into a `Result`:
+
+```rust
+let name = match find_default(&text) {
+    Some(name) => name.to_string(),
+    None => return Err(ConfigError::MissingDefault),
+};
+```
+
+The compact version is:
+
+```rust
+let name = find_default(&text)
+    .map(str::to_string)
+    .ok_or(ConfigError::MissingDefault)?;
+```
+
+Adapters are useful when they preserve the story: read, convert the error shape, continue. If the chain becomes hard to read, a `match` is still good Rust. Clarity wins over compactness.
+:::
+
 ## Borrow Or Own Inputs
 
 Error flow and ownership meet at API boundaries. A function signature should say whether the function needs to keep data or only read it.
@@ -345,6 +433,8 @@ fn load_default_notebook(path: impl AsRef<Path>) -> Result<String, ConfigError> 
 }
 ```
 
+`Path` is Rust's standard borrowed view of a filesystem path. `PathBuf` is the owned, growable path buffer. `AsRef<Path>` is a trait for values that can cheaply present themselves as a `Path`. The `impl AsRef<Path>` parameter means "accept any one value that can be viewed as a path."
+
 This lets callers pass a `&str`, a `String`, a `&Path`, or a `PathBuf` without the loader caring which one they have.
 
 Do not turn every beginner function into a generic API. The private helper below is clearer as `&str`:
@@ -358,6 +448,36 @@ fn find_default(text: &str) -> Option<&str> {
 ```
 
 Use the flexible shape where the boundary benefits from it. Keep inner helpers plain until real callers need more.
+
+:::expand[AsRef<Path> is public API polish]{kind="design"}
+`impl AsRef<Path>` is useful at public boundaries because callers often hold paths in different forms.
+
+Without it, you might force callers to allocate:
+
+```rust
+fn load_default_notebook(path: String) -> Result<String, ConfigError> {
+    // ...
+}
+```
+
+That is awkward for a caller that already has a `&str` literal or a `PathBuf`. A borrowed path is often enough:
+
+```rust
+fn load_default_notebook(path: impl AsRef<Path>) -> Result<String, ConfigError> {
+    let path = path.as_ref();
+    let text = std::fs::read_to_string(path)
+        .map_err(ConfigError::Read)?;
+
+    find_default(&text)
+        .map(str::to_string)
+        .ok_or(ConfigError::MissingDefault)
+}
+```
+
+The function still does one job: load a default notebook. The flexible parameter only removes friction at the edge.
+
+Do not use this shape everywhere on day one. Private helpers are often clearer with concrete types such as `&str` or `&[Note]`. Reach for `impl AsRef<Path>` when the function is a boundary that many callers will use.
+:::
 
 ## Putting It All Together
 

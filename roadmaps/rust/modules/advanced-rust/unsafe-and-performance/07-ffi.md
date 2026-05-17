@@ -11,12 +11,13 @@ id: article-rust-advanced-rust-ffi
 
 1. [The Problem](#the-problem)
 2. [The Boundary](#the-boundary)
-3. [extern Functions](#extern-functions)
-4. [Strings And Pointers](#strings-and-pointers)
-5. [Safe Wrappers](#safe-wrappers)
-6. [Ownership Across The Boundary](#ownership-across-the-boundary)
-7. [Putting It All Together](#putting-it-all-together)
-8. [What's Next](#whats-next)
+3. [ABI And C String Primer](#abi-and-c-string-primer)
+4. [extern Functions](#extern-functions)
+5. [Strings And Pointers](#strings-and-pointers)
+6. [Safe Wrappers](#safe-wrappers)
+7. [Ownership Across The Boundary](#ownership-across-the-boundary)
+8. [Putting It All Together](#putting-it-all-together)
+9. [What's Next](#whats-next)
 
 ## The Problem
 
@@ -49,6 +50,19 @@ foreign function
 ```
 
 Most of the program should call the safe Rust API. The unsafe details should be isolated in a small module that understands the foreign library's contract.
+
+## ABI And C String Primer
+
+ABI means application binary interface: the machine-level agreement for how compiled code passes arguments, returns values, names functions, and lays out certain data. When Rust declares `extern "C"`, it is saying this function follows the C ABI.
+
+C strings also need a quick model. A Rust `String` knows its length. A C string is usually a pointer to bytes that continue until the first zero byte, called a null terminator.
+
+```text
+Rust string: pointer + length + UTF-8 bytes
+C string:    pointer + bytes ... 0
+```
+
+That is why FFI examples talk about raw pointers and null termination before they talk about business logic. The boundary has to agree on what the bytes mean.
 
 ## extern Functions
 
@@ -170,6 +184,41 @@ Ask these questions for every pointer:
 If C allocates memory, Rust usually needs a matching C function to free it. If Rust allocates memory, C usually should not free it unless the API was specifically designed for that ownership transfer.
 
 Good FFI design is mostly boundary design.
+
+:::expand[Who frees this memory?]{kind="pitfall"}
+Every FFI pointer needs an ownership answer.
+
+This is dangerous as a vague contract:
+
+```c
+char *parse_note(const char *input);
+```
+
+If C returns a `char *`, Rust needs to know who owns that memory. Did the C library allocate it? Should Rust call `free`? Is there a special `parser_free_string` function? Is the pointer valid only until the next parser call?
+
+A better C API makes the cleanup pair explicit:
+
+```c
+char *parse_note(const char *input);
+void parser_free_string(char *value);
+```
+
+Then the Rust wrapper can own the cleanup rule:
+
+```rust
+struct ParsedCString {
+    ptr: *mut std::ffi::c_char,
+}
+
+impl Drop for ParsedCString {
+    fn drop(&mut self) {
+        unsafe { parser_free_string(self.ptr) };
+    }
+}
+```
+
+The exact wrapper will vary, but the question is always the same: the side that allocates usually needs to provide the matching cleanup path. Guessing at this boundary creates leaks, double frees, and use-after-free bugs.
+:::
 
 ## Putting It All Together
 

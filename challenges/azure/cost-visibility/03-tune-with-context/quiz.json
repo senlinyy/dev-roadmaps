@@ -1,0 +1,57 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A budget alert fires at 85 percent of the monthly forecast for `rg-devpolaris-orders-prod`. What does that alert do by itself?",
+      "options": [
+        { "id": "a", "text": "It notifies the team so they can investigate; it does not automatically stop resources from running." },
+        { "id": "b", "text": "It shuts down all resources in the scope when the threshold is crossed." },
+        { "id": "c", "text": "It proves every resource in the scope is waste." },
+        { "id": "d", "text": "It restores deleted blobs because budget alerts are recovery tools." }
+      ],
+      "correct": ["a"],
+      "explanation": "Budgets are guardrails and notification tools. They are not circuit breakers that automatically stop Azure consumption."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "Azure Advisor recommends downsizing an Azure SQL database because average CPU is low. The database handles a weekly reconciliation job and checkout peaks during campaigns.",
+      "options": [
+        { "id": "a", "text": "Review peak windows, latency, query pressure, storage growth, and recovery promise before changing the tier." },
+        { "id": "b", "text": "Apply the recommendation immediately because average CPU is the only safety signal." },
+        { "id": "c", "text": "Ignore all Advisor recommendations forever because they can never help." },
+        { "id": "d", "text": "Delete the database backup first so CPU gets lower." }
+      ],
+      "correct": ["a"],
+      "explanation": "Advisor can point at likely waste, but a team still needs workload context. Averages can hide peaks, batch jobs, latency needs, and recovery requirements."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "Quiet-hour App Service metrics show CPU below 15 percent for weeks. The service still has traffic spikes during release announcements.",
+      "options": [
+        { "id": "a", "text": "Right-size only after comparing quiet hours with peaks, latency, scale rules, and rollback evidence." },
+        { "id": "b", "text": "Scale to the quiet-hour minimum permanently because quiet hours are the whole workload." },
+        { "id": "c", "text": "Turn off monitoring so low CPU is easier to prove." },
+        { "id": "d", "text": "Move all cost to Blob Storage because Blob Storage is always cheaper than compute." }
+      ],
+      "correct": ["a"],
+      "explanation": "Right-sizing chooses the smallest shape that still protects the service promise. Quiet-hour utilization matters, but peak traffic and recovery behavior matter too."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "Which signals should be in a safe right-sizing review?",
+      "options": [
+        { "id": "a", "text": "Cost movement by service, resource, tag, and time window." },
+        { "id": "b", "text": "Traffic, latency, errors, CPU, memory, storage growth, and peak windows." },
+        { "id": "c", "text": "The recovery or rollback plan if the smaller shape hurts users." },
+        { "id": "d", "text": "Only the desire to make the bill lower this week." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "Safe tuning combines cost evidence with operating evidence and a way back. A cost target alone is not enough information."
+    }
+  ]
+}

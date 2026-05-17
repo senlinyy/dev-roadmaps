@@ -1,0 +1,20 @@
+{
+  "language": "python",
+  "activeFile": "main.py",
+  "files": [
+    {
+      "filename": "main.py",
+      "initialValue": "message = \"hello from devpolaris\"\nprint(message)\n"
+    }
+  ],
+  "executor": {
+    "runtime": "python-3.13",
+    "entrypoint": "main.py",
+    "runLabel": "Run Python"
+  },
+  "grader": {
+    "strategy": "text-contains",
+    "expected": ["hello from devpolaris"],
+    "loose": true
+  }
+}

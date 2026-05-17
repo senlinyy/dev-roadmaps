@@ -1,0 +1,44 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "An alert mentions `orders`, and the engineer finds a Cloud Run service with a similar name in `devpolaris-orders-staging`. Production is `devpolaris-orders-prod`. What should happen before any change?",
+      "options": [
+        { "id": "a", "text": "Confirm the project ID, resource type, location, and exact resource path for the production target." },
+        { "id": "b", "text": "Change the staging service because the name is close enough." },
+        { "id": "c", "text": "Ignore the project because names are globally unique for every GCP service." },
+        { "id": "d", "text": "Change the billing account, because billing account names identify Cloud Run services." }
+      ],
+      "correct": ["a"],
+      "explanation": "A friendly name is not enough. Project, type, location, and strong identifier make the target exact."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A service account email is `orders-api-prod@devpolaris-orders-prod.iam.gserviceaccount.com`. What does the email reveal immediately?",
+      "options": [
+        { "id": "a", "text": "The service account's home project ID is visible in the email." },
+        { "id": "b", "text": "The service account has Owner on every project." },
+        { "id": "c", "text": "The Cloud Run service must be global." },
+        { "id": "d", "text": "The billing account is disabled." }
+      ],
+      "correct": ["a"],
+      "explanation": "Service account emails include the project ID. Permissions still need IAM evidence, but the home project is visible."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "Which fields make a Cloud Run service target safer to review?",
+      "options": [
+        { "id": "a", "text": "Project ID." },
+        { "id": "b", "text": "Region." },
+        { "id": "c", "text": "Service name or resource path." },
+        { "id": "d", "text": "Only the word `orders` from a search result." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "The target should be exact enough for another engineer to find the same resource. A loose search word is not enough."
+    }
+  ]
+}

@@ -10,15 +10,16 @@ id: article-rust-ownership-and-reliability-ownership
 ## Table of Contents
 
 1. [The Problem](#the-problem)
-2. [One Owner](#one-owner)
-3. [Stack And Heap](#stack-and-heap)
-4. [Moves](#moves)
-5. [Copy](#copy)
-6. [Clone](#clone)
-7. [Drop](#drop)
-8. [Returning Ownership](#returning-ownership)
-9. [Putting It All Together](#putting-it-all-together)
-10. [What's Next](#whats-next)
+2. [Names, Values, And Cleanup](#names-values-and-cleanup)
+3. [One Owner](#one-owner)
+4. [Stack, Heap, And Handles](#stack-heap-and-handles)
+5. [Moves](#moves)
+6. [Copy](#copy)
+7. [Clone](#clone)
+8. [Drop](#drop)
+9. [Returning Ownership](#returning-ownership)
+10. [Putting It All Together](#putting-it-all-together)
+11. [What's Next](#whats-next)
 
 ## The Problem
 
@@ -33,6 +34,20 @@ The error usually appears in ordinary-looking code:
 Rust is not being fussy about style. It is protecting a memory rule: each value has one owner, and the owner is responsible for the value until ownership moves somewhere else or the value is dropped.
 
 That rule is the foundation for Rust's reliability story. Rust does not need a garbage collector to find unused values later, and it does not ask you to manually free memory. Instead, the compiler checks ownership before the program runs.
+
+## Names, Values, And Cleanup
+
+In JavaScript, TypeScript, and Python, you usually create objects and let the runtime decide when unused objects are cleaned up. Rust makes that cleanup path part of the program's structure.
+
+Start with a name and a value:
+
+```rust
+let title = String::from("Buy milk");
+```
+
+`title` is the name in your code. The `String` is the value. That value owns resources: a small handle in the variable and heap memory for the text bytes. Handle here means the small value Rust follows to reach owned data, not a second copy of the data.
+
+Rust wants one clear answer to this question: when this `String` is finished, who cleans up the heap memory? Ownership is the answer. The owner is responsible for the value until ownership moves or the owner goes out of scope.
 
 ## One Owner
 
@@ -57,9 +72,9 @@ When execution reaches the closing brace, `title` goes out of scope. That means 
 
 That sounds simple, but it matters because `String` owns memory that can grow at runtime. The title text is not just a small fixed value. A `String` needs heap storage for its bytes, and Rust needs one clear place where that storage will be cleaned up.
 
-The ownership rule gives Rust that place. The owner is the cleanup handle.
+The ownership rule gives Rust that place. The owner is the cleanup handle: the one valid path Rust will use later to drop the value and release any resources it owns.
 
-## Stack And Heap
+## Stack, Heap, And Handles
 
 A useful beginner model is that Rust values often have a small stack part and sometimes a larger heap part.
 
@@ -74,6 +89,8 @@ flowchart LR
 ```
 
 For a `String`, the stack part stores a pointer, a length, and a capacity. The heap part stores the actual text bytes.
+
+The pointer says where the heap bytes start. The length says how many bytes are currently used. The capacity says how many bytes are reserved before the `String` has to ask for a larger allocation. That small stack value is why people sometimes call `String` a handle to heap data.
 
 This explains why Rust treats different values differently. A small number such as `i32` can be copied cheaply because the whole value is fixed-size stack data. A `String` cannot be copied in the same automatic way without deciding what to do with the heap bytes.
 

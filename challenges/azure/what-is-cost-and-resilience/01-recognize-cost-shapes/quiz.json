@@ -1,0 +1,57 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A monthly review shows this row:\n\n```text\nResource: asp-devpolaris-orders-prod\nPattern: App Service plan runs all month, even during quiet hours\nKnown reason: production checkout needs at least one ready runtime\n```\n\nWhich cost shape is most visible?",
+      "options": [
+        { "id": "a", "text": "Always-on capacity, because the plan reserves runtime whether traffic is high or low." },
+        { "id": "b", "text": "Only stored data, because App Service plans charge only for files saved by the app." },
+        { "id": "c", "text": "Only data movement, because all app cost must come from outbound traffic." },
+        { "id": "d", "text": "A safety copy, because every running web app is a backup." }
+      ],
+      "correct": ["a"],
+      "explanation": "An App Service plan is capacity the team keeps ready. It may be the right choice, but the review should connect that steady cost to traffic, availability, and scaling promises."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "After release `2026-05-16.2`, Application Insights ingestion rises much faster than request traffic. Normal checkout now writes this message on every request:\n\n```text\nDEBUG route=POST /orders payloadBytes=18421 message=request body accepted\n```\n\nWhich cost shape should the team discuss first?",
+      "options": [
+        { "id": "a", "text": "Usage-based work, because noisy telemetry creates more ingestion and processing around normal traffic." },
+        { "id": "b", "text": "Safety copies, because every debug payload is a restore point." },
+        { "id": "c", "text": "Data movement only, because log ingestion is always internet egress." },
+        { "id": "d", "text": "Always-on SQL capacity, because every log line resizes the database tier." }
+      ],
+      "correct": ["a"],
+      "explanation": "Usage-based cost can spike when the application does extra work. A verbose debug line can multiply observability cost without adding enough diagnostic value."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "Blob versioning is enabled for receipt files. Storage cost grows steadily even though the number of current receipts looks normal.",
+      "options": [
+        { "id": "a", "text": "Stored data and safety copies, because old versions are retained to support recovery." },
+        { "id": "b", "text": "Only idle compute, because old blob versions are running servers." },
+        { "id": "c", "text": "Only database capacity, because Blob Storage cannot keep old object state." },
+        { "id": "d", "text": "Only budget notification cost, because versions are alert messages." }
+      ],
+      "correct": ["a"],
+      "explanation": "Blob versions are retained data. They may be useful protection against overwrite or delete, but they still consume storage and need a retention policy."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "Which cost-shape pairings are reasonable for `devpolaris-orders-api`?",
+      "options": [
+        { "id": "a", "text": "Stored data: Azure SQL size, Blob receipts, retained logs, and backup storage grow over time." },
+        { "id": "b", "text": "Safety copies: backups, soft delete, blob versions, and restore targets kept for recovery." },
+        { "id": "c", "text": "Data movement: cross-region replication or outbound traffic can add cost to the service path." },
+        { "id": "d", "text": "Always-on capacity: a deleted test database that no one can identify is automatically a healthy production promise." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "Stored data, safety copies, and data movement are real Azure cost shapes. Unowned leftovers can cost money too, but ownership and purpose are missing, so they are not a healthy example of intentional capacity."
+    }
+  ]
+}

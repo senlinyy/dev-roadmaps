@@ -1,537 +1,249 @@
 ---
 title: "GCP Mental Model"
-description: "Understand GCP as projects, resources, APIs, regions, identities, billing, and managed services before learning individual services."
-overview: "Google Cloud becomes easier when you stop seeing it as a product list and start seeing the project as the everyday workspace. This article gives you the first map for placing an app, its data, its permissions, and its operating evidence."
-tags: ["gcp", "projects", "resources", "apis"]
+description: "Understand how GCP organizes app jobs through projects, APIs, resources, identities, billing, and managed services."
+overview: "Start with the same Orders API used in AWS and Azure. This article shows what carries over, what GCP changes, and why projects and APIs become the first everyday map."
+tags: ["gcp", "projects", "apis", "mental-model"]
 order: 1
 id: article-cloud-providers-gcp-foundations-gcp-mental-model
+aliases:
+  - what-is-gcp
+  - cloud-providers/gcp/foundations/gcp-mental-model.md
 ---
 
 ## Table of Contents
 
-1. [What GCP Is Trying To Organize](#what-gcp-is-trying-to-organize)
-2. [The AWS And Azure Translation](#the-aws-and-azure-translation)
-3. [The Example: One Orders API Needs A Project](#the-example-one-orders-api-needs-a-project)
-4. [Projects Are The Daily Workspace](#projects-are-the-daily-workspace)
-5. [APIs Must Be Enabled Before Services Can Be Used](#apis-must-be-enabled-before-services-can-be-used)
-6. [Regions And Zones Put Resources On The Map](#regions-and-zones-put-resources-on-the-map)
-7. [Resources Have Names, Labels, And Paths](#resources-have-names-labels-and-paths)
-8. [Identity Decides Who And What Can Act](#identity-decides-who-and-what-can-act)
-9. [Billing Belongs To Projects Through A Billing Account](#billing-belongs-to-projects-through-a-billing-account)
-10. [Managed Services Still Leave You Responsible](#managed-services-still-leave-you-responsible)
-11. [Failure Modes For Beginners](#failure-modes-for-beginners)
-12. [The Mental Checklist Before You Deploy](#the-mental-checklist-before-you-deploy)
+1. [The Problem](#the-problem)
+2. [The Same App Jobs](#the-same-app-jobs)
+3. [What Carries Over](#what-carries-over)
+4. [What GCP Changes](#what-gcp-changes)
+5. [Projects](#projects)
+6. [APIs](#apis)
+7. [Resources](#resources)
+8. [Callers](#callers)
+9. [Billing](#billing)
+10. [What GCP Takes Over](#what-gcp-takes-over)
+11. [First Map](#first-map)
+12. [Putting It All Together](#putting-it-all-together)
+13. [What's Next](#whats-next)
 
-## What GCP Is Trying To Organize
+## The Problem
 
-If you have seen AWS first, you may think in accounts, regions, IAM
-roles, and services. If you have seen Azure first, you may think in
-tenants, subscriptions, resource groups, and Azure RBAC. GCP has the
-same broad goal, but it asks you to build a slightly different picture
-in your head.
+The Orders API already has a cloud shape in your head. AWS taught you to ask where code runs, where data lives, who can call what, how traffic enters, and where evidence goes. Azure added a different boundary map: tenants, subscriptions, resource groups, Resource Manager, and managed identities.
 
-The center of that picture is the project. A GCP project is the main
-workspace for an app, environment, or team. It is where resources are
-created, APIs are enabled, permissions are attached, quotas are counted,
-logs are collected, and billing is connected.
+Now the team asks for the GCP version of `devpolaris-orders-api`.
 
-That project-centered shape makes more sense when you remember where
-Google Cloud comes from. Google was already operating huge services
-like Search, Gmail, and YouTube before most developers were thinking
-about public cloud. The public GCP experience grew from that
-platform-and-API mindset. Instead of thinking about owned servers, GCP
-pushes you toward API calls inside a selected project.
+- A developer creates a Cloud Run service but deploys it into the wrong project.
+- The Cloud SQL Admin API is not enabled, so a database task fails before a database exists.
+- A bucket exists, but nobody knows which billing account pays for the project that owns it.
+- The app has a service account, but the team cannot tell which resources that identity can access.
 
-The console is only one way to make that API request. The `gcloud` CLI,
-Terraform, CI/CD pipelines, and application SDKs all talk to Google
-Cloud APIs too. When the DevPolaris team deploys `devpolaris-orders-api`
-to Cloud Run, creates a Cloud SQL database, or grants a service account
-access to a secret, those actions go through the Google Cloud control
-plane.
+The beginner question is not "which GCP product replaces which AWS product?" The better question is:
 
-So before memorizing the product list, learn the few ideas that almost
-every GCP service depends on: projects, APIs, regions, resources,
-identity, billing, and operating evidence. Once those ideas are clear,
-names like Cloud Run, Cloud SQL, Cloud Storage, IAM, and Cloud Logging
-are much easier to place.
+> How does GCP organize the same app jobs I already understand?
 
-Here is the first map. A GCP project is not exactly an AWS account or
-an Azure subscription, but it carries several concerns you already care
-about:
+GCP still gives you compute, data, networking, identity, logs, metrics, deployment tools, cost controls, and recovery options. The important shift is that daily work usually starts inside a project, goes through enabled APIs, creates resources with identities and locations, and charges usage through a linked billing account.
 
-| Daily concern | Project-level answer |
-|---|---|
-| Deployment target | The project selected by the console, CLI, pipeline, or Terraform |
-| Resource ownership | The app, environment, and team boundaries around created resources |
-| Service readiness | The APIs enabled for this project |
-| Access | The IAM bindings attached to the project or resources |
-| Cost | The billing account connected to the project |
+## The Same App Jobs
 
-This article follows one running example: `devpolaris-orders-api`, a
-Node backend for checkout, is moving into Google Cloud. We will use
-Cloud Run as the easiest first runtime to picture. You give Google
-Cloud a container image, and Cloud Run runs the service for you. We will
-not go deep into Cloud Run here. The goal is to learn the map before we
-walk into each service.
+The app has not changed just because the provider changed. The Orders API still needs the same production jobs:
 
-## The AWS And Azure Translation
+| App need | Plain job |
+| --- | --- |
+| Customers call checkout | Public traffic reaches healthy code. |
+| Backend code keeps running | Compute hosts the app when no laptop is open. |
+| Order records survive deploys | A database stores structured state. |
+| Receipt files survive | Object storage keeps files outside the container. |
+| Private values stay private | A secret store holds sensitive config. |
+| The app calls cloud services | A workload identity receives limited permission. |
+| Engineers debug later | Logs, metrics, traces, and alerts outlive one process. |
+| Releases reach users | Deployment leaves repeatable evidence. |
 
-If you have learned AWS or Azure, reuse the instinct, but do not copy
-every assumption.
+This is the part that transfers across clouds. A cloud provider is a set of managed homes for jobs that were hidden in the laptop, repo, shell, local database, and human memory.
 
-In AWS, the account often feels like the main workspace. In Azure, the
-tenant, subscription, and resource group split that job into clearer
-layers. In GCP, the project is the work area most app teams touch
-again and again.
+The useful GCP habit starts there. Ask what job the app needs before memorizing a service name.
 
-Use this table as orientation, not as a word-for-word dictionary:
+## What Carries Over
 
-| AWS or Azure idea | GCP idea to learn | What changes |
-|---|---|---|
-| AWS account | GCP project | A project is a daily resource, API, IAM, quota, and billing boundary, but organizations can contain many projects |
-| Azure subscription | GCP project plus billing account | A project holds resources, while the billing account pays for one or more projects |
-| Azure resource group | Usually project plus labels | GCP does not have the same universal resource group container |
-| AWS Organizations or Azure tenant | Organization and folders | These organize projects and policies above the project |
-| IAM role or Azure RBAC role | IAM role on a resource | GCP IAM is granted to principals on projects, folders, resources, or organizations |
-| ARN or Azure resource ID | Resource path or full resource name | GCP resources have path-like names that include service and parent information |
-| Tags or labels | Labels and tags | Labels help with organization and cost, while tags can be used for policy conditions |
+AWS and Azure are useful bridges because they already taught the shape of a production system. Keep the job-based instinct, but be careful with direct translation.
 
-The biggest GCP difference is the project. You will see project IDs in
-commands, logs, resource names, billing reports, and API calls. The
-project becomes part of the language of daily work.
+| If you remember... | Use it to understand... | Careful difference |
+| --- | --- | --- |
+| AWS account | GCP project | A project is the everyday workspace for resources, APIs, IAM, quotas, logs, and billing links. |
+| Azure subscription | GCP project plus billing account | The project owns resources; the billing account pays for usage. |
+| Azure resource group | Project plus labels | GCP has no identical universal resource group container. |
+| AWS or Azure region | GCP region | Same broad location idea, but services have their own location choices. |
+| IAM role or managed identity | IAM role binding plus service account | GCP separates the role from the principal that receives it. |
+| ARN or Azure resource ID | Resource path or full resource name | GCP identifiers are project-centered and service-specific. |
 
-The second difference is API enablement. In GCP, many services must be
-enabled for a project before you can use them. If Cloud Run is not
-enabled in the production project, a deployment can fail even if the
-container image and IAM role are correct.
+The table is orientation, not a migration plan. You can use AWS or Azure to remember the job. Then learn the GCP mechanism that actually owns that job.
 
-The third difference is the lack of an Azure-style resource group. A GCP
-project can contain many resources, and labels help humans group them by
-team, environment, service, and cost owner. That means a sloppy labeling
-habit becomes painful quickly.
+## What GCP Changes
 
-The cloud habit is portable. The exact boxes are not. Bring the habit
-of checking ownership, access, location, and cost, then learn how GCP
-stores those answers.
+GCP's first surprise is how much everyday work revolves around the project. In AWS, the account often feels like the main place where resources, cost, access, and quotas become real. In Azure, those ideas split across tenant, subscription, resource group, and resource. In GCP, the project is the work area most app teams touch again and again.
 
-## The Example: One Orders API Needs A Project
+The second surprise is API enablement. Many Google Cloud services must be enabled for a project before they can be used. A deployment can fail because the project is real, the caller is real, and the resource name is right, but the service API is not enabled.
 
-Imagine the DevPolaris team owns `devpolaris-orders-api`. It receives
-checkout requests, validates carts, stores orders, writes receipt files,
-and emits signals for support and operations.
+The third surprise is that GCP does not give you an Azure-style resource group inside every project. Projects and labels do more of the organizing work. That means a messy project or missing labels can make cost, ownership, and cleanup harder.
 
-In local development, the flow is intentionally small:
+The mental model becomes:
 
 ```text
-developer machine
-  -> npm run dev
-  -> http://localhost:3000/orders
-  -> local test database
+organization or folder
+  -> project
+      -> enabled APIs
+      -> resources
+      -> IAM bindings
+      -> logs and quotas
+      -> linked billing account
 ```
 
-That setup is useful for learning and quick feedback. It is not a
-production home. The service needs cloud resources that the team can
-inspect, secure, deploy, and pay for together.
+## Projects
 
-A first GCP shape might look like this:
+A project is the everyday workspace for a GCP workload. It has a project ID, a project number, and a display name. The project ID is the string humans and tools often use, such as `devpolaris-orders-prod`. The project number is assigned by Google and appears in some service identities and resource paths.
+
+For the Orders API, the project answers a practical question:
 
 ```text
-users
-  -> public HTTPS URL
-  -> Cloud Run service
-  -> Cloud SQL database
-  -> Cloud Storage bucket
-  -> Cloud Logging and Cloud Monitoring
-  -> Secret Manager for private config
+When I deploy, inspect logs, grant access, or review cost, which workspace am I standing in?
 ```
 
-Those names are useful, but the team still needs an owner boundary. For
-GCP, that boundary is usually a project.
+That question is small, but it prevents many beginner mistakes. If the CLI is pointed at `devpolaris-orders-dev`, a command that succeeds there does not prove production is configured. If a Cloud Run service exists in one project, searching another project does not prove it is missing.
 
-The team might create or choose a project like this:
+Project choice also affects quotas and API readiness. If the production project has no Cloud Run API enabled, a deployment cannot use Cloud Run there just because a dev project can.
 
-```text
-project id: devpolaris-orders-prod
-purpose: production resources for devpolaris-orders-api
-billing: DevPolaris production billing account
-primary region: us-central1
-labels: team=orders, env=prod, service=orders-api
-```
+## APIs
 
-Now the product names have a home. Cloud Run, Cloud SQL, Cloud Storage,
-Secret Manager, logging, monitoring, IAM bindings, and quotas all sit in
-or attach to that project.
+GCP exposes services through APIs. To use most Google Cloud APIs and services, the service must be enabled in the project. Enabling a service associates it with the project, makes project-level service behavior visible, and can affect billing and IAM role visibility.
 
-Here is the beginner map:
+For a first Orders API project, the team might need services like:
 
-```mermaid
-graph TD
-    ORG["Company home<br/>(organization)"]
-    FOLDER["Team or environment group<br/>(folder)"]
-    PROJECT["Daily workspace<br/>(GCP project)"]
-    APIS["Enabled service doors<br/>(APIs)"]
-    REGION["Where it runs<br/>(region)"]
-    RESOURCES["Created things<br/>(GCP resources)"]
-    BILLING["Cost owner<br/>(billing account)"]
-    IAM["Access checks<br/>(IAM)"]
-
-    ORG --> FOLDER
-    FOLDER --> PROJECT
-    PROJECT --> APIS
-    APIS --> REGION
-    REGION --> RESOURCES
-    BILLING -. "pays for usage" .-> PROJECT
-    IAM -. "allows or blocks actions" .-> RESOURCES
-```
-
-Read the solid line as the main placement story. A company can have
-folders. A folder can contain a project. A project enables services.
-Resources are created in the project, often in a region. The dotted
-lines show supporting rules rather than places where the app runs.
-Billing decides where cost lands. IAM decides who or what can act.
-
-That distinction prevents many beginner mistakes. Keep the jobs
-separate: billing pays for usage, IAM controls actions, enabled APIs
-open service doors, regions place resources, and projects organize the
-workspace.
-
-## Projects Are The Daily Workspace
-
-A GCP project is the base organizing unit for most hands-on work. It is
-where you create resources, enable APIs, attach billing, set IAM
-permissions, and inspect quotas.
-
-The project has three names learners often confuse:
-
-| Project field | What it means | Beginner note |
-|---|---|---|
-| Project name | Human-readable label | Can be changed and does not need to be globally unique |
-| Project ID | Globally unique string | Shows up in commands, URLs, logs, and resource references |
-| Project number | Automatically assigned numeric ID | Often appears in service accounts and backend systems |
-
-For daily work, the project ID is the one you will feel most often. A
-command might deploy to `devpolaris-orders-prod`. A log entry might
-include that project. A Cloud Storage bucket name or service account may
-carry the project identity in some form.
-
-That is why project naming matters. A project called `test-123` might be
-fine for a personal experiment. It is a bad production home for an app
-that another engineer must debug at 10:00 on a Monday morning.
-
-For `devpolaris-orders-api`, the team may choose separate projects for
-separate environments:
-
-```text
-devpolaris-orders-dev
-devpolaris-orders-staging
-devpolaris-orders-prod
-```
-
-This layout is one possible design, and it is easy for beginners to
-reason about. Staging resources stay separate from production resources.
-Production IAM can be stricter. Billing can still roll up through the
-same billing account or folder reports.
-
-Before you create anything in GCP, check the current project. A correct
-command in the wrong project is still a wrong change.
-
-## APIs Must Be Enabled Before Services Can Be Used
-
-GCP has a small step that surprises many learners: most Google Cloud
-services must be enabled in a project before you use them.
-
-Think of an enabled API as opening the service door for that project. If
-the Cloud Run API is disabled, the project is not ready to create Cloud
-Run services. If the Secret Manager API is disabled, the app cannot use
-Secret Manager resources in the normal way. Some services are enabled by
-default, but the safe beginner habit is to verify the service you need.
-
-For the orders project, the team may need service doors like this:
-
-| Need | GCP service or API to inspect |
-|---|---|
-| Run the containerized API | Cloud Run |
-| Store container images | Artifact Registry |
-| Store order records | Cloud SQL |
+| Job | API or service family |
+| --- | --- |
+| Run container backend | Cloud Run |
+| Store relational records | Cloud SQL Admin API and Cloud SQL |
 | Store receipt files | Cloud Storage |
-| Store private config | Secret Manager |
-| Collect logs and metrics | Cloud Logging and Cloud Monitoring |
+| Store secrets | Secret Manager |
+| Keep logs and metrics | Cloud Logging and Cloud Monitoring |
+| Store images | Artifact Registry |
 
-Separate API enablement from permission. A project can have the Cloud
-Run API enabled while a developer still lacks permission to deploy a
-service. A developer can have the right IAM role while the API is still
-disabled. Both must be true.
+The gotcha is that "I have permission" and "the API is enabled" are different facts. A principal can have a role that would allow an action, but the project still cannot use a service until the API is enabled.
 
-This failure shape is common enough to remember:
+## Resources
 
-```text
-deploy target: devpolaris-orders-prod
-action: deploy Cloud Run service
-result: API not enabled for project
-first check: is run.googleapis.com enabled in this project?
-```
+A resource is a thing managed by Google Cloud: a Cloud Run service, Cloud SQL instance, Cloud Storage bucket, Artifact Registry repository, service account, log sink, firewall rule, or many other service objects.
 
-Inspect the project setup before giving the pipeline broader
-permissions. Is the service enabled? Is billing attached? Is the
-identity allowed to deploy? Separate those questions and debugging
-becomes more direct.
+Resources do not all behave the same. Some are global. Some are regional. Some are zonal. Some live inside another resource. Some names must be globally unique. Some only need to be unique in a project or location. The foundation habit is to identify the exact resource, its project, its location, and its job before changing it.
 
-## Regions And Zones Put Resources On The Map
+For the Orders API, a small first resource map might look like this:
 
-Projects answer "which workspace?" Regions and zones answer "where in
-the world?"
+| Job | GCP resource |
+| --- | --- |
+| Runtime | Cloud Run service `run-orders-api-prod` |
+| Data | Cloud SQL instance `sql-orders-prod` |
+| Receipts | Cloud Storage bucket `devpolaris-orders-receipts-prod` |
+| Images | Artifact Registry repository `orders-prod` |
+| Workload identity | Service account `orders-api-prod@devpolaris-orders-prod.iam.gserviceaccount.com` |
+| Evidence | Cloud Logging logs and Cloud Monitoring metrics |
 
-A region is a geographic area, such as `us-central1` or `europe-west1`.
-A zone is a smaller isolated location inside a region, such as
-`us-central1-a`. Some GCP resources are regional, some are zonal, and
-some are global or multi-region.
+The map is not just documentation. It is the first debugging tool.
 
-That scope changes the design. A Cloud Run service is deployed to a
-region. A Compute Engine VM is usually placed in a zone. A VPC network
-is global, while its subnets are regional. A Cloud Storage bucket can
-use location choices such as region, dual-region, or multi-region
-depending on the storage design.
+## Callers
 
-For a first production version of `devpolaris-orders-api`, the team
-might choose one main region:
+Every GCP action has a caller. A human in the console is a caller. The `gcloud` CLI is acting for a caller. A CI pipeline can act as a service account. A Cloud Run service calls other APIs through its runtime service account.
 
-```text
-primary region: us-central1
-Cloud Run service: us-central1
-Cloud SQL database: us-central1
-Cloud Storage bucket: us-central1 or a reviewed storage location
-```
+GCP IAM grants roles to principals. Principals can be users, groups, service accounts, or workload identities. A service account is the identity for a machine workload rather than a person.
 
-`us-central1` is only an example. The lasting lesson is that app,
-database, storage, latency, compliance, and recovery all connect to
-location. A backend in one region talking to a database in another
-region may work, but it can add latency, cost, and failure paths.
+That means the Orders API needs two kinds of identity thinking:
 
-If you know AWS or Azure, the basic region idea transfers. The service
-scope details do not. Always ask whether the specific GCP resource is
-global, regional, zonal, dual-region, or multi-region.
+| Caller | Question |
+| --- | --- |
+| Human or pipeline deployer | Can this caller deploy or change resources in the right project? |
+| Runtime service account | Can the running app read the secret, connect to needed services, and write receipts? |
 
-## Resources Have Names, Labels, And Paths
+Do not blur those together. A deployer that can update Cloud Run should not automatically become the runtime identity that reads every secret. A runtime service account that writes receipts should not automatically get permission to edit project IAM.
 
-After the project and location come the actual resources.
+## Billing
 
-A GCP resource is a managed thing the platform knows about. For the
-orders API, that might include:
+GCP billing is connected to projects through Cloud Billing accounts. A billing account defines who pays, and project usage is charged to the billing account linked to that project.
 
-| Resource | Job |
-|---|---|
-| Cloud Run service | Runs the Node backend |
-| Cloud SQL instance | Stores relational order records |
-| Cloud Storage bucket | Stores receipt PDFs and exports |
-| Secret Manager secret | Stores private configuration values |
-| Artifact Registry repository | Stores container images |
-| Log entries and metrics | Provide operating evidence |
+For a beginner, this matters because "the project exists" is not the same as "the project can run paid services." If billing is disabled or linked to the wrong account, resource creation and service usage can fail or charge the wrong owner.
 
-Names help humans recognize resources. Labels help humans filter,
-report, and group cost. Resource paths help systems identify the exact
-thing.
-
-For example, a Cloud Run service could be named:
-
-```text
-run-devpolaris-orders-api-prod
-```
-
-Useful labels might look like:
-
-```text
-team=orders
-service=orders-api
-env=prod
-cost_center=commerce
-```
-
-Labels are not secrets. They may appear in inventory, billing, logs, and
-reports. Do not put private customer data or credentials in labels.
-
-This is where GCP feels different from Azure for many learners. Azure
-has resource groups as a visible container. GCP does not use the same
-universal resource group shape. The project and labels do much of that
-organizing work.
-
-## Identity Decides Who And What Can Act
-
-Cloud resources are useful only if the right people and workloads can
-use them. That is IAM's job. IAM stands for Identity and Access
-Management. It decides which principal can perform which action on which
-resource.
-
-A principal is an actor. It can be a person, a group, a service account,
-or another supported identity. A service account is an identity for a
-workload or automation rather than a human. In GCP, service accounts are
-central. Cloud Run services, build pipelines, and background jobs often
-run as service accounts.
-
-For `devpolaris-orders-api`, the team might use:
-
-```text
-service account:
-  orders-api-prod@devpolaris-orders-prod.iam.gserviceaccount.com
-
-needs:
-  read selected secrets
-  connect to Cloud SQL
-  write receipt objects to Cloud Storage
-  write logs
-```
-
-That service account should not be able to delete every project in the
-organization. It should have the permissions needed for the app's job.
-
-This is the bridge from AWS and Azure. If you know AWS IAM roles or
-Azure managed identities, the instinct is right: workloads need
-identities. The GCP version you will see often is a service account
-attached to a resource such as Cloud Run. Later identity articles will
-go deeper. For now, remember the question:
-
-> Which identity is making this request, and what is it allowed to do?
-
-## Billing Belongs To Projects Through A Billing Account
-
-Cloud cost needs a home. In GCP, projects are linked to billing
-accounts. The project holds the resources. The billing account pays for
-usage from one or more projects.
-
-This split matters because a project can look technically correct but
-still fail if billing is not attached or allowed. It also matters for
-cost review. If the orders team runs production in
-`devpolaris-orders-prod`, labels and project structure help finance and
-engineering understand where spend came from.
-
-A small production review might ask:
+For `devpolaris-orders-api`, a good first record names both:
 
 ```text
 project: devpolaris-orders-prod
-billing account: DevPolaris Production
-labels required: team, service, env, cost_center
-budget alert: production order services
+billing account: DevPolaris Production Billing
+cost owner: commerce-platform
 ```
 
-The project record helps the team avoid surprise later. If a Cloud Run
-service scales up, a Cloud SQL instance is oversized, or a storage
-bucket grows because exports never expire, the team needs to see the
-cost and know who owns the decision.
+That record lets finance and engineering talk about the same boundary. The project is where the resources live. The billing account is how usage gets paid for.
 
-Billing is part of engineering because resources are choices. The bill
-is one way the system tells you whether those choices still make sense.
+## What GCP Takes Over
 
-## Managed Services Still Leave You Responsible
+GCP takes over infrastructure jobs, not product judgment.
 
-GCP managed services remove a lot of undifferentiated work. You do not
-patch the physical machines behind Cloud Run. You do not rack servers
-for Cloud SQL. You do not build a logging backend from scratch just to
-store log entries.
+Cloud Run can run containers without the team managing servers. Cloud SQL can manage database maintenance, backups, monitoring, and failover features. Cloud Storage can store objects durably in buckets. IAM can evaluate access. Cloud Logging can collect logs after the container exits.
 
-That does not mean Google Cloud owns your application. The team still
-owns many important decisions:
+The team still owns the design:
 
-| Area | What GCP helps with | What the team still owns |
-|---|---|---|
-| Runtime | Cloud Run runs container instances | App code, config, health, rollout choices |
-| Database | Cloud SQL manages database infrastructure | Schema, queries, backups, access, sizing decisions |
-| Storage | Cloud Storage stores objects | Bucket design, object names, retention, authorization |
-| Identity | IAM checks permissions | Choosing narrow roles and safe identities |
-| Observability | Logging and Monitoring collect evidence | Useful log fields, alerts, dashboards, response habits |
-| Cost | Billing reports show spend | Labels, budgets, cleanup, service sizing |
+| GCP can provide... | The team still decides... |
+| --- | --- |
+| Projects and APIs | Which project owns each environment and which services belong there. |
+| Managed compute | Runtime shape, scaling limits, rollout strategy, and health expectations. |
+| Managed data services | Data model, retention, access, backup settings, and restore practice. |
+| IAM | Which caller gets which role at which scope. |
+| Logging and monitoring | Which signals matter and who responds. |
+| Billing reports | Which spend is expected, owned, or waste. |
 
-This tradeoff is the heart of cloud work. You give up some low-level
-control and gain managed building blocks. In return, you must learn how
-to choose, connect, secure, observe, and pay for those building blocks.
+Managed service should never mean "no one owns it." It means the provider runs some platform machinery while the team owns the service promise.
 
-For a beginner, that is the healthy middle ground. You do not need to
-know the inside of every Google data center. You do need to recognize
-the project, resource, runtime identity, and health signal involved in a
-change.
+## First Map
 
-## Failure Modes For Beginners
+The first GCP map for the Orders API can stay small:
 
-Most first GCP problems are not mysterious. They usually come from one
-box in the mental model being wrong.
-
-The deploy command works locally, but production deploy fails:
-
-```text
-target project: devpolaris-orders-prod
-operation: deploy Cloud Run service
-error: Cloud Run API has not been used in project before or it is disabled
+```mermaid
+flowchart TD
+    User["Customer request"] --> Run["Cloud Run service"]
+    Run --> Sql["Cloud SQL"]
+    Run --> Bucket["Cloud Storage bucket"]
+    Run --> Secret["Secret Manager"]
+    Image["Artifact Registry"] --> Run
+    Run --> Logs["Cloud Logging and Monitoring"]
+    Project["Project: devpolaris-orders-prod"] --> Run
+    Billing["Billing account"] --> Project
 ```
 
-The first check is the project and API enablement. Do not start by
-rewriting the Dockerfile. The service door may simply be closed for that
-project.
+Read it as a question map:
 
-The app starts, but cannot read a secret:
+- Which project is selected?
+- Which APIs are enabled?
+- Which resource owns each job?
+- Which service account does the app use?
+- Which billing account pays?
+- Which logs and metrics prove the app is working?
 
-```text
-service: devpolaris-orders-api
-identity: orders-api-prod@devpolaris-orders-prod.iam.gserviceaccount.com
-error: Permission denied on secret orders-db-url
-```
+Those questions are the GCP mental model. They make later service articles easier because every service now has a place in the same story.
 
-The first check is the runtime identity and IAM binding. Which service
-account is Cloud Run using? Does that service account have permission to
-read the specific secret?
+## Putting It All Together
 
-The app is deployed, but nobody can find the cost owner:
+Return to the opener.
 
-```text
-resource: run-devpolaris-orders-api-prod
-labels: missing
-monthly cost: visible, but not grouped by team
-```
+- The wrong-project deployment became a project selection question.
+- The failed database task became an API enablement question.
+- The mystery bucket bill became a project and billing account question.
+- The app access problem became a caller and service account question.
 
-The first check is labels and project structure. A resource without
-labels may work technically while still being hard to operate.
+GCP is not just a product list. It is a project-centered control plane where app jobs become enabled APIs, resources, identities, locations, logs, quotas, and billing usage.
 
-The app connects slowly to the database:
+## What's Next
 
-```text
-Cloud Run region: us-central1
-Cloud SQL region: europe-west1
-symptom: checkout latency increased
-```
-
-The first check is location. The resources may be healthy, but placed in
-a way that adds avoidable distance.
-
-Before diving into the product console, place the problem on the map:
-project, API, region, resource, identity, billing, or evidence. One of
-those boxes is usually where the first answer lives.
-
-## The Mental Checklist Before You Deploy
-
-Before `devpolaris-orders-api` deploys to GCP, the team should be able
-to answer a short set of questions.
-
-| Question | Good first answer |
-|---|---|
-| Production project | `devpolaris-orders-prod` |
-| Enabled APIs | Cloud Run, Artifact Registry, Cloud SQL, Cloud Storage, Secret Manager, Logging, Monitoring |
-| Primary location | A reviewed region close to users and data needs |
-| Runtime identity | A dedicated service account for the production API |
-| Required resources | Runtime, database, bucket, secrets, logs, metrics |
-| Required labels | `team`, `service`, `env`, `cost_center` |
-| Billing owner | The approved production billing account |
-| Healthy evidence | Health checks, logs, metrics, traces, and release records |
-
-This checklist keeps cloud work from becoming guesswork. When the map is
-clear, service-specific articles become easier. Cloud Run has a place.
-Cloud SQL has a place. IAM has a place. Logs and billing have a place.
-
-That is the real goal of a foundation article: the next noun should have
-somewhere to land.
+The next article makes the placement question concrete. It explains organizations, folders, projects, billing accounts, APIs, quotas, regions, and zones as the boundaries that decide where the Orders API lives and what can fail together.
 
 ---
 
 **References**
 
-- [Resource hierarchy](https://cloud.google.com/resource-manager/docs/cloud-platform-resource-hierarchy) - Google explains organizations, folders, projects, and resources in the GCP hierarchy.
-- [Creating and managing projects](https://cloud.google.com/resource-manager/docs/creating-managing-projects) - Google explains project names, project IDs, project numbers, and project lifecycle.
-- [Enabled services](https://cloud.google.com/service-usage/docs/enabled-service) - Google explains why services and APIs must be enabled in a project before use.
-- [Regions and zones](https://cloud.google.com/compute/docs/regions-zones/) - Google explains regional, zonal, and global resource placement.
-- [Labels overview](https://cloud.google.com/resource-manager/docs/labels-overview) - Google explains labels for organizing resources and understanding costs.
+- [Google Cloud resource hierarchy](https://cloud.google.com/resource-manager/docs/cloud-platform-resource-hierarchy)
+- [Enabled services](https://cloud.google.com/service-usage/docs/enabled-service)
+- [Verify the billing status of your projects](https://cloud.google.com/billing/docs/how-to/verify-billing-enabled)
+- [IAM principals](https://cloud.google.com/iam/docs/principals-overview)

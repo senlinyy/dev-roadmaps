@@ -10,12 +10,13 @@ id: article-rust-idiomatic-rust-testing-rust
 ## Table of Contents
 
 1. [The Problem](#the-problem)
-2. [Unit Tests](#unit-tests)
-3. [Testing Results](#testing-results)
-4. [Integration Tests](#integration-tests)
-5. [Test Shape](#test-shape)
-6. [Putting It All Together](#putting-it-all-together)
-7. [What's Next](#whats-next)
+2. [How Cargo Finds Tests](#how-cargo-finds-tests)
+3. [Unit Tests](#unit-tests)
+4. [Testing Results](#testing-results)
+5. [Integration Tests](#integration-tests)
+6. [Test Shape](#test-shape)
+7. [Putting It All Together](#putting-it-all-together)
+8. [What's Next](#whats-next)
 
 ## The Problem
 
@@ -28,6 +29,19 @@ The parser has ordinary product behavior:
 - Bad config should return the right error.
 
 Those are not type-system questions. They are behavior questions. Rust's built-in test framework gives you a place to record them.
+
+## How Cargo Finds Tests
+
+`cargo test` builds special test targets and looks for functions marked with `#[test]`.
+
+There are two common places to put those tests:
+
+| Test location | What it is good for |
+| --- | --- |
+| `#[cfg(test)] mod tests` inside a source file | Unit tests near the code, including private helpers |
+| Files under `tests/` | Integration tests that use the public library like an outside caller |
+
+This is a compile-time arrangement, not a runtime switch in your application. Cargo asks Rust to build the test version of the crate, and test-only modules are included for that build.
 
 ## Unit Tests
 
@@ -53,7 +67,7 @@ mod tests {
 }
 ```
 
-`#[cfg(test)]` means the module is compiled when tests run. `#[test]` marks a function as a test. `assert_eq!` compares the actual value with the expected value.
+`#[cfg(test)]` means the module is compiled when tests run. This is closer to a compiler or build flag than a runtime `if`; test-only code is included when Cargo builds the test target. `#[test]` marks a function as a test. `assert_eq!` compares the actual value with the expected value.
 
 Run tests with:
 
@@ -62,6 +76,30 @@ cargo test
 ```
 
 Tests are just Rust functions with a special attribute. That is why they can use normal helper functions, normal modules, and the same visibility rules you use in application code.
+
+:::expand[Why unit tests can see private helpers]{kind="design"}
+Unit tests often sit in a nested `tests` module inside the same source file:
+
+```rust
+fn title_from_markdown(input: &str) -> Option<&str> {
+    input.lines().find_map(|line| line.strip_prefix("# "))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn finds_title() {
+        assert_eq!(title_from_markdown("# Rust"), Some("Rust"));
+    }
+}
+```
+
+The `use super::*` line brings items from the parent module into the test module. Because the test module is still inside the same crate and module tree, it can test private helpers directly.
+
+That is useful for small parsing or formatting functions. But it is also a design signal. If most tests need to reach deep private internals, the public behavior may be hard to exercise, or the code may need a clearer public boundary. Use private unit tests for focused edge cases. Use integration tests for the promises outside callers rely on.
+:::
 
 ## Testing Results
 
@@ -166,6 +204,8 @@ fn reads_default_notebook_from_config() {
     assert_eq!(default_notebook(config).unwrap(), "work");
 }
 ```
+
+A crate is the library or executable Cargo builds. In an integration test, `use my_notes::default_notebook` imports the public library crate from the same package, just as another project would.
 
 Unit tests are good for small private pieces. Integration tests are good for public behavior across modules.
 

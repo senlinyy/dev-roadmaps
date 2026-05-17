@@ -10,14 +10,15 @@ id: article-rust-async-and-production-production-rust
 ## Table of Contents
 
 1. [The Problem](#the-problem)
-2. [Project Boundaries](#project-boundaries)
-3. [Error Layers](#error-layers)
-4. [Tracing](#tracing)
-5. [Configuration](#configuration)
-6. [Dependencies And Features](#dependencies-and-features)
-7. [Release Checks](#release-checks)
-8. [Putting It All Together](#putting-it-all-together)
-9. [What's Next](#whats-next)
+2. [Packages, Crates, And Workspaces](#packages-crates-and-workspaces)
+3. [Project Boundaries](#project-boundaries)
+4. [Error Layers](#error-layers)
+5. [Tracing](#tracing)
+6. [Configuration](#configuration)
+7. [Dependencies And Features](#dependencies-and-features)
+8. [Release Checks](#release-checks)
+9. [Putting It All Together](#putting-it-all-together)
+10. [What's Next](#whats-next)
 
 ## The Problem
 
@@ -31,6 +32,19 @@ Production pressure asks different questions:
 - Can builds stay repeatable as dependencies grow?
 
 Production Rust is not a bag of advanced tricks. It is ordinary Rust habits made durable: clear boundaries, structured errors, useful telemetry, explicit config, and repeatable checks.
+
+## Packages, Crates, And Workspaces
+
+Production Rust uses the same Cargo vocabulary from the foundation module, but the stakes get higher.
+
+| Word | Production reading |
+| --- | --- |
+| Package | One `Cargo.toml` project that may produce one or more crates |
+| Crate | One compiled library or executable |
+| Workspace | A set of related packages built and versioned together |
+| `Cargo.lock` | The exact dependency graph used by the workspace or package |
+
+A workspace does not replace architecture. It coordinates packages that are developed together. The architecture still comes from dependency direction, public APIs, and which crate owns which job.
 
 ## Project Boundaries
 
@@ -180,6 +194,45 @@ sqlite = ["dep:sqlx"]
 ```
 
 Do not add features as a place to hide unclear design. A feature should correspond to a real build choice.
+
+Cargo features are build-time switches, not runtime environment flags. Enabling a feature changes what code and dependencies are compiled. If other crates depend on your crate, your feature choices can become part of their build too.
+
+:::expand[Feature flags are part of your build API]{kind="design"}
+Feature flags can look like harmless toggles, but they are part of how other projects build your crate.
+
+This is reasonable:
+
+```toml
+[features]
+default = ["sqlite"]
+sqlite = ["dep:sqlx"]
+postgres = ["dep:sqlx"]
+```
+
+The features represent real build choices: include SQLite support, PostgreSQL support, or both.
+
+This is weaker:
+
+```toml
+[features]
+fast = []
+new_parser = []
+production = []
+```
+
+Those names do not explain a dependency or capability boundary. They also invite confusion about whether the feature changes build behavior, runtime behavior, or deployment behavior.
+
+Use this review habit:
+
+| Feature question | Healthy answer |
+| --- | --- |
+| What dependency or capability does it enable? | Clear and documented |
+| Can two features be enabled together? | Tested or deliberately rejected |
+| Is it a runtime setting? | Prefer config instead |
+| Will downstream crates rely on it? | Treat it as public API |
+
+For applications, runtime configuration usually belongs in config. For libraries, Cargo features should describe compile-time capabilities.
+:::
 
 ## Release Checks
 

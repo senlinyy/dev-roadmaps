@@ -10,13 +10,14 @@ id: article-rust-advanced-rust-advanced-lifetimes
 ## Table of Contents
 
 1. [The Problem](#the-problem)
-2. [Lifetimes Name Relationships](#lifetimes-name-relationships)
-3. [Borrowed Structs](#borrowed-structs)
-4. [Returned References](#returned-references)
-5. [Elision Limits](#elision-limits)
-6. [Avoiding Over-Borrowed APIs](#avoiding-over-borrowed-apis)
-7. [Putting It All Together](#putting-it-all-together)
-8. [What's Next](#whats-next)
+2. [Views vs Owned Data](#views-vs-owned-data)
+3. [Lifetimes Name Relationships](#lifetimes-name-relationships)
+4. [Borrowed Structs](#borrowed-structs)
+5. [Returned References](#returned-references)
+6. [Elision Limits](#elision-limits)
+7. [Avoiding Over-Borrowed APIs](#avoiding-over-borrowed-apis)
+8. [Putting It All Together](#putting-it-all-together)
+9. [What's Next](#whats-next)
 
 ## The Problem
 
@@ -34,6 +35,23 @@ struct ParsedNote<'a> {
 But it creates a real constraint. The parsed note cannot outlive the source text. If the source string is dropped, the slices would point at invalid memory. Rust uses lifetimes to express that relationship.
 
 Advanced lifetime work is not about sprinkling annotations until the compiler stops complaining. It is about deciding which values borrow from which sources, and whether that borrowing is worth the API constraint.
+
+## Views vs Owned Data
+
+`&str` is a view into existing text, not a new owned string. That view is cheap, but it depends on the source text staying alive.
+
+```rust
+let source = String::from("# Rust\nbody");
+let title: &str = source.lines().next().unwrap();
+```
+
+`title` points into `source`. It does not copy the heading into new storage. If the program needs the title after `source` is gone, it must create owned data:
+
+```rust
+let owned_title: String = title.to_string();
+```
+
+Lifetimes are how Rust tracks those view relationships. The question is not only "can this compile?" It is "should this value be a temporary view, or should it own what it needs?"
 
 ## Lifetimes Name Relationships
 
@@ -70,7 +88,29 @@ fn parse_note(source: &str) -> Option<ParsedNote<'_>> {
 }
 ```
 
-`ParsedNote<'a>` means a parsed note borrows from some source that lives for `'a`.
+`ParsedNote<'a>` means a parsed note borrows from some source that lives for `'a`. It is a view into source text, not an independent note value.
+
+:::expand[Lifetime names are relationships, not timers]{kind="design"}
+The name `'a` can look like a timer or duration, but it is only a label for a relationship between references.
+
+In this function:
+
+```rust
+fn first_line<'a>(text: &'a str) -> Option<&'a str> {
+    text.lines().next()
+}
+```
+
+`'a` says the returned line, if any, is borrowed from `text`. It does not tell Rust to keep `text` alive. It tells Rust to reject caller code that tries to use the returned line after `text` is gone.
+
+You can rename `'a` to another lifetime name and the meaning is the same:
+
+```rust
+fn first_line<'source>(text: &'source str) -> Option<&'source str>
+```
+
+The useful habit is to read lifetimes as arrows: this returned reference comes from that input reference. When there is no surviving source, return owned data instead.
+:::
 
 This design can be excellent for parsers because it avoids allocation. It can also make APIs harder to use because the parsed value stays tied to the original source.
 

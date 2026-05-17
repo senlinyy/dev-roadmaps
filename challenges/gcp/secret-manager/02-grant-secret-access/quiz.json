@@ -1,0 +1,44 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "The Orders API runtime service account needs to read the payload of `orders-db-url`. Which access shape is the best starting point?",
+      "options": [
+        { "id": "a", "text": "Grant Secret Manager Secret Accessor to the runtime service account on the needed secret, when that scope fits." },
+        { "id": "b", "text": "Grant Project Owner to the runtime service account." },
+        { "id": "c", "text": "Put the secret value in the Dockerfile." },
+        { "id": "d", "text": "Grant every developer access to every production secret." }
+      ],
+      "correct": ["a"],
+      "explanation": "Runtime access should match the secret-reading job. The app usually does not need broad administrative permissions."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A service account can read `orders-db-url` but should not rotate, disable, or destroy secret versions. What is the review concern?",
+      "options": [
+        { "id": "a", "text": "Separate secret readers from secret managers." },
+        { "id": "b", "text": "Remove IAM because Secret Manager has versions." },
+        { "id": "c", "text": "Use a billing account as the secret reader." },
+        { "id": "d", "text": "Give the app permission to edit all IAM policies." }
+      ],
+      "correct": ["a"],
+      "explanation": "Reading a secret and managing its lifecycle are different jobs. The runtime identity should usually only read what it needs."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "Which evidence helps review secret access safely?",
+      "options": [
+        { "id": "a", "text": "Secret resource path." },
+        { "id": "b", "text": "Runtime service account." },
+        { "id": "c", "text": "IAM binding role and scope." },
+        { "id": "d", "text": "The plaintext secret pasted into chat." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "Secret reviews should avoid exposing payloads. Resource path, identity, and IAM evidence are enough to review access."
+    }
+  ]
+}

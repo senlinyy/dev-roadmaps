@@ -11,13 +11,14 @@ aliases: ["rust-foundations/rust-context/01-why-rust.md"]
 ## Table of Contents
 
 1. [The Problem](#the-problem)
-2. [Why Rust Exists](#why-rust-exists)
-3. [What Rust Optimizes For](#what-rust-optimizes-for)
-4. [Where Rust Shows Up](#where-rust-shows-up)
-5. [The Rust Community](#the-rust-community)
-6. [The Learning Path](#the-learning-path)
-7. [Putting It All Together](#putting-it-all-together)
-8. [What's Next](#whats-next)
+2. [A Tiny Memory Vocabulary](#a-tiny-memory-vocabulary)
+3. [Why Rust Exists](#why-rust-exists)
+4. [What Rust Optimizes For](#what-rust-optimizes-for)
+5. [Where Rust Shows Up](#where-rust-shows-up)
+6. [The Rust Community](#the-rust-community)
+7. [The Learning Path](#the-learning-path)
+8. [Putting It All Together](#putting-it-all-together)
+9. [What's Next](#whats-next)
 
 ## The Problem
 
@@ -31,6 +32,26 @@ A team has a small service that started in a comfortable language. The code is r
 For decades, teams reached for C or C++ when they needed that kind of control. Those languages are powerful, but they make the programmer manually protect many memory and concurrency rules. A small mistake can become a use-after-free bug, buffer overrun, data race, crash, or security vulnerability.
 
 Rust exists for that uncomfortable space: the place where you want low-level control, but you do not want ordinary memory mistakes to be ordinary production failures.
+
+## A Tiny Memory Vocabulary
+
+If you mostly write JavaScript, TypeScript, or Python, memory may feel like something the runtime handles behind the curtain. Rust asks you to look at a few of those details directly, so it helps to name them before the roadmap uses them.
+
+A byte is a small unit of memory. Text, images, network packets, and program data eventually become bytes somewhere. A buffer is a fixed area that holds bytes. If a program writes more bytes than the buffer was meant to hold, the write can spill into nearby memory. That is the shape behind a buffer overrun.
+
+A pointer is a small value that tells code where some data lives. You can think of it as an address-like handle, although Rust usually gives you safer forms called references. A reference lets code read or mutate a value without becoming the owner of that value. Later articles will make this precise, but the first idea is simple: a reference is access to data, not a new copy of the data.
+
+Programs usually use two broad memory areas. The stack holds local values for active function calls and is cleaned up in a predictable last-in, first-out order. The heap holds data that needs to live beyond one fixed stack slot, such as growable strings and vectors. A `String` value is small enough to sit on the stack, but it points to heap bytes that hold the text.
+
+These words explain the bug classes Rust cares about:
+
+| Term | Plain meaning | Why Rust cares |
+| --- | --- | --- |
+| Buffer overrun | Code writes past the end of a memory area | Untrusted input can corrupt nearby data |
+| Use-after-free | Code uses data after the owner has cleaned it up | A pointer may lead to memory now used for something else |
+| Data race | Threads access the same data at the same time, with at least one write | The result can depend on timing instead of program logic |
+
+Rust does not make you manually manage all of this in normal code. The point is different: Rust makes ownership, borrowing, and mutation explicit enough that many of these mistakes are rejected before the program runs.
 
 ## Why Rust Exists
 

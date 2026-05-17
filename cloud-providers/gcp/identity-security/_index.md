@@ -1,6 +1,6 @@
 ---
 title: "Identity and Security"
-description: "Understand GCP principals, IAM roles, policy bindings, service accounts, application credentials, secrets, and access reviews."
-tags: ["IAM", "Service Accounts", "Secrets"]
+description: "Learn how GCP checks IAM access, how workloads get service-account identity, and how Secret Manager protects sensitive values."
+tags: ["gcp", "iam", "service-accounts", "secrets"]
 order: 2
 ---

@@ -10,13 +10,14 @@ id: article-rust-advanced-rust-interior-mutability
 ## Table of Contents
 
 1. [The Problem](#the-problem)
-2. [The Pattern](#the-pattern)
-3. [Cell](#cell)
-4. [RefCell](#refcell)
-5. [Mutex](#mutex)
-6. [When To Avoid It](#when-to-avoid-it)
-7. [Putting It All Together](#putting-it-all-together)
-8. [What's Next](#whats-next)
+2. [Shared Outside, Mutable Inside](#shared-outside-mutable-inside)
+3. [The Pattern](#the-pattern)
+4. [Cell](#cell)
+5. [RefCell](#refcell)
+6. [Mutex](#mutex)
+7. [When To Avoid It](#when-to-avoid-it)
+8. [Putting It All Together](#putting-it-all-together)
+9. [What's Next](#whats-next)
 
 ## The Problem
 
@@ -29,6 +30,14 @@ fn parse(&self, source: &str) -> ParsedNote
 That shape is pleasant for callers. They can share one parser value and call it many times. Inside the parser, though, a small cache would be useful. It could remember the last title pattern or count how many documents were parsed.
 
 Normal Rust borrowing says an immutable `&self` method cannot mutate fields. Most of the time, that is exactly what you want. Interior mutability is for the narrower case where the outer API should stay immutable, but a specific inner value needs controlled mutation.
+
+## Shared Outside, Mutable Inside
+
+`&self` means callers only have shared access to the value. From the outside, the method looks read-only: many callers can hold shared references at the same time.
+
+Interior mutability is the pattern where a wrapper type allows one private field to change anyway, while still enforcing rules inside the wrapper.
+
+That is different from casual mutation in JavaScript or Python. The mutation is not hidden free-for-all state. It is routed through a type such as `Cell`, `RefCell`, or `Mutex` that controls how access happens.
 
 ## The Pattern
 
@@ -112,6 +121,37 @@ impl Parser {
 `borrow()` gives a shared borrow. `borrow_mut()` gives a mutable borrow. If code tries to create a mutable borrow while shared borrows are active, `RefCell` panics.
 
 That panic is memory-safe, but it is still a bug. Keep `RefCell` borrows short and local. Do not pass them through large parts of the program if a simpler API can hide the detail.
+
+:::expand[A RefCell panic is safe, but still a bug]{kind="pitfall"}
+`RefCell<T>` enforces Rust's borrowing rule at runtime: many shared borrows or one mutable borrow.
+
+This panics:
+
+```rust
+use std::cell::RefCell;
+
+let warnings = RefCell::new(Vec::new());
+
+let read = warnings.borrow();
+let mut write = warnings.borrow_mut();
+
+write.push(String::from("late warning"));
+println!("{}", read.len());
+```
+
+The program stays memory-safe. `RefCell` refuses to hand out a mutable borrow while a shared borrow is active. But the panic is still a bug in the control flow.
+
+The usual fix is to shorten the borrow:
+
+```rust
+let count = warnings.borrow().len();
+println!("{count}");
+
+warnings.borrow_mut().push(String::from("late warning"));
+```
+
+Use `RefCell` when runtime checking is the right design. Do not use it to postpone thinking about borrow scopes forever.
+:::
 
 ## Mutex
 

@@ -10,13 +10,14 @@ id: article-rust-advanced-rust-smart-pointers
 ## Table of Contents
 
 1. [The Problem](#the-problem)
-2. [References And Smart Pointers](#references-and-smart-pointers)
-3. [Box](#box)
-4. [Rc](#rc)
-5. [Arc](#arc)
-6. [Deref And Drop](#deref-and-drop)
-7. [Putting It All Together](#putting-it-all-together)
-8. [What's Next](#whats-next)
+2. [Stack, Heap, And Indirection](#stack-heap-and-indirection)
+3. [References And Smart Pointers](#references-and-smart-pointers)
+4. [Box](#box)
+5. [Rc](#rc)
+6. [Arc](#arc)
+7. [Deref And Drop](#deref-and-drop)
+8. [Putting It All Together](#putting-it-all-together)
+9. [What's Next](#whats-next)
 
 ## The Problem
 
@@ -29,6 +30,22 @@ Plain ownership still works for most values, but a few designs create pressure:
 - Background work needs shared ownership across threads.
 
 Rust's smart pointers solve these specific ownership shapes. They act like pointers, but they also own data, count owners, clean up resources, or enforce rules.
+
+## Stack, Heap, And Indirection
+
+A pointer-sized value is a small handle to data stored elsewhere. The handle has a fixed size, even when the data behind it is large.
+
+That idea is called indirection: instead of storing the whole value directly inside another value, store a pointer-like handle that leads to it.
+
+```mermaid
+flowchart LR
+    Owner["owner value<br/>(fixed size handle)"]
+    Heap["heap value<br/>(data stored elsewhere)"]
+
+    Owner --> Heap
+```
+
+Smart pointers use indirection with ownership rules attached. `Box<T>` owns one heap value. `Rc<T>` and `Arc<T>` own through reference-counted handles. The pointer part finds the data; the smart part decides who owns it and when cleanup happens.
 
 ## References And Smart Pointers
 
@@ -97,6 +114,38 @@ enum Outline {
 Each child is behind a `Box`, so the vector stores fixed-size pointers to heap-allocated outline nodes. The recursive shape becomes possible because the enum no longer contains a child enum directly inside itself.
 
 Use `Box` when you need owned indirection, not as a default wrapper.
+
+:::expand[Why recursive types need indirection]{kind="design"}
+Rust needs to know the size of every type at compile time. A directly recursive type has no finite size:
+
+```rust
+enum Outline {
+    Item(String),
+    Section {
+        title: String,
+        child: Outline,
+    },
+}
+```
+
+To know the size of `Outline`, Rust would need to know the size of `child: Outline`, which contains another `child: Outline`, and so on forever.
+
+`Box` breaks that infinite calculation:
+
+```rust
+enum Outline {
+    Item(String),
+    Section {
+        title: String,
+        child: Box<Outline>,
+    },
+}
+```
+
+Now the `Section` variant stores a fixed-size box handle. The child outline lives on the heap. The type has a finite size because the field is a handle, not an inline copy of another full `Outline`.
+
+This is the real reason `Box` appears in recursive examples. It is not about making code "more advanced." It gives recursive data a fixed-size edge.
+:::
 
 ## Rc
 

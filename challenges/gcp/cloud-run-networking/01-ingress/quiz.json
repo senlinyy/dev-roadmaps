@@ -1,0 +1,44 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "The Orders API should be reachable only through the approved external load balancer path. Which Cloud Run setting family belongs in the first review?",
+      "options": [
+        { "id": "a", "text": "Ingress." },
+        { "id": "b", "text": "Only egress." },
+        { "id": "c", "text": "Only billing export." },
+        { "id": "d", "text": "Only Cloud SQL storage size." }
+      ],
+      "correct": ["a"],
+      "explanation": "Ingress controls which network paths can reach the Cloud Run service."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A service requires authenticated invokers but still allows broad public ingress. What is true?",
+      "options": [
+        { "id": "a", "text": "IAM can reject callers, but the network reachability setting is still broad." },
+        { "id": "b", "text": "IAM automatically changes ingress to internal only." },
+        { "id": "c", "text": "The service can no longer receive HTTPS." },
+        { "id": "d", "text": "Egress settings decide who may call the service." }
+      ],
+      "correct": ["a"],
+      "explanation": "IAM invocation and ingress reachability are separate controls."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "Which questions belong in Cloud Run ingress review?",
+      "options": [
+        { "id": "a", "text": "Should callers use the generated URL directly?" },
+        { "id": "b", "text": "Should traffic arrive only through a load balancer path?" },
+        { "id": "c", "text": "Are internal callers allowed?" },
+        { "id": "d", "text": "Which private database range does outbound traffic use?" }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "Ingress is about inbound reachability. Private database egress is a different direction."
+    }
+  ]
+}

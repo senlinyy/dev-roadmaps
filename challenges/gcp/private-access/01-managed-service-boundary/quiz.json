@@ -1,0 +1,44 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "The team says Cloud SQL should be \"in the app subnet.\" What is the better review question?",
+      "options": [
+        { "id": "a", "text": "Which private access pattern connects the workload's VPC path to Cloud SQL?" },
+        { "id": "b", "text": "Which VM tag should be copied onto Cloud SQL?" },
+        { "id": "c", "text": "Which SSH port opens the Cloud SQL host?" },
+        { "id": "d", "text": "Which frontend branch owns the database?" }
+      ],
+      "correct": ["a"],
+      "explanation": "Managed services are reached through supported service access patterns, not by treating them as ordinary VMs in a subnet."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A private VM calls Cloud Storage. What kind of destination is Cloud Storage from the network review perspective?",
+      "options": [
+        { "id": "a", "text": "A Google API/service endpoint that needs an approved reachability path and IAM." },
+        { "id": "b", "text": "A VM network interface inside the app subnet." },
+        { "id": "c", "text": "A firewall rule priority number." },
+        { "id": "d", "text": "A local file on the VM disk." }
+      ],
+      "correct": ["a"],
+      "explanation": "Cloud Storage is a managed API service, so reachability and IAM should both be reviewed."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "Which questions fit a managed service boundary review?",
+      "options": [
+        { "id": "a", "text": "What is the workload?" },
+        { "id": "b", "text": "What managed service is being reached?" },
+        { "id": "c", "text": "Which private or API access pattern is used?" },
+        { "id": "d", "text": "Can we assume every managed service lives in our subnet?" }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "The review starts by naming caller, destination, and supported access pattern."
+    }
+  ]
+}

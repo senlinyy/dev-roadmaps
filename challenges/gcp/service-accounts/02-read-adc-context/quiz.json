@@ -1,0 +1,44 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "Maya's local code reads a dev secret successfully, but Cloud Run fails in production. The code is the same. What likely changed?",
+      "options": [
+        { "id": "a", "text": "ADC found a different identity locally than the service account used by Cloud Run." },
+        { "id": "b", "text": "Secret Manager stops working only in production." },
+        { "id": "c", "text": "Cloud Run cannot use service accounts." },
+        { "id": "d", "text": "The project ID can never affect credentials." }
+      ],
+      "correct": ["a"],
+      "explanation": "ADC is credential discovery. Local code may use a human credential while Cloud Run uses the attached runtime service account."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A developer wants local behavior to be closer to production without downloading a long-lived key. Which approach fits the article?",
+      "options": [
+        { "id": "a", "text": "Use approved service account impersonation where appropriate." },
+        { "id": "b", "text": "Copy the production service account key into the repo." },
+        { "id": "c", "text": "Give every developer project Owner forever." },
+        { "id": "d", "text": "Disable IAM for local testing." }
+      ],
+      "correct": ["a"],
+      "explanation": "Impersonation can let a developer test as a service account without distributing a long-lived service account key."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "Which questions belong in local ADC review?",
+      "options": [
+        { "id": "a", "text": "Which project is selected?" },
+        { "id": "b", "text": "Which credential did ADC find?" },
+        { "id": "c", "text": "Is the test using a user identity or an impersonated service account?" },
+        { "id": "d", "text": "Can we skip production identity review because local success proves everything?" }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "Local identity evidence matters. Local success does not prove production service account access."
+    }
+  ]
+}

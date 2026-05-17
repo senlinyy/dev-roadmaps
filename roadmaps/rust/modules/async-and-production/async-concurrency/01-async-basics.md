@@ -12,11 +12,12 @@ id: article-rust-async-and-production-async-basics
 1. [The Problem](#the-problem)
 2. [Blocking Work](#blocking-work)
 3. [Futures](#futures)
-4. [Await Points](#await-points)
-5. [Runtimes](#runtimes)
-6. [When Async Helps](#when-async-helps)
-7. [Putting It All Together](#putting-it-all-together)
-8. [What's Next](#whats-next)
+4. [Futures vs Promises](#futures-vs-promises)
+5. [Await Points](#await-points)
+6. [Runtimes](#runtimes)
+7. [When Async Helps](#when-async-helps)
+8. [Putting It All Together](#putting-it-all-together)
+9. [What's Next](#whats-next)
 
 ## The Problem
 
@@ -62,9 +63,24 @@ fn main() {
 
 The variable `future` represents work that can be driven forward later. Nothing useful has finished yet.
 
+Unlike a JavaScript `Promise`, a Rust future usually does no work just because it was created. It needs to be awaited, spawned, or otherwise polled by an executor.
+
 A future is like a saved plan for work that may need to pause. The runtime asks the future to make progress. If the future is waiting on I/O, it yields. Later, when the I/O is ready, the runtime asks it to continue.
 
 The official Async Book describes `async` as turning code into a state machine that implements `Future`. You do not need to write that state machine by hand, but the idea matters. An async function remembers where it paused and what local values it still needs.
+
+## Futures vs Promises
+
+JavaScript promises and Python coroutines are useful comparisons, but Rust's futures have their own shape.
+
+| Idea | JavaScript/Python intuition | Rust future detail |
+| --- | --- | --- |
+| Creating async work | Often starts work soon or when scheduled by the event loop | Creates a value that must be driven |
+| Waiting | `await promise` or `await coroutine` | `.await` waits inside another async context |
+| Runtime | Usually built into the platform or framework | Chosen as a library, such as Tokio |
+| Memory rules | Runtime owns object lifetime | Future must obey Rust ownership and borrowing rules |
+
+The key beginner rule is: an async call creates future-shaped work, and a runtime drives that work. When code appears to do nothing, ask whether the future was ever awaited or spawned.
 
 :::expand[A future is lazy until it is driven]{kind="design"}
 The biggest beginner surprise is that creating a future is not the same as running it.
@@ -94,6 +110,30 @@ The cost is that async code has one more question to answer: who drives the futu
 | `tokio::spawn(work())` | Give it to the runtime as a task |
 
 When async code seems to "do nothing," look for the missing driver. A future that is never awaited or spawned is just a value.
+:::
+
+:::expand[What poll and wake mean]{kind="design"}
+Under the friendly `.await` syntax, a Rust async runtime repeatedly asks futures whether they can make progress. That low-level question is called polling.
+
+A future can answer in two broad ways:
+
+```text
+Ready(value)      the work is finished
+Pending           the work is waiting
+```
+
+When a future returns `Pending`, it also arranges for the runtime to be woken later. For example, an async socket read may say "I am waiting for bytes." When the operating system reports the socket is readable, the runtime wakes the task and polls the future again.
+
+You do not need to implement `poll` for normal async app code. The mental model still helps:
+
+| Surface syntax | Underlying idea |
+| --- | --- |
+| `.await` | Pause until the future becomes ready |
+| I/O not ready | Future returns pending |
+| I/O ready later | Runtime wakes and polls again |
+| Local variables in async fn | Stored inside the future's state machine |
+
+That is why async Rust cares so much about ownership. Values used across an `.await` point may be stored inside the future while the task is paused.
 :::
 
 ## Await Points

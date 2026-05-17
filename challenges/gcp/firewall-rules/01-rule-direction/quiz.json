@@ -1,0 +1,44 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "An admin VPN should be allowed to SSH into a bastion VM on TCP 22. Which direction should the rule use on the bastion target?",
+      "options": [
+        { "id": "a", "text": "Ingress." },
+        { "id": "b", "text": "Egress." },
+        { "id": "c", "text": "Billing." },
+        { "id": "d", "text": "DNS only." }
+      ],
+      "correct": ["a"],
+      "explanation": "The bastion is receiving a new connection, so the target-side rule is ingress."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A worker VM must call a third-party HTTPS API, and outbound traffic is restricted. Which direction is relevant for the worker rule?",
+      "options": [
+        { "id": "a", "text": "Egress from the worker target to the API destination." },
+        { "id": "b", "text": "Ingress to the worker from the API." },
+        { "id": "c", "text": "Project inheritance." },
+        { "id": "d", "text": "A DNS TXT record." }
+      ],
+      "correct": ["a"],
+      "explanation": "The worker starts the outbound connection, so its restricted outbound path is an egress question."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "Which details help decide firewall direction?",
+      "options": [
+        { "id": "a", "text": "Which resource is the target of the rule." },
+        { "id": "b", "text": "Who starts the connection." },
+        { "id": "c", "text": "Whether the packet is entering or leaving the target." },
+        { "id": "d", "text": "The color of the Cloud Console graph." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "Direction is about packet flow relative to the target resource."
+    }
+  ]
+}

@@ -1,0 +1,80 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "Traffic reached 100 percent on the new checkout revision. What makes the next 30 minutes a watch window instead of passive waiting?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Named signals, an owner, decision times, and a rollback target."
+        },
+        {
+          "id": "b",
+          "text": "A calendar invite with no metrics."
+        },
+        {
+          "id": "c",
+          "text": "A promise to check tomorrow."
+        },
+        {
+          "id": "d",
+          "text": "A successful deployment command."
+        }
+      ],
+      "correct": ["a"],
+      "explanation": "A watch window is active verification with evidence and decision points."
+    },
+    {
+      "id": "q2",
+      "type": "multiple",
+      "scenario": "Which signals belong in a checkout watch window?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Failed request rate for `POST /checkout`."
+        },
+        {
+          "id": "b",
+          "text": "p95 checkout duration."
+        },
+        {
+          "id": "c",
+          "text": "Dependency failures and exceptions."
+        },
+        {
+          "id": "d",
+          "text": "The color of the deployment badge."
+        }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "The useful signals connect to user impact and likely failure causes."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "A health endpoint is green, but Application Insights shows checkout failures rising. What should the team do?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Treat health as one layer and investigate the user-path evidence."
+        },
+        {
+          "id": "b",
+          "text": "Ignore user failures because health is green."
+        },
+        {
+          "id": "c",
+          "text": "Delete the health check."
+        },
+        {
+          "id": "d",
+          "text": "Close the release because the runtime is alive."
+        }
+      ],
+      "correct": ["a"],
+      "explanation": "A health check can pass while the business path fails. Verification uses multiple layers."
+    }
+  ]
+}

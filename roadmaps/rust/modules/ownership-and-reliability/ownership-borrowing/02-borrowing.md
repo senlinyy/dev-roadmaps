@@ -10,15 +10,17 @@ id: article-rust-ownership-and-reliability-borrowing
 ## Table of Contents
 
 1. [The Problem](#the-problem)
-2. [Shared References](#shared-references)
-3. [Function Signatures](#function-signatures)
-4. [Mutable References](#mutable-references)
-5. [Readers And Writers](#readers-and-writers)
-6. [Borrow Scopes](#borrow-scopes)
-7. [No Dangling References](#no-dangling-references)
-8. [Choosing A Signature](#choosing-a-signature)
-9. [Putting It All Together](#putting-it-all-together)
-10. [What's Next](#whats-next)
+2. [What A Reference Is](#what-a-reference-is)
+3. [Shared References](#shared-references)
+4. [Function Signatures](#function-signatures)
+5. [Mutable Binding vs Mutable Borrow](#mutable-binding-vs-mutable-borrow)
+6. [Mutable References](#mutable-references)
+7. [Readers And Writers](#readers-and-writers)
+8. [Borrow Scopes](#borrow-scopes)
+9. [No Dangling References](#no-dangling-references)
+10. [Choosing A Signature](#choosing-a-signature)
+11. [Putting It All Together](#putting-it-all-together)
+12. [What's Next](#whats-next)
 
 ## The Problem
 
@@ -43,6 +45,50 @@ The same problem appears across the app:
 - An edit function needs to change one note body while the rest of the app waits.
 
 Borrowing is Rust's answer. A reference lets code use a value without becoming its owner.
+
+## What A Reference Is
+
+In JavaScript and Python, people often say variables "hold references" to objects. That is useful background, but a Rust reference is stricter. A Rust reference is temporary, checked access to a value owned somewhere else.
+
+The reference does not own the value. It does not keep the value alive by itself. It also carries rules about what kind of access is allowed:
+
+| Reference | Plain meaning | Access rule |
+| --- | --- | --- |
+| `&T` | Shared reference to a `T` | Read-style access; many can exist together |
+| `&mut T` | Mutable reference to a `T` | Write-capable access; it must be exclusive |
+
+That is the big difference from managed-language references. Rust references are not just aliases that can float around freely. The compiler checks when they start, when they stop being used, and whether they overlap with mutation.
+
+:::expand[JS and Python references vs Rust references]{kind="design"}
+The same word, "reference," can point to different ideas.
+
+In JavaScript:
+
+```javascript
+const a = { title: "Buy milk" };
+const b = a;
+b.title = "Read Rust";
+console.log(a.title);
+```
+
+Both `a` and `b` refer to the same object. Either name can observe mutation through the other. The runtime allows that aliasing by default.
+
+Rust makes the access mode explicit:
+
+```rust
+let mut title = String::from("Buy milk");
+
+let preview = &title;
+println!("{preview}");
+
+let edit = &mut title;
+edit.push_str(" today");
+```
+
+The shared reference `preview` reads. The mutable reference `edit` writes. Rust accepts this only because the read is finished before the write begins.
+
+That rule is why Rust references can feel less casual than references in JS or Python. The payoff is that a function signature tells you whether the function merely reads a value, mutates it in place, or takes ownership completely.
+:::
 
 ## Shared References
 
@@ -137,6 +183,25 @@ That makes signatures part of the design, not just syntax.
 | `&mut String` | Borrows a `String` for changing |
 
 When a function surprises you by moving a value, read its parameter list first. If the parameter type is owned, the call transfers ownership unless the type is `Copy`.
+
+## Mutable Binding vs Mutable Borrow
+
+Rust uses `mut` in two nearby but different places.
+
+`let mut body` means the local binding can be changed through this name:
+
+```rust
+let mut body = String::from("Remember:");
+body.push_str(" Buy milk");
+```
+
+`&mut body` means a function temporarily receives the only write-capable access to that value:
+
+```rust
+add_line(&mut body, "Buy milk");
+```
+
+The first is about whether this variable may change. The second is about lending exclusive mutable access to someone else for a short time.
 
 ## Mutable References
 

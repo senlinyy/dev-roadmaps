@@ -1,0 +1,57 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A developer says, `We have Azure SQL automated backups, so recovery is done.` A bad release wrote wrong order statuses for 20 minutes. What is missing from that statement?",
+      "options": [
+        { "id": "a", "text": "The restore time, restored database target, app cutover plan, data repair plan, and validation evidence." },
+        { "id": "b", "text": "Only a nicer database name, because backups automatically update the app." },
+        { "id": "c", "text": "Only a larger App Service plan, because compute capacity restores bad rows." },
+        { "id": "d", "text": "Nothing, because every backup is already a complete recovery plan." }
+      ],
+      "correct": ["a"],
+      "explanation": "A backup is a restore source. Recovery also needs a target, a cutover path, validation, and a decision about valid data written after the restore point."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "Azure SQL point-in-time restore creates `orders-restored-20260517-1020`. What should the team remember?",
+      "options": [
+        { "id": "a", "text": "The restored database is a target the app must be pointed to or used for repair; it does not automatically replace application behavior." },
+        { "id": "b", "text": "The restore deletes all later production data automatically." },
+        { "id": "c", "text": "The restored database means RTO is zero because the database name exists." },
+        { "id": "d", "text": "The app can ignore secrets and connection strings after a restore." }
+      ],
+      "correct": ["a"],
+      "explanation": "The restore gives the team a database target. The recovery plan still has to decide how the app uses it and how the team handles data after the chosen restore point."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "A receipt blob is deleted by mistake. The storage account has blob soft delete with a 14-day retention period.",
+      "options": [
+        { "id": "a", "text": "The team may be able to recover the blob within the retention window, but the recovery process and verification still matter." },
+        { "id": "b", "text": "The blob can be recovered forever, no matter how retention is configured." },
+        { "id": "c", "text": "Soft delete only protects SQL rows and has no relationship to blobs." },
+        { "id": "d", "text": "The app automatically switches users to a recovered receipt without any restore action." }
+      ],
+      "correct": ["a"],
+      "explanation": "Soft delete can help with accidental deletion during its retention window. The team still needs a process to restore the object and prove users can read the right receipt."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "Which items belong in a recovery plan instead of only in a backup inventory?",
+      "options": [
+        { "id": "a", "text": "What data or workflow must come back first." },
+        { "id": "b", "text": "Which restore target is created and how the app uses it." },
+        { "id": "c", "text": "What proves recovery worked, such as checkout tests, receipt reads, metrics, and data checks." },
+        { "id": "d", "text": "A vague note that backups exist somewhere." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "A recovery plan names priority, target, app cutover or repair, and validation. A vague backup inventory does not tell the team how users get a working service back."
+    }
+  ]
+}

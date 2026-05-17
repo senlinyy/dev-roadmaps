@@ -11,12 +11,13 @@ id: article-rust-async-and-production-tokio-and-tasks
 
 1. [The Problem](#the-problem)
 2. [The Runtime](#the-runtime)
-3. [Spawning Tasks](#spawning-tasks)
-4. [Join Handles](#join-handles)
-5. [Move Into Tasks](#move-into-tasks)
-6. [Timeouts](#timeouts)
-7. [Putting It All Together](#putting-it-all-together)
-8. [What's Next](#whats-next)
+3. [Tasks, Threads, And Workers](#tasks-threads-and-workers)
+4. [Spawning Tasks](#spawning-tasks)
+5. [Join Handles](#join-handles)
+6. [Move Into Tasks](#move-into-tasks)
+7. [Timeouts](#timeouts)
+8. [Putting It All Together](#putting-it-all-together)
+9. [What's Next](#whats-next)
 
 ## The Problem
 
@@ -42,6 +43,21 @@ async fn main() {
 The attribute creates a runtime and runs the async `main` function on it.
 
 In a larger application, you may configure the runtime directly, but early on the attribute is enough. The important idea is that async code does not run itself. Tokio drives the futures and decides which ready task gets to make progress.
+
+## Tasks, Threads, And Workers
+
+A Tokio task is runtime-managed future work. A worker thread is an operating system thread that the runtime uses to poll many tasks.
+
+That distinction is easy to blur:
+
+| Word | Plain meaning |
+| --- | --- |
+| Future | The async work value |
+| Task | A future submitted to the runtime |
+| Worker thread | An OS thread that runs ready tasks |
+| Scheduler | The runtime logic that decides which task runs next |
+
+Many tasks can share a smaller number of worker threads because tasks yield at `.await` points. A task waiting on I/O does not need to occupy a thread until the I/O is ready again.
 
 ## Spawning Tasks
 
@@ -200,6 +216,23 @@ async fn main() {
 ```
 
 A timeout does not make the remote service faster. It protects the caller from waiting forever. That is an API design choice, not just an async trick.
+
+:::expand[What timeout cancellation really drops]{kind="pitfall"}
+`timeout(duration, future).await` waits for a future for a limited amount of time. If the duration expires, Tokio returns an error and drops the future it was waiting on.
+
+Dropping the future cancels that Rust async work, but it does not magically undo everything outside the process. A request may already have reached a server. A database may already be doing work. A file write may have partially completed depending on the API.
+
+Use timeouts as caller protection, then design the operation behind them with cancellation in mind:
+
+| Operation | Timeout question |
+| --- | --- |
+| HTTP request | Is retry safe, or could it duplicate a write? |
+| File write | Is the output written atomically through a temp file? |
+| Database update | Is the transaction rolled back or still running server-side? |
+| Background task | Who observes that the task stopped early? |
+
+The simple rule is: a timeout stops waiting in your Rust task. It is not automatically a business-level undo button.
+:::
 
 ## Putting It All Together
 

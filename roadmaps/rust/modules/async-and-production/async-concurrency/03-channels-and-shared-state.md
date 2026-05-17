@@ -11,11 +11,12 @@ id: article-rust-async-and-production-channels-and-shared-state
 
 1. [The Problem](#the-problem)
 2. [Message Passing](#message-passing)
-3. [Bounded Channels](#bounded-channels)
-4. [Shared State](#shared-state)
-5. [Choosing The Shape](#choosing-the-shape)
-6. [Putting It All Together](#putting-it-all-together)
-7. [What's Next](#whats-next)
+3. [Messages Move Ownership](#messages-move-ownership)
+4. [Bounded Channels](#bounded-channels)
+5. [Shared State](#shared-state)
+6. [Choosing The Shape](#choosing-the-shape)
+7. [Putting It All Together](#putting-it-all-together)
+8. [What's Next](#whats-next)
 
 ## The Problem
 
@@ -33,6 +34,8 @@ Those are different communication shapes. The parsed notes should flow through a
 Message passing means one task sends values to another task.
 
 For many producers and one consumer, Tokio's `mpsc` channel is the common starting point.
+
+`mpsc` means many producers, single consumer: many senders can send messages, and one receiver pulls messages out.
 
 ```rust
 use tokio::sync::mpsc;
@@ -69,6 +72,22 @@ flowchart LR
 ```
 
 This design is useful when one task should own a resource. Instead of every task mutating the index directly, the indexer task receives commands and updates the index in one place.
+
+## Messages Move Ownership
+
+Sending usually transfers ownership of the message into the channel.
+
+```rust
+let note = ParsedNote {
+    title: String::from("Async"),
+};
+
+tx.send(note).await.unwrap();
+```
+
+After this send, the sender cannot keep using `note`. The channel now owns the message until the receiver takes it. That is exactly what you want for work items: one task produces a value, another task becomes responsible for processing it.
+
+If several tasks need to share the same large data, send an ID, clone an `Arc`, or design a shared owner. Do not assume channel send is a hidden copy.
 
 ## Bounded Channels
 
@@ -144,6 +163,32 @@ async fn main() {
 The `Arc` lets each task own a handle to the same counter. The `Mutex` ensures only one task mutates the counter at a time.
 
 The gotcha is lock scope. Keep the locked section small. Avoid holding a lock across slow work. If a task locks shared state and then awaits a network call, other tasks may sit behind it for no good reason.
+
+:::expand[Arc and Mutex are two separate layers]{kind="design"}
+`Arc<Mutex<T>>` combines two jobs, and each job is different.
+
+`Arc<T>` means atomically reference-counted shared ownership. It lets several tasks or threads own a handle to the same value.
+
+`Mutex<T>` means protected interior access. It lets one task at a time lock the value and mutate it.
+
+Together:
+
+```rust
+let progress = Arc::new(Mutex::new(0usize));
+```
+
+the `Arc` answers "how can several tasks reach the same counter?" The `Mutex` answers "how do we prevent two tasks from changing the counter at the same time?"
+
+Leaving out either layer changes the meaning:
+
+| Type | What is missing |
+| --- | --- |
+| `Mutex<T>` | One owner only; cannot easily share into many tasks |
+| `Arc<T>` | Shared ownership, but no protected mutation |
+| `Arc<Mutex<T>>` | Shared ownership plus exclusive mutation |
+
+This shape is good for small shared state. For complex resources, a dedicated owner task plus messages is often easier to reason about.
+:::
 
 ## Choosing The Shape
 

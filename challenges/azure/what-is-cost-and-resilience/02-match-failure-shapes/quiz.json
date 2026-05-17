@@ -1,0 +1,57 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "One Container Apps revision instance crashes during normal traffic. The app has enough healthy replicas and checkout keeps returning 201.",
+      "options": [
+        { "id": "a", "text": "Instance failure, protected by having healthy runtime copies available." },
+        { "id": "b", "text": "Bad write, protected only by point-in-time database restore." },
+        { "id": "c", "text": "Data deletion, protected only by blob soft delete." },
+        { "id": "d", "text": "Regional outage, because any process crash means the whole region failed." }
+      ],
+      "correct": ["a"],
+      "explanation": "A single runtime copy failing is an instance failure. Multiple healthy replicas can keep the workflow serving, which is different from recovering lost or corrupted data."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A cleanup job deletes receipt blobs under `receipts/2026/05/` instead of only deleting temporary exports.",
+      "options": [
+        { "id": "a", "text": "Data deletion, where blob soft delete, versioning, retention, and restore practice matter." },
+        { "id": "b", "text": "Zone failure, because a delete command always means a datacenter failed." },
+        { "id": "c", "text": "Instance failure, because the app process is the only thing that can delete data." },
+        { "id": "d", "text": "Cost allocation failure only, because deleted data is never a recovery issue." }
+      ],
+      "correct": ["a"],
+      "explanation": "The failure is accidental data deletion. Redundancy may not give the business an older object state; object-level protection and a restore plan are the relevant safeguards."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "A bad release accepts orders but writes the wrong status for 20 minutes. The database is available, but the business state is wrong.",
+      "options": [
+        { "id": "a", "text": "Bad write, where point-in-time restore, audit evidence, repair logic, and release controls matter." },
+        { "id": "b", "text": "Only regional outage, because wrong data always means all Azure regions are unavailable." },
+        { "id": "c", "text": "Only App Service instance failure, because app replicas can repair all written records automatically." },
+        { "id": "d", "text": "Only budget failure, because cost alerts prevent bad writes." }
+      ],
+      "correct": ["a"],
+      "explanation": "The service stayed online but wrote bad state. Availability did not solve correctness. The team needs a data recovery or repair path and release controls that reduce repeat risk."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "Which pairings connect the failure shape to a realistic Azure protection?",
+      "options": [
+        { "id": "a", "text": "Zone failure: design app and data tiers to use availability zones when the workflow needs in-region protection." },
+        { "id": "b", "text": "Regional outage: prepare a secondary-region plan instead of assuming local redundancy is enough." },
+        { "id": "c", "text": "Bad write: use restore evidence and repair plans, because redundancy may copy the bad state." },
+        { "id": "d", "text": "Instance failure: disable all health checks so traffic keeps flowing to every instance." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "The correct answers match protection to the shape of failure. Health checks should help keep traffic away from unhealthy instances, not hide them."
+    }
+  ]
+}

@@ -12,12 +12,14 @@ id: article-rust-ownership-and-reliability-strings-and-slices
 1. [The Problem](#the-problem)
 2. [Owned Text](#owned-text)
 3. [Borrowed Text](#borrowed-text)
-4. [Slices](#slices)
-5. [Vectors And List Slices](#vectors-and-list-slices)
-6. [Lifetimes In Plain English](#lifetimes-in-plain-english)
-7. [A Practical Heuristic](#a-practical-heuristic)
-8. [Putting It All Together](#putting-it-all-together)
-9. [What's Next](#whats-next)
+4. [Bytes, Characters, And UTF-8](#bytes-characters-and-utf-8)
+5. [Slices](#slices)
+6. [What A Slice Stores](#what-a-slice-stores)
+7. [Vectors And List Slices](#vectors-and-list-slices)
+8. [Lifetimes In Plain English](#lifetimes-in-plain-english)
+9. [A Practical Heuristic](#a-practical-heuristic)
+10. [Putting It All Together](#putting-it-all-together)
+11. [What's Next](#whats-next)
 
 ## The Problem
 
@@ -71,7 +73,7 @@ struct Note<'a> {
 }
 ```
 
-That shape can be useful for temporary parser views, but it is usually the wrong first shape for application data. A stored note needs to keep its title and body after the command, file buffer, or request that created it is gone.
+The `<'a>` part is a lifetime parameter. It says the `Note` does not own its text; it borrows text that must stay valid for at least as long as the note view is used. That shape can be useful for temporary parser views, but it is usually the wrong first shape for application data. A stored note needs to keep its title and body after the command, file buffer, or request that created it is gone.
 
 Here is the problem in plain terms:
 
@@ -128,9 +130,31 @@ The first call borrows from an owned `String`. The second call uses a string lit
 
 This is why Rust examples often use `&str` in function parameters. Borrowing makes a function easier to call and avoids taking ownership when ownership would add no value.
 
+## Bytes, Characters, And UTF-8
+
+Rust strings are UTF-8. UTF-8 stores text as bytes, and not every visible character uses the same number of bytes.
+
+For plain ASCII text, the relationship looks simple:
+
+```text
+text:  R  u  s  t
+byte:  0  1  2  3
+```
+
+The word `"Rust"` has four visible characters and four bytes. The word `"café"` is different:
+
+```text
+text:  c  a  f  é
+byte:  0  1  2  3  4
+```
+
+The final `é` uses two bytes in UTF-8. That is why Rust string ranges are byte ranges, not character-position ranges. A range must begin and end at valid character boundaries.
+
+`usize` appears often around strings and slices because it is Rust's standard type for counts, lengths, and indexes. When you see a length from `.len()`, read it as a byte count for strings and an element count for list slices.
+
 ## Slices
 
-A slice is a borrowed view into a contiguous part of a collection. For strings, that view is `&str`. For vectors and arrays, that view looks like `&[T]`.
+A slice is a borrowed view into a contiguous part of a collection. Contiguous means the items are next to each other in memory, with no gaps in the viewed range. For strings, that view is `&str`. For vectors and arrays, that view looks like `&[T]`.
 
 One way to picture the relationship is:
 
@@ -157,6 +181,29 @@ There is an important gotcha here. Rust strings are UTF-8, and string indexes ar
 
 The bigger idea is still the same: a slice borrows part of an owner. It is cheap because it does not duplicate the data, and it is safe because Rust checks that the borrowed view cannot outlive the owner.
 
+## What A Slice Stores
+
+A slice is not a new collection. It is a view with two essential pieces of information:
+
+```text
+slice = where the viewed data starts + how much of it is visible
+```
+
+For `&str`, the slice points at UTF-8 bytes and stores a length in bytes. For `&[T]`, the slice points at elements of type `T` and stores a length in elements.
+
+```mermaid
+flowchart LR
+    Text["String owner<br/>(Rust notes)"]
+    Slice["&str view<br/>(start + byte length)"]
+    List["Vec<Note> owner"]
+    ListSlice["&[Note] view<br/>(start + element length)"]
+
+    Text --> Slice
+    List --> ListSlice
+```
+
+This is why slices are cheap to pass into helper functions. The helper receives a small view, not a copy of all the underlying text or notes. The owner still controls how long the data lives.
+
 :::expand[String slices are byte ranges with UTF-8 rules]{kind="pitfall"}
 String ranges use byte indexes. That is harmless when the text is plain ASCII:
 
@@ -176,7 +223,16 @@ let word = String::from("café");
 let broken = &word[0..4];
 ```
 
-The visible word has four characters, but `é` takes more than one byte in UTF-8. The range `0..4` cuts into the middle of that final character, so slicing there is invalid and will panic at runtime.
+The visible word has four characters, but `é` takes two bytes in UTF-8:
+
+```text
+byte indexes: 0   1   2   3   4   5
+text:         c   a   f   é
+bytes:        63  61  66  c3  a9
+range 0..4:   c   a   f   half of é
+```
+
+The range `0..4` cuts into the middle of that final character, so slicing there is invalid and will panic at runtime.
 
 For beginner text work, prefer methods that understand text boundaries:
 
@@ -199,6 +255,8 @@ The same ownership pattern appears with lists.
 ```rust
 let notes: Vec<Note> = Vec::new();
 ```
+
+The `T` in `Vec<T>` is a placeholder for the element type. `Vec<Note>` means a vector whose elements are `Note` values. `Vec<String>` means a vector whose elements are `String` values.
 
 A helper that only searches notes should not need to own that vector. It can borrow a slice:
 

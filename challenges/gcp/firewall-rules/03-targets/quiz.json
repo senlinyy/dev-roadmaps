@@ -1,0 +1,44 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "Only VMs running as `orders-worker` should call an internal VM backend. Which target/source habit is usually stronger than allowing every instance in the VPC?",
+      "options": [
+        { "id": "a", "text": "Use workload-specific targeting such as service-account or narrow tag-based rules where appropriate." },
+        { "id": "b", "text": "Target all instances forever." },
+        { "id": "c", "text": "Use the billing account as a firewall target." },
+        { "id": "d", "text": "Use a project description as the source." }
+      ],
+      "correct": ["a"],
+      "explanation": "Targets should match the workload role as narrowly as the design supports."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A team tries to attach a normal VM network tag firewall target directly to a Cloud Run instance. What is the better mental model?",
+      "options": [
+        { "id": "a", "text": "Cloud Run uses service-level ingress and configured egress paths; it is not a tagged VM instance." },
+        { "id": "b", "text": "Cloud Run cannot receive HTTPS requests." },
+        { "id": "c", "text": "Cloud Run firewall rules are billing labels." },
+        { "id": "d", "text": "Cloud Run always ignores networking." }
+      ],
+      "correct": ["a"],
+      "explanation": "Cloud Run networking is controlled through service settings and egress configuration rather than VM instance tags."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "Which statements about firewall targets are healthy?",
+      "options": [
+        { "id": "a", "text": "All-instance targets are broad and should be reviewed carefully." },
+        { "id": "b", "text": "Network tags can drift if copied casually." },
+        { "id": "c", "text": "Service-account targeting can express workload role for VMs." },
+        { "id": "d", "text": "A target is unnecessary because every allow rule should apply everywhere." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "The target keeps a useful allow from becoming a network-wide allow."
+    }
+  ]
+}

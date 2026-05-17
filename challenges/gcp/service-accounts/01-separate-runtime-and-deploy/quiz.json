@@ -1,0 +1,44 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "The Orders API runs on Cloud Run and reads one database secret while serving requests. Which identity should carry that runtime access?",
+      "options": [
+        { "id": "a", "text": "The Cloud Run runtime service account for the Orders API." },
+        { "id": "b", "text": "Maya's personal user account." },
+        { "id": "c", "text": "The production billing account." },
+        { "id": "d", "text": "Every user in the company domain." }
+      ],
+      "correct": ["a"],
+      "explanation": "Production app code should run as a workload identity. The runtime service account gets the access needed while the app serves requests."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A CI/CD pipeline deploys Cloud Run revisions and shifts traffic. The app runtime only reads a secret and writes receipts. What is the healthy identity split?",
+      "options": [
+        { "id": "a", "text": "Use a deploy identity for releases and a separate runtime service account for the app." },
+        { "id": "b", "text": "Use the runtime service account for all deployment administration by default." },
+        { "id": "c", "text": "Use a developer's personal ADC file in production." },
+        { "id": "d", "text": "Use the same broad Owner identity everywhere to avoid review." }
+      ],
+      "correct": ["a"],
+      "explanation": "Deploy and runtime are different jobs. Separating them limits the power available to running application code."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "Which statements about service accounts are correct?",
+      "options": [
+        { "id": "a", "text": "A service account is an identity for software or automation." },
+        { "id": "b", "text": "A service account can receive IAM roles." },
+        { "id": "c", "text": "A service account can appear in audit evidence." },
+        { "id": "d", "text": "A service account should always share a human's password." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "Service accounts are workload principals. They should not depend on human passwords."
+    }
+  ]
+}

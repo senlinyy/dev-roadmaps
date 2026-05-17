@@ -11,12 +11,14 @@ id: article-rust-idiomatic-rust-docs-formatting-and-clippy
 
 1. [The Problem](#the-problem)
 2. [Documentation Comments](#documentation-comments)
-3. [Doctests](#doctests)
-4. [rustfmt](#rustfmt)
-5. [Clippy](#clippy)
-6. [A Review Rhythm](#a-review-rhythm)
-7. [Putting It All Together](#putting-it-all-together)
-8. [What's Next](#whats-next)
+3. [What rustdoc Builds](#what-rustdoc-builds)
+4. [Doctests](#doctests)
+5. [rustfmt](#rustfmt)
+6. [What Lints Are](#what-lints-are)
+7. [Clippy](#clippy)
+8. [A Review Rhythm](#a-review-rhythm)
+9. [Putting It All Together](#putting-it-all-together)
+10. [What's Next](#whats-next)
 
 ## The Problem
 
@@ -62,9 +64,25 @@ pub fn default_notebook(config: &str) -> Option<&str> {
 
 Use docs most carefully on public functions, public structs, public enums, and public traits. Private helpers often need clearer names more than comments.
 
+## What rustdoc Builds
+
+`rustdoc` is Rust's documentation tool. It reads public items, documentation comments, examples, and type signatures, then builds browsable API documentation.
+
+That matters because Rust docs are not only prose. They show the function signature beside the explanation, link types to their definitions, and can run examples as tests. For a library, docs are often the first interface another developer uses.
+
+You can build local docs with:
+
+```bash
+cargo doc --no-deps --open
+```
+
+`--no-deps` keeps the focus on your crate instead of building every dependency's docs. Remove it when you want local docs for the full dependency graph.
+
 ## Doctests
 
 Rust can run examples in documentation as tests.
+
+A doctest is not only rendered documentation. `rustdoc` extracts the Rust code block, compiles it like an outside user, and runs the assertions.
 
 ````rust
 /// Finds the default notebook name in a config file.
@@ -86,6 +104,27 @@ pub fn default_notebook(config: &str) -> Option<&str> {
 When you run `cargo test`, Cargo also runs documentation tests for library examples. That is a powerful maintenance feature. The docs do not merely look plausible. The examples compile and run.
 
 Doctests work best for small public examples. If an example needs a lot of setup, hide setup lines with `#` or move the complex scenario into a normal test.
+
+:::expand[Hidden doctest setup with #]{kind="pattern"}
+Sometimes a good public example needs a tiny bit of setup that would distract readers. In Rust doctests, a line that starts with `#` is compiled but hidden from the rendered example.
+
+````rust
+/// Returns the first Markdown heading.
+///
+/// ```
+/// # use my_notes::title_from_markdown;
+/// let input = "# Rust\nbody";
+/// assert_eq!(title_from_markdown(input), Some("Rust"));
+/// ```
+pub fn title_from_markdown(input: &str) -> Option<&str> {
+    input.lines().find_map(|line| line.strip_prefix("# "))
+}
+````
+
+Readers see the useful example. The test still has the import it needs.
+
+Use hidden lines sparingly. They are best for imports, tiny setup values, or making a public API example compile. If half the example is hidden, the doctest is probably doing too much and belongs in a normal test.
+:::
 
 :::expand[Docs are executable promises]{kind="design"}
 Documentation examples often rot in other ecosystems because they are separate from the test workflow. Rust's doctests reduce that drift.
@@ -130,6 +169,12 @@ cargo fmt --all --check
 ```
 
 If the check fails, run `cargo fmt` and review the actual code changes. Formatting should be boring and automatic. That gives reviewers more attention for ownership, errors, tests, and API design.
+
+## What Lints Are
+
+A lint is an automated warning about suspicious, confusing, or non-idiomatic code. If you know ESLint, Pylint, or Ruff, Clippy plays a similar role for Rust, with extra Rust-specific knowledge about ownership, allocation, iterators, and common mistakes.
+
+Lints are not the type checker. The compiler decides whether the program is valid Rust. Lints ask whether the valid code is likely to be clearer, safer, or more idiomatic in another shape.
 
 ## Clippy
 

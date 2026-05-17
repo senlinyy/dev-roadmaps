@@ -1,0 +1,44 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A new Cloud Run revision times out during startup while opening a private database connection. Which investigation should start first?",
+      "options": [
+        { "id": "a", "text": "Check VPC egress, route/private access, DNS, and firewall path to the database." },
+        { "id": "b", "text": "Change the public domain immediately." },
+        { "id": "c", "text": "Grant every user Owner." },
+        { "id": "d", "text": "Assume the container image cannot run anywhere." }
+      ],
+      "correct": ["a"],
+      "explanation": "A timeout during private dependency startup often points to path, DNS, or firewall reachability."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "Startup fails with `PERMISSION_DENIED` while reading Secret Manager. Which layer is most likely involved?",
+      "options": [
+        { "id": "a", "text": "IAM permission for the runtime identity, assuming the API path is reachable." },
+        { "id": "b", "text": "Only a missing public DNS record." },
+        { "id": "c", "text": "Only firewall priority." },
+        { "id": "d", "text": "Only the VPC name." }
+      ],
+      "correct": ["a"],
+      "explanation": "Permission denied is an identity signal. Network evidence still matters, but the error points toward IAM."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "Which evidence helps review Cloud Run startup networking?",
+      "options": [
+        { "id": "a", "text": "Revision name and region." },
+        { "id": "b", "text": "Ingress and egress settings." },
+        { "id": "c", "text": "Subnet or VPC egress path." },
+        { "id": "d", "text": "The exact color of the deploy button." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "Startup evidence should name the revision and both network edges."
+    }
+  ]
+}

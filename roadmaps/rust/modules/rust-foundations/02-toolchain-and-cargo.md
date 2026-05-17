@@ -13,12 +13,13 @@ aliases: ["rust-foundations/getting-started/02-toolchain-and-cargo.md"]
 1. [The Problem](#the-problem)
 2. [rustup](#rustup)
 3. [Cargo](#cargo)
-4. [First Project](#first-project)
-5. [The Daily Loop](#the-daily-loop)
-6. [Manifest And Lockfile](#manifest-and-lockfile)
-7. [Tooling Gotchas](#tooling-gotchas)
-8. [Putting It All Together](#putting-it-all-together)
-9. [What's Next](#whats-next)
+4. [Cargo Vocabulary](#cargo-vocabulary)
+5. [First Project](#first-project)
+6. [The Daily Loop](#the-daily-loop)
+7. [Manifest And Lockfile](#manifest-and-lockfile)
+8. [Tooling Gotchas](#tooling-gotchas)
+9. [Putting It All Together](#putting-it-all-together)
+10. [What's Next](#whats-next)
 
 ## The Problem
 
@@ -36,6 +37,8 @@ The fix is to learn the Rust toolchain as one system. You use `rustup` to manage
 ## rustup
 
 `rustup` is the toolchain manager. A toolchain is the set of tools for a Rust release channel and target platform: the compiler, standard library, Cargo, docs, and optional components.
+
+A release channel is the stream of Rust releases you are using, such as stable, beta, or nightly. A target platform is the operating system and CPU shape Rust is compiling for, such as your laptop today or a WebAssembly target later.
 
 Most learners should start on stable Rust. Stable is the normal release channel for application and library work. Beta and nightly exist, but they are not where a beginner should start unless a specific project requires them.
 
@@ -99,6 +102,21 @@ Think of Cargo as doing three jobs at once:
 | Dependency workflow | Records dependencies, resolves versions, and builds dependency crates |
 
 That is why learning Cargo early is not a distraction from learning Rust. Cargo is how Rust code becomes a project.
+
+## Cargo Vocabulary
+
+Cargo uses a few words that sound familiar but have Rust-specific meanings. Getting them straight early prevents a lot of fog later.
+
+| Word | Plain meaning in Rust |
+| --- | --- |
+| Package | The project Cargo manages, described by one `Cargo.toml` |
+| Crate | One compiled Rust unit: a library or executable |
+| Crate root | The source file where Rust starts reading one crate, usually `src/main.rs` or `src/lib.rs` |
+| Target | A build output Cargo can produce, such as a binary, library, example, or test |
+| Component | An installed toolchain add-on, such as rustfmt or Clippy |
+| Registry | A place Cargo can download crates from, usually crates.io |
+
+If you know npm or pip, this can feel close to packages and dependencies, but the mapping is not exact. In Rust, a single Cargo package can contain more than one crate, such as one library plus several command-line binaries.
 
 :::expand[Cargo is the project interface, rustc is the engine]{kind="design"}
 `rustc` is the compiler. Cargo is the project interface that knows when and how to call the compiler.

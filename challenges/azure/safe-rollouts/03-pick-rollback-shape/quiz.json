@@ -1,0 +1,80 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "An App Service release used a staging slot swap. The new production path is bad, and the old slot is intact. What rollback shape fits first?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Swap back to the previous slot and verify user-path health."
+        },
+        {
+          "id": "b",
+          "text": "Create a new App Service plan before changing traffic."
+        },
+        {
+          "id": "c",
+          "text": "Delete the staging slot so the bad version cannot return."
+        },
+        {
+          "id": "d",
+          "text": "Rotate every secret because rollback always requires secret rotation."
+        }
+      ],
+      "correct": ["a"],
+      "explanation": "For slot-based rollout, the natural rollback target is often the previous slot path, followed by verification."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A Container Apps candidate revision at 20 percent traffic causes failures. The old revision is still healthy. Which rollback shape fits?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Route traffic back to the old revision and verify the failure rate returns to baseline."
+        },
+        {
+          "id": "b",
+          "text": "Change the app name to force a new endpoint."
+        },
+        {
+          "id": "c",
+          "text": "Raise traffic to 50 percent to confirm the pattern."
+        },
+        {
+          "id": "d",
+          "text": "Rebuild the same image and hope for different runtime behavior."
+        }
+      ],
+      "correct": ["a"],
+      "explanation": "Revision traffic routing is the controlled rollback handle when the older revision is still a known healthy target."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "Which rollout details should be captured before release so rollback is not discovered during an incident?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Previous slot or revision."
+        },
+        {
+          "id": "b",
+          "text": "Settings that are sticky or app-level."
+        },
+        {
+          "id": "c",
+          "text": "Signals that prove recovery."
+        },
+        {
+          "id": "d",
+          "text": "The color used in the release calendar."
+        }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "Rollback needs a target, config scope, and recovery evidence."
+    }
+  ]
+}

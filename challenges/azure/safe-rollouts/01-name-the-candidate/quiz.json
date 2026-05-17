@@ -1,0 +1,80 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A team deploys a new checkout image to App Service staging. Before swap, what should they treat that version as?",
+      "options": [
+        {
+          "id": "a",
+          "text": "A candidate version that still needs runtime, config, and smoke-test evidence."
+        },
+        {
+          "id": "b",
+          "text": "A production release because Azure accepted the package."
+        },
+        {
+          "id": "c",
+          "text": "A harmless copy that cannot affect dependencies."
+        },
+        {
+          "id": "d",
+          "text": "A rollback target for the current production version."
+        }
+      ],
+      "correct": ["a"],
+      "explanation": "The staging slot gives the candidate a place to run, but it still needs evidence before production exposure."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A Container Apps release note says `new revision created`, but not whether it receives traffic. What is the next question?",
+      "options": [
+        {
+          "id": "a",
+          "text": "What percentage of ingress traffic is assigned to the candidate revision?"
+        },
+        {
+          "id": "b",
+          "text": "Who last opened the Azure portal?"
+        },
+        {
+          "id": "c",
+          "text": "Whether the resource group name contains `prod`."
+        },
+        {
+          "id": "d",
+          "text": "Whether the old revision can be deleted immediately."
+        }
+      ],
+      "correct": ["a"],
+      "explanation": "A revision can exist without being the main production path. Traffic assignment is release-critical evidence."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "Which items help define a candidate version clearly?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Artifact digest or build version."
+        },
+        {
+          "id": "b",
+          "text": "Slot or revision name."
+        },
+        {
+          "id": "c",
+          "text": "Initial traffic percentage."
+        },
+        {
+          "id": "d",
+          "text": "A vague label such as `new stuff`."
+        }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "Candidate evidence should identify version, runtime surface, and exposure. Vague labels do not help during rollback."
+    }
+  ]
+}

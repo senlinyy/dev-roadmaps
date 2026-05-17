@@ -1,0 +1,44 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "Cloud Run must connect to a Cloud SQL private IP. What must exist besides application code?",
+      "options": [
+        { "id": "a", "text": "A VPC egress path from Cloud Run to the network that can reach the private database address." },
+        { "id": "b", "text": "A public URL for the database." },
+        { "id": "c", "text": "A broader custom domain." },
+        { "id": "d", "text": "A load balancer frontend for every database query." }
+      ],
+      "correct": ["a"],
+      "explanation": "Cloud Run needs an outbound VPC path for private IP destinations."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A service sends only RFC 1918 private-address traffic through the VPC path and leaves public API calls on the normal outbound path. Which egress shape does that describe?",
+      "options": [
+        { "id": "a", "text": "Private ranges only." },
+        { "id": "b", "text": "All traffic." },
+        { "id": "c", "text": "Ingress only." },
+        { "id": "d", "text": "DNS-only routing." }
+      ],
+      "correct": ["a"],
+      "explanation": "Private-ranges-only egress focuses the VPC path on private address destinations."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "What should a team list before sending all Cloud Run traffic through a VPC path?",
+      "options": [
+        { "id": "a", "text": "Private databases and internal services." },
+        { "id": "b", "text": "Google API dependencies such as Secret Manager." },
+        { "id": "c", "text": "Public third-party APIs that may now need NAT or egress design." },
+        { "id": "d", "text": "Only the service's marketing name." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "All-traffic egress makes the VPC path responsible for every outbound destination."
+    }
+  ]
+}

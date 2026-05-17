@@ -1,0 +1,44 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "The Orders API runs on Cloud Run and needs to call Secret Manager. What is the safer starting point?",
+      "options": [
+        { "id": "a", "text": "Attach a runtime service account to Cloud Run and grant it the needed IAM role." },
+        { "id": "b", "text": "Bake a service account key into the container image." },
+        { "id": "c", "text": "Paste a human refresh token into an environment variable." },
+        { "id": "d", "text": "Use the billing account as a password." }
+      ],
+      "correct": ["a"],
+      "explanation": "GCP runtimes can use attached service accounts without storing a long-lived key in the app."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A GitHub Actions workflow needs to deploy to GCP. The team wants to avoid storing a service account key in GitHub secrets. What should they evaluate?",
+      "options": [
+        { "id": "a", "text": "Workload Identity Federation with a deploy service account and narrow IAM." },
+        { "id": "b", "text": "A permanent Owner key copied into every repository." },
+        { "id": "c", "text": "A database password reused as a GCP credential." },
+        { "id": "d", "text": "Removing IAM policies from the project." }
+      ],
+      "correct": ["a"],
+      "explanation": "Workload Identity Federation is designed to let external workloads authenticate without maintaining service account keys."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "Why are service account keys a risky fallback?",
+      "options": [
+        { "id": "a", "text": "They are long-lived credentials if not controlled by policy." },
+        { "id": "b", "text": "They can be copied outside GCP." },
+        { "id": "c", "text": "They must be stored, rotated, and monitored carefully." },
+        { "id": "d", "text": "They automatically have no permissions, so leaks are harmless." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "A leaked key can authenticate as the service account and use its permissions. Prefer attached identities, impersonation, or federation when possible."
+    }
+  ]
+}

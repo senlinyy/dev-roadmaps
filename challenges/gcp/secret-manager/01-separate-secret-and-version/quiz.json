@@ -1,0 +1,44 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "`orders-db-url` exists in Secret Manager. Version 3 contains the current database connection string. Which part is usually the dangerous payload?",
+      "options": [
+        { "id": "a", "text": "The secret version payload." },
+        { "id": "b", "text": "The public fact that a secret named `orders-db-url` exists." },
+        { "id": "c", "text": "The module title." },
+        { "id": "d", "text": "The billing account name only." }
+      ],
+      "correct": ["a"],
+      "explanation": "The secret name is the stable container. The version stores the sensitive value."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "The team wants to rotate the database URL without changing every reference in app code. Which Secret Manager feature helps?",
+      "options": [
+        { "id": "a", "text": "Add a new secret version under the same secret name." },
+        { "id": "b", "text": "Paste the new URL into a ticket." },
+        { "id": "c", "text": "Rename the production project for every rotation." },
+        { "id": "d", "text": "Grant Owner to the runtime service account." }
+      ],
+      "correct": ["a"],
+      "explanation": "Versions let the secret name remain stable while the stored value changes."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "Which statements about secrets and versions are correct?",
+      "options": [
+        { "id": "a", "text": "A secret is the named container." },
+        { "id": "b", "text": "A secret version stores a value." },
+        { "id": "c", "text": "Old versions can be disabled or destroyed as part of rotation." },
+        { "id": "d", "text": "Every engineer should read the payload to prove the secret exists." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "Secret review should use metadata and access evidence, not broad payload exposure."
+    }
+  ]
+}

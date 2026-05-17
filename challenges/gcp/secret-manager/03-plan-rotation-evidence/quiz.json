@@ -1,0 +1,44 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "The team adds version 4 of `orders-db-url` and immediately disables the old database credential. Some old Cloud Run revisions still use the previous value. What went wrong?",
+      "options": [
+        { "id": "a", "text": "Rotation was treated as only a secret update instead of a release plan with rollout and verification." },
+        { "id": "b", "text": "Secret Manager cannot store more than one version." },
+        { "id": "c", "text": "Cloud Run revisions never use configuration." },
+        { "id": "d", "text": "KMS automatically changes app traffic splits." }
+      ],
+      "correct": ["a"],
+      "explanation": "Rotation must account for the dependency, secret version, app rollout, verification, and safe old-credential cleanup."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A reviewer asks for proof that a secret was rotated. Which evidence is safe to share?",
+      "options": [
+        { "id": "a", "text": "Version metadata, IAM review, deployment evidence, audit logs, and successful app checks without showing the payload." },
+        { "id": "b", "text": "The plaintext old and new values in a ticket." },
+        { "id": "c", "text": "A screenshot of someone's local `.env` file." },
+        { "id": "d", "text": "The production database password in chat." }
+      ],
+      "correct": ["a"],
+      "explanation": "Secret evidence should prove state and behavior without exposing the sensitive value."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "Which statements about encryption and KMS match the article?",
+      "options": [
+        { "id": "a", "text": "Secret Manager encrypts secret data in transit and at rest." },
+        { "id": "b", "text": "IAM still controls who can read the payload." },
+        { "id": "c", "text": "CMEK with Cloud KMS is an extra control when requirements justify it." },
+        { "id": "d", "text": "Encryption means every principal should be able to read every secret." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "Encryption, IAM, audit, and rotation solve different parts of the secret problem. Encryption does not justify broad access."
+    }
+  ]
+}

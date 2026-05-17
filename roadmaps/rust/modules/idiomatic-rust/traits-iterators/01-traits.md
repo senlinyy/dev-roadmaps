@@ -11,12 +11,13 @@ id: article-rust-idiomatic-rust-traits
 
 1. [The Problem](#the-problem)
 2. [Shared Behavior](#shared-behavior)
-3. [Implementing Traits](#implementing-traits)
-4. [Trait Parameters](#trait-parameters)
-5. [Default Methods](#default-methods)
-6. [Derived Traits](#derived-traits)
-7. [Putting It All Together](#putting-it-all-together)
-8. [What's Next](#whats-next)
+3. [Trait vs Interface](#trait-vs-interface)
+4. [Implementing Traits](#implementing-traits)
+5. [Trait Parameters](#trait-parameters)
+6. [Default Methods](#default-methods)
+7. [Derived Traits](#derived-traits)
+8. [Putting It All Together](#putting-it-all-together)
+9. [What's Next](#whats-next)
 
 ## The Problem
 
@@ -63,6 +64,14 @@ struct SearchHit {
 ```
 
 The app can keep the data model honest while still giving the UI one behavior to call.
+
+## Trait vs Interface
+
+If you know TypeScript interfaces or Python protocols, start there: a trait says which methods a value must offer. The Rust difference is that the implementation can live in a separate `impl Trait for Type` block.
+
+That separate implementation matters. The struct definition owns the data shape. The trait implementation owns one behavior promise. A type can implement many traits without inheriting from a parent class.
+
+The analogy also has limits. TypeScript interfaces often describe field shape. Rust traits describe behavior. A value does not implement `Summary` because it happens to have a `summary` field or a matching object shape. It implements `Summary` because there is an explicit implementation the compiler can check.
 
 :::expand[Traits name behavior, not ancestry]{kind="design"}
 Traits are often compared to interfaces, and that comparison is useful at first. Both let code depend on behavior instead of a concrete type.
@@ -151,7 +160,7 @@ print_summary(&hit);
 
 If a caller passes a type that does not implement `Summary`, the code does not compile. Rust catches the missing behavior at compile time instead of letting the function fail later.
 
-:::expand[The orphan rule protects shared meaning]{kind="pitfall"}
+:::expand[Why Rust Limits External Trait Implementations]{kind="pitfall"}
 Rust has a rule that can surprise beginners: you can implement a trait for a type only when the trait or the type belongs to your crate.
 
 This is allowed:

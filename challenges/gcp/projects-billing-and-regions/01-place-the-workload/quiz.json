@@ -1,0 +1,44 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A quick Cloud Run test for `devpolaris-orders-api` now handles production-like traffic in a personal learning project. What is the safest first correction?",
+      "options": [
+        { "id": "a", "text": "Create or select an owned production project with a clear folder, billing account, API set, and labels." },
+        { "id": "b", "text": "Keep production in the personal project because the service is already running." },
+        { "id": "c", "text": "Move only the display name, because display names move resources." },
+        { "id": "d", "text": "Disable all inherited policy so the deployment is easier." }
+      ],
+      "correct": ["a"],
+      "explanation": "Production needs an intentional project boundary. The project should be reviewable before the quick test becomes accidental infrastructure."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "The team wants separate dev, staging, and production blast-radius, quotas, cost review, and access control. Which GCP boundary is usually the first conversation?",
+      "options": [
+        { "id": "a", "text": "Separate projects for the environments, with labels and folder placement reviewed." },
+        { "id": "b", "text": "One bucket prefix per environment, because prefixes replace project boundaries." },
+        { "id": "c", "text": "One service account for every human and runtime." },
+        { "id": "d", "text": "One region per developer laptop." }
+      ],
+      "correct": ["a"],
+      "explanation": "Projects are the everyday boundary for resources, IAM, quotas, logs, APIs, and billing linkage. Separate projects are often the first environment-separation discussion."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "Which placement facts belong in the production project record?",
+      "options": [
+        { "id": "a", "text": "Project ID and display name." },
+        { "id": "b", "text": "Folder or organization context where inherited policy may come from." },
+        { "id": "c", "text": "Primary region and main service families." },
+        { "id": "d", "text": "Only the name of the last engineer who deployed." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "Project identity, hierarchy context, location, and service intent make the workload findable and reviewable. A last deployer is not the workload home."
+    }
+  ]
+}

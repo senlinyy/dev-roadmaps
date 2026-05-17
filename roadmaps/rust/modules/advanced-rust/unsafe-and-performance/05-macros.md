@@ -10,13 +10,14 @@ id: article-rust-advanced-rust-macros
 ## Table of Contents
 
 1. [The Problem](#the-problem)
-2. [Why Macros Exist](#why-macros-exist)
-3. [macro_rules](#macro_rules)
-4. [Derive Macros](#derive-macros)
-5. [Attribute And Function Macros](#attribute-and-function-macros)
-6. [When To Avoid Macros](#when-to-avoid-macros)
-7. [Putting It All Together](#putting-it-all-together)
-8. [What's Next](#whats-next)
+2. [Compile Time vs Runtime](#compile-time-vs-runtime)
+3. [Why Macros Exist](#why-macros-exist)
+4. [macro_rules](#macro_rules)
+5. [Derive Macros](#derive-macros)
+6. [Attribute And Function Macros](#attribute-and-function-macros)
+7. [When To Avoid Macros](#when-to-avoid-macros)
+8. [Putting It All Together](#putting-it-all-together)
+9. [What's Next](#whats-next)
 
 ## The Problem
 
@@ -29,6 +30,14 @@ Functions remove ordinary repetition. But sometimes the repeated thing is not ju
 - A public API that needs an attribute to generate glue code.
 
 Macros are Rust's code-generation tool for those cases. They write Rust code before the rest of the compiler checks it.
+
+## Compile Time vs Runtime
+
+Macros are not runtime decorators. They transform Rust syntax before normal type checking finishes.
+
+A function receives values while the program runs. A macro receives Rust tokens while the program is being compiled. That is why a macro can generate a test function, derive trait implementations, or wrap an async `main` function in runtime setup code.
+
+If you know Python decorators or JavaScript decorators, be careful with the analogy. Rust attributes can look similar, but many Rust macros are compile-time code generation, not runtime wrapping.
 
 ## Why Macros Exist
 
@@ -47,6 +56,26 @@ vec![1, 2, 3]
 The exclamation mark marks function-like macros such as `println!` and `vec!`. The `derive` attribute invokes a procedural macro that generates trait implementations.
 
 The tradeoff is readability. Macro definitions are harder to read than functions. Reach for a function first. Reach for a macro when the repeated shape is code structure, not ordinary behavior.
+
+:::expand[Macros are not string templates]{kind="design"}
+It is tempting to imagine macros as fancy text replacement. Rust macros are more structured than that.
+
+`macro_rules!` matches Rust token patterns:
+
+```rust
+macro_rules! say_note {
+    ($title:expr) => {
+        println!("note: {}", $title);
+    };
+}
+```
+
+`$title:expr` means "match a Rust expression." The macro expands into Rust code, and then the compiler checks the result as Rust.
+
+That differs from a raw string template that blindly pastes text. Macro fragments such as `ident`, `expr`, `ty`, and `path` give the macro a syntax-aware shape.
+
+The practical result is still the same warning: macros can make code harder to follow. Use them when you need syntax-level generation, not when a function would be clearer.
+:::
 
 :::expand[Macros are for syntax-shaped repetition]{kind="design"}
 A function can remove this repetition:

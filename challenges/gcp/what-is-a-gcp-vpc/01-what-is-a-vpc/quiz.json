@@ -1,0 +1,44 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "The Orders API team says a private database is safe because it is \"in the project.\" Which concept better describes the private network map that traffic uses?",
+      "options": [
+        { "id": "a", "text": "The VPC network." },
+        { "id": "b", "text": "The billing account." },
+        { "id": "c", "text": "The release branch." },
+        { "id": "d", "text": "The service account display name." }
+      ],
+      "correct": ["a"],
+      "explanation": "A project owns resources, but the VPC network is the private network map for addresses, routes, and firewall rules."
+    },
+    {
+      "id": "q2",
+      "type": "multiple",
+      "scenario": "Which questions belong in a first GCP VPC review?",
+      "options": [
+        { "id": "a", "text": "Which VPC network owns the private path?" },
+        { "id": "b", "text": "Which regional subnet provides the address range?" },
+        { "id": "c", "text": "Which route handles the destination?" },
+        { "id": "d", "text": "Which JavaScript framework renders the frontend?" }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "The first network review names the network, subnet, and route before it moves to application details."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "A developer opens a firewall rule to a private address, but traffic still cannot reach the destination. What might still be missing?",
+      "options": [
+        { "id": "a", "text": "A route or private access path to the destination range." },
+        { "id": "b", "text": "A different article title." },
+        { "id": "c", "text": "A broader billing role." },
+        { "id": "d", "text": "A public DNS record for every private IP." }
+      ],
+      "correct": ["a"],
+      "explanation": "Firewall rules allow or deny traffic that has a path. They do not create the path."
+    }
+  ]
+}

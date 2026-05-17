@@ -1,0 +1,57 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A proposal reduces production app replicas from 3 to 1. It saves always-on compute cost, but the review has no traffic, deploy, restart, or failure evidence.",
+      "options": [
+        { "id": "a", "text": "Pause the change until the team knows what availability promise the extra replicas support." },
+        { "id": "b", "text": "Approve it because every replica above 1 is always waste." },
+        { "id": "c", "text": "Approve it if the monthly bill is high enough, because cost evidence replaces health evidence." },
+        { "id": "d", "text": "Delete the database backups first, because compute replicas and backups protect the same failure." }
+      ],
+      "correct": ["a"],
+      "explanation": "Reducing replicas can be safe, but the team needs evidence about traffic, deployments, health checks, and failure tolerance. Cost savings alone do not explain the resilience tradeoff."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "The nightly export runs once a day, can be rerun tomorrow, and is not on the checkout path. A teammate wants it to have the same warm standby design as checkout.",
+      "options": [
+        { "id": "a", "text": "Ask whether the workflow promise justifies the steady cost, because not every workflow needs checkout-level readiness." },
+        { "id": "b", "text": "Require active-active design for every workflow so the architecture is symmetrical." },
+        { "id": "c", "text": "Remove all recovery protection because batch jobs never matter." },
+        { "id": "d", "text": "Move the export to a more expensive database tier because that always reduces RPO." }
+      ],
+      "correct": ["a"],
+      "explanation": "Service promises should belong to workflows. A rerunnable daily export may accept longer delay than checkout, which lets the team spend differently without being careless."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "The team wants to disable blob versioning for receipt containers to reduce storage growth. Receipts are customer-visible, and the only current recovery path for overwrites is version restore.",
+      "options": [
+        { "id": "a", "text": "Revise the plan unless another tested recovery path still protects receipt overwrites." },
+        { "id": "b", "text": "Approve it because current blobs remain visible, so older versions never matter." },
+        { "id": "c", "text": "Approve it if budgets are configured, because budget alerts restore deleted versions." },
+        { "id": "d", "text": "Replace versioning with more app instances, because compute replicas protect object history." }
+      ],
+      "correct": ["a"],
+      "explanation": "Versioning may be the cost the team pays for recovering overwrites. If it is removed, the service promise needs a replacement or an explicit decision to accept more risk."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "Before approving a cost reduction, which review questions match the article?",
+      "options": [
+        { "id": "a", "text": "Which cost shape changes, and which workflow owns that cost?" },
+        { "id": "b", "text": "Which failure shape gets weaker if the resource or retention is reduced?" },
+        { "id": "c", "text": "What signal proves the change is safe, and what is the rollback or recovery path?" },
+        { "id": "d", "text": "Can the team skip owner review because Azure defaults are usually enough?" }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "The tradeoff table exists to keep cost, workflow, protection, evidence, and recovery in the same conversation. Defaults can help, but they do not replace a reviewed service promise."
+    }
+  ]
+}

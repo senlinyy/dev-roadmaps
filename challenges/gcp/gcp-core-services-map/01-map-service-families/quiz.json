@@ -1,0 +1,44 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "Customers need a public HTTPS path to reach `devpolaris-orders-api`. Which service family should the team inspect first?",
+      "options": [
+        { "id": "a", "text": "Traffic entry: DNS, TLS, routing, load balancing, and backend health." },
+        { "id": "b", "text": "Artifact storage, because container repositories serve customer HTTP requests." },
+        { "id": "c", "text": "Billing only, because invoices route traffic." },
+        { "id": "d", "text": "Labels only, because labels terminate TLS." }
+      ],
+      "correct": ["a"],
+      "explanation": "Public entry is a traffic job. DNS, TLS, routing, and backend health need to be considered before the exact service mix is chosen."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "The app needs private configuration and a database password should not live in the container image. Which family is most relevant first?",
+      "options": [
+        { "id": "a", "text": "Identity and secrets: IAM, service accounts, and Secret Manager." },
+        { "id": "b", "text": "Global DNS only." },
+        { "id": "c", "text": "Cloud Storage object prefixes only." },
+        { "id": "d", "text": "Regions and zones only." }
+      ],
+      "correct": ["a"],
+      "explanation": "Private config is an access and secrets problem. Secret Manager stores secrets, and IAM/service accounts decide who can read them."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "Which mappings follow the job-first approach?",
+      "options": [
+        { "id": "a", "text": "Run containerized backend -> Cloud Run." },
+        { "id": "b", "text": "Store relational orders -> Cloud SQL." },
+        { "id": "c", "text": "Keep request evidence -> Cloud Logging and Cloud Monitoring." },
+        { "id": "d", "text": "Pick service names first, then invent app needs later." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "The foundation map starts with app jobs. Service names become useful when they answer a real need."
+    }
+  ]
+}

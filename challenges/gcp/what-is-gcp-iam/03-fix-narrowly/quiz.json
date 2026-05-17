@@ -1,0 +1,44 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "The app cannot read a secret during release. A teammate wants to grant Owner for five minutes. What is the best response?",
+      "options": [
+        { "id": "a", "text": "Use the error to identify the missing permission and grant the smallest role at the smallest useful scope, then verify." },
+        { "id": "b", "text": "Grant Owner because temporary broad access leaves no risk." },
+        { "id": "c", "text": "Disable audit logs so the release can move faster." },
+        { "id": "d", "text": "Move the secret into Git so Secret Manager no longer blocks the app." }
+      ],
+      "correct": ["a"],
+      "explanation": "A narrow fix follows the access sentence. Temporary broad access can still create real exposure and often becomes permanent."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "IAM policy looks correct, but access still fails. The binding has a condition. What should the team do?",
+      "options": [
+        { "id": "a", "text": "Check whether the condition matches the request before removing or widening access." },
+        { "id": "b", "text": "Delete every condition because conditions are always mistakes." },
+        { "id": "c", "text": "Change the billing account because conditions only apply to invoices." },
+        { "id": "d", "text": "Assume the principal is wrong without checking evidence." }
+      ],
+      "correct": ["a"],
+      "explanation": "Conditions can narrow when a binding applies. They are part of the access relationship and should be understood before changing them."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "Which evidence helps verify a narrow IAM fix?",
+      "options": [
+        { "id": "a", "text": "Cloud Run runtime service account." },
+        { "id": "b", "text": "IAM binding role and scope." },
+        { "id": "c", "text": "Error or audit evidence showing the resource and permission." },
+        { "id": "d", "text": "A screenshot of an unrelated project where access works." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "Verification should prove the intended principal can perform the intended action on the intended resource. Unrelated project evidence does not prove the production fix."
+    }
+  ]
+}

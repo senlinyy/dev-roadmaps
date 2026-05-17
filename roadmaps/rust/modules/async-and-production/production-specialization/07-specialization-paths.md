@@ -10,14 +10,15 @@ id: article-rust-async-and-production-specialization-paths
 ## Table of Contents
 
 1. [The Problem](#the-problem)
-2. [Backend Rust](#backend-rust)
-3. [CLI And Tooling](#cli-and-tooling)
-4. [Embedded Rust](#embedded-rust)
-5. [Systems Rust](#systems-rust)
-6. [WebAssembly Rust](#webassembly-rust)
-7. [Data And Performance](#data-and-performance)
-8. [Choosing A Path](#choosing-a-path)
-9. [Putting It All Together](#putting-it-all-together)
+2. [You Do Not Need Every Path](#you-do-not-need-every-path)
+3. [Backend Rust](#backend-rust)
+4. [CLI And Tooling](#cli-and-tooling)
+5. [Embedded Rust](#embedded-rust)
+6. [Systems Rust](#systems-rust)
+7. [WebAssembly Rust](#webassembly-rust)
+8. [Data And Performance](#data-and-performance)
+9. [Choosing A Path](#choosing-a-path)
+10. [Putting It All Together](#putting-it-all-together)
 
 ## The Problem
 
@@ -32,6 +33,22 @@ The same core ideas appear everywhere:
 - Async and threads handle different kinds of concurrency.
 
 Specialization is about where you apply those ideas next. A backend engineer, CLI tool author, embedded developer, systems programmer, WebAssembly developer, and performance engineer will practice different crates, constraints, and project shapes.
+
+## You Do Not Need Every Path
+
+This article is a menu, not a graduation checklist. Rust is broad because it can work in many environments, but a productive Rust developer usually grows through one project direction at a time.
+
+A few terms in the path descriptions are advanced, so keep these plain definitions nearby:
+
+| Term | Plain meaning |
+| --- | --- |
+| `no_std` | Rust without the full standard library, common on tiny or OS-less targets |
+| HAL | Hardware abstraction layer, a crate that gives safer names to device features |
+| FFI | Foreign function interface, code crossing between Rust and another language such as C |
+| Atomics | CPU-supported operations for shared values across threads without a normal lock |
+| Zero-copy | Designing code so data is viewed or borrowed instead of copied into a new buffer |
+
+You do not need to master those before choosing a first Rust project. Treat them as signs of which direction you are entering.
 
 ## Backend Rust
 
@@ -81,6 +98,24 @@ You will likely study:
 A good proof project is a small device program that reads a sensor, controls an LED, or communicates over a simple bus.
 
 The main design pressure is resource control. There may be no allocator, no operating system, and very little memory. Rust's ownership model becomes a way to express hardware access safely.
+
+:::expand[What no_std removes]{kind="design"}
+`no_std` means a Rust crate does not link the full standard library. It can still use Rust's core language features, but many conveniences from `std` are unavailable.
+
+What disappears depends on the target, but common losses include:
+
+| Standard feature | Why it may be missing |
+| --- | --- |
+| File I/O | No operating system filesystem |
+| Threads | No OS scheduler |
+| Networking | No OS socket stack |
+| Heap allocation | No allocator configured |
+| Environment variables | No process environment |
+
+That does not make embedded Rust "less Rust." It changes the environment. Ownership, borrowing, enums, traits, and `Result` still matter. The difference is that your program may talk directly to hardware registers or a tiny runtime instead of a desktop operating system.
+
+This is why embedded Rust has its own learning path. The language foundation transfers, but the platform assumptions change.
+:::
 
 ## Systems Rust
 

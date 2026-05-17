@@ -1,0 +1,57 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "The production subscription cost is 32 percent higher than the previous 30 days. The first view is only a monthly total. What is the best next slice?",
+      "options": [
+        { "id": "a", "text": "Group by service name, then filter to the DevPolaris resource groups and inspect the daily trend." },
+        { "id": "b", "text": "Resize the largest-looking resource before checking which service family changed." },
+        { "id": "c", "text": "Delete all staging resources because staging is always the cause of cost increases." },
+        { "id": "d", "text": "Wait until the end of the next month because Cost Analysis cannot answer service-level questions." }
+      ],
+      "correct": ["a"],
+      "explanation": "The article starts with visibility. Grouping and filtering turn a total into service, resource group, resource, tag, and time evidence before any tuning decision."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "Cost Analysis shows this change:\n\n```text\nService: Azure Monitor\nResource: log-devpolaris-prod\nDaily pattern: flat until release 2026-05-16, then steady increase\nTraffic: normal\n```\n\nWhat should the team investigate first?",
+      "options": [
+        { "id": "a", "text": "Log ingestion, retention, and application logging behavior near the release." },
+        { "id": "b", "text": "SQL backup retention, because Azure Monitor cost is always database backup cost." },
+        { "id": "c", "text": "Only the subscription display name, because service and time evidence are not useful." },
+        { "id": "d", "text": "A complete migration to another region before reading log volume." }
+      ],
+      "correct": ["a"],
+      "explanation": "The service and time trend point at observability volume. The next useful question is what logging or retention behavior changed near the release."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "Which Cost Analysis dimensions help turn spend into owned evidence?",
+      "options": [
+        { "id": "a", "text": "Service name, because it separates compute, SQL, storage, monitoring, networking, and backup cost." },
+        { "id": "b", "text": "Resource group, because it can show the service or environment boundary where spend changed." },
+        { "id": "c", "text": "Tag values such as `service`, `env`, and `owner`, when they are present and reliable." },
+        { "id": "d", "text": "The prettiest resource name, because naming style proves the resource is safe to resize." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "Service, resource group, and tag dimensions help identify what changed and who should review it. A friendly name can help humans, but it is not cost or safety evidence by itself."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "The team finds that deleted test databases still have short-term backup cost aging out. What is the safest conclusion?",
+      "options": [
+        { "id": "a", "text": "Cost can remain after deletion until retention behavior finishes, so repeated create/delete cycles still need review." },
+        { "id": "b", "text": "Azure SQL backups prove the databases were never deleted." },
+        { "id": "c", "text": "All Azure SQL backup cost is a billing error and should be ignored." },
+        { "id": "d", "text": "The only fix is to remove every production backup immediately." }
+      ],
+      "correct": ["a"],
+      "explanation": "Cost visibility should explain behavior, not trigger blind deletion. Retention can leave real cost after database churn, and production backup protection needs a separate recovery decision."
+    }
+  ]
+}

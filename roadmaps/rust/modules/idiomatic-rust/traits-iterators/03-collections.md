@@ -10,13 +10,14 @@ id: article-rust-idiomatic-rust-collections
 ## Table of Contents
 
 1. [The Problem](#the-problem)
-2. [Vec](#vec)
-3. [HashMap](#hashmap)
-4. [HashSet](#hashset)
-5. [String](#string)
-6. [Borrowed Views](#borrowed-views)
-7. [Putting It All Together](#putting-it-all-together)
-8. [What's Next](#whats-next)
+2. [Rust Collections From JS, TS, And Python](#rust-collections-from-js-ts-and-python)
+3. [Vec](#vec)
+4. [HashMap](#hashmap)
+5. [HashSet](#hashset)
+6. [String](#string)
+7. [Borrowed Views](#borrowed-views)
+8. [Putting It All Together](#putting-it-all-together)
+9. [What's Next](#whats-next)
 
 ## The Problem
 
@@ -30,6 +31,19 @@ Different features ask different questions:
 - File loading produces owned text that can grow.
 
 One collection cannot be the best answer to every question. Rust's standard library gives you several common containers, and the right choice depends on the access pattern.
+
+## Rust Collections From JS, TS, And Python
+
+The familiar names are a decent starting point, but Rust collections add ownership and stricter element types.
+
+| Familiar idea | Rust starting point | Important difference |
+| --- | --- | --- |
+| JavaScript `Array` or Python `list` | `Vec<T>` | One element type per vector |
+| JavaScript `Map` or Python `dict` | `HashMap<K, V>` | Great for lookup; do not rely on display order |
+| JavaScript `Set` or Python `set` | `HashSet<T>` | Great for uniqueness; do not rely on display order |
+| JavaScript/Python string | `String` and `&str` | Owned text and borrowed text are different types |
+
+When you put a value into a Rust collection, ownership matters. `notes.push(note)` moves the note into the vector. `notes.get(0)` borrows a note from the vector. The collection is not only a container; it is also an owner.
 
 ## Vec
 
@@ -50,7 +64,7 @@ notes.push(Note {
 });
 ```
 
-A vector stores a variable number of values of the same type. It keeps them in order, supports indexing, and grows as needed.
+A vector stores a variable number of values of the same type. Unlike a JavaScript array, a `Vec<Note>` cannot also hold a random string or number. It keeps values in order, supports indexing, and grows as needed.
 
 ```rust
 if let Some(first) = notes.first() {
@@ -117,6 +131,8 @@ if let Some(note) = notes_by_id.get(&1) {
 
 `get` returns `Option<&V>` because the key might not exist. That connects directly to the previous module: missing lookup is ordinary absence, so it is an `Option`.
 
+Do not treat `HashMap` iteration order as UI order. A map is optimized for keyed lookup, not for preserving the order you inserted items.
+
 The `entry` API is useful when inserting depends on whether the key already exists:
 
 ```rust
@@ -157,6 +173,42 @@ if tags.contains("rust") {
 ```
 
 Sets are not for preserving display order. If the UI needs tags in a stable order, collect and sort them before display, or choose a different structure. The set's job is uniqueness and fast membership checks.
+
+:::expand[Why HashMap and HashSet do not promise display order]{kind="pitfall"}
+Hash maps and hash sets are built for fast lookup and membership checks. They organize data using hashes of the keys, not by the order a human would naturally read.
+
+That means this kind of code is a trap:
+
+```rust
+for tag in tags {
+    println!("{tag}");
+}
+```
+
+It may print a useful-looking order during one run and a different order later. The code did not ask for sorted or insertion order; it asked a set to reveal its internal traversal order.
+
+For display, create the order explicitly:
+
+```rust
+let mut tags: Vec<&String> = tags.iter().collect();
+tags.sort();
+
+for tag in tags {
+    println!("{tag}");
+}
+```
+
+Use this rule of thumb:
+
+| Need | Better shape |
+| --- | --- |
+| Fast lookup by key | `HashMap<K, V>` |
+| Fast uniqueness check | `HashSet<T>` |
+| Stable display order | `Vec<T>` or collect and sort |
+| Both lookup and display order | Keep a map for lookup and a separate ordered list when needed |
+
+Rust's standard hash collections are excellent when you ask their main question. They are a poor source of presentation order.
+:::
 
 ## String
 

@@ -1,0 +1,44 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "Users call `orders.devpolaris.com` through a load balancer. Which certificate matters to the browser?",
+      "options": [
+        { "id": "a", "text": "The certificate served by the public entry point for `orders.devpolaris.com`." },
+        { "id": "b", "text": "Any certificate in the source repository." },
+        { "id": "c", "text": "A database TLS setting only." },
+        { "id": "d", "text": "The service account key ID." }
+      ],
+      "correct": ["a"],
+      "explanation": "The client validates the certificate presented at the public entry it reaches."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "The backend container listens on an internal HTTP port behind an HTTPS load balancer. What is the healthy interpretation?",
+      "options": [
+        { "id": "a", "text": "TLS can terminate at the public entry while the backend uses an internal protocol path." },
+        { "id": "b", "text": "HTTPS is impossible unless the container itself owns the public certificate." },
+        { "id": "c", "text": "DNS no longer matters." },
+        { "id": "d", "text": "IAM automatically renews certificates." }
+      ],
+      "correct": ["a"],
+      "explanation": "Public HTTPS is often handled at the load balancer or service entry, not necessarily inside the container."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "Which checks belong in HTTPS entry review?",
+      "options": [
+        { "id": "a", "text": "The certificate covers the public name." },
+        { "id": "b", "text": "The public entry point serves that certificate." },
+        { "id": "c", "text": "The certificate is not expired and can renew." },
+        { "id": "d", "text": "The subnet name contains the word secure." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "HTTPS review follows the name, certificate, serving entry, and renewal state."
+    }
+  ]
+}

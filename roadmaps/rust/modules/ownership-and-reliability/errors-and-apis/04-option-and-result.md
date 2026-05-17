@@ -10,14 +10,15 @@ id: article-rust-ownership-and-reliability-option-and-result
 ## Table of Contents
 
 1. [The Problem](#the-problem)
-2. [Enums Carry States](#enums-carry-states)
-3. [Option](#option)
-4. [Result](#result)
-5. [Handling With Match](#handling-with-match)
-6. [if let](#if-let)
-7. [The Unwrap Trap](#the-unwrap-trap)
-8. [Putting It All Together](#putting-it-all-together)
-9. [What's Next](#whats-next)
+2. [Nulls, Exceptions, And Return Values](#nulls-exceptions-and-return-values)
+3. [Enums Carry States](#enums-carry-states)
+4. [Option](#option)
+5. [Result](#result)
+6. [Handling With Match](#handling-with-match)
+7. [if let](#if-let)
+8. [The Unwrap Trap](#the-unwrap-trap)
+9. [Putting It All Together](#putting-it-all-together)
+10. [What's Next](#whats-next)
 
 ## The Problem
 
@@ -33,9 +34,25 @@ Those states should not collapse into the same answer. A missing default noteboo
 
 Rust pushes those distinctions into return types. A function that might not find a value returns `Option<T>`. A function that might fail and should explain why returns `Result<T, E>`. The caller cannot use the successful value until it decides what to do with the other path.
 
+## Nulls, Exceptions, And Return Values
+
+If you come from JavaScript, TypeScript, or Python, you may expect missing values and failures to travel through `null`, `undefined`, `None`, or exceptions. Rust's default style is different: ordinary absence and recoverable failure are values returned from the function.
+
+That does not mean Rust never panics. It means Rust prefers return types for states the caller can reasonably handle.
+
+| Familiar shape | Rust usually uses | Why |
+| --- | --- | --- |
+| `null`, `undefined`, or Python `None` for "not found" | `Option<T>` | The caller must handle value or no value |
+| `throw` or `raise` for recoverable work | `Result<T, E>` | The caller sees success and failure in the signature |
+| Crash for impossible internal state | `panic!` | The program cannot continue normally |
+
+This is why `Option` and `Result` appear so early in Rust. They are not advanced error-handling libraries. They are everyday data shapes for uncertainty.
+
 ## Enums Carry States
 
 `Option` and `Result` are enums. An enum says a value is one of several named variants, and each variant can carry data.
+
+A variant is one named case. An `Option<String>` value is either the `Some` variant carrying a `String`, or the `None` variant carrying no data. It is one case at a time, not a bag of flags.
 
 The shape behind `Option` is small:
 
@@ -47,6 +64,8 @@ enum Option<T> {
 ```
 
 The `<T>` means `Option` can wrap many different types. `Option<String>` is either `Some(String)` or `None`. `Option<&str>` is either `Some(&str)` or `None`.
+
+`T` is a type placeholder, like a generic type parameter in TypeScript. It lets the same enum shape work for many contained types.
 
 `Result` has two type parameters because success and failure usually carry different data:
 
@@ -60,6 +79,14 @@ enum Result<T, E> {
 `Result<String, std::io::Error>` means the operation either produced a `String` or failed with an I/O error.
 
 The useful mental model is simple:
+
+```mermaid
+flowchart LR
+    Option["Option<T>"] --> Some["Some(value)"]
+    Option --> None["None"]
+    Result["Result<T, E>"] --> Ok["Ok(value)"]
+    Result --> Err["Err(error)"]
+```
 
 | Situation | Rust shape | Possible states |
 | --- | --- | --- |
@@ -262,6 +289,8 @@ Use `if let` when the ignored case is genuinely boring. If both cases matter, `m
 ## The Unwrap Trap
 
 `unwrap()` says, "give me the value, and panic if this is the other variant."
+
+A panic is a runtime stop for a path that cannot continue normally. Depending on settings, Rust may unwind the stack and run cleanup or abort the process. Either way, it is not the same thing as returning a normal error value to the caller.
 
 That can be fine in a throwaway experiment. It can be fine in a test where panic is exactly how the test should fail. It can be fine when you just proved an invariant in the previous line and there is no realistic recovery path.
 

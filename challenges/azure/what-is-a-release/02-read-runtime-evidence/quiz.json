@@ -1,0 +1,80 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A release note says `orders-api v31 deployed`, but it does not name the slot or revision serving users. What is missing?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Runtime target evidence that identifies where the artifact is actually running."
+        },
+        {
+          "id": "b",
+          "text": "A longer feature description."
+        },
+        {
+          "id": "c",
+          "text": "A screenshot of the pipeline success page."
+        },
+        {
+          "id": "d",
+          "text": "The developer's local environment variables."
+        }
+      ],
+      "correct": ["a"],
+      "explanation": "A version label is not enough. The team needs the exact slot, revision, resource, and traffic target."
+    },
+    {
+      "id": "q2",
+      "type": "multiple",
+      "scenario": "The team is comparing staging and production behavior after a release. Which runtime facts can explain why the same artifact behaves differently?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Different app settings or secret references."
+        },
+        {
+          "id": "b",
+          "text": "Different managed identities or role assignments."
+        },
+        {
+          "id": "c",
+          "text": "Different traffic split or slot exposure."
+        },
+        {
+          "id": "d",
+          "text": "The same commit SHA in both environments."
+        }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "The same commit can still behave differently when runtime state differs."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "A health check passes in a candidate slot, but checkout fails after swap. What is the best conclusion?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The health check proved one layer, but the release still needs user-path and dependency evidence."
+        },
+        {
+          "id": "b",
+          "text": "The health check result must have been false and should be deleted."
+        },
+        {
+          "id": "c",
+          "text": "The failure cannot be release-related because health passed."
+        },
+        {
+          "id": "d",
+          "text": "The team should roll back without checking dependency or config evidence."
+        }
+      ],
+      "correct": ["a"],
+      "explanation": "Health checks are useful gates, but they do not prove every business path works."
+    }
+  ]
+}

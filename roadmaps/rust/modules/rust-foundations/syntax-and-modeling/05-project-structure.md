@@ -10,14 +10,15 @@ id: article-rust-rust-foundations-project-structure
 ## Table of Contents
 
 1. [The Problem](#the-problem)
-2. [Packages And Crates](#packages-and-crates)
-3. [main.rs And lib.rs](#mainrs-and-librs)
-4. [Modules](#modules)
-5. [Visibility](#visibility)
-6. [Integration Tests](#integration-tests)
-7. [A Small Layout](#a-small-layout)
-8. [Putting It All Together](#putting-it-all-together)
-9. [What's Next](#whats-next)
+2. [The Map: Package, Crate, Module, Path](#the-map-package-crate-module-path)
+3. [Packages And Crates](#packages-and-crates)
+4. [main.rs And lib.rs](#mainrs-and-librs)
+5. [Modules](#modules)
+6. [Visibility](#visibility)
+7. [Integration Tests](#integration-tests)
+8. [A Small Layout](#a-small-layout)
+9. [Putting It All Together](#putting-it-all-together)
+10. [What's Next](#whats-next)
 
 ## The Problem
 
@@ -31,6 +32,30 @@ That creates a different kind of bug. The program is not failing because Rust is
 - Future modules have no obvious place to go.
 
 Rust project structure solves this by separating package, crate, module, and visibility decisions. Those words sound abstract, but the day-to-day habit is practical: keep `main.rs` thin, put reusable behavior in `lib.rs` and modules, and expose only the pieces other code needs.
+
+## The Map: Package, Crate, Module, Path
+
+Rust uses several organization words at once. They are easier to read if you attach each word to the thing it organizes.
+
+| Word | What it organizes | Small example |
+| --- | --- | --- |
+| Package | The project Cargo manages | `rust-notes/` with one `Cargo.toml` |
+| Crate | One compiled library or executable | `src/lib.rs` or `src/main.rs` |
+| Module | A named area inside a crate | `parser`, `model`, `storage` |
+| Path | The route to an item through modules | `rust_notes::parser::count_words` |
+
+The package is the folder Cargo understands. A crate is one thing the Rust compiler builds from that package. A module is how Rust code inside a crate is divided into names. A path is how code names an item once it is in that module tree.
+
+```text
+rust-notes/                 package
+  Cargo.toml
+  src/
+    lib.rs                  library crate root
+    main.rs                 binary crate root
+    parser.rs               parser module
+```
+
+This differs from some JavaScript and Python habits. Rust does not automatically include every file just because it exists. A file becomes part of the crate when a module declaration connects it to the module tree.
 
 ## Packages And Crates
 
@@ -119,7 +144,7 @@ pub fn count_words(text: &str) -> usize {
 }
 ```
 
-The line `use rust_notes::count_words;` may look surprising. The binary crate can use the library crate from the same package by the package name, with hyphens converted to underscores. If the package is named `rust-notes`, the crate path is `rust_notes`.
+The line `use rust_notes::count_words;` may look surprising. The binary crate can use the library crate from the same package by the package name, with hyphens converted to underscores. If the package is named `rust-notes`, the crate path is `rust_notes`. `use` brings a path into scope; it does not load a file the way some languages' imports do.
 
 This split gives you a cleaner testing path. Functions in `lib.rs` are library items. Integration tests can import them like external users would.
 
@@ -158,6 +183,30 @@ pub fn words(text: &str) -> Vec<&str> {
 The module declaration `pub mod parser;` tells Rust to include `src/parser.rs` as the `parser` module. The `pub` makes the module visible to users of the library crate.
 
 Without `pub`, the module is private to the crate. That is often what you want for internal helpers.
+
+:::expand[Why Rust asks you to declare modules]{kind="design"}
+In many languages, a file becomes importable as soon as it exists at a path. Rust makes the crate's module tree explicit instead.
+
+This line in `lib.rs`:
+
+```rust
+pub mod parser;
+```
+
+does two jobs. It declares a module named `parser`, and it tells Rust where to look for that module's source, usually `src/parser.rs` or `src/parser/mod.rs`.
+
+That can feel like extra ceremony, but it gives the crate root a clear table of contents. A reader can open `lib.rs` and see which modules are part of the crate and which names are meant to be public.
+
+The design also separates file layout from public API. You might keep `parser.rs` private:
+
+```rust
+mod parser;
+
+pub use parser::count_words;
+```
+
+Now outside code can call `rust_notes::count_words`, but it does not rely on a public `rust_notes::parser` module. Later you can move parsing code into `src/text/parser.rs` and keep the same public path. The module declaration is not just about finding files; it is about deciding which structure the rest of the world is allowed to depend on.
+:::
 
 ## Visibility
 

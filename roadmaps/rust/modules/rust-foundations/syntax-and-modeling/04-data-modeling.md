@@ -97,7 +97,7 @@ impl Note {
 }
 ```
 
-The `&self` parameter means the method reads the note without taking ownership of it. You do not need the full ownership model yet, but the shape is worth noticing. Many methods borrow `self` because they only need to inspect the value.
+`impl Note` means "methods for the `Note` type live here." The `&self` parameter means the method reads the note without taking ownership of it. If you know `this` in JavaScript or Python's `self`, start there, but add one Rust detail: `&self` is borrowed access, so the method can inspect the note without taking the note away from the caller. You do not need the full ownership model yet, but the shape is worth noticing. Many methods borrow `self` because they only need to inspect the value.
 
 Calling the method looks like this:
 
@@ -118,6 +118,8 @@ Methods keep behavior close to the data shape. That makes small programs easier 
 ## Enums
 
 A struct says, "this value has these fields." An enum says, "this value is one of these variants."
+
+A variant is one named case of the enum. A `NoteStatus` value is `Draft`, `Published`, or `Archived`, but never all three at the same time.
 
 For note status, an enum is clearer than a pile of booleans:
 
@@ -235,7 +237,7 @@ fn describe_status(status: NoteStatus) -> &'static str {
 }
 ```
 
-The useful part is not only branching. The useful part is coverage. A `match` over an enum must handle every variant unless you deliberately use a catch-all pattern.
+The useful part is not only branching. The useful part is coverage. A pattern is the shape a match arm is looking for, such as `NoteStatus::Draft` or `Command::Add { title, body }`. A `match` over an enum must handle every variant unless you deliberately use a catch-all pattern.
 
 That changes maintenance. If you add a new status later:
 
@@ -335,6 +337,23 @@ That creates a useful boundary: outside the parser, invalid command shapes shoul
 Rust does not use null as the normal way to say "maybe no value." It uses `Option<T>`:
 
 ```rust
+fn first_match(notes: &[Note], query: &str) -> Option<&Note> {
+    for note in notes {
+        if note.title.contains(query) {
+            return Some(note);
+        }
+    }
+
+    None
+}
+```
+
+The important idea is `Option<&Note>`: the function may return a borrowed note, or it may return no note. `Some(note)` means a match was found. `None` means the search finished without finding one.
+
+:::expand[What the lifetime annotation would be doing]{kind="design"}
+You may see a more explicit version of this function in Rust examples:
+
+```rust
 fn first_match<'a>(notes: &'a [Note], query: &str) -> Option<&'a Note> {
     for note in notes {
         if note.title.contains(query) {
@@ -346,7 +365,18 @@ fn first_match<'a>(notes: &'a [Note], query: &str) -> Option<&'a Note> {
 }
 ```
 
-The full lifetime syntax appears here only because the function returns a borrowed note from the input slice. Do not worry if that part is not comfortable yet. The important idea is `Option<&Note>`: the function may return a note, or it may return no note.
+The `<'a>` syntax is a lifetime name. It does not mean "keep this value alive for a certain number of seconds." It names a relationship between borrowed values.
+
+Here, the returned `&Note` must come from the input `notes` slice. The returned reference cannot outlive the notes it points into. The lifetime annotation says that relationship out loud: "the borrowed note I return is valid for the same borrow of `notes`."
+
+Rust can infer that relationship in the simpler version:
+
+```rust
+fn first_match(notes: &[Note], query: &str) -> Option<&Note>
+```
+
+That is why the visible article uses the shorter form. The modeling lesson is `Option`: the search may find a note or may not. Lifetimes become the main lesson later, when borrowed data is the thing being modeled.
+:::
 
 Callers have to handle both cases:
 

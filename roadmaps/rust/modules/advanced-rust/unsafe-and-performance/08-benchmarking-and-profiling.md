@@ -11,11 +11,12 @@ id: article-rust-advanced-rust-benchmarking-and-profiling
 
 1. [The Problem](#the-problem)
 2. [Release Builds](#release-builds)
-3. [Benchmarks](#benchmarks)
-4. [Criterion](#criterion)
-5. [Profiling](#profiling)
-6. [Common Bottlenecks](#common-bottlenecks)
-7. [Putting It All Together](#putting-it-all-together)
+3. [Benchmark vs Profile](#benchmark-vs-profile)
+4. [Benchmarks](#benchmarks)
+5. [Criterion](#criterion)
+6. [Profiling](#profiling)
+7. [Common Bottlenecks](#common-bottlenecks)
+8. [Putting It All Together](#putting-it-all-together)
 
 ## The Problem
 
@@ -48,6 +49,19 @@ cargo run --release -- index ./notes
 ```
 
 This still is not a proper benchmark, but it prevents one common mistake: making performance decisions from debug-mode behavior.
+
+## Benchmark vs Profile
+
+A benchmark times a chosen workload. A profiler samples where the running program spends time.
+
+Use both because they answer different questions:
+
+| Tool | Answers |
+| --- | --- |
+| Benchmark | Did this workload get faster or slower? |
+| Profiler | Which functions or operations consume the time? |
+
+A benchmark without a profile can tell you the app is slow but not why. A profile without a benchmark can show a hot path but not whether your change improved the user-facing workload.
 
 ## Benchmarks
 
@@ -154,6 +168,24 @@ The workflow is:
 6. Measure again.
 
 Profiling often reveals surprises. The parser may be fine while sorting dominates. A clone may allocate far more than expected. A mutex may serialize work. A logging call may be louder than the code it describes.
+
+:::expand[What a flamegraph shows]{kind="example"}
+A flamegraph is a visual profile. Each box is a function. Wider boxes represent more sampled time. Stacked boxes show call relationships.
+
+If the widest boxes are under parsing functions, parsing is probably worth investigating. If the widest boxes are under allocation functions, cloning or repeated `String` creation may matter more. If the graph shows many samples waiting on locks, parallelism may be blocked by contention.
+
+Read a flamegraph with a few questions:
+
+| Question | What to look for |
+| --- | --- |
+| Where is most time spent? | Widest boxes |
+| Is time spread out or concentrated? | Many medium boxes vs one hot tower |
+| Is allocation hot? | allocator or `String`/`Vec` growth paths |
+| Is synchronization hot? | mutex or lock-related frames |
+| Did my change help? | Compare before and after profiles |
+
+Do not optimize every visible box. Start with the widest part of the real workload, make one change, then measure again.
+:::
 
 ## Common Bottlenecks
 

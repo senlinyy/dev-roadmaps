@@ -10,13 +10,15 @@ id: article-rust-idiomatic-rust-generics-and-bounds
 ## Table of Contents
 
 1. [The Problem](#the-problem)
-2. [Generic Functions](#generic-functions)
-3. [Trait Bounds](#trait-bounds)
-4. [Same Type Or Any Type](#same-type-or-any-type)
-5. [Where Clauses](#where-clauses)
-6. [Common Bounds](#common-bounds)
-7. [Putting It All Together](#putting-it-all-together)
-8. [What's Next](#whats-next)
+2. [Type Parameters Are Placeholders](#type-parameters-are-placeholders)
+3. [Generic Functions](#generic-functions)
+4. [Trait Bounds](#trait-bounds)
+5. [Same Type Or Any Type](#same-type-or-any-type)
+6. [Where Clauses](#where-clauses)
+7. [Clone vs Copy](#clone-vs-copy)
+8. [Common Bounds](#common-bounds)
+9. [Putting It All Together](#putting-it-all-together)
+10. [What's Next](#whats-next)
 
 ## The Problem
 
@@ -29,6 +31,20 @@ The app might need to:
 - Store a page of results where the item type changes by screen.
 
 Writing one version per type gets old quickly. Replacing types with vague data loses safety. Rust's answer is generics: write the shape once, then say what abilities the type must have.
+
+## Type Parameters Are Placeholders
+
+A type parameter is a placeholder for one real type chosen when the function or struct is used.
+
+In this signature, `T` is not `any`:
+
+```rust
+fn first<T>(items: &[T]) -> Option<&T>
+```
+
+It means "for some concrete element type `T`, borrow a slice of those items and maybe return a borrowed item of that same type." If the caller passes notes, `T` is `Note` for that call. If the caller passes strings, `T` is `String` for that call.
+
+This is close to TypeScript generics in shape, but Rust checks and compiles generic code around concrete types and explicit trait bounds. It is not dynamic duck typing.
 
 ## Generic Functions
 
@@ -66,7 +82,7 @@ fn print_item<T: std::fmt::Display>(item: T) {
 }
 ```
 
-This function accepts any `T` that implements `Display`. A `String` works. An integer works. A custom type works only if it implements `Display`.
+Read the colon as "must satisfy this capability." This function accepts any `T` that implements `Display`. A `String` works. An integer works. A custom type works only if it implements `Display`.
 
 The bound is the contract. Inside the function, Rust lets you use behavior promised by the bound and nothing else.
 
@@ -85,6 +101,40 @@ fn collect_summaries<T: Summary>(items: &[T]) -> Vec<String> {
 The function does not know whether the items are notes, search hits, or notebook records. It only knows that each item can produce a summary.
 
 That is the balance Rust wants: reusable code, but with visible requirements.
+
+:::expand[Why T is not dynamic typing]{kind="design"}
+Generic Rust can look like dynamic code because `T` seems to stand for "whatever." The difference is that Rust still checks what the function is allowed to do.
+
+This generic function compiles because it only asks the slice for its first item:
+
+```rust
+fn first<T>(items: &[T]) -> Option<&T> {
+    items.first()
+}
+```
+
+This one does not compile:
+
+```rust
+fn print_first<T>(items: &[T]) {
+    if let Some(item) = items.first() {
+        println!("{item}");
+    }
+}
+```
+
+Rust cannot assume every possible `T` knows how to display itself with `{}`. Add the bound:
+
+```rust
+fn print_first<T: std::fmt::Display>(items: &[T]) {
+    if let Some(item) = items.first() {
+        println!("{item}");
+    }
+}
+```
+
+That is the generic contract. The function can be reused across many types, but every operation inside the function must be justified by the bounds in the signature.
+:::
 
 :::expand[Bounds are the price tag on reuse]{kind="design"}
 Generics can make code look more abstract, but trait bounds keep the abstraction honest.
@@ -217,6 +267,27 @@ The reader can scan the function in two passes. First, what does it take and ret
 
 That is the pattern: use inline bounds for simple cases, use `where` when the requirements deserve their own space.
 :::
+
+## Clone vs Copy
+
+`Clone` and `Copy` both involve duplication, but they send different signals.
+
+`Clone` is explicit. Calling `.clone()` can allocate memory or do work proportional to the value:
+
+```rust
+let title = String::from("Rust notes");
+let saved = title.clone();
+```
+
+`Copy` is implicit and reserved for values where simple bitwise duplication is cheap and safe, such as integers and booleans:
+
+```rust
+let count = 3;
+let saved = count;
+println!("{count} {saved}");
+```
+
+This distinction matters in generic code. A bound of `T: Clone` says the function may explicitly duplicate values. A bound of `T: Copy` says the function only accepts types that can be duplicated invisibly by assignment.
 
 ## Common Bounds
 

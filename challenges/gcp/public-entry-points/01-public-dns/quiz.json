@@ -1,0 +1,44 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "`orders.devpolaris.com` resolves to an old load balancer address. Which layer is wrong first?",
+      "options": [
+        { "id": "a", "text": "The DNS record for the public name." },
+        { "id": "b", "text": "The database password." },
+        { "id": "c", "text": "The Cloud Run container port only." },
+        { "id": "d", "text": "The IAM role title." }
+      ],
+      "correct": ["a"],
+      "explanation": "DNS gives the name an answer. If the answer points to the wrong entry, traffic starts in the wrong place."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A DNS record points to the intended load balancer. What has DNS not proven yet?",
+      "options": [
+        { "id": "a", "text": "That the certificate, route, backend, and service health are correct." },
+        { "id": "b", "text": "That the name has an answer." },
+        { "id": "c", "text": "That clients can find the next destination." },
+        { "id": "d", "text": "That a record exists." }
+      ],
+      "correct": ["a"],
+      "explanation": "DNS only maps the name to the next destination. The rest of the entry path still needs review."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "Which DNS details help with rollout and rollback?",
+      "options": [
+        { "id": "a", "text": "The zone that owns the name." },
+        { "id": "b", "text": "The target the record points to." },
+        { "id": "c", "text": "The TTL that affects caching." },
+        { "id": "d", "text": "The database table count." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "Ownership, target, and TTL are the DNS details that shape public entry changes."
+    }
+  ]
+}

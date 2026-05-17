@@ -1,0 +1,44 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "The Orders API must reach Cloud SQL over a private IP from `vpc-orders-prod`. Which pattern is the article's Cloud SQL private IP starting point?",
+      "options": [
+        { "id": "a", "text": "Private Services Access with an allocated private range and service networking connection." },
+        { "id": "b", "text": "A public SSH tunnel from every developer laptop." },
+        { "id": "c", "text": "A DNS TXT record only." },
+        { "id": "d", "text": "A Cloud Run public URL." }
+      ],
+      "correct": ["a"],
+      "explanation": "Cloud SQL private IP commonly depends on Private Services Access between the VPC and Google's service networking."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "Why should the allocated private range for Private Services Access be documented?",
+      "options": [
+        { "id": "a", "text": "It reserves address space for the service producer side and can affect future growth or overlap." },
+        { "id": "b", "text": "It replaces every IAM permission." },
+        { "id": "c", "text": "It is only a cosmetic label." },
+        { "id": "d", "text": "It makes public DNS unnecessary for every service." }
+      ],
+      "correct": ["a"],
+      "explanation": "The reserved range is real network planning state, not just decoration."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "Which evidence belongs in a Private Services Access review?",
+      "options": [
+        { "id": "a", "text": "The VPC network name." },
+        { "id": "b", "text": "The allocated private range." },
+        { "id": "c", "text": "The service networking connection used by the managed service." },
+        { "id": "d", "text": "The frontend CSS class." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "VPC, allocated range, and connection evidence explain the private managed-service path."
+    }
+  ]
+}

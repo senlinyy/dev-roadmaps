@@ -1,0 +1,44 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "Customers get TLS errors before any request reaches the Cloud Run container. Which map area should the team inspect first?",
+      "options": [
+        { "id": "a", "text": "Traffic: DNS, certificate, routing, and HTTPS entry." },
+        { "id": "b", "text": "Cloud SQL schema migrations." },
+        { "id": "c", "text": "BigQuery dataset labels." },
+        { "id": "d", "text": "Receipt object prefixes." }
+      ],
+      "correct": ["a"],
+      "explanation": "TLS errors before the container point to the public entry path. Start with traffic, then continue through the map if needed."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "The app starts, but logs show permission denied when reading `orders-db-url` from Secret Manager. Which map area is first?",
+      "options": [
+        { "id": "a", "text": "Access: runtime service account, Secret Manager resource, and IAM binding." },
+        { "id": "b", "text": "Compute Engine zone labels only." },
+        { "id": "c", "text": "Cloud DNS record TTL only." },
+        { "id": "d", "text": "Artifact Registry repository format only." }
+      ],
+      "correct": ["a"],
+      "explanation": "A secret permission error is an access problem. The runtime service account and secret IAM policy are the first evidence to read."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "A release serves the wrong version to some users. Which evidence belongs in the first deployment review?",
+      "options": [
+        { "id": "a", "text": "Artifact Registry image or digest." },
+        { "id": "b", "text": "Cloud Run revision and traffic split." },
+        { "id": "c", "text": "Runtime configuration and logs for the revision." },
+        { "id": "d", "text": "Only the monthly billing total." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "Release behavior crosses image, revision, config, traffic, and logs. Billing may matter later, but it does not identify which version is serving."
+    }
+  ]
+}

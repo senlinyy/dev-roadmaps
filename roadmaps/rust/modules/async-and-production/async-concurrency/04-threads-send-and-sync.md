@@ -10,14 +10,15 @@ id: article-rust-async-and-production-threads-send-and-sync
 ## Table of Contents
 
 1. [The Problem](#the-problem)
-2. [Threads](#threads)
-3. [Move Closures](#move-closures)
-4. [Join Handles](#join-handles)
-5. [Shared Thread State](#shared-thread-state)
-6. [Send And Sync](#send-and-sync)
-7. [CPU Work vs I/O Work](#cpu-work-vs-io-work)
-8. [Putting It All Together](#putting-it-all-together)
-9. [What's Next](#whats-next)
+2. [Threads vs Async Tasks](#threads-vs-async-tasks)
+3. [Threads](#threads)
+4. [Move Closures](#move-closures)
+5. [Join Handles](#join-handles)
+6. [Shared Thread State](#shared-thread-state)
+7. [Send And Sync](#send-and-sync)
+8. [CPU Work vs I/O Work](#cpu-work-vs-io-work)
+9. [Putting It All Together](#putting-it-all-together)
+10. [What's Next](#whats-next)
 
 ## The Problem
 
@@ -31,6 +32,21 @@ This work is CPU-heavy:
 - Build index entries.
 
 Async does not automatically make CPU work faster. If a task spends its time computing instead of waiting, it may block a runtime worker thread. For CPU-heavy work, ordinary threads or a parallelism library may be the better tool.
+
+## Threads vs Async Tasks
+
+An async task is managed by a runtime and makes progress when it is polled. It is best when the work often waits on I/O and reaches `.await` points.
+
+An operating system thread is scheduled by the OS and can run CPU work in parallel on another core. It has a heavier setup cost, but it is the direct tool for computation that needs real parallel execution.
+
+| Need | Better starting point |
+| --- | --- |
+| Many network requests waiting on I/O | Async tasks |
+| A server handling many sockets | Async runtime |
+| CPU-heavy parsing or indexing | Threads or Rayon |
+| Blocking library inside async code | Dedicated blocking thread or runtime helper |
+
+If you know JavaScript, async may feel like the whole concurrency story. Rust gives you async tasks and OS threads because waiting and computing are different bottlenecks.
 
 ## Threads
 
@@ -138,6 +154,8 @@ The tradeoff is contention. If many threads spend most of their time waiting for
 
 `Send` and `Sync` are marker traits that describe thread-safety properties.
 
+They have no methods. They are compiler-checked labels about whether values can move to another thread or be shared by reference across threads.
+
 `Send` means a value can be moved to another thread. `Sync` means references to a value can be shared between threads safely.
 
 You usually do not implement these traits yourself. Rust implements them automatically when a type's fields make it safe.
@@ -173,7 +191,7 @@ fn main() {
 
 The compiler is enforcing a real safety boundary. Values that are safe in one thread are not automatically safe across threads.
 
-:::expand[Send and Sync are promises about movement and sharing]{kind="design"}
+:::expand[Why Rc cannot cross threads]{kind="design"}
 `Send` and `Sync` are easy to memorize badly, so tie them to two questions.
 
 | Question | Trait |

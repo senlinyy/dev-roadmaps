@@ -1,0 +1,80 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "An App Service setting points to the correct Key Vault secret, but the app cannot read the value. What should the team inspect?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The app's managed identity and permission to read the secret."
+        },
+        {
+          "id": "b",
+          "text": "Only the app setting name."
+        },
+        {
+          "id": "c",
+          "text": "The checkout route name."
+        },
+        {
+          "id": "d",
+          "text": "The number of developers on the release."
+        }
+      ],
+      "correct": ["a"],
+      "explanation": "A Key Vault reference needs both a correct reference and an identity that can read the secret."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A teammate wants to prove secret resolution by logging the resolved secret value. What is the better evidence?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Use safe behavior evidence such as successful dependency calls and absence of secret resolution errors."
+        },
+        {
+          "id": "b",
+          "text": "Log the value once and delete the log later."
+        },
+        {
+          "id": "c",
+          "text": "Paste the value into the incident channel for peer review."
+        },
+        {
+          "id": "d",
+          "text": "Move the secret into source code for easier comparison."
+        }
+      ],
+      "correct": ["a"],
+      "explanation": "Secret values should stay secret. Prove access through safe runtime behavior and non-sensitive errors."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "Which facts belong in a secret-access review?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Vault and secret name."
+        },
+        {
+          "id": "b",
+          "text": "App identity."
+        },
+        {
+          "id": "c",
+          "text": "Access permission scope."
+        },
+        {
+          "id": "d",
+          "text": "The secret's raw value in the release note."
+        }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "The review needs target, caller, and permission. It should not expose the raw secret value."
+    }
+  ]
+}

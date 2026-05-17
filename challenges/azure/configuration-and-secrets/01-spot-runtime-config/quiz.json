@@ -1,0 +1,80 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "The same image works in staging but production checkout writes receipts to the wrong storage account. Which layer is most likely involved?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Runtime configuration."
+        },
+        {
+          "id": "b",
+          "text": "The image build step only."
+        },
+        {
+          "id": "c",
+          "text": "The Azure region name only."
+        },
+        {
+          "id": "d",
+          "text": "The markdown release note."
+        }
+      ],
+      "correct": ["a"],
+      "explanation": "The same artifact can behave differently when production receives different runtime values."
+    },
+    {
+      "id": "q2",
+      "type": "multiple",
+      "scenario": "Which values are runtime configuration for `devpolaris-orders-api`?",
+      "options": [
+        {
+          "id": "a",
+          "text": "`ORDERS_DB_SERVER`."
+        },
+        {
+          "id": "b",
+          "text": "`RECEIPTS_STORAGE_ACCOUNT`."
+        },
+        {
+          "id": "c",
+          "text": "`CHECKOUT_PAYMENTS_ENABLED`."
+        },
+        {
+          "id": "d",
+          "text": "The course article title."
+        }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "Database targets, storage targets, and feature flags are runtime values the app receives outside source code."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "A setting is saved in the portal, but checkout still fails. What should the team remember?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Saving configuration is not the same as proving the app received it and behaves correctly."
+        },
+        {
+          "id": "b",
+          "text": "Portal settings always apply without restart or runtime effects."
+        },
+        {
+          "id": "c",
+          "text": "The issue cannot be configuration after a value is saved."
+        },
+        {
+          "id": "d",
+          "text": "The safest fix is to add duplicate settings with similar names."
+        }
+      ],
+      "correct": ["a"],
+      "explanation": "The app still needs to receive the value and prove behavior through safe evidence."
+    }
+  ]
+}

@@ -1,6 +1,6 @@
 ---
 title: "Deployment and Runtime Operations"
-description: "Deploy changes, manage runtime settings, use Azure rollout tools, and verify that a running application is healthy after release."
-tags: ["deployment-slots", "revisions", "runtime-config"]
+description: "Release Azure application changes safely by controlling versions, runtime configuration, traffic movement, verification, and rollback decisions."
+tags: ["deployment", "slots", "revisions", "configuration", "rollback"]
 order: 7
 ---

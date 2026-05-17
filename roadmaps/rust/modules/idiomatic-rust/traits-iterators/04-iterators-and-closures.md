@@ -11,12 +11,14 @@ id: article-rust-idiomatic-rust-iterators-and-closures
 
 1. [The Problem](#the-problem)
 2. [Iterator Flow](#iterator-flow)
-3. [Closures](#closures)
-4. [iter, iter_mut, into_iter](#iter-iter_mut-into_iter)
-5. [Collect](#collect)
-6. [Readable Chains](#readable-chains)
-7. [Putting It All Together](#putting-it-all-together)
-8. [What's Next](#whats-next)
+3. [Lazy Pipelines](#lazy-pipelines)
+4. [Closures](#closures)
+5. [What Closures Capture](#what-closures-capture)
+6. [iter, iter_mut, into_iter](#iter-iter_mut-into_iter)
+7. [Collect](#collect)
+8. [Readable Chains](#readable-chains)
+9. [Putting It All Together](#putting-it-all-together)
+10. [What's Next](#whats-next)
 
 ## The Problem
 
@@ -51,7 +53,28 @@ Read that chain from top to bottom:
 
 The chain is lazy until `collect` asks for the results. The `map` step describes a transformation, but it does not build a new vector by itself.
 
+This differs from JavaScript array `.map()`, which immediately creates a new array. Rust iterator adapters are closer to Python generator pipelines: they describe work that will happen later when something consumes the iterator.
+
 This is why iterator chains can be efficient and readable. Each adapter describes the next step. The final consumer, such as `collect`, `count`, `any`, or `find`, asks the iterator to run.
+
+## Lazy Pipelines
+
+Laziness means the pipeline waits until a consumer asks for values.
+
+```rust
+let pipeline = notes
+    .iter()
+    .filter(|note| note.tags.contains("rust"))
+    .map(|note| note.title.as_str());
+```
+
+At this point, the code has not built a result list. It has built a value that knows how to produce matching titles. The work runs when a consumer appears:
+
+```rust
+let titles: Vec<&str> = pipeline.collect();
+```
+
+That split is why Rust can chain several transformations without allocating intermediate vectors. It is also why an unused iterator chain is usually a bug: describing work is not the same thing as running it.
 
 :::expand[Adapters describe work, consumers run it]{kind="design"}
 Iterator methods fall into two broad groups.
@@ -119,6 +142,58 @@ let results: Vec<&Note> = notes
 ```
 
 The closure borrows `selected_tag` from the surrounding function. That is one reason closures fit Rust's ownership model well: capture behavior follows the same borrowing and moving rules as the rest of the language.
+
+## What Closures Capture
+
+A closure can use values from the surrounding scope. Rust decides whether it can borrow, mutably borrow, or move those values based on what the closure does.
+
+This closure only reads `selected_tag`, so it can borrow it:
+
+```rust
+let selected_tag = String::from("rust");
+
+let results: Vec<&Note> = notes
+    .iter()
+    .filter(|note| note.tags.contains(selected_tag.as_str()))
+    .collect();
+```
+
+If a closure needs to keep a value after the surrounding function continues, Rust may require `move` so the closure owns what it uses. That appears often with threads and async tasks later.
+
+:::expand[move closures and captured ownership]{kind="pattern"}
+The `move` keyword on a closure means the closure takes ownership of the values it captures.
+
+Without `move`, this closure can borrow `label` while it is called immediately:
+
+```rust
+let label = String::from("note");
+let print = || println!("{label}");
+
+print();
+println!("{label}");
+```
+
+With `move`, the closure owns `label`:
+
+```rust
+let label = String::from("note");
+let print = move || println!("{label}");
+
+print();
+```
+
+Now the original `label` binding is no longer available after the closure is created. That may look inconvenient, but it is exactly what you want when the closure might outlive the current stack frame.
+
+You will see this shape later:
+
+```rust
+std::thread::spawn(move || {
+    println!("{label}");
+});
+```
+
+The spawned thread may run after the current function returns, so borrowing a local variable would be unsafe. `move` transfers ownership into the closure so the data lives where the closure needs it.
+:::
 
 ## iter, iter_mut, into_iter
 
@@ -280,7 +355,7 @@ struct Note {
     tags: HashSet<String>,
 }
 
-fn search_summaries<'a>(notes: &'a [Note], tag: &str) -> Vec<String> {
+fn search_summaries(notes: &[Note], tag: &str) -> Vec<String> {
     notes
         .iter()
         .filter(|note| note.tags.contains(tag))

@@ -1,0 +1,80 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A new Container Apps revision passes direct tests. The team wants limited real-user evidence before full release. Which traffic move fits the article?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Send a small percentage of traffic to the candidate and watch release signals."
+        },
+        {
+          "id": "b",
+          "text": "Move 100 percent traffic immediately because direct tests passed."
+        },
+        {
+          "id": "c",
+          "text": "Keep the revision at 0 percent forever to avoid risk."
+        },
+        {
+          "id": "d",
+          "text": "Delete the old revision before testing the candidate."
+        }
+      ],
+      "correct": ["a"],
+      "explanation": "Small traffic percentages reduce blast radius while producing real evidence."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "An App Service staging slot works by direct URL, but production uses different sticky settings. What should happen before swap?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Review which settings stay with production and which move with the candidate."
+        },
+        {
+          "id": "b",
+          "text": "Assume the direct URL test proves production behavior."
+        },
+        {
+          "id": "c",
+          "text": "Copy every production setting into staging without a record."
+        },
+        {
+          "id": "d",
+          "text": "Remove sticky settings so fewer values need review."
+        }
+      ],
+      "correct": ["a"],
+      "explanation": "Direct testing is useful, but slot-specific settings can change behavior during swap."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "Which are healthy reasons to pause a rollout?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The candidate has no named rollback target."
+        },
+        {
+          "id": "b",
+          "text": "The smoke test does not cover the changed dependency."
+        },
+        {
+          "id": "c",
+          "text": "Traffic moved but nobody is watching failure rate or latency."
+        },
+        {
+          "id": "d",
+          "text": "The deployment used a managed Azure service."
+        }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "Missing rollback, weak tests, and no watch window are rollout risks. Managed service use is not a problem by itself."
+    }
+  ]
+}

@@ -1,0 +1,44 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A ticket says `fix the orders bucket`. There are receipt, export, and failed-payload buckets with similar names. What should the ticket include before approval?",
+      "options": [
+        { "id": "a", "text": "Project, bucket name, location, labels, relevant object prefix, and the evidence that points to this bucket." },
+        { "id": "b", "text": "Only the word `orders`, because search results are enough." },
+        { "id": "c", "text": "The last deployer's favorite terminal." },
+        { "id": "d", "text": "A new random bucket name to avoid investigating." }
+      ],
+      "correct": ["a"],
+      "explanation": "A good evidence bundle lets another engineer find the same resource and understand why it is the target."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A Cloud Run service cannot read a secret. Which evidence best connects the resource and the caller?",
+      "options": [
+        { "id": "a", "text": "The Cloud Run service's project, region, runtime service account, secret resource, and IAM evidence." },
+        { "id": "b", "text": "The public DNS name only." },
+        { "id": "c", "text": "The billing account display name only." },
+        { "id": "d", "text": "A screenshot of a different project where a secret exists." }
+      ],
+      "correct": ["a"],
+      "explanation": "Secret access depends on the exact service, runtime identity, secret, project, and IAM binding. Loose evidence can point at the wrong target."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "Which items belong in evidence before a production resource change?",
+      "options": [
+        { "id": "a", "text": "Project ID and resource path or exact name." },
+        { "id": "b", "text": "Resource type and location." },
+        { "id": "c", "text": "Labels that show service, environment, team, and component." },
+        { "id": "d", "text": "A vague memory that the resource looked familiar last week." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "Project, resource identity, location, and labels make a change reviewable. Memory is not production evidence."
+    }
+  ]
+}

@@ -147,6 +147,8 @@ Calling a method on a trait object uses dynamic dispatch.
 
 Rust stores enough information with the trait object to find the right method implementation at runtime. That extra lookup has a small cost. It also prevents some compiler optimizations that are easier with generics.
 
+A trait object carries a data pointer plus a table for calling the right methods. The data pointer finds the concrete value. The table, often called a vtable, tells Rust which implementation of each trait method to call.
+
 For many application designs, that cost is not important. Exporting notes, rendering UI components, or choosing a plugin usually cares more about design flexibility than about one indirect method call.
 
 Use the simplest design that matches the choice:
@@ -157,6 +159,33 @@ Use the simplest design that matches the choice:
 | Runtime | Trait object |
 
 If performance becomes important, measure before replacing trait objects with generics.
+
+:::expand[What dyn carries at runtime]{kind="design"}
+A trait object is wider than an ordinary reference. Conceptually, `&dyn Exporter` carries two pieces:
+
+```text
+data pointer     -> the concrete exporter value
+method table     -> functions for Exporter on that concrete type
+```
+
+That is why Rust can call `exporter.export(note)` without knowing whether the exporter is a `TextExporter` or `JsonExporter` at compile time.
+
+The cost is one runtime lookup through the table. The benefit is runtime flexibility.
+
+Generics choose this:
+
+```rust
+fn run_export<E: Exporter>(exporter: &E, note: &Note) -> String
+```
+
+Trait objects choose this:
+
+```rust
+fn run_export(exporter: &dyn Exporter, note: &Note) -> String
+```
+
+The first shape lets the compiler specialize for one concrete type per call. The second shape lets the program store and pass different concrete types behind one behavior.
+:::
 
 ## Object Safety
 
@@ -182,7 +211,7 @@ trait CloneExporter {
 
 Returning `Self` is a problem because `dyn CloneExporter` does not know the concrete return type in a simple uniform way.
 
-Do not start by memorizing every object-safety rule. Start with the design question: does the trait describe behavior that can be called through `&dyn Trait` or `Box<dyn Trait>`? If not, use generics or reshape the trait.
+Do not start by memorizing every object-safety rule. Treat this as advanced material you revisit when the compiler complains about using a trait as `dyn Trait`. Start with the design question: does the trait describe behavior that can be called through `&dyn Trait` or `Box<dyn Trait>`? If not, use generics or reshape the trait.
 
 ## Putting It All Together
 

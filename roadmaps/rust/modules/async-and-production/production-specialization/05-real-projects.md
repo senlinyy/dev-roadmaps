@@ -64,6 +64,8 @@ Start with projects that reuse the notes-app ideas from this roadmap:
 | CLI with subcommands | `clap`, modules, integration tests |
 | Tiny web service | Tokio, routing, shared state |
 
+In that table, `serde` is Rust's common serialization and deserialization ecosystem, often used for JSON, TOML, and other formats. `clap` is a common crate for parsing command-line arguments. A crate is a Rust library or package unit you add through Cargo.
+
 Do not try to make every project production-grade. A learning project should have a sharp purpose.
 
 :::expand[A project should force one new design decision]{kind="pattern"}
@@ -84,6 +86,30 @@ This works better than starting with "build a full productivity app." The smalle
 When you add JSON persistence, the old `fn add(todo: Todo)` design may still work. When you add CLI commands, error messages matter more. When you add due dates, your data model changes. Those design turns are the learning.
 
 If a project does not force any new decision, make it slightly bigger. If it forces ten new decisions at once, cut the scope.
+:::
+
+:::expand[From npm and pip packages to crates]{kind="pattern"}
+If you know npm or pip, crates.io will feel familiar: it is where Rust projects usually download third-party libraries from. Cargo records those dependencies in `Cargo.toml`.
+
+```toml
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+clap = { version = "4", features = ["derive"] }
+```
+
+The familiar part is versioned dependencies. The Rust-specific part is that Cargo also builds those dependencies, runs feature resolution, and links everything into the final crate graph.
+
+For learning projects, add dependencies deliberately:
+
+| Need | Common crate |
+| --- | --- |
+| JSON or TOML data | `serde` plus a format crate |
+| CLI arguments | `clap` |
+| Filesystem walking | `walkdir` or `ignore` |
+| HTTP client | `reqwest` |
+| Async runtime | `tokio` |
+
+The goal is not to memorize crate names. The goal is to recognize when the standard library is enough and when a well-known crate lets you focus on your project's actual design problem.
 :::
 
 ## Add One Concept

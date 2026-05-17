@@ -1,0 +1,44 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "The Orders API cannot reach a private address. Which question belongs before changing firewall rules?",
+      "options": [
+        { "id": "a", "text": "Does the VPC route table have a path to the destination range or service range?" },
+        { "id": "b", "text": "Can we rename the subnet to private?" },
+        { "id": "c", "text": "Can we grant Viewer to every user?" },
+        { "id": "d", "text": "Can we shorten the service name?" }
+      ],
+      "correct": ["a"],
+      "explanation": "Routes decide next hop. A firewall allow does not help when no path exists."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A firewall rule allows TCP 5432, but Cloud Run still times out connecting to a private database. What is the best next check?",
+      "options": [
+        { "id": "a", "text": "Whether Cloud Run has a VPC egress path and private service route to the database range." },
+        { "id": "b", "text": "Whether the public domain has a prettier name." },
+        { "id": "c", "text": "Whether the service account has a longer description." },
+        { "id": "d", "text": "Whether the database has an emoji label." }
+      ],
+      "correct": ["a"],
+      "explanation": "The timeout points to path or service reachability first, especially for Cloud Run private egress."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "Which statements keep routes, firewalls, and IAM separate?",
+      "options": [
+        { "id": "a", "text": "Routes choose where packets go next." },
+        { "id": "b", "text": "Firewall rules allow or deny matching network traffic." },
+        { "id": "c", "text": "IAM controls who may perform API actions." },
+        { "id": "d", "text": "An IAM role always creates a missing route." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "A clean GCP troubleshooting path keeps route, firewall, and IAM checks distinct."
+    }
+  ]
+}
