@@ -350,34 +350,6 @@ fn first_match(notes: &[Note], query: &str) -> Option<&Note> {
 
 The important idea is `Option<&Note>`: the function may return a borrowed note, or it may return no note. `Some(note)` means a match was found. `None` means the search finished without finding one.
 
-:::expand[What the lifetime annotation would be doing]{kind="design"}
-You may see a more explicit version of this function in Rust examples:
-
-```rust
-fn first_match<'a>(notes: &'a [Note], query: &str) -> Option<&'a Note> {
-    for note in notes {
-        if note.title.contains(query) {
-            return Some(note);
-        }
-    }
-
-    None
-}
-```
-
-The `<'a>` syntax is a lifetime name. It does not mean "keep this value alive for a certain number of seconds." It names a relationship between borrowed values.
-
-Here, the returned `&Note` must come from the input `notes` slice. The returned reference cannot outlive the notes it points into. The lifetime annotation says that relationship out loud: "the borrowed note I return is valid for the same borrow of `notes`."
-
-Rust can infer that relationship in the simpler version:
-
-```rust
-fn first_match(notes: &[Note], query: &str) -> Option<&Note>
-```
-
-That is why the visible article uses the shorter form. The modeling lesson is `Option`: the search may find a note or may not. Lifetimes become the main lesson later, when borrowed data is the thing being modeled.
-:::
-
 Callers have to handle both cases:
 
 ```rust

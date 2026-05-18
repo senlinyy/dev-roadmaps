@@ -130,33 +130,6 @@ fn print_title(title: &str) {
 
 That is more flexible because a string slice can refer to a `String` or to a string literal. For this article, the important idea is the same: the `&` means the function borrows instead of owns.
 
-:::expand[Borrowing is temporary access, not shared ownership]{kind="design"}
-Borrowing does not create a second owner. It creates temporary access to a value that still belongs somewhere else.
-
-In this call:
-
-```rust
-let title = String::from("Buy milk");
-print_title(&title);
-println!("{title}");
-```
-
-`title` remains the owner for the whole sequence. The expression `&title` creates a reference that `print_title` can use during the call. When the function returns, that reference is finished. Nothing about cleanup moved into `print_title`.
-
-That matters because cleanup still has one path:
-
-| Moment | Who owns the `String`? | What can happen? |
-| --- | --- | --- |
-| Before the call | `title` | Caller can use or move it |
-| During the call | `title` | Function can read through the reference |
-| After the call | `title` | Caller can keep using it |
-| End of scope | `title` | Rust drops the string |
-
-This is why borrowing is the right tool for printing, searching, formatting previews, and validation. The function gets enough access to do its work, but it does not become responsible for the value's lifetime.
-
-If a function needs to keep the value after returning, borrowing is too weak. That function should take ownership or create its own owned value. Borrowing is for temporary access.
-:::
-
 ## Function Signatures
 
 Rust function signatures tell you what kind of access a function needs.

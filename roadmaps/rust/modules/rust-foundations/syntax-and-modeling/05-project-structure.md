@@ -86,39 +86,6 @@ rust-notes/
 
 This is a common shape for command-line apps. The binary crate handles startup, input, and output. The library crate holds behavior that can be tested and reused.
 
-:::expand[One package can have several crate roots]{kind="design"}
-The package is the project Cargo manages. The crate root is where the compiler starts building one crate inside that package.
-
-That means one package can contain several starting points:
-
-```text
-rust-notes/
-  Cargo.toml
-  src/
-    lib.rs
-    main.rs
-    bin/
-      import_notes.rs
-      export_notes.rs
-```
-
-`src/lib.rs` is the library crate root. `src/main.rs` is the default binary crate root. Files under `src/bin/` are extra binary crate roots.
-
-That layout gives you several executables that can share one library:
-
-```bash
-cargo run
-cargo run --bin import_notes
-cargo run --bin export_notes
-```
-
-The default `cargo run` uses `src/main.rs`. The `--bin` flag selects one of the extra binaries under `src/bin/`.
-
-Each binary should stay thin. For example, `src/bin/import_notes.rs` might parse command-line arguments and then call `rust_notes::import_from_file(path)`. The real import behavior belongs in `src/lib.rs` or a module under it, where it can be tested and reused.
-
-This is the design reason behind the layout: a package is allowed to contain multiple products, but the shared behavior should not be copied between them. The import tool, export tool, and main app can all call the same parsing, model, and storage code from the library crate.
-:::
-
 ## main.rs And lib.rs
 
 `main.rs` should answer one question: how does the program start?

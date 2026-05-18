@@ -304,45 +304,6 @@ None          -> Err(ConfigError::MissingDefault)
 
 That is the pattern: use `Option` while searching, then convert to `Result` at the boundary where the caller needs an explanation.
 
-:::expand[map_err and ok_or are adapters]{kind="pattern"}
-Rust has many small adapter methods. They can look cryptic until you connect each one to the longer `match` it replaces.
-
-`map_err` changes only the error side of a `Result`:
-
-```rust
-let text = match std::fs::read_to_string(path) {
-    Ok(text) => text,
-    Err(error) => return Err(ConfigError::Read(error)),
-};
-```
-
-The compact version is:
-
-```rust
-let text = std::fs::read_to_string(path)
-    .map_err(ConfigError::Read)?;
-```
-
-`ok_or` changes an `Option` into a `Result`:
-
-```rust
-let name = match find_default(&text) {
-    Some(name) => name.to_string(),
-    None => return Err(ConfigError::MissingDefault),
-};
-```
-
-The compact version is:
-
-```rust
-let name = find_default(&text)
-    .map(str::to_string)
-    .ok_or(ConfigError::MissingDefault)?;
-```
-
-Adapters are useful when they preserve the story: read, convert the error shape, continue. If the chain becomes hard to read, a `match` is still good Rust. Clarity wins over compactness.
-:::
-
 ## Borrow Or Own Inputs
 
 Error flow and ownership meet at API boundaries. A function signature should say whether the function needs to keep data or only read it.
@@ -448,36 +409,6 @@ fn find_default(text: &str) -> Option<&str> {
 ```
 
 Use the flexible shape where the boundary benefits from it. Keep inner helpers plain until real callers need more.
-
-:::expand[AsRef<Path> is public API polish]{kind="design"}
-`impl AsRef<Path>` is useful at public boundaries because callers often hold paths in different forms.
-
-Without it, you might force callers to allocate:
-
-```rust
-fn load_default_notebook(path: String) -> Result<String, ConfigError> {
-    // ...
-}
-```
-
-That is awkward for a caller that already has a `&str` literal or a `PathBuf`. A borrowed path is often enough:
-
-```rust
-fn load_default_notebook(path: impl AsRef<Path>) -> Result<String, ConfigError> {
-    let path = path.as_ref();
-    let text = std::fs::read_to_string(path)
-        .map_err(ConfigError::Read)?;
-
-    find_default(&text)
-        .map(str::to_string)
-        .ok_or(ConfigError::MissingDefault)
-}
-```
-
-The function still does one job: load a default notebook. The flexible parameter only removes friction at the edge.
-
-Do not use this shape everywhere on day one. Private helpers are often clearer with concrete types such as `&str` or `&[Note]`. Reach for `impl AsRef<Path>` when the function is a boundary that many callers will use.
-:::
 
 ## Putting It All Together
 
