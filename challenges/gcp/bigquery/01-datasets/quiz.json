@@ -1,0 +1,44 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "The analytics team creates `orders_analytics_prod` for checkout events and modeled reporting tables. What BigQuery concept is this?",
+      "options": [
+        { "id": "a", "text": "A dataset." },
+        { "id": "b", "text": "A Cloud SQL transaction." },
+        { "id": "c", "text": "A Filestore mount." },
+        { "id": "d", "text": "A signed URL." }
+      ],
+      "correct": ["a"],
+      "explanation": "A dataset groups BigQuery tables and related controls."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A team mixes unrelated finance, support, and experimental tables in one dataset with broad access. What is the concern?",
+      "options": [
+        { "id": "a", "text": "Ownership, access, and retention become harder to explain." },
+        { "id": "b", "text": "Datasets cannot contain tables." },
+        { "id": "c", "text": "BigQuery becomes object storage." },
+        { "id": "d", "text": "All queries become free." }
+      ],
+      "correct": ["a"],
+      "explanation": "Dataset boundaries should make ownership and access review clearer."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "Which facts belong in dataset review?",
+      "options": [
+        { "id": "a", "text": "Location." },
+        { "id": "b", "text": "Owner." },
+        { "id": "c", "text": "Access boundary." },
+        { "id": "d", "text": "VM startup script output." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "A dataset is an analytics organization and governance boundary."
+    }
+  ]
+}

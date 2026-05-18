@@ -1,0 +1,44 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A Cloud SQL high availability setup helps with an instance failure. What does it not automatically undo?",
+      "options": [
+        { "id": "a", "text": "A bad migration that wrote wrong data." },
+        { "id": "b", "text": "A zone-level infrastructure failure." },
+        { "id": "c", "text": "The existence of a standby pattern." },
+        { "id": "d", "text": "The database engine choice." }
+      ],
+      "correct": ["a"],
+      "explanation": "HA helps availability. Backups and restore plans help recover data correctness."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "The team enables automated backups but never restores to a test instance. What remains unproven?",
+      "options": [
+        { "id": "a", "text": "Whether the backup can become usable data again." },
+        { "id": "b", "text": "Whether SQL supports rows." },
+        { "id": "c", "text": "Whether receipts are PDF files." },
+        { "id": "d", "text": "Whether BigQuery can run analytics." }
+      ],
+      "correct": ["a"],
+      "explanation": "A restore drill proves recovery capability."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "Which questions belong in Cloud SQL recovery review?",
+      "options": [
+        { "id": "a", "text": "Are automated backups enabled?" },
+        { "id": "b", "text": "Is point-in-time recovery needed and enabled?" },
+        { "id": "c", "text": "Where does restored data land?" },
+        { "id": "d", "text": "Can support users delete backups casually?" }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "Recovery review should describe backup, recovery window, and restore target."
+    }
+  ]
+}

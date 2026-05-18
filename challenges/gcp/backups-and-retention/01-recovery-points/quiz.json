@@ -1,0 +1,44 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A bad release wrote wrong status values for two hours. Which question does recovery point answer?",
+      "options": [
+        { "id": "a", "text": "Which moment in time can the data be restored to?" },
+        { "id": "b", "text": "Which bucket name is prettiest?" },
+        { "id": "c", "text": "Can SQL be avoided forever?" },
+        { "id": "d", "text": "Which VM has the most CPU?" }
+      ],
+      "correct": ["a"],
+      "explanation": "The recovery point is the moment the restored data represents."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A temporary export can be recreated, but paid order records cannot be casually lost. What should drive different recovery targets?",
+      "options": [
+        { "id": "a", "text": "Business impact of the data." },
+        { "id": "b", "text": "Alphabetical order of service names." },
+        { "id": "c", "text": "Whether the file name has a slash." },
+        { "id": "d", "text": "Whether dashboards use colors." }
+      ],
+      "correct": ["a"],
+      "explanation": "Recovery point needs should follow business impact, not service defaults."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "Which data might need different recovery point expectations?",
+      "options": [
+        { "id": "a", "text": "Paid order records." },
+        { "id": "b", "text": "Temporary exports." },
+        { "id": "c", "text": "Raw analytics events." },
+        { "id": "d", "text": "The shape of a button in the UI." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "Different data shapes and business impact lead to different recovery targets."
+    }
+  ]
+}

@@ -1,0 +1,44 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A function should run when a message arrives on the receipt topic. Which trigger shape fits?",
+      "options": [
+        { "id": "a", "text": "A Pub/Sub event trigger." },
+        { "id": "b", "text": "A VM startup script." },
+        { "id": "c", "text": "A GKE node pool." },
+        { "id": "d", "text": "A load balancer URL map only." }
+      ],
+      "correct": ["a"],
+      "explanation": "Pub/Sub is the event source, so a Pub/Sub trigger delivers the event to the function."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A function should validate export files when they are created in a specific bucket. What should the trigger make clear?",
+      "options": [
+        { "id": "a", "text": "The storage event and bucket scope that should invoke the handler." },
+        { "id": "b", "text": "The developer's local shell prompt." },
+        { "id": "c", "text": "The name of every VM in the project." },
+        { "id": "d", "text": "The Kubernetes Pod replica count." }
+      ],
+      "correct": ["a"],
+      "explanation": "A trigger should be scoped to the event source and event type the function actually handles."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "Which concerns belong to trigger design?",
+      "options": [
+        { "id": "a", "text": "Who or what can invoke the function." },
+        { "id": "b", "text": "What event format the handler receives." },
+        { "id": "c", "text": "Whether retry behavior may occur." },
+        { "id": "d", "text": "How many unrelated services can be hidden in one function." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "The trigger is part of the function's runtime contract."
+    }
+  ]
+}

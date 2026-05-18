@@ -1,0 +1,44 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "Several VMs need to read and write files in the same shared directory tree. Which service is the better first thought?",
+      "options": [
+        { "id": "a", "text": "Filestore." },
+        { "id": "b", "text": "Cloud SQL." },
+        { "id": "c", "text": "BigQuery time travel." },
+        { "id": "d", "text": "A signed URL for every directory operation." }
+      ],
+      "correct": ["a"],
+      "explanation": "Filestore provides managed shared file storage."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A shared directory has `/mnt/incoming`, `/mnt/processing`, and `/mnt/complete`. What is that path structure?",
+      "options": [
+        { "id": "a", "text": "Part of the application protocol for shared file work." },
+        { "id": "b", "text": "A BigQuery dataset." },
+        { "id": "c", "text": "A Cloud SQL schema." },
+        { "id": "d", "text": "A Firestore collection group." }
+      ],
+      "correct": ["a"],
+      "explanation": "Shared paths need ownership and workflow conventions."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "Which questions belong in Filestore review?",
+      "options": [
+        { "id": "a", "text": "Which clients mount it?" },
+        { "id": "b", "text": "Who owns each path?" },
+        { "id": "c", "text": "How is throughput and capacity monitored?" },
+        { "id": "d", "text": "Can it replace all analytical tables?" }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "Shared filesystems need client, ownership, and operational review."
+    }
+  ]
+}

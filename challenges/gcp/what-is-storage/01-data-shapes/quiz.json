@@ -1,0 +1,44 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "The Orders API generates receipt PDFs and needs to store and fetch them by name. Which data shape is this?",
+      "options": [
+        { "id": "a", "text": "Object-shaped file data." },
+        { "id": "b", "text": "Relational checkout records." },
+        { "id": "c", "text": "A Kubernetes cluster mode." },
+        { "id": "d", "text": "A billing account." }
+      ],
+      "correct": ["a"],
+      "explanation": "Receipt PDFs are file-like bytes that fit object storage."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "Orders, line items, payments, and refunds need relationships and transactions. Which first GCP service fits that shape?",
+      "options": [
+        { "id": "a", "text": "Cloud SQL." },
+        { "id": "b", "text": "Cloud Storage only." },
+        { "id": "c", "text": "Filestore by default." },
+        { "id": "d", "text": "BigQuery as the checkout source of truth." }
+      ],
+      "correct": ["a"],
+      "explanation": "Related business records and transactions are relational data."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "Which pairings match the article?",
+      "options": [
+        { "id": "a", "text": "Whole files -> Cloud Storage." },
+        { "id": "b", "text": "Document-shaped app state -> Firestore." },
+        { "id": "c", "text": "Analytical questions over many events -> BigQuery." },
+        { "id": "d", "text": "Every data problem -> one SQL table." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "The data shape should lead the service choice."
+    }
+  ]
+}

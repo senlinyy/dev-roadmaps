@@ -1,0 +1,44 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A team says Cloud SQL backups exist. What drill proves they can use one safely?",
+      "options": [
+        { "id": "a", "text": "Restore a backup to a non-production instance and verify sample app reads." },
+        { "id": "b", "text": "Delete production first." },
+        { "id": "c", "text": "Only screenshot the settings page." },
+        { "id": "d", "text": "Turn off logs during restore." }
+      ],
+      "correct": ["a"],
+      "explanation": "A restore drill should prove the backup can become usable data without risking production."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A BigQuery modeled table is wrong, but raw events are protected. What recovery path may work?",
+      "options": [
+        { "id": "a", "text": "Rebuild the modeled table from raw events or restore from a snapshot/time travel window." },
+        { "id": "b", "text": "Use a Cloud Storage signed URL." },
+        { "id": "c", "text": "Mount Filestore on every analyst laptop." },
+        { "id": "d", "text": "Ignore the dashboard forever." }
+      ],
+      "correct": ["a"],
+      "explanation": "Analytics recovery often depends on protected raw facts and table recovery tools."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "Which details belong in restore drill evidence?",
+      "options": [
+        { "id": "a", "text": "Data restored." },
+        { "id": "b", "text": "Restore point." },
+        { "id": "c", "text": "Verification checks and time to usable." },
+        { "id": "d", "text": "Only a claim that backups are probably fine." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "Restore evidence should make the recovery capability measurable."
+    }
+  ]
+}

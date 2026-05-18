@@ -1,0 +1,44 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A Compute Engine worker needs durable local working space while rebuilding an index. Which service fits the block-storage shape?",
+      "options": [
+        { "id": "a", "text": "Persistent Disk." },
+        { "id": "b", "text": "BigQuery." },
+        { "id": "c", "text": "A signed URL." },
+        { "id": "d", "text": "Firestore Security Rules." }
+      ],
+      "correct": ["a"],
+      "explanation": "Persistent Disk is block storage attached to compute."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A VM reboots and the app starts before the disk is mounted. What kind of operational issue is this?",
+      "options": [
+        { "id": "a", "text": "Attached block storage needs mount and startup planning." },
+        { "id": "b", "text": "BigQuery query cost." },
+        { "id": "c", "text": "Cloud Storage object metadata only." },
+        { "id": "d", "text": "A Firestore index." }
+      ],
+      "correct": ["a"],
+      "explanation": "A disk attached to compute must be mounted and ready for the process that uses it."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "Which Persistent Disk review details matter?",
+      "options": [
+        { "id": "a", "text": "Which VM or workload uses it." },
+        { "id": "b", "text": "Zonal or regional placement." },
+        { "id": "c", "text": "Snapshot or restore plan." },
+        { "id": "d", "text": "Whether it replaces the app database by default." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "Persistent Disk is tied to compute and recovery choices."
+    }
+  ]
+}

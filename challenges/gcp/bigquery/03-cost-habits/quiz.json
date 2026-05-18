@@ -1,0 +1,44 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A dashboard scans five years of raw checkout events every minute to show yesterday's failures. What is the main design smell?",
+      "options": [
+        { "id": "a", "text": "It scans far more data, far more often, than the question needs." },
+        { "id": "b", "text": "BigQuery cannot run SQL." },
+        { "id": "c", "text": "The data should be stored only on a VM disk." },
+        { "id": "d", "text": "Partitioning never matters." }
+      ],
+      "correct": ["a"],
+      "explanation": "BigQuery cost and performance depend heavily on query scope and schedule."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "Most checkout reports filter by event date. Which table design habit helps BigQuery scan less unrelated data?",
+      "options": [
+        { "id": "a", "text": "Partition by event date where appropriate." },
+        { "id": "b", "text": "Store PDFs in BigQuery cells." },
+        { "id": "c", "text": "Remove all filters." },
+        { "id": "d", "text": "Make every query select every column." }
+      ],
+      "correct": ["a"],
+      "explanation": "Partition filters help limit the data a query scans."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "Which are healthy BigQuery cost habits?",
+      "options": [
+        { "id": "a", "text": "Filter by partitions when possible." },
+        { "id": "b", "text": "Select only needed columns." },
+        { "id": "c", "text": "Use modeled tables for common dashboards." },
+        { "id": "d", "text": "Schedule expensive queries without ownership." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "Cost habits are part of warehouse design."
+    }
+  ]
+}

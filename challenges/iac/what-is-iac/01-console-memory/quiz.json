@@ -1,0 +1,44 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A staging network works, but nobody can explain which defaults were accepted during creation. What is the main IaC concern?",
+      "options": [
+        { "id": "a", "text": "The infrastructure choices are not reviewable or repeatable." },
+        { "id": "b", "text": "The cloud provider cannot run networks." },
+        { "id": "c", "text": "Every environment must be created from scratch every day." },
+        { "id": "d", "text": "The console is never useful for inspection." }
+      ],
+      "correct": ["a"],
+      "explanation": "A working environment can still be hard to review, reproduce, or recover when the choices live only in memory."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "Production needs the same invoice bucket settings as staging. The only note says, `bucket exists, public access off`. What is missing?",
+      "options": [
+        { "id": "a", "text": "The exact reviewed settings, ownership, permissions, and rebuild path." },
+        { "id": "b", "text": "A rule that forbids all storage services." },
+        { "id": "c", "text": "A requirement to memorize every provider API." },
+        { "id": "d", "text": "A screenshot of the prettiest dashboard." }
+      ],
+      "correct": ["a"],
+      "explanation": "A short note is not the same as a reviewable source of truth for important infrastructure behavior."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "Which risks grow when routine infrastructure changes happen directly in the console?",
+      "options": [
+        { "id": "a", "text": "Hidden defaults become hard to review." },
+        { "id": "b", "text": "Different engineers may recreate environments differently." },
+        { "id": "c", "text": "The team may lack a clear rebuild path." },
+        { "id": "d", "text": "Plain text files stop working everywhere." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "Console-first changes can hide defaults, make repeatability weak, and leave recovery dependent on memory."
+    }
+  ]
+}

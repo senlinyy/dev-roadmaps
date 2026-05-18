@@ -1,0 +1,44 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "Product asks how many checkouts failed by region last week. Which service is the natural first place for that analysis?",
+      "options": [
+        { "id": "a", "text": "BigQuery." },
+        { "id": "b", "text": "Cloud Storage signed URLs." },
+        { "id": "c", "text": "Filestore." },
+        { "id": "d", "text": "A VM boot disk." }
+      ],
+      "correct": ["a"],
+      "explanation": "That question scans and groups many facts, which is the analytics shape."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A checkout request needs the current state of order `9281`. Why is BigQuery the wrong first dependency?",
+      "options": [
+        { "id": "a", "text": "The request-time app state belongs in the operational database, not the analytics warehouse." },
+        { "id": "b", "text": "BigQuery cannot store tables." },
+        { "id": "c", "text": "SQL can never answer analytical questions." },
+        { "id": "d", "text": "Cloud SQL can only store PDFs." }
+      ],
+      "correct": ["a"],
+      "explanation": "BigQuery is for analysis over many records, not the source of truth for one checkout request."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "Which details should a BigQuery query review name?",
+      "options": [
+        { "id": "a", "text": "The business question." },
+        { "id": "b", "text": "Tables used." },
+        { "id": "c", "text": "Filters and grouping." },
+        { "id": "d", "text": "Only the prettiness of the dashboard." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "The SQL should answer a named question over known tables and filters."
+    }
+  ]
+}

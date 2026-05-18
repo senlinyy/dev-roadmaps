@@ -1,0 +1,44 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "The team wants to mix dev test files and production receipts in one bucket because prefixes are easy. What is the main review concern?",
+      "options": [
+        { "id": "a", "text": "Bucket boundaries affect access, lifecycle, ownership, and review." },
+        { "id": "b", "text": "Buckets cannot contain objects." },
+        { "id": "c", "text": "Production receipts must live in BigQuery." },
+        { "id": "d", "text": "Prefixes remove all IAM risk." }
+      ],
+      "correct": ["a"],
+      "explanation": "A bucket is a policy boundary as well as an object container."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "`devpolaris-orders-receipts-prod` is a bucket name. What does that name help humans see?",
+      "options": [
+        { "id": "a", "text": "System, purpose, and environment." },
+        { "id": "b", "text": "Every object is public." },
+        { "id": "c", "text": "The bucket is a relational table." },
+        { "id": "d", "text": "No lifecycle rules are needed." }
+      ],
+      "correct": ["a"],
+      "explanation": "A good bucket name makes ownership and purpose visible."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "Which bucket-level decisions matter?",
+      "options": [
+        { "id": "a", "text": "Location." },
+        { "id": "b", "text": "Access model." },
+        { "id": "c", "text": "Lifecycle policy." },
+        { "id": "d", "text": "The SQL schema for order rows." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "Bucket choices shape object storage behavior and policy."
+    }
+  ]
+}

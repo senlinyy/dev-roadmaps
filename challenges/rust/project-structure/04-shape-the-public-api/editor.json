@@ -1,0 +1,45 @@
+{
+  "language": "rust",
+  "activeFile": "src/lib.rs",
+  "files": [
+    {
+      "filename": "Cargo.toml",
+      "initialValue": "[package]\nname = \"rust_notes\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[dependencies]\n",
+      "readOnly": true
+    },
+    {
+      "filename": "src/lib.rs",
+      "initialValue": "mod parser;\nmod model;\n\n"
+    },
+    {
+      "filename": "src/parser.rs",
+      "initialValue": "pub fn count_words(text: &str) -> usize {\n    text.split_whitespace().count()\n}\n"
+    },
+    {
+      "filename": "src/model.rs",
+      "initialValue": "pub struct Note {\n    pub title: String,\n    body: String,\n}\n\nimpl Note {\n    pub fn new(title: String, body: String) -> Note {\n        Note { title, body }\n    }\n\n    pub fn word_count(&self) -> usize {\n        self.body.split_whitespace().count()\n    }\n}\n"
+    },
+    {
+      "filename": "tests/api_test.rs",
+      "initialValue": "use rust_notes::{count_words, Note};\n\n#[test]\nfn crate_root_exposes_the_api() {\n    assert_eq!(count_words(\"one two three\"), 3);\n\n    let note = Note::new(String::from(\"Rust\"), String::from(\"modules hide layout\"));\n    assert_eq!(note.title, \"Rust\");\n    assert_eq!(note.word_count(), 3);\n}\n",
+      "readOnly": true
+    }
+  ],
+  "executor": {
+    "runtime": "rust-stable",
+    "entrypoint": "Cargo.toml",
+    "mode": "cargo-test",
+    "runLabel": "Run Tests"
+  },
+  "grader": {
+    "strategy": "execution",
+    "expectedExitCode": 0,
+    "output": [
+      {
+        "match": "contains",
+        "value": "test result: ok",
+        "label": "Cargo tests pass"
+      }
+    ]
+  }
+}

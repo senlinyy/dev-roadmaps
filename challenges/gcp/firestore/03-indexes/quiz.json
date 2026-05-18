@@ -1,0 +1,44 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "The app queries active checkout drafts ordered by update time. What Firestore design item should the team expect to review?",
+      "options": [
+        { "id": "a", "text": "The index that supports that query shape." },
+        { "id": "b", "text": "A Cloud Storage signed URL." },
+        { "id": "c", "text": "A disk snapshot schedule." },
+        { "id": "d", "text": "A public bucket policy." }
+      ],
+      "correct": ["a"],
+      "explanation": "Indexes support Firestore query patterns."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A missing index error appears only when a new query path runs in production. What did the release miss?",
+      "options": [
+        { "id": "a", "text": "Query and index review before rollout." },
+        { "id": "b", "text": "Object versioning." },
+        { "id": "c", "text": "A VM disk resize." },
+        { "id": "d", "text": "A BigQuery dashboard owner." }
+      ],
+      "correct": ["a"],
+      "explanation": "The index is part of the app's data access design."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "Which statements about indexes are healthy?",
+      "options": [
+        { "id": "a", "text": "They support specific query shapes." },
+        { "id": "b", "text": "They reveal access patterns future engineers should know." },
+        { "id": "c", "text": "They should be reviewed with release changes." },
+        { "id": "d", "text": "They replace authorization." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "Indexes help queries; they do not replace security review."
+    }
+  ]
+}

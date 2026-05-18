@@ -1,0 +1,37 @@
+{
+  "language": "rust",
+  "activeFile": "src/lib.rs",
+  "files": [
+    {
+      "filename": "Cargo.toml",
+      "initialValue": "[package]\nname = \"note_search_lab\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[dependencies]\n",
+      "readOnly": true
+    },
+    {
+      "filename": "src/lib.rs",
+      "initialValue": "pub struct Note {\n    pub title: String,\n    pub body: String,\n}\n\npub fn first_match(notes: &[Note], query: &str) -> Option<&Note> {\n    todo!()\n}\n"
+    },
+    {
+      "filename": "tests/search_test.rs",
+      "initialValue": "use note_search_lab::{first_match, Note};\n\nfn notes() -> Vec<Note> {\n    vec![\n        Note { title: String::from(\"Rust notes\"), body: String::from(\"Ownership later\") },\n        Note { title: String::from(\"Cargo commands\"), body: String::from(\"check run test\") },\n    ]\n}\n\n#[test]\nfn finds_first_matching_note() {\n    let notes = notes();\n    let found = first_match(&notes, \"Cargo\").expect(\"expected a match\");\n    assert_eq!(found.body, \"check run test\");\n}\n\n#[test]\nfn returns_none_when_missing() {\n    let notes = notes();\n    assert!(first_match(&notes, \"Tokio\").is_none());\n}\n",
+      "readOnly": true
+    }
+  ],
+  "executor": {
+    "runtime": "rust-stable",
+    "entrypoint": "Cargo.toml",
+    "mode": "cargo-test",
+    "runLabel": "Run Tests"
+  },
+  "grader": {
+    "strategy": "execution",
+    "expectedExitCode": 0,
+    "output": [
+      {
+        "match": "contains",
+        "value": "test result: ok",
+        "label": "Cargo tests pass"
+      }
+    ]
+  }
+}

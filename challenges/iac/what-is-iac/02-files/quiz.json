@@ -1,0 +1,44 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A pull request adds a bucket resource with tags, environment, and name. What is the main benefit over creating it silently in the console?",
+      "options": [
+        { "id": "a", "text": "The intended bucket shape can be reviewed before it exists." },
+        { "id": "b", "text": "The bucket can never be deleted by anyone." },
+        { "id": "c", "text": "The team no longer needs cloud knowledge." },
+        { "id": "d", "text": "The provider stops applying quotas." }
+      ],
+      "correct": ["a"],
+      "explanation": "IaC files make infrastructure intent visible before the real system changes."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "An Ansible task says Nginx should be installed and running. Why is that still infrastructure code?",
+      "options": [
+        { "id": "a", "text": "It describes desired server configuration in a versioned file." },
+        { "id": "b", "text": "Only cloud networks count as infrastructure." },
+        { "id": "c", "text": "YAML files automatically make all systems secure." },
+        { "id": "d", "text": "It avoids the need to connect to hosts." }
+      ],
+      "correct": ["a"],
+      "explanation": "IaC can describe cloud resources or host configuration; the important part is reviewed desired infrastructure in files."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "Which qualities make IaC files useful as a team source of truth?",
+      "options": [
+        { "id": "a", "text": "They can be diffed in review." },
+        { "id": "b", "text": "They can be searched and versioned." },
+        { "id": "c", "text": "They can express intended ownership and environment." },
+        { "id": "d", "text": "They make every provider setting obvious without reading docs." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "Files help with review, history, and ownership, but engineers still need provider understanding."
+    }
+  ]
+}

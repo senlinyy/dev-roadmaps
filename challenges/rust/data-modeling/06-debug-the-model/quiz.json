@@ -1,0 +1,59 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A learner writes println!(\"{note:?}\") and the compiler says Note does not implement Debug. What should they add while learning?",
+      "options": [
+        {
+          "id": "a",
+          "text": "#[derive(Debug)] above the Note type"
+        },
+        {
+          "id": "b",
+          "text": "A Cargo.lock file inside src/"
+        },
+        {
+          "id": "c",
+          "text": "mut before every field"
+        },
+        {
+          "id": "d",
+          "text": "A match arm named Debug"
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Deriving Debug lets Rust print a developer-facing representation with :?."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "When should debug output be treated carefully?",
+      "options": [
+        {
+          "id": "a",
+          "text": "When the output is user-facing and needs intentional formatting."
+        },
+        {
+          "id": "b",
+          "text": "Never; debug output is always the final UI."
+        },
+        {
+          "id": "c",
+          "text": "Only before any structs exist."
+        },
+        {
+          "id": "d",
+          "text": "Only when Cargo.toml is missing."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Debug output is great for inspection while learning, but permanent user output should be designed intentionally."
+    }
+  ]
+}

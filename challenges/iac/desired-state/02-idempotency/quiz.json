@@ -1,0 +1,44 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A second run reports no changes after the first run created the expected bucket and role. What does that suggest?",
+      "options": [
+        { "id": "a", "text": "The desired state and reality now match." },
+        { "id": "b", "text": "The first run definitely failed." },
+        { "id": "c", "text": "The tool created duplicate resources." },
+        { "id": "d", "text": "The files are no longer useful." }
+      ],
+      "correct": ["a"],
+      "explanation": "A quiet second run is useful evidence that the tool can avoid unnecessary changes."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A task runs `mkdir /var/orders/exports` every time and fails if the directory already exists. What is the issue?",
+      "options": [
+        { "id": "a", "text": "The task is not safely idempotent." },
+        { "id": "b", "text": "Directories cannot be managed as infrastructure." },
+        { "id": "c", "text": "The path is too short." },
+        { "id": "d", "text": "All shell commands are forbidden in every situation." }
+      ],
+      "correct": ["a"],
+      "explanation": "An idempotent task should check or declare the desired directory state so reruns are safe."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "Why does idempotency matter in real infrastructure work?",
+      "options": [
+        { "id": "a", "text": "CI jobs may be rerun." },
+        { "id": "b", "text": "Provider APIs or networks may fail partway through." },
+        { "id": "c", "text": "Humans may retry after fixing a mistake." },
+        { "id": "d", "text": "Reruns should always create extra copies." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "Retries are normal, so automation should converge safely instead of duplicating or failing unnecessarily."
+    }
+  ]
+}

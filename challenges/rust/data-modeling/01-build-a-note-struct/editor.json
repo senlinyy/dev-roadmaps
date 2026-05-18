@@ -1,0 +1,37 @@
+{
+  "language": "rust",
+  "activeFile": "src/lib.rs",
+  "files": [
+    {
+      "filename": "Cargo.toml",
+      "initialValue": "[package]\nname = \"note_struct_lab\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[dependencies]\n",
+      "readOnly": true
+    },
+    {
+      "filename": "src/lib.rs",
+      "initialValue": "pub fn sample_note() -> Note {\n    todo!()\n}\n"
+    },
+    {
+      "filename": "tests/note_struct_test.rs",
+      "initialValue": "use note_struct_lab::sample_note;\n\n#[test]\nfn builds_note_with_named_fields() {\n    let note = sample_note();\n    assert_eq!(note.title, \"Rust notes\");\n    assert_eq!(note.body, \"Cargo creates projects\");\n    assert!(note.pinned);\n}\n",
+      "readOnly": true
+    }
+  ],
+  "executor": {
+    "runtime": "rust-stable",
+    "entrypoint": "Cargo.toml",
+    "mode": "cargo-test",
+    "runLabel": "Run Tests"
+  },
+  "grader": {
+    "strategy": "execution",
+    "expectedExitCode": 0,
+    "output": [
+      {
+        "match": "contains",
+        "value": "test result: ok",
+        "label": "Cargo tests pass"
+      }
+    ]
+  }
+}

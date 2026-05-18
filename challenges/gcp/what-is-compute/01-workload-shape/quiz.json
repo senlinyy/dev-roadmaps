@@ -1,0 +1,44 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "The Orders API receives HTTP checkout requests all day and is already packaged as a container. Which GCP runtime is the natural first option?",
+      "options": [
+        { "id": "a", "text": "Cloud Run." },
+        { "id": "b", "text": "A Cloud Run function for every route." },
+        { "id": "c", "text": "A GKE cluster because every container must use Kubernetes." },
+        { "id": "d", "text": "A billing account." }
+      ],
+      "correct": ["a"],
+      "explanation": "A normal HTTP container service is a strong Cloud Run fit before introducing server or cluster responsibility."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A receipt email should be sent after checkout, and the customer should not wait for the email provider. Which workload shape is this?",
+      "options": [
+        { "id": "a", "text": "Event-shaped side work." },
+        { "id": "b", "text": "A public entry DNS record." },
+        { "id": "c", "text": "A VM boot disk." },
+        { "id": "d", "text": "A cluster upgrade." }
+      ],
+      "correct": ["a"],
+      "explanation": "The work starts because checkout happened. That makes it a good candidate for an event-driven handler."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "Which questions help choose compute responsibly?",
+      "options": [
+        { "id": "a", "text": "What starts the work?" },
+        { "id": "b", "text": "What does the team need to operate?" },
+        { "id": "c", "text": "Where will failure evidence appear?" },
+        { "id": "d", "text": "Which product name sounds most advanced?" }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "Runtime choice should follow work shape, ownership, and evidence, not product prestige."
+    }
+  ]
+}

@@ -1,0 +1,37 @@
+{
+  "language": "rust",
+  "activeFile": "src/lib.rs",
+  "files": [
+    {
+      "filename": "Cargo.toml",
+      "initialValue": "[package]\nname = \"note_match_lab\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[dependencies]\n",
+      "readOnly": true
+    },
+    {
+      "filename": "src/lib.rs",
+      "initialValue": "pub enum NoteState {\n    Draft,\n    Published { published_at: String },\n    Archived { reason: String },\n}\n\npub struct Note {\n    pub title: String,\n    pub body: String,\n    pub state: NoteState,\n}\n\npub fn status_line(note: &Note) -> String {\n    todo!()\n}\n"
+    },
+    {
+      "filename": "tests/status_line_test.rs",
+      "initialValue": "use note_match_lab::{status_line, Note, NoteState};\n\nfn note(state: NoteState) -> Note {\n    Note { title: String::from(\"T\"), body: String::from(\"B\"), state }\n}\n\n#[test]\nfn handles_draft() {\n    assert_eq!(status_line(&note(NoteState::Draft)), \"draft\");\n}\n\n#[test]\nfn handles_published() {\n    assert_eq!(status_line(&note(NoteState::Published { published_at: String::from(\"today\") })), \"published at today\");\n}\n\n#[test]\nfn handles_archived() {\n    assert_eq!(status_line(&note(NoteState::Archived { reason: String::from(\"duplicate\") })), \"archived: duplicate\");\n}\n",
+      "readOnly": true
+    }
+  ],
+  "executor": {
+    "runtime": "rust-stable",
+    "entrypoint": "Cargo.toml",
+    "mode": "cargo-test",
+    "runLabel": "Run Tests"
+  },
+  "grader": {
+    "strategy": "execution",
+    "expectedExitCode": 0,
+    "output": [
+      {
+        "match": "contains",
+        "value": "test result: ok",
+        "label": "Cargo tests pass"
+      }
+    ]
+  }
+}

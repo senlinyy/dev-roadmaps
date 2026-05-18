@@ -1,0 +1,32 @@
+{
+  "language": "rust",
+  "activeFile": "src/main.rs",
+  "files": [
+    {
+      "filename": "Cargo.toml",
+      "initialValue": "[package]\nname = \"cargo_hello_lab\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[dependencies]\n",
+      "readOnly": true
+    },
+    {
+      "filename": "src/main.rs",
+      "initialValue": "fn main() {\n    println!(\"change me\");\n}\n"
+    }
+  ],
+  "executor": {
+    "runtime": "rust-stable",
+    "entrypoint": "Cargo.toml",
+    "mode": "cargo-run",
+    "runLabel": "Run Cargo"
+  },
+  "grader": {
+    "strategy": "execution",
+    "expectedExitCode": 0,
+    "stdout": [
+      {
+        "match": "contains",
+        "value": "hello from cargo",
+        "label": "stdout prints the Cargo greeting"
+      }
+    ]
+  }
+}

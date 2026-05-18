@@ -1,0 +1,44 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A platform team says the Orders API will run on GKE. What is the first platform boundary to identify?",
+      "options": [
+        { "id": "a", "text": "The GKE cluster that owns the Kubernetes environment." },
+        { "id": "b", "text": "Only the container image tag." },
+        { "id": "c", "text": "Only the billing account display name." },
+        { "id": "d", "text": "Only a Cloud Run revision." }
+      ],
+      "correct": ["a"],
+      "explanation": "The cluster is the Kubernetes environment where workloads run."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "Why does cluster region and network placement matter?",
+      "options": [
+        { "id": "a", "text": "They affect cost, IAM, quotas, network paths, and workload placement." },
+        { "id": "b", "text": "They only change the color of the console page." },
+        { "id": "c", "text": "They replace all Kubernetes objects." },
+        { "id": "d", "text": "They make every Pod global." }
+      ],
+      "correct": ["a"],
+      "explanation": "A GKE cluster is managed, but it still lives in concrete GCP placement and network context."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "Which facts belong in a first GKE cluster review?",
+      "options": [
+        { "id": "a", "text": "Project and region." },
+        { "id": "b", "text": "Cluster mode." },
+        { "id": "c", "text": "Namespaces and network path." },
+        { "id": "d", "text": "Whether every developer likes Kubernetes." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "Cluster review should name the platform boundary and its operating context."
+    }
+  ]
+}

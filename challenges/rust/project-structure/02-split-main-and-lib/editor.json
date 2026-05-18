@@ -1,0 +1,41 @@
+{
+  "language": "rust",
+  "activeFile": "src/lib.rs",
+  "files": [
+    {
+      "filename": "Cargo.toml",
+      "initialValue": "[package]\nname = \"rust_notes\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[dependencies]\n",
+      "readOnly": true
+    },
+    {
+      "filename": "src/main.rs",
+      "initialValue": "use rust_notes::count_words;\n\nfn main() {\n    let text = \"Cargo creates Rust projects\";\n    println!(\"{} words\", count_words(text));\n}\n"
+    },
+    {
+      "filename": "src/lib.rs",
+      "initialValue": "pub fn count_words(text: &str) -> usize {\n    todo!()\n}\n"
+    },
+    {
+      "filename": "tests/count_words_test.rs",
+      "initialValue": "use rust_notes::count_words;\n\n#[test]\nfn counts_words() {\n    assert_eq!(count_words(\"one two three\"), 3);\n}\n",
+      "readOnly": true
+    }
+  ],
+  "executor": {
+    "runtime": "rust-stable",
+    "entrypoint": "Cargo.toml",
+    "mode": "cargo-test",
+    "runLabel": "Run Tests"
+  },
+  "grader": {
+    "strategy": "execution",
+    "expectedExitCode": 0,
+    "output": [
+      {
+        "match": "contains",
+        "value": "test result: ok",
+        "label": "Cargo tests pass"
+      }
+    ]
+  }
+}

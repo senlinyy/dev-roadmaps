@@ -1,0 +1,44 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A script overwrites receipt PDFs with bad content. What question matters more than whether Cloud Storage is durable?",
+      "options": [
+        { "id": "a", "text": "Is there a previous good version or recovery copy that can be restored?" },
+        { "id": "b", "text": "Can we rename the project?" },
+        { "id": "c", "text": "Can the app use a larger font?" },
+        { "id": "d", "text": "Can the checkout service ignore receipts forever?" }
+      ],
+      "correct": ["a"],
+      "explanation": "Durability can preserve bad data. Recovery copies decide whether the old good data is available."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "The team says backups are enabled but nobody has restored one. What is missing?",
+      "options": [
+        { "id": "a", "text": "Restore proof." },
+        { "id": "b", "text": "A second product name." },
+        { "id": "c", "text": "A broader public bucket." },
+        { "id": "d", "text": "A checkout route in every function." }
+      ],
+      "correct": ["a"],
+      "explanation": "A backup is not operationally useful until restore is understood and tested."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "Which recovery-copy questions belong in storage review?",
+      "options": [
+        { "id": "a", "text": "What previous copy exists?" },
+        { "id": "b", "text": "How long is it kept?" },
+        { "id": "c", "text": "Who can delete it?" },
+        { "id": "d", "text": "Can we skip recovery because the first write succeeded?" }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "Recovery needs copy, retention, deletion, and restore thinking."
+    }
+  ]
+}

@@ -1,0 +1,44 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A receipt PDF is stored in Cloud Storage. Where should the app keep the fact that order `9281` owns that receipt?",
+      "options": [
+        { "id": "a", "text": "In the application database as business metadata pointing to the object name." },
+        { "id": "b", "text": "Only inside the PDF bytes." },
+        { "id": "c", "text": "Only in a bucket lifecycle rule." },
+        { "id": "d", "text": "Only in a BigQuery dashboard." }
+      ],
+      "correct": ["a"],
+      "explanation": "Cloud Storage keeps object bytes. The database keeps business meaning and relationships."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A feature stores images, PDFs, and CSV exports as named blobs. Which GCP service should be the first thought?",
+      "options": [
+        { "id": "a", "text": "Cloud Storage." },
+        { "id": "b", "text": "Cloud SQL for every byte." },
+        { "id": "c", "text": "BigQuery as a file server." },
+        { "id": "d", "text": "A GKE cluster." }
+      ],
+      "correct": ["a"],
+      "explanation": "Named file-like bytes fit Cloud Storage object storage."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "Which facts should object review include?",
+      "options": [
+        { "id": "a", "text": "Bucket name." },
+        { "id": "b", "text": "Object name pattern." },
+        { "id": "c", "text": "Access and retention behavior." },
+        { "id": "d", "text": "A promise that object storage replaces relational constraints." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "Object storage review should name where objects live, how they are named, and how they are protected."
+    }
+  ]
+}

@@ -1,0 +1,37 @@
+{
+  "language": "rust",
+  "activeFile": "src/lib.rs",
+  "files": [
+    {
+      "filename": "Cargo.toml",
+      "initialValue": "[package]\nname = \"note_description_lab\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[dependencies]\n",
+      "readOnly": true
+    },
+    {
+      "filename": "src/lib.rs",
+      "initialValue": "pub fn count_words(text: &str) -> usize {\n    text.split_whitespace().count()\n}\n\npub fn describe(text: &str) -> String {\n    todo!()\n}\n\npub fn summarize_all(notes: Vec<&str>) -> Vec<String> {\n    let mut summaries = Vec::new();\n\n    for note in notes {\n        summaries.push(describe(note));\n    }\n\n    summaries\n}\n"
+    },
+    {
+      "filename": "tests/describe_test.rs",
+      "initialValue": "use note_description_lab::{describe, summarize_all};\n\n#[test]\nfn describes_empty_text() {\n    assert_eq!(describe(\"\"), \"No words\");\n}\n\n#[test]\nfn describes_word_count() {\n    assert_eq!(describe(\"learn cargo today\"), \"3 words\");\n}\n\n#[test]\nfn summarizes_a_vector() {\n    let notes = vec![\"learn cargo\", \"\", \"read errors\"];\n    assert_eq!(summarize_all(notes), vec![\"2 words\", \"No words\", \"2 words\"]);\n}\n",
+      "readOnly": true
+    }
+  ],
+  "executor": {
+    "runtime": "rust-stable",
+    "entrypoint": "Cargo.toml",
+    "mode": "cargo-test",
+    "runLabel": "Run Tests"
+  },
+  "grader": {
+    "strategy": "execution",
+    "expectedExitCode": 0,
+    "output": [
+      {
+        "match": "contains",
+        "value": "test result: ok",
+        "label": "Cargo tests pass"
+      }
+    ]
+  }
+}

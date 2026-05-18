@@ -1,0 +1,44 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "The Orders API image builds successfully but Cloud Run never marks the revision ready. The app always listens on hardcoded port `3000`. What should the team check?",
+      "options": [
+        { "id": "a", "text": "Whether the container listens on the port Cloud Run expects through the `PORT` environment variable." },
+        { "id": "b", "text": "Whether the image tag is longer." },
+        { "id": "c", "text": "Whether DNS has more TXT records." },
+        { "id": "d", "text": "Whether the billing account is renamed." }
+      ],
+      "correct": ["a"],
+      "explanation": "A built image can still fail the runtime contract if it does not listen where Cloud Run sends traffic."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "The app writes uploaded receipts to the local container filesystem and expects them to be there next week. What is the Cloud Run design issue?",
+      "options": [
+        { "id": "a", "text": "Container instances are not durable storage homes; durable state should live outside the container." },
+        { "id": "b", "text": "Cloud Run cannot receive requests." },
+        { "id": "c", "text": "Every file must be in a Kubernetes Pod." },
+        { "id": "d", "text": "The service account name is too short." }
+      ],
+      "correct": ["a"],
+      "explanation": "Cloud Run instances can be replaced or scaled down. Durable data belongs in a durable service."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "Which items belong in a Cloud Run container contract review?",
+      "options": [
+        { "id": "a", "text": "Startup reliability." },
+        { "id": "b", "text": "Listening on the expected port." },
+        { "id": "c", "text": "Keeping durable state outside the instance filesystem." },
+        { "id": "d", "text": "Manually SSHing into each Cloud Run instance." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "Cloud Run expects a well-behaved process; it does not expose servers for manual runtime setup."
+    }
+  ]
+}

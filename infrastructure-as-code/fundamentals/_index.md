@@ -1,6 +1,6 @@
 ---
 title: "IaC Fundamentals"
-description: "Learn the shared mental model behind repeatable infrastructure changes before choosing Terraform or Ansible."
-tags: ["iac", "state", "drift"]
+description: "Learn why infrastructure changes move into reviewed files, how desired state works, and how plans and drift checks keep changes safe."
+tags: ["iac", "desired-state", "plans", "drift"]
 order: 1
 ---

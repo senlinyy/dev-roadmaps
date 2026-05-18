@@ -1,0 +1,41 @@
+{
+  "language": "rust",
+  "activeFile": "src/lib.rs",
+  "files": [
+    {
+      "filename": "Cargo.toml",
+      "initialValue": "[package]\nname = \"rust_notes\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[dependencies]\n",
+      "readOnly": true
+    },
+    {
+      "filename": "src/lib.rs",
+      "initialValue": "mod parser;\n\n"
+    },
+    {
+      "filename": "src/parser.rs",
+      "initialValue": "pub fn count_words(text: &str) -> usize {\n    todo!()\n}\n"
+    },
+    {
+      "filename": "tests/parser_test.rs",
+      "initialValue": "use rust_notes::count_words;\n\n#[test]\nfn counts_words_from_the_outside() {\n    assert_eq!(count_words(\"integration tests use public API\"), 5);\n}\n\n#[test]\nfn empty_text_has_zero_words() {\n    assert_eq!(count_words(\"\"), 0);\n}\n",
+      "readOnly": true
+    }
+  ],
+  "executor": {
+    "runtime": "rust-stable",
+    "entrypoint": "Cargo.toml",
+    "mode": "cargo-test",
+    "runLabel": "Run Tests"
+  },
+  "grader": {
+    "strategy": "execution",
+    "expectedExitCode": 0,
+    "output": [
+      {
+        "match": "contains",
+        "value": "test result: ok",
+        "label": "Cargo tests pass"
+      }
+    ]
+  }
+}

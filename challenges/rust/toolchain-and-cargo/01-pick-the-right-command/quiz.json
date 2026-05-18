@@ -1,0 +1,115 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "You changed a function signature and want the fastest feedback that the project still type-checks. Which command fits best?",
+      "options": [
+        {
+          "id": "a",
+          "text": "cargo check"
+        },
+        {
+          "id": "b",
+          "text": "cargo doc --open"
+        },
+        {
+          "id": "c",
+          "text": "cargo new"
+        },
+        {
+          "id": "d",
+          "text": "rustup update"
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "cargo check asks whether the project compiles and is usually faster than building a runnable binary."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "You want to see the output from the binary program in src/main.rs. Which command fits?",
+      "options": [
+        {
+          "id": "a",
+          "text": "cargo run"
+        },
+        {
+          "id": "b",
+          "text": "cargo fmt"
+        },
+        {
+          "id": "c",
+          "text": "cargo clippy"
+        },
+        {
+          "id": "d",
+          "text": "cargo new"
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "cargo run builds and runs the binary target."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "You added unit tests for a word-count function and want Cargo to execute them. Which command fits?",
+      "options": [
+        {
+          "id": "a",
+          "text": "cargo test"
+        },
+        {
+          "id": "b",
+          "text": "cargo build --release"
+        },
+        {
+          "id": "c",
+          "text": "cargo doc --open"
+        },
+        {
+          "id": "d",
+          "text": "rustc --version"
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "cargo test builds and runs Rust tests."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "Which commands are part of normal project feedback rather than project creation?",
+      "options": [
+        {
+          "id": "a",
+          "text": "cargo fmt"
+        },
+        {
+          "id": "b",
+          "text": "cargo clippy"
+        },
+        {
+          "id": "c",
+          "text": "cargo test"
+        },
+        {
+          "id": "d",
+          "text": "cargo new rust-notes"
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "fmt, clippy, and test are normal feedback commands after the project exists. cargo new creates a project."
+    }
+  ]
+}

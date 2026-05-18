@@ -1,0 +1,44 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A VM-hosted worker fails overnight, but logs only exist in a local file that rotated away. What was missing?",
+      "options": [
+        { "id": "a", "text": "A plan to ship and retain VM and application logs where operators can read them." },
+        { "id": "b", "text": "A Cloud Run traffic split." },
+        { "id": "c", "text": "A Kubernetes Service." },
+        { "id": "d", "text": "A Pub/Sub trigger." }
+      ],
+      "correct": ["a"],
+      "explanation": "VM runtime responsibility includes log collection and retention."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A team chooses Compute Engine for host control. Which duty does that usually keep with the team?",
+      "options": [
+        { "id": "a", "text": "OS and package patch strategy." },
+        { "id": "b", "text": "Cloud Run revision traffic." },
+        { "id": "c", "text": "Function trigger retry settings only." },
+        { "id": "d", "text": "GKE Pod scheduling only." }
+      ],
+      "correct": ["a"],
+      "explanation": "VMs keep more server operations, including patch planning, with the team."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "Which items are part of honest VM operation?",
+      "options": [
+        { "id": "a", "text": "Patch strategy." },
+        { "id": "b", "text": "Process restart behavior." },
+        { "id": "c", "text": "Disk monitoring." },
+        { "id": "d", "text": "Assuming manual SSH changes are permanent design." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "Compute Engine is explicit server control, which means explicit server operations."
+    }
+  ]
+}

@@ -1,0 +1,44 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A customer should download one private receipt PDF without receiving bucket credentials. Which pattern fits?",
+      "options": [
+        { "id": "a", "text": "A short-lived signed URL for that object." },
+        { "id": "b", "text": "Make the whole bucket public." },
+        { "id": "c", "text": "Grant the customer Storage Admin." },
+        { "id": "d", "text": "Copy the file into Cloud SQL." }
+      ],
+      "correct": ["a"],
+      "explanation": "A signed URL can grant temporary access to a specific object operation."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A signed URL is valid for seven days and points to the wrong support attachment. What is the risk?",
+      "options": [
+        { "id": "a", "text": "The access mistake travels with the link while it is valid." },
+        { "id": "b", "text": "Signed URLs cannot access objects." },
+        { "id": "c", "text": "The bucket becomes a SQL database." },
+        { "id": "d", "text": "Lifecycle rules stop working." }
+      ],
+      "correct": ["a"],
+      "explanation": "Signed URLs should be narrow in object, method, and expiration."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "Which properties should a signed URL design specify?",
+      "options": [
+        { "id": "a", "text": "Object name." },
+        { "id": "b", "text": "Allowed method." },
+        { "id": "c", "text": "Expiration window." },
+        { "id": "d", "text": "A permanent broad IAM role for the user." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "Signed URLs should be tightly scoped."
+    }
+  ]
+}

@@ -1,0 +1,88 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A beginner says the compiler is too strict because it complains before the program runs. Which response best matches the article?",
+      "options": [
+        {
+          "id": "a",
+          "text": "That strictness is part of moving some memory and state bugs from runtime into compile time."
+        },
+        {
+          "id": "b",
+          "text": "The compiler is only checking whitespace and formatting."
+        },
+        {
+          "id": "c",
+          "text": "The correct response is to use unwrap everywhere until the errors disappear."
+        },
+        {
+          "id": "d",
+          "text": "Rust is strict because Cargo cannot run tests."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Rusts early cost is that it asks you to describe ownership, mutation, and failure more honestly before the program runs."
+    },
+    {
+      "id": "q2",
+      "type": "multiple",
+      "scenario": "Which Rust choices from the article cost something early but buy maintainability later?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Strict ownership rules"
+        },
+        {
+          "id": "b",
+          "text": "Explicit error types"
+        },
+        {
+          "id": "c",
+          "text": "Cargo conventions"
+        },
+        {
+          "id": "d",
+          "text": "Ignoring all compiler warnings"
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "Ownership, error types, and Cargo conventions all require learning, but improve feedback and consistency."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "What is the best way to understand no garbage collector in the article?",
+      "options": [
+        {
+          "id": "a",
+          "text": "It is a design constraint that gives Rust predictable cleanup points and makes it fit constrained environments."
+        },
+        {
+          "id": "b",
+          "text": "It proves garbage-collected languages are bad."
+        },
+        {
+          "id": "c",
+          "text": "It means Rust developers manually call free in normal code."
+        },
+        {
+          "id": "d",
+          "text": "It means heap memory never exists in Rust."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "No built-in GC is about predictability and placement, not moral superiority or manual free in normal code."
+    }
+  ]
+}

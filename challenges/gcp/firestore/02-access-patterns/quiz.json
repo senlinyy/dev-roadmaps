@@ -1,0 +1,44 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "The app almost always reads the active checkout draft by user ID. Which path is easy to explain?",
+      "options": [
+        { "id": "a", "text": "`checkoutDrafts/{userId}`." },
+        { "id": "b", "text": "`random/{timestamp}/misc/{uuid}`." },
+        { "id": "c", "text": "A Cloud Storage object lifecycle rule." },
+        { "id": "d", "text": "A BigQuery partition only." }
+      ],
+      "correct": ["a"],
+      "explanation": "The path should match the common lookup question."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A Firestore design starts with fields but cannot answer how the app will query documents. What is missing?",
+      "options": [
+        { "id": "a", "text": "Access patterns." },
+        { "id": "b", "text": "A VM machine type." },
+        { "id": "c", "text": "A signed URL." },
+        { "id": "d", "text": "A Cloud SQL engine version only." }
+      ],
+      "correct": ["a"],
+      "explanation": "Firestore design should start with reads and writes the app must perform."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "Which access-pattern questions fit Firestore design?",
+      "options": [
+        { "id": "a", "text": "Can the app name the document path?" },
+        { "id": "b", "text": "Which collection queries are needed?" },
+        { "id": "c", "text": "Which indexes support those queries?" },
+        { "id": "d", "text": "Can we avoid modeling and query anything later for free?" }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "Firestore is flexible, but query shape still matters."
+    }
+  ]
+}

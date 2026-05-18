@@ -1,0 +1,44 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A user's checkout draft is read and written as one small record by user ID. Which Firestore concept matches that unit?",
+      "options": [
+        { "id": "a", "text": "A document." },
+        { "id": "b", "text": "A Cloud SQL transaction log." },
+        { "id": "c", "text": "A BigQuery warehouse query." },
+        { "id": "d", "text": "A Persistent Disk snapshot." }
+      ],
+      "correct": ["a"],
+      "explanation": "A small state record read by path is document-shaped."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "The team wants to store order, payment, refund, and support relationships in one large document because JSON feels easy. What is the concern?",
+      "options": [
+        { "id": "a", "text": "The data may need relational constraints and transactions better suited to Cloud SQL." },
+        { "id": "b", "text": "Firestore cannot store fields." },
+        { "id": "c", "text": "Documents must be public." },
+        { "id": "d", "text": "BigQuery is required for every user preference." }
+      ],
+      "correct": ["a"],
+      "explanation": "JSON-like shape does not remove relational requirements."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "Which are reasonable Firestore document examples?",
+      "options": [
+        { "id": "a", "text": "Checkout draft by user ID." },
+        { "id": "b", "text": "User preference record." },
+        { "id": "c", "text": "Small support note document." },
+        { "id": "d", "text": "A quarter of analytics event scans." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "Firestore fits predictable document-shaped app state."
+    }
+  ]
+}

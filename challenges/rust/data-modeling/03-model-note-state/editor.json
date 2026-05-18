@@ -1,0 +1,37 @@
+{
+  "language": "rust",
+  "activeFile": "src/lib.rs",
+  "files": [
+    {
+      "filename": "Cargo.toml",
+      "initialValue": "[package]\nname = \"note_state_lab\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[dependencies]\n",
+      "readOnly": true
+    },
+    {
+      "filename": "src/lib.rs",
+      "initialValue": "pub struct Note {\n    pub title: String,\n    pub body: String,\n    pub state: (),\n}\n\npub fn published_note() -> Note {\n    todo!()\n}\n"
+    },
+    {
+      "filename": "tests/state_test.rs",
+      "initialValue": "use note_state_lab::{published_note, NoteState};\n\n#[test]\nfn published_state_carries_a_date() {\n    let note = published_note();\n    match note.state {\n        NoteState::Published { published_at } => {\n            assert_eq!(published_at, \"2026-05-18\");\n        }\n        _ => panic!(\"expected a published note\"),\n    }\n}\n",
+      "readOnly": true
+    }
+  ],
+  "executor": {
+    "runtime": "rust-stable",
+    "entrypoint": "Cargo.toml",
+    "mode": "cargo-test",
+    "runLabel": "Run Tests"
+  },
+  "grader": {
+    "strategy": "execution",
+    "expectedExitCode": 0,
+    "output": [
+      {
+        "match": "contains",
+        "value": "test result: ok",
+        "label": "Cargo tests pass"
+      }
+    ]
+  }
+}

@@ -1,0 +1,37 @@
+{
+  "language": "rust",
+  "activeFile": "src/lib.rs",
+  "files": [
+    {
+      "filename": "Cargo.toml",
+      "initialValue": "[package]\nname = \"word_count_lab\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[dependencies]\n",
+      "readOnly": true
+    },
+    {
+      "filename": "src/lib.rs",
+      "initialValue": "pub fn word_count(text: &str) -> usize {\n    todo!()\n}\n"
+    },
+    {
+      "filename": "tests/word_count_test.rs",
+      "initialValue": "use word_count_lab::word_count;\n\n#[test]\nfn counts_normal_text() {\n    assert_eq!(word_count(\"rust makes systems visible\"), 4);\n}\n\n#[test]\nfn handles_empty_text() {\n    assert_eq!(word_count(\"\"), 0);\n}\n\n#[test]\nfn ignores_extra_spaces() {\n    assert_eq!(word_count(\"  cargo   test  \"), 2);\n}\n",
+      "readOnly": true
+    }
+  ],
+  "executor": {
+    "runtime": "rust-stable",
+    "entrypoint": "Cargo.toml",
+    "mode": "cargo-test",
+    "runLabel": "Run Tests"
+  },
+  "grader": {
+    "strategy": "execution",
+    "expectedExitCode": 0,
+    "output": [
+      {
+        "match": "contains",
+        "value": "test result: ok",
+        "label": "Cargo tests pass"
+      }
+    ]
+  }
+}

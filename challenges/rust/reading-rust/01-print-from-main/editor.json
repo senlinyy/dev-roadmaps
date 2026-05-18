@@ -1,0 +1,27 @@
+{
+  "language": "rust",
+  "activeFile": "main.rs",
+  "files": [
+    {
+      "filename": "main.rs",
+      "initialValue": "fn main() {\n    println!(\"change this line\");\n}\n"
+    }
+  ],
+  "executor": {
+    "runtime": "rust-stable",
+    "entrypoint": "main.rs",
+    "mode": "run",
+    "runLabel": "Run Rust"
+  },
+  "grader": {
+    "strategy": "execution",
+    "expectedExitCode": 0,
+    "stdout": [
+      {
+        "match": "exact",
+        "value": "Rust is readable\n",
+        "label": "stdout exactly matches the requested line"
+      }
+    ]
+  }
+}

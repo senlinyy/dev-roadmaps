@@ -1,0 +1,25 @@
+{
+  "language": "rust",
+  "activeFile": "src/lib.rs",
+  "files": [
+    {
+      "filename": "Cargo.toml",
+      "initialValue": "[package]\nname = \"cargo_check_lab\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[dependencies]\n",
+      "readOnly": true
+    },
+    {
+      "filename": "src/lib.rs",
+      "initialValue": "pub fn add_tax(price: i32) -> i32 {\n    price + 5;\n}\n"
+    }
+  ],
+  "executor": {
+    "runtime": "rust-stable",
+    "entrypoint": "Cargo.toml",
+    "mode": "cargo-check",
+    "runLabel": "Cargo Check"
+  },
+  "grader": {
+    "strategy": "execution",
+    "expectedExitCode": 0
+  }
+}

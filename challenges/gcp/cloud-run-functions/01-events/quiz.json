@@ -1,0 +1,44 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "Checkout completes and the system needs to send a receipt later. What is the event-shaped view?",
+      "options": [
+        { "id": "a", "text": "An order-created event can trigger bounded side work." },
+        { "id": "b", "text": "The customer must wait for every email provider call." },
+        { "id": "c", "text": "A VM must be patched for every receipt." },
+        { "id": "d", "text": "A Kubernetes cluster is required because events exist." }
+      ],
+      "correct": ["a"],
+      "explanation": "The side work starts because checkout happened, which fits event-driven handling."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A function receives a receipt event. Which fields are useful without copying the whole database record into the event?",
+      "options": [
+        { "id": "a", "text": "Order ID, customer ID, and correlation ID." },
+        { "id": "b", "text": "Every table row in the system." },
+        { "id": "c", "text": "The billing account display name only." },
+        { "id": "d", "text": "A VM image family." }
+      ],
+      "correct": ["a"],
+      "explanation": "Events should carry enough context to do the job without becoming fragile full data copies."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "Which examples are event-shaped?",
+      "options": [
+        { "id": "a", "text": "A Pub/Sub message arrives." },
+        { "id": "b", "text": "A file is created in Cloud Storage." },
+        { "id": "c", "text": "A schedule fires." },
+        { "id": "d", "text": "A service owns many long-running HTTP routes." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "Functions fit bounded work that starts because something happened."
+    }
+  ]
+}

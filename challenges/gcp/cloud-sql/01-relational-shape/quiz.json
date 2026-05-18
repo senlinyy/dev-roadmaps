@@ -1,0 +1,44 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "An order has line items, payment attempts, refunds, and support queries that join across those facts. Which data shape is this?",
+      "options": [
+        { "id": "a", "text": "Relational application data." },
+        { "id": "b", "text": "A single receipt object." },
+        { "id": "c", "text": "Only a mounted file path." },
+        { "id": "d", "text": "A GKE cluster mode." }
+      ],
+      "correct": ["a"],
+      "explanation": "Related business records that need constraints and joins are relational."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "The app needs to keep receipt PDF bytes and order status. Where should order status live?",
+      "options": [
+        { "id": "a", "text": "In Cloud SQL or another operational database record, with the object name pointing to Cloud Storage." },
+        { "id": "b", "text": "Only in the PDF file name." },
+        { "id": "c", "text": "Only in a lifecycle rule." },
+        { "id": "d", "text": "Only in a signed URL." }
+      ],
+      "correct": ["a"],
+      "explanation": "Cloud Storage keeps bytes. The database keeps business state."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "Which are relational database signals?",
+      "options": [
+        { "id": "a", "text": "Transactions across related writes." },
+        { "id": "b", "text": "Constraints between records." },
+        { "id": "c", "text": "Queries that join business tables." },
+        { "id": "d", "text": "Only storing one image blob." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "Cloud SQL fits when relationships and consistency rules matter."
+    }
+  ]
+}

@@ -1,0 +1,88 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A learner wants to understand Rust by reading the whole book before building anything. What rhythm does the article recommend instead?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Read one concept, run a small example, break it, fix the compiler error, then use it in a tiny project."
+        },
+        {
+          "id": "b",
+          "text": "Memorize every lifetime rule before typing code."
+        },
+        {
+          "id": "c",
+          "text": "Start with async web services before learning ownership."
+        },
+        {
+          "id": "d",
+          "text": "Skip Cargo until production."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Rust clicks through repeated small feedback loops, not through passive reading alone."
+    },
+    {
+      "id": "q2",
+      "type": "multiple",
+      "scenario": "Which ecosystem pieces belong in a beginner Rust foundation?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The Rust Book for first-principles explanation"
+        },
+        {
+          "id": "b",
+          "text": "Rust By Example for runnable shapes"
+        },
+        {
+          "id": "c",
+          "text": "Rustlings for exercises"
+        },
+        {
+          "id": "d",
+          "text": "Only nightly compiler features"
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "The article points learners toward official reading, examples, and exercises. Nightly-only features are not the beginner base."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "A team wants to adopt Rust. Which path best matches the article pattern?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Start at a clear pressure point with small blast radius, such as a CLI, parser, or performance-sensitive component."
+        },
+        {
+          "id": "b",
+          "text": "Rewrite the entire company system at once so everyone learns faster."
+        },
+        {
+          "id": "c",
+          "text": "Use Rust only if no one needs documentation."
+        },
+        {
+          "id": "d",
+          "text": "Avoid community crates and tooling entirely."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Adoption often starts at edges where Rusts strengths match a specific problem and the risk is bounded."
+    }
+  ]
+}

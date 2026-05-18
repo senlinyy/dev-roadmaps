@@ -1,0 +1,44 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A vendor import tool expects files under `/mnt/incoming` and writes results beside them. What storage shape is this?",
+      "options": [
+        { "id": "a", "text": "Attached filesystem-shaped storage." },
+        { "id": "b", "text": "Relational checkout records." },
+        { "id": "c", "text": "A warehouse query." },
+        { "id": "d", "text": "A signed URL only." }
+      ],
+      "correct": ["a"],
+      "explanation": "The tool asks for a mounted path, which is attached-storage territory."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A customer receipt should be downloaded later by object name. Which service remains the better first thought?",
+      "options": [
+        { "id": "a", "text": "Cloud Storage." },
+        { "id": "b", "text": "Persistent Disk by default." },
+        { "id": "c", "text": "Filestore by default." },
+        { "id": "d", "text": "A VM local folder with no backup." }
+      ],
+      "correct": ["a"],
+      "explanation": "Receipt PDFs are object-shaped, not attached-storage-shaped."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "Which are attached-storage signals?",
+      "options": [
+        { "id": "a", "text": "The workload needs a mounted path." },
+        { "id": "b", "text": "The operating system should see a block device." },
+        { "id": "c", "text": "Several clients need a shared file tree." },
+        { "id": "d", "text": "The data is a business relationship between order rows." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "Attached storage is about disks and filesystems presented to compute."
+    }
+  ]
+}

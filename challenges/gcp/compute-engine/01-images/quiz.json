@@ -1,0 +1,44 @@
+{
+  "passThreshold": 0.8,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A VM works because someone SSHed in and installed packages by hand. The replacement VM fails. What is the core design problem?",
+      "options": [
+        { "id": "a", "text": "The server state was not captured in an image or repeatable startup automation." },
+        { "id": "b", "text": "Compute Engine cannot run Linux." },
+        { "id": "c", "text": "The project needs more DNS zones." },
+        { "id": "d", "text": "The machine type name is too short." }
+      ],
+      "correct": ["a"],
+      "explanation": "A healthy VM design can reproduce the server from an image plus automation."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "The security team requires a hardened OS baseline for import workers. Which VM planning artifact should name that baseline?",
+      "options": [
+        { "id": "a", "text": "The image used to create the VM." },
+        { "id": "b", "text": "The public DNS TTL." },
+        { "id": "c", "text": "The Cloud Run revision." },
+        { "id": "d", "text": "A function trigger." }
+      ],
+      "correct": ["a"],
+      "explanation": "The image is the operating system starting point for the VM."
+    },
+    {
+      "id": "q3",
+      "type": "multiple",
+      "scenario": "Which statements about VM images are healthy?",
+      "options": [
+        { "id": "a", "text": "They define what exists before startup automation runs." },
+        { "id": "b", "text": "Custom images need a refresh and patch strategy." },
+        { "id": "c", "text": "They help avoid manual snowflake servers." },
+        { "id": "d", "text": "They replace all IAM review." }
+      ],
+      "correct": ["a", "b", "c"],
+      "explanation": "Images are runtime starting points, not permission systems."
+    }
+  ]
+}
