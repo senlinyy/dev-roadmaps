@@ -1,7 +1,7 @@
 ---
 title: "Terraform in CI"
-description: "Run Terraform and OpenTofu checks in CI so pull requests show formatting, validation, plan, and apply evidence safely."
-overview: "Terraform in CI moves the review loop from one laptop into a repeatable runner. This article follows devpolaris-orders as it checks pull requests, protects state, handles credentials, and separates plan review from apply."
+description: "Run Terraform and OpenTofu checks in CI so pull requests show formatting, validation, plan evidence, credential boundaries, backend access, locks, and safe apply choices."
+overview: "Terraform in CI moves the review loop from one laptop into a repeatable runner. This article follows the orders team as pull requests generate review evidence and production applies stay protected."
 tags: ["terraform", "opentofu", "ci", "plan", "state"]
 order: 9
 id: article-infrastructure-as-code-terraform-in-ci
@@ -9,64 +9,38 @@ id: article-infrastructure-as-code-terraform-in-ci
 
 ## Table of Contents
 
-1. [Why Terraform Belongs in CI](#why-terraform-belongs-in-ci)
-2. [The CI Runner Is Another Operator](#the-ci-runner-is-another-operator)
+1. [The Problem](#the-problem)
+2. [CI Runner](#ci-runner)
 3. [Pull Request Checks](#pull-request-checks)
-4. [Plans, Saved Plans, and Apply](#plans-saved-plans-and-apply)
-5. [Credentials, Backends, and Locks](#credentials-backends-and-locks)
-6. [A Beginner-Safe GitHub Actions Workflow](#a-beginner-safe-github-actions-workflow)
-7. [Reading CI Output Like a Reviewer](#reading-ci-output-like-a-reviewer)
-8. [Common Terraform CI Failures](#common-terraform-ci-failures)
-9. [Choosing Automation Boundaries](#choosing-automation-boundaries)
+4. [Plan Artifacts](#plan-artifacts)
+5. [Credentials](#credentials)
+6. [Backends and Locks](#backends-and-locks)
+7. [Apply Boundaries](#apply-boundaries)
+8. [GitHub Actions Shape](#github-actions-shape)
+9. [Reading CI Output](#reading-ci-output)
+10. [Putting It All Together](#putting-it-all-together)
 
-## Why Terraform Belongs in CI
+## The Problem
 
-Infrastructure pull requests are hard to review from file diffs alone. A small change to one variable can create a database replacement. A provider upgrade can change a default. A new module input can affect more resources than the author expected. The reviewer needs tool evidence, not only a description from the author.
+The orders team can run Terraform locally now. That works for one engineer, but team review needs more than "it planned fine on my laptop."
 
-Terraform in CI means a repeatable runner checks the Terraform directory whenever a pull request changes it. The runner formats, validates, initializes providers, and generates a plan for review. In OpenTofu repositories, the same idea uses `tofu` commands instead of `terraform` commands.
+A laptop can have stale providers, a different workspace, uncommitted files, broad credentials, missing environment variables, or a state lock problem the reviewer cannot see. Infrastructure pull requests need repeatable evidence.
 
-This workflow exists because one person's laptop is a weak place to hold infrastructure truth. A laptop may have old providers, stale credentials, a different workspace, or an uncommitted file. CI gives the team one repeatable place to ask, "What would this change do if we ran it against the target environment?"
+Terraform in CI answers that need:
 
-CI fits between code review and apply. It does not replace human judgment. It gives the reviewer plan evidence, command output, and status checks so the review can focus on risk: what changes, what could be damaged, and whether the proposed change matches the pull request.
+- Every pull request runs the same formatting and validation checks.
+- Plans are generated from a known root module.
+- Reviewers can read plan evidence without reproducing the environment locally.
+- Production credentials and apply permissions can be separated from pull request checks.
+- Backend and lock problems are visible before merge or apply.
 
-The running example is `devpolaris-orders`. The service has a Terraform root module at `infra/orders/prod`. A pull request adds lifecycle rules to the production invoice bucket, so old generated invoice PDFs move to colder storage after the team's retention window. The team wants CI to prove the Terraform files are valid and show the plan before anyone applies the change.
+CI does not make Terraform safe by magic. It gives the team a consistent place to produce evidence and enforce boundaries.
 
-```mermaid
-flowchart TD
-    A["Pull request changes<br/>Terraform files"] --> B["CI checks format<br/>and validation"]
-    B --> C["CI generates<br/>review plan"]
-    C --> D{"Plan matches<br/>the PR?"}
-    D -->|"No"| E["Fix code or<br/>explain drift"]
-    D -->|"Yes"| F["Merge or approve<br/>apply workflow"]
-    F --> G["Apply with protected<br/>credentials and state lock"]
-```
+## CI Runner
 
-That diagram shows the boundary clearly. CI does not make the change safe by existing. CI produces evidence. The team still reads the evidence.
+A CI runner is another operator. It has a working directory, provider plugins, credentials, environment variables, network access, backend access, and filesystem state.
 
-## The CI Runner Is Another Operator
-
-When CI runs Terraform, the runner is acting like an operator. It has a working directory, environment variables, provider plugins, credentials, network access, and a backend connection. If any of those differ from the real apply environment, the plan may mislead the reviewer.
-
-Start with the working directory. Terraform runs in a root module, which is the directory containing the `.tf` files for that target. If the repository has multiple environments, CI must run the command in the right directory:
-
-```text
-devpolaris-orders/
-  src/
-  infra/
-    orders/
-      dev/
-        main.tf
-      staging/
-        main.tf
-      prod/
-        main.tf
-```
-
-A pull request for production should not accidentally run a development plan. The path matters because each root module may use a different backend, variables file, and provider configuration.
-
-The runner also needs the same dependency discipline as a laptop. `terraform init` downloads providers and reads the dependency lock file. The `.terraform.lock.hcl` file should be committed so CI and developers use the same provider selections unless the pull request intentionally updates them.
-
-Here is a normal CI setup sequence:
+For Terraform, that means the CI job must be explicit about the root module:
 
 ```bash
 $ terraform -chdir=infra/orders/prod init -input=false
@@ -75,173 +49,104 @@ $ terraform -chdir=infra/orders/prod validate
 $ terraform -chdir=infra/orders/prod plan -input=false
 ```
 
-The `-chdir` flag tells Terraform which root module to use. The `-input=false` flag prevents Terraform from waiting for interactive input that a CI runner cannot provide. In a CI job, a prompt is not a friendly pause. It is a stuck job.
+The `-chdir` flag makes the target directory explicit. The `-input=false` flag prevents Terraform from prompting in a non-interactive job. HashiCorp's automation guidance calls out non-interactive runs as a special workflow concern because CI cannot answer prompts like a human terminal.
 
-OpenTofu follows the same shape:
+The runner should also use the dependency lock file. If the pull request did not update `.terraform.lock.hcl`, CI should not silently choose a surprise provider version.
 
-```bash
-$ tofu -chdir=infra/orders/prod init -input=false
-$ tofu -chdir=infra/orders/prod fmt -check
-$ tofu -chdir=infra/orders/prod validate
-$ tofu -chdir=infra/orders/prod plan -input=false
-```
-
-Treat the runner as a real participant in the workflow. Give it only the permissions it needs, make its target directory explicit, and make every command non-interactive.
+OpenTofu uses the same shape with `tofu` commands.
 
 ## Pull Request Checks
 
-A good Terraform pull request job starts with mechanical checks. Mechanical checks are valuable because they keep humans focused on infrastructure judgment instead of syntax and formatting.
+Pull request checks should answer mechanical questions before humans spend time on infrastructure judgment.
 
-The first check is formatting:
+| Check | Question |
+| --- | --- |
+| `init` | Can the runner install providers, modules, and backend setup? |
+| `fmt -check` | Are files in canonical format? |
+| `validate` | Can Terraform understand the configuration? |
+| `plan` | What does Terraform propose to change? |
+
+Formatting and validation are not risk review. They clear the floor. A green `validate` does not mean the plan is safe. A plan that passes command execution can still replace a database.
+
+The plan is the main review artifact. Reviewers compare the pull request story, file diff, and plan output. If they disagree, the branch needs more work before apply.
+
+## Plan Artifacts
+
+There are two common plan patterns in CI.
+
+The first pattern is a throwaway pull request plan:
 
 ```bash
-$ terraform -chdir=infra/orders/prod fmt -check
+$ terraform plan -input=false
 ```
 
-In CI, `fmt -check` does not rewrite files. It fails if a file needs formatting. That is the right behavior for a pull request because the branch should contain the formatted source.
+This plan is for review only. It is not applied later. After merge, the apply workflow creates a fresh plan from the main branch and current state.
 
-A formatting failure looks like this:
+The second pattern is a saved plan:
+
+```bash
+$ terraform plan -out=tfplan -input=false
+$ terraform apply -input=false tfplan
+```
+
+A saved plan connects the reviewed plan to apply more directly, but it creates artifact handling responsibilities. HashiCorp documents that plan files can include configuration, state-derived data, variables, and backend configuration. Protect saved plans like sensitive deployment artifacts.
+
+The team should be clear about which pattern it uses. A reviewer should never assume a pull request plan is exactly what production will apply unless the automation actually enforces that connection.
+
+## Credentials
+
+Terraform CI credentials should match the job's purpose.
+
+A pull request plan may need enough read access to refresh state and read provider data. It may also need limited write access in some provider workflows or speculative plan setups. A production apply needs write access to the managed resources. Those are not always the same permission set.
+
+Credential questions belong in the CI design:
+
+| Question | Healthy direction |
+| --- | --- |
+| Can pull requests from forks access secrets? | Usually no, especially for cloud credentials. |
+| Can a plan job write production? | Avoid when possible. |
+| Can an apply job run without approval? | Only for low-risk environments. |
+| Are credentials hardcoded in `.tf` files? | No. Use provider-supported external mechanisms. |
+| Are permissions scoped to one environment? | Yes, as much as the provider allows. |
+
+GitHub Actions, for example, supports workflow permissions and secrets. Cloud providers often support OpenID Connect from CI so workflows can request short-lived credentials instead of storing long-lived keys. The exact provider setup is outside this Terraform article, but the boundary matters: CI is now an operator, so its identity must be designed.
+
+## Backends and Locks
+
+CI must reach the backend for the root module it plans. If the backend is unavailable, credentials are wrong, or the state lock is held, the plan may fail before it produces useful evidence.
+
+That is good. A failed backend or lock check is information.
 
 ```text
-main.tf
-
-Error: Terraform exited with code 3.
+Error acquiring the state lock
 ```
 
-The fix is not an infrastructure decision. Run `terraform fmt`, commit the result, and let CI focus on the next check.
+This should not trigger an automatic force-unlock. It may mean another apply is active. The safe response is to identify the lock owner, understand whether work is still running, and only recover a stale lock deliberately.
 
-The second check is validation:
+Backend access also decides which environment the plan is reading. A production workflow should not accidentally use a development state key. CI should make the root module, backend, variables, and credentials line up.
 
-```bash
-$ terraform -chdir=infra/orders/prod validate
-Success! The configuration is valid.
-```
+## Apply Boundaries
 
-Validation checks whether Terraform can understand the configuration after initialization. It catches missing arguments, invalid references, wrong block shapes, and other configuration problems. It does not prove the cloud provider will accept the plan. It is still worth running because invalid configuration cannot produce a useful review plan.
+Apply is where CI becomes dangerous if the boundary is vague. A workflow that runs `terraform apply -auto-approve` on every pull request to production is usually not a review process. It is a fast path to an incident.
 
-The third check is the plan:
+Common apply boundary patterns include:
 
-```bash
-$ terraform -chdir=infra/orders/prod plan -input=false
-```
+| Pattern | Good use |
+| --- | --- |
+| PR checks only | Produce plan evidence without changing infrastructure. |
+| Merge to main triggers plan | Recompute against the latest state after approval. |
+| Manual approval for production apply | Human gate before real changes. |
+| Automatic apply for disposable dev | Low-risk environments where speed matters. |
+| Separate apply workflow | Write credentials are available only in a protected path. |
 
-For the lifecycle rule change, the plan might show:
+For production, a healthy workflow usually separates pull request evidence from apply authority. The reviewer sees the plan. The protected apply path uses scoped credentials, state locking, and approval.
 
-```text
-  # aws_s3_bucket_lifecycle_configuration.orders_invoices will be created
-  + resource "aws_s3_bucket_lifecycle_configuration" "orders_invoices" {
-      + bucket = "dp-orders-invoices-prod"
+## GitHub Actions Shape
 
-      + rule {
-          + id     = "archive-old-invoices"
-          + status = "Enabled"
-        }
-    }
-
-Plan: 1 to add, 0 to change, 0 to destroy.
-```
-
-That is useful review evidence. The pull request says "add lifecycle configuration." The plan says one lifecycle configuration will be created and no existing resources will be destroyed. A reviewer still needs to check whether the lifecycle rule is correct, but the plan shape matches the intent.
-
-Many teams add policy checks, security scans, or cost estimation around the plan. Those can be helpful, but they should not hide the basic Terraform loop. A beginner-friendly first version is format, init, validate, plan, then human review.
-
-## Plans, Saved Plans, and Apply
-
-Plans in CI come in two common forms. A speculative plan is a preview for review. It answers, "What does Terraform think this pull request would do right now?" A saved plan is written to a file and can later be passed to apply so Terraform applies exactly the actions captured in that file.
-
-A speculative plan is enough for many pull requests:
-
-```bash
-$ terraform -chdir=infra/orders/prod plan -input=false
-```
-
-The word speculative matters because the world can change after the plan runs. Another teammate may apply a different change. Someone may edit a resource manually. The provider may return updated remote data. A green plan on Monday morning does not guarantee the same apply is safe on Tuesday afternoon.
-
-A saved plan uses `-out`:
-
-```bash
-$ terraform -chdir=infra/orders/prod plan -input=false -out=tfplan
-```
-
-The apply step can then use that exact plan file:
-
-```bash
-$ terraform -chdir=infra/orders/prod apply -input=false tfplan
-```
-
-Saved plans are useful when the plan and apply happen close together in a controlled workflow. They are not ordinary build artifacts to share casually. Plan files can contain sensitive data and are tied to the configuration, state, provider selections, and environment used when they were created.
-
-If the team wants machine-readable plan output, Terraform can render a saved plan as JSON:
-
-```bash
-$ terraform -chdir=infra/orders/prod show -json tfplan
-```
-
-Policy tools and custom checks often read that JSON. A human reviewer usually needs a readable summary too. Do not replace the plan explanation with a huge JSON blob in the pull request.
-
-The safest early team boundary is:
-
-```text
-Pull request:
-  fmt, validate, speculative plan, review
-
-Protected apply workflow:
-  checkout reviewed commit, init, final plan, approval, apply, verify
-```
-
-That separation keeps pull requests useful without giving every branch the ability to change production. It also lets the final apply re-check reality close to the moment of change.
-
-OpenTofu supports the same practical split: plan for review, saved plan when needed, and apply only in the protected context your team chooses.
-
-## Credentials, Backends, and Locks
-
-Terraform CI touches real infrastructure data even when it only runs a plan. The runner may need permission to read resources, read and lock state, and sometimes read secrets from the provider. Treat those permissions as production access, not as a harmless build token.
-
-The backend is where state lives. In team workflows, state should usually live in a remote backend with access control and locking. A lock prevents two Terraform runs from writing the same state at the same time. Without locking, two applies can race and leave the state file out of sync with reality.
-
-The failure shape is easy to imagine:
-
-```text
-10:00 CI apply starts for invoice lifecycle rule.
-10:01 Engineer runs local apply for bucket tags.
-10:02 Both runs read old state.
-10:03 Both runs write different updates.
-10:04 The state no longer tells a clean story.
-```
-
-Locking turns that race into a wait or failure:
-
-```text
-Error: Error acquiring the state lock
-
-Lock Info:
-  ID:        9d8f7d4c-2a40-4c7e-96b2-0a2c2b25c111
-  Operation: OperationTypeApply
-  Who:       github-actions@devpolaris-orders
-```
-
-That error is protective. It says another run is already operating on the same state. The right response is to identify the active run, wait for it to finish, or follow the team's lock recovery runbook if a run died while holding the lock.
-
-Credentials deserve the same care. Avoid long-lived cloud access keys stored as plain repository secrets when a short-lived identity option is available. Many CI platforms can request temporary credentials from a cloud provider based on repository, branch, workflow, or environment rules. The exact setup is provider-specific, but the goal is simple: the runner gets a short-lived identity for the exact job it needs to perform.
-
-For `devpolaris-orders`, a pull request plan identity might be allowed to read state and describe resources, but not apply changes. A production apply identity might be available only in a protected workflow after approval.
-
-| Identity | Allowed Work | Reason |
-|----------|--------------|--------|
-| PR plan | Init, validate, read state, read resources, create plan | Gives reviewers evidence without changing infrastructure. |
-| Prod apply | Final plan, apply, read verification data | Changes production only in a protected workflow. |
-| Local developer | Dev environment work and read-only prod checks | Keeps production changes out of casual laptop commands. |
-
-The exact permissions depend on your provider and backend. The shape should stay small: give CI enough access to do the job, and no more.
-
-## A Beginner-Safe GitHub Actions Workflow
-
-GitHub Actions is a common place to run Terraform checks because many teams already review pull requests there. The same structure can be translated to GitLab CI, Jenkins, Buildkite, Azure Pipelines, or another CI system.
-
-Here is a compact pull request workflow for `devpolaris-orders`. It runs checks only for the production Terraform root module:
+A beginner-safe GitHub Actions check might look like this:
 
 ```yaml
-name: terraform-prod-checks
+name: Terraform checks
 
 on:
   pull_request:
@@ -252,199 +157,67 @@ permissions:
   contents: read
 
 jobs:
-  terraform:
+  plan:
     runs-on: ubuntu-latest
     defaults:
       run:
-        shell: bash
-
+        working-directory: infra/orders/prod
     steps:
-      - name: Checkout
-        uses: actions/checkout@v6
+      - uses: actions/checkout@v4
 
-      - name: Set up Terraform
-        uses: hashicorp/setup-terraform@v4
+      - name: Terraform init
+        run: terraform init -input=false
 
-      - name: Init
-        run: terraform -chdir=infra/orders/prod init -input=false
+      - name: Terraform format
+        run: terraform fmt -check
 
-      - name: Format check
-        run: terraform -chdir=infra/orders/prod fmt -check
+      - name: Terraform validate
+        run: terraform validate
 
-      - name: Validate
-        run: terraform -chdir=infra/orders/prod validate
-
-      - name: Plan
-        run: terraform -chdir=infra/orders/prod plan -input=false
+      - name: Terraform plan
+        run: terraform plan -input=false
 ```
 
-This workflow is intentionally modest. It checks one directory. It does not auto-apply. It does not post a giant plan comment. It does not try to solve every policy problem on day one. A team can add those pieces after the basic workflow is understood and trusted.
+This workflow checks pull requests that touch the production Terraform directory. It does not apply. It sets read-only repository permissions for the workflow token. It makes the working directory explicit.
 
-The `uses` lines are pinned to major versions so the workflow does not float silently from one action generation to another. In a real repository, your team should review those pins and update them deliberately. The `paths` filter keeps the job focused on Terraform changes. The `permissions` block limits the default GitHub token to reading repository contents. Cloud credentials are not shown here because each team should wire them through its chosen provider identity method rather than copying static keys into the example.
+A real production workflow would still need cloud authentication, backend access, dependency caching decisions, plan output handling, and protected apply design. The example shows shape, not a complete security design.
 
-If the repository uses OpenTofu, the same idea can use a setup action chosen by the team and `tofu` commands:
+## Reading CI Output
 
-```yaml
-      - name: Init
-        run: tofu -chdir=infra/orders/prod init -input=false
+Reviewers should read CI output with the same questions they use locally:
 
-      - name: Format check
-        run: tofu -chdir=infra/orders/prod fmt -check
+| Output | Review question |
+| --- | --- |
+| `fmt` failed | Did the branch commit formatted Terraform files? |
+| `validate` failed | Is the configuration coherent enough to plan? |
+| `plan` failed on backend | Is state reachable and correctly configured? |
+| `plan` failed on credentials | Is the CI identity allowed to read what it needs? |
+| Plan has unexpected destroy | Does the plan conflict with the pull request story? |
+| Apply blocked on approval | Is the protected boundary working as intended? |
 
-      - name: Validate
-        run: tofu -chdir=infra/orders/prod validate
+CI can make infrastructure review calmer, but only if humans read the right evidence. A green check is the start of review, not the end.
 
-      - name: Plan
-        run: tofu -chdir=infra/orders/prod plan -input=false
-```
+## Putting It All Together
 
-The exact CI syntax matters less than the operating rule: every pull request should produce the same checks from a clean runner, with explicit target directory and non-interactive commands.
+The orders team moved Terraform from one laptop into a repeatable CI path.
 
-## Reading CI Output Like a Reviewer
+- The CI runner became an explicit operator with a root module and non-interactive commands.
+- Pull request checks produced formatting, validation, and plan evidence.
+- Plan artifacts were treated according to whether they were throwaway or applyable.
+- Credentials were scoped to the job and environment.
+- Backend and lock failures became useful safety signals.
+- Apply boundaries separated review evidence from production write authority.
+- A small GitHub Actions workflow showed the shape without pretending to be a complete security design.
 
-A Terraform CI job is only useful if people read the output. A green checkmark means the commands exited successfully. It does not mean the change is wise.
-
-Start with the job list:
-
-```text
-terraform-prod-checks
-  Init          passed
-  Format check  passed
-  Validate      passed
-  Plan          passed
-```
-
-That tells you the workflow completed. It does not tell you what the plan proposed. Open the plan step and look for the summary:
-
-```text
-Plan: 1 to add, 0 to change, 0 to destroy.
-```
-
-Compare that with the pull request description. If the description says "add lifecycle rule for old invoices", one addition may fit. If the plan says `0 to add, 4 to change, 1 to destroy`, the author needs to explain the extra work.
-
-A useful pull request comment from the author might be:
-
-```text
-Expected:
-- Add lifecycle configuration for dp-orders-invoices-prod.
-- No bucket replacement.
-- No IAM changes.
-
-CI plan:
-- 1 to add: aws_s3_bucket_lifecycle_configuration.orders_invoices.
-- 0 to change.
-- 0 to destroy.
-```
-
-That summary is not ceremony. It helps the reviewer compare intent with evidence quickly. It also gives future maintainers context when they look back at why the change was approved.
-
-Scan for hidden risk in the plan body. Pay extra attention to:
-
-| Plan Area | Review Question |
-|-----------|-----------------|
-| Destroy or replace actions | Is data, DNS, networking, or identity affected? |
-| IAM changes | Does the permission widen beyond the service need? |
-| Public access fields | Does a private service become reachable from the internet? |
-| Provider or module upgrades | Did dependency changes bring unrelated infrastructure changes? |
-| Unknown values | Are the unknown values normal provider-computed fields or risky missing inputs? |
-
-If the plan fails, read the first meaningful error, not only the final exit code. Terraform errors usually name the stage: init, validate, plan, state lock, provider authentication, or provider API call. That stage tells you where to look next.
-
-## Common Terraform CI Failures
-
-The first common failure is an interactive prompt. CI jobs cannot answer questions:
-
-```text
-var.environment
-  Enter a value:
-```
-
-The fix is to pass required variables through files, environment variables, or the CI platform's secure inputs, and to use `-input=false` so missing values fail clearly instead of hanging.
-
-The second common failure is missing backend configuration:
-
-```text
-Error: Backend initialization required, please run "terraform init"
-```
-
-In CI, every job starts on a clean runner. It does not remember that you ran `init` on your laptop. Add an init step before validate and plan. If the backend needs configuration, provide it through the repository's normal environment-specific path.
-
-The third common failure is provider dependency drift:
-
-```text
-Error: Inconsistent dependency lock file
-
-The following dependency selections recorded in the lock file are inconsistent
-with the current configuration.
-```
-
-This usually means the provider constraints changed but the lock file was not updated, or the lock file changed without the configuration explaining why. Run init in the right directory, review the lock file diff, and commit it if the provider selection change is intentional.
-
-The fourth common failure is missing cloud credentials:
-
-```text
-Error: No valid credential sources found
-```
-
-The runner reached a stage where the provider needed authentication. Check whether the job has the right identity for the target environment. Do not fix this by pasting personal credentials into the Terraform files. The CI identity should be deliberate and limited.
-
-The fifth common failure is a state lock conflict:
-
-```text
-Error: Error acquiring the state lock
-```
-
-Find the active Terraform run before doing anything else. A lock conflict often means another CI job or engineer is already planning or applying against the same state. Waiting is safer than forcing unlock without understanding the active operation.
-
-The sixth common failure is an unsafe plan:
-
-```text
-Plan: 0 to add, 2 to change, 1 to destroy.
-```
-
-That is not a tool failure, but it should block review if the pull request did not explain it. The author should either change the Terraform files, split the pull request, or explain why the destroy is expected and how the team will verify recovery.
-
-## Choosing Automation Boundaries
-
-The hardest Terraform CI decision is how far automation should go. A plan on every pull request is usually helpful. Automatic production apply on every merge is a bigger decision because the runner can change real infrastructure without a person reading the final plan at the moment of apply.
-
-For a small team learning Terraform, a safer first boundary is manual apply from a protected workflow. The workflow runs only from the main branch, targets one environment, uses a restricted identity, acquires the state lock, generates a final plan, waits for approval, applies, and runs verification commands.
-
-For `devpolaris-orders`, the protected apply checklist might be:
-
-```text
-Before apply:
-- Pull request merged into main.
-- CI plan matched the reviewed change.
-- Final plan generated from the merged commit.
-- State lock acquired.
-- Production apply approval recorded.
-
-After apply:
-- Terraform reports expected resource counts.
-- Invoice bucket lifecycle configuration is visible through provider read command.
-- Follow-up plan shows no unexpected changes.
-```
-
-Teams with stronger guardrails may automate more. They might auto-apply development after merge, require approval for staging, and require a separate production release workflow. Teams with strict change windows may generate plans in CI but apply only during scheduled operations.
-
-The tradeoff is speed versus control:
-
-| Boundary | What You Gain | What You Give Up |
-|----------|---------------|------------------|
-| PR plan only | Review evidence with low change risk | A person or workflow still performs apply later. |
-| Auto-apply dev | Fast feedback on disposable infrastructure | Bad changes can still break shared dev resources. |
-| Manual prod apply | Human check close to production change | Slower releases and more coordination. |
-| Auto-apply prod | Fastest path from merge to infrastructure change | Requires strong policy, testing, rollback, and trust in the workflow. |
-
-Pick the smallest boundary that your team can operate well. Terraform in CI is successful when the team can answer the same questions every time: which directory ran, which identity ran it, which state was used, what the plan proposed, who approved apply, and what verification proved afterward.
+This closes the Terraform module. You now have the operating path: write clear resources, control values, protect state, read plans, reuse modules carefully, separate environments, import existing resources, and make review evidence repeatable in CI.
 
 ---
 
 **References**
 
-- [Terraform running in automation](https://developer.hashicorp.com/terraform/tutorials/automation/automate-terraform) - Explains how Terraform behaves in automated workflows and why non-interactive execution matters.
-- [Terraform plan command](https://developer.hashicorp.com/terraform/cli/commands/plan) - Documents plan behavior, saved plans, `-input=false`, `-out`, and related review options.
-- [Terraform apply command](https://developer.hashicorp.com/terraform/cli/commands/apply) - Describes how apply uses automatic or saved plans and how approval works.
-- [Terraform show command](https://developer.hashicorp.com/terraform/cli/commands/show) - Covers readable and JSON output for Terraform state and saved plan files.
-- [OpenTofu CLI commands](https://opentofu.org/docs/cli/commands/) - Provides the equivalent OpenTofu command reference for init, fmt, validate, plan, and apply.
+- [Terraform automation guide](https://developer.hashicorp.com/terraform/tutorials/automation/automate-terraform)
+- [Terraform init command](https://developer.hashicorp.com/terraform/cli/commands/init)
+- [Terraform plan command](https://developer.hashicorp.com/terraform/cli/commands/plan)
+- [Terraform apply command](https://developer.hashicorp.com/terraform/cli/commands/apply)
+- [GitHub Actions workflow syntax](https://docs.github.com/en/actions/writing-workflows/workflow-syntax-for-github-actions)
+- [GitHub Actions token authentication](https://docs.github.com/en/actions/security-for-github-actions/security-guides/automatic-token-authentication)

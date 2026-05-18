@@ -1,7 +1,7 @@
 ---
 title: "Reading Terraform Plans"
-description: "Read Terraform and OpenTofu plans like review evidence, including action symbols, replacements, drift, unknown values, and saved plan files."
-overview: "A plan is the proposed infrastructure change before the provider APIs are called. This article follows devpolaris-orders through realistic plan output so you can review what will be created, changed, replaced, or destroyed."
+description: "Read Terraform and OpenTofu plans as review evidence, including summaries, action symbols, replacements, destroys, unknown values, sensitive values, and drift."
+overview: "A Terraform plan is the proposed infrastructure change before provider APIs are called. This article follows the orders team through realistic plan output so reviewers can connect the plan to the pull request story."
 tags: ["terraform", "opentofu", "plans", "review", "drift"]
 order: 5
 id: article-infrastructure-as-code-terraform-reading-terraform-plans
@@ -9,605 +9,253 @@ id: article-infrastructure-as-code-terraform-reading-terraform-plans
 
 ## Table of Contents
 
-1. [The Review Before the API Call](#the-review-before-the-api-call)
-2. [The Three Inputs Behind a Plan](#the-three-inputs-behind-a-plan)
-3. [Start With the Summary](#start-with-the-summary)
-4. [Read Resource Actions in Context](#read-resource-actions-in-context)
-5. [Replacement Deserves Extra Attention](#replacement-deserves-extra-attention)
-6. [Unknown Values and Sensitive Values](#unknown-values-and-sensitive-values)
-7. [Drift in a Normal Plan](#drift-in-a-normal-plan)
-8. [Saved Plans and JSON Evidence](#saved-plans-and-json-evidence)
-9. [Plan Failures and Diagnostic Clues](#plan-failures-and-diagnostic-clues)
-10. [A Reviewer Checklist for devpolaris-orders](#a-reviewer-checklist-for-devpolaris-orders)
+1. [The Problem](#the-problem)
+2. [Plan Inputs](#plan-inputs)
+3. [Summary](#summary)
+4. [Adds and Changes](#adds-and-changes)
+5. [Replacement](#replacement)
+6. [Destroy](#destroy)
+7. [Unknown Values](#unknown-values)
+8. [Sensitive Values](#sensitive-values)
+9. [Drift](#drift)
+10. [Saved Plans](#saved-plans)
+11. [Putting It All Together](#putting-it-all-together)
+12. [What's Next](#whats-next)
 
-## The Review Before the API Call
+## The Problem
 
-Infrastructure changes should be reviewed while they are still proposals. Once the provider API creates a
-bucket, replaces a queue, removes a firewall rule, or edits an IAM policy, the team is already in cleanup
-mode if the change was wrong. A Terraform plan gives you the proposal before that API call happens.
+The fundamentals module taught the generic idea of plans and drift. Terraform plans add their own details: action symbols, resource addresses, unknown values, sensitive redaction, replacement markers, saved plan files, and state refresh behavior.
 
-A plan is Terraform's description of the actions it intends to take. OpenTofu plans serve the same purpose.
-The plan compares your configuration, the stored state, and the provider's view of real infrastructure. The
-output shows resource creations, in-place updates, replacements, deletions, data reads, and values that will
-only be known after apply.
-
-The running example is the `devpolaris-orders` service. The team already has an invoice bucket. A new pull
-request adds S3 versioning, tightens public access settings, and gives the orders API permission to write
-invoice PDFs. The reviewer needs to answer a practical question: does the plan match that story?
+The orders team opens a pull request that says:
 
 ```text
-Pull request intent:
-  Add versioning for invoice storage.
-  Enforce public access blocking on the invoice bucket.
-  Attach write permission for the orders API role.
-
-Reviewer question:
-  Does the plan show only those changes, and are the risky fields acceptable?
+Add lifecycle rules to the invoice bucket so old generated invoices move to colder storage.
 ```
 
-That small question is enough to prevent many mistakes. The plan is not only output from a tool. It is the
-shared evidence that lets the author, reviewer, and operator agree on what will happen.
+The plan summary says:
 
-## The Three Inputs Behind a Plan
-
-Terraform does not produce a plan by reading only your `.tf` files. It uses three inputs: configuration,
-state, and provider refresh data. Understanding those inputs helps you diagnose confusing output.
-
-Configuration is the desired shape in files. For the orders service, the file may say the bucket should have
-versioning enabled:
-
-```hcl
-resource "aws_s3_bucket_versioning" "orders_invoices" {
-  bucket = aws_s3_bucket.orders_invoices.id
-
-  versioning_configuration {
-    status = "Enabled"
-  }
-}
+```text
+Plan: 0 to add, 1 to change, 1 to destroy.
 ```
 
-State is Terraform's memory of managed objects. It says which real bucket belongs to
-`aws_s3_bucket.orders_invoices` and whether Terraform already knows about a versioning resource at
-`aws_s3_bucket_versioning.orders_invoices`.
+The change may be the lifecycle rule. The destroy is not explained by the story. A Terraform reviewer needs to know how to read from summary to resource detail without turning the review into guesswork.
 
-Provider refresh data is what Terraform learns by asking the provider about current reality. The provider
-may report that public access settings were changed manually, that a queue exists, or that a generated ARN
-has a specific value.
+## Plan Inputs
+
+A Terraform plan is built from three main inputs: configuration files, state, and provider data.
 
 ```mermaid
 flowchart TD
-    A["Configuration<br/>wanted shape"] --> D["Plan"]
-    B["State<br/>managed object map"] --> D
-    C["Provider refresh<br/>current reality"] --> D
-    D --> E["Create, update,<br/>replace, destroy, or no-op"]
+    Config["Configuration"] --> Plan["Terraform plan"]
+    State["State"] --> Plan
+    Provider["Provider data"] --> Plan
+    Plan --> Review["Review evidence"]
 ```
 
-If the plan surprises you, locate which input caused the surprise. A change in the `.tf` file is expected
-when the pull request edited that resource. A change from provider refresh may be drift. A missing state
-record may make Terraform think it needs to create something that already exists.
+Configuration says what should exist. State says what Terraform currently manages. Provider data says what exists right now. Terraform compares those inputs and proposes actions.
 
-This is why a reviewer should ask for both the Terraform diff and the plan. The code diff shows what the
-author changed. The plan shows how Terraform interprets the change against real managed infrastructure.
+This means a plan can reveal more than the current pull request. If someone changed the invoice bucket in the console yesterday, a plan for today's lifecycle rule may also show that drift. If a provider default changed, the plan may show a field the author did not edit. If state points at an object that no longer exists, the plan may propose recreation.
 
-## Start With the Summary
+That is why reviewers read the plan as evidence, not just as a command output blob.
 
-The summary line is the fastest way to see whether the plan matches the pull request. It appears near the
-end of the plan:
+## Summary
+
+Start with the summary:
 
 ```text
-Plan: 3 to add, 1 to change, 0 to destroy.
+Plan: 1 to add, 0 to change, 0 to destroy.
 ```
 
-For the orders pull request, that may be reasonable. The three additions could be bucket versioning, public
-access blocking, and an IAM policy. The one change could be adding tags to the existing bucket. The summary
-does not approve the plan by itself, but it gives the reviewer a first expectation.
+The summary answers the first question: does the action count match the pull request story?
 
-Now compare this summary:
+| Story | Plausible summary | Suspicious summary |
+| --- | --- | --- |
+| Add one bucket | `1 to add` | Any destroy or replacement |
+| Update tags | `1 to change` | Add a new unrelated resource |
+| Rename resource address | No object change with moved block | Destroy and create without explanation |
+| Remove obsolete rule | `1 to destroy` | Destroy a database or bucket |
+
+A suspicious summary does not always mean the plan is wrong. It means the plan needs explanation before approval. Terraform is showing the reviewer where to slow down.
+
+The summary is not enough by itself. A plan with `1 to add` can still add the wrong thing. A plan with `0 to destroy` can still make a risky in-place change. The summary tells you where to look next.
+
+## Adds and Changes
+
+Terraform plan output uses symbols to show action types. A create often appears with `+`. An in-place update often appears with `~`.
+
+For the invoice bucket lifecycle change, a simplified update might look like this:
 
 ```text
-Plan: 3 to add, 1 to change, 1 to destroy.
-```
-
-The destroy needs an explanation. It may be a cleanup of an old test policy. It may be a dangerous deletion.
-The review should not continue as if the extra action is invisible. The author should name why that resource
-is being destroyed and what depends on it.
-
-Use the pull request description to create a small expected count before reading the plan:
-
-```text
-Expected:
-  Add 3 resources:
-    - bucket versioning
-    - public access block
-    - write policy
-  Change 0 or 1 existing resources:
-    - bucket tags if missing
-  Destroy 0 resources:
-    - no deletes expected
-```
-
-Then compare it with the plan summary. If the numbers differ, the plan may still be valid, but the pull
-request needs more explanation. A good reviewer does not require every plan to be tiny. A good reviewer
-requires the plan to match the stated intent.
-
-Terraform also supports a detailed exit code for automation. With `-detailed-exitcode`, exit code `0` means
-no changes, `2` means the plan has changes, and `1` means an error. This is useful in CI because the job can
-distinguish "no infrastructure diff" from "plan failed."
-
-```bash
-$ terraform plan -detailed-exitcode
-```
-
-CI should still publish readable plan evidence for humans. An exit code can tell a workflow what happened,
-but a reviewer still needs to read the proposed actions.
-
-## Read Resource Actions in Context
-
-After the summary, read the resource actions. Terraform uses symbols to show what will happen to each resource.
-The same symbols appear in many OpenTofu plans.
-
-| Symbol | Meaning | Review Question |
-|--------|---------|-----------------|
-| `+` | Create | Is this new object expected? |
-| `~` | Update in place | Is this setting safe to change on the existing object? |
-| `-` | Destroy | Is deletion expected, recoverable, and approved? |
-| `-/+` | Destroy then create replacement | What downtime or data loss can happen? |
-| `+/-` | Create replacement then destroy old | Can both objects exist at once safely? |
-| `<=` | Read data source | Is Terraform reading an external object rather than owning it? |
-
-Here is a plan excerpt that fits the orders pull request:
-
-```text
-Terraform will perform the following actions:
-
-  # aws_s3_bucket_versioning.orders_invoices will be created
-  + resource "aws_s3_bucket_versioning" "orders_invoices" {
-      + bucket = "dp-orders-invoices-prod"
-      + id     = (known after apply)
-
-      + versioning_configuration {
-          + status = "Enabled"
+  # aws_s3_bucket_lifecycle_configuration.invoices will be updated in-place
+  ~ resource "aws_s3_bucket_lifecycle_configuration" "invoices" {
+      ~ rule {
+          id     = "archive-old-invoices"
+          status = "Enabled"
         }
     }
+```
 
-  # aws_s3_bucket_public_access_block.orders_invoices will be created
-  + resource "aws_s3_bucket_public_access_block" "orders_invoices" {
+The first line gives the resource address and the action. The inner lines show which fields change. Reviewers should read both. The resource address tells what object is affected. The field diff tells what behavior changes.
+
+Adds deserve the same care:
+
+```text
+  # aws_s3_bucket_public_access_block.invoices will be created
+  + resource "aws_s3_bucket_public_access_block" "invoices" {
       + block_public_acls       = true
       + block_public_policy     = true
       + ignore_public_acls      = true
       + restrict_public_buckets = true
     }
-
-Plan: 2 to add, 0 to change, 0 to destroy.
 ```
 
-The reviewer should connect each resource to intent. Versioning protects invoice history. Public access
-blocking prevents accidental public bucket policies or ACLs from exposing invoice files. The plan does not
-show unexpected destroys, replacements, or broad access changes.
+The plus signs are not enough. The reviewer asks whether the resource belongs to the story, whether the settings match the intended posture, and whether the provider target is correct.
 
-An in-place update uses `~`. For example, the team may add a missing `cost-center` tag to the existing bucket:
+## Replacement
+
+Replacement is higher risk because Terraform destroys one object and creates another to reach the desired state. In plan output, replacement is often shown as a destroy and create action for the same resource address, with wording like "must be replaced."
+
+Example:
 
 ```text
-  # aws_s3_bucket.orders_invoices will be updated in-place
-  ~ resource "aws_s3_bucket" "orders_invoices" {
-        bucket = "dp-orders-invoices-prod"
-      ~ tags   = {
-          + "cost-center" = "orders"
-            "environment" = "prod"
-            "owner"       = "platform"
-            "service"     = "orders-api"
-        }
+  # aws_db_instance.orders will be replaced
+-/+ resource "aws_db_instance" "orders" {
+      ~ identifier = "orders-prod" -> "orders-prod-2" # forces replacement
     }
 ```
 
-That update is probably low risk. It changes metadata on the existing bucket. The reviewer still checks that
-the environment and service tags are not being removed or changed to the wrong values.
+The phrase `forces replacement` is the important clue. Some fields cannot be changed in place. Changing them means a new object must replace the old one.
 
-The `<=` marker appears for data sources. A data source reads something Terraform does not own in this root
-module. For example, the orders module may read the existing application role instead of creating it:
+Replacement is not always wrong. It may be exactly what a migration plan intends. But it needs more than a casual approval. Reviewers should ask:
+
+| Replacement question | Why it matters |
+| --- | --- |
+| What data or traffic depends on the old object? | Replacement can break stateful systems. |
+| Is there a migration or cutover plan? | Create-before-destroy may not solve app behavior. |
+| Does the provider support safe replacement settings? | Some objects cannot overlap due to names or limits. |
+| Is the replacement caused by a rename? | A moved block or import may be the right fix. |
+
+If a tiny tag change causes a database replacement, stop. The plan and story disagree.
+
+## Destroy
+
+A destroy removes a managed object. Terraform usually shows it with `-`.
 
 ```text
-  # data.aws_iam_role.orders_api will be read during apply
-  <= data "aws_iam_role" "orders_api" {
-      + arn  = (known after apply)
-      + name = "orders-api-prod"
+  # aws_security_group_rule.old_admin_ssh will be destroyed
+  - resource "aws_security_group_rule" "old_admin_ssh" {
+      - cidr_blocks = ["0.0.0.0/0"]
+      - from_port   = 22
+      - to_port     = 22
     }
 ```
 
-That line says Terraform is reading a role named `orders-api-prod`. The reviewer should ask whether that is
-the intended external role. A typo in a data source can attach permissions to the wrong identity or fail only
-when the provider cannot find it.
+This destroy may be good. Removing public SSH access could be the whole point of a hardening change. The reviewer still needs the pull request story to say so.
 
-## Replacement Deserves Extra Attention
+Destroys are especially important for stateful resources: buckets, databases, disks, queues, DNS zones, and anything users or other systems depend on. A resource disappearing from configuration is enough for Terraform to propose deleting it if state says Terraform owns it.
 
-Replacement means the existing remote object cannot be updated in place for the requested change. Terraform
-must create a new object, destroy the old object, or do both in the order allowed by the provider and lifecycle
-settings. Replacement is where small-looking file edits can become service-impacting changes.
+The question is not "does Terraform know how to destroy this?" The question is "should this object be destroyed now, by this change, in this environment?"
 
-For example, suppose someone changes the bucket name:
+## Unknown Values
 
-```hcl
-resource "aws_s3_bucket" "orders_invoices" {
-  bucket = "dp-orders-invoice-archive-prod"
-}
-```
-
-The plan may show a replacement because an S3 bucket name is part of the resource identity:
-
-```text
-  # aws_s3_bucket.orders_invoices must be replaced
--/+ resource "aws_s3_bucket" "orders_invoices" {
-      ~ bucket = "dp-orders-invoices-prod" -> "dp-orders-invoice-archive-prod"
-      ~ id     = "dp-orders-invoices-prod" -> (known after apply)
-        tags   = {
-            "environment" = "prod"
-            "owner"       = "platform"
-            "service"     = "orders-api"
-        }
-    }
-
-Plan: 1 to add, 0 to change, 1 to destroy.
-```
-
-That may look like a rename, but for the provider it is a different bucket. The reviewer should ask what
-happens to existing invoice objects, application configuration, IAM policies, replication, lifecycle rules,
-alerts, and backups. A name edit in HCL can turn into a migration project.
-
-Replacement can be safe for disposable resources. A generated test queue in a development account may be
-fine to replace. A production bucket, database, load balancer, or DNS zone needs a migration plan. The plan
-shows the mechanical action. The team supplies the operational judgment.
-
-Look for fields that force replacement. Terraform often marks them with text like "forces replacement":
-
-```text
-  # aws_sqs_queue.invoice_jobs must be replaced
--/+ resource "aws_sqs_queue" "invoice_jobs" {
-      ~ fifo_queue = false -> true
-      ~ name       = "orders-invoice-jobs-prod" -> "orders-invoice-jobs-prod.fifo"
-        visibility_timeout_seconds = 30
-    }
-```
-
-Changing a standard SQS queue into a FIFO queue is not an in-place tweak. The new queue has different delivery
-semantics and a different name. The orders workers, retry behavior, monitoring, and dead-letter setup may all
-need review. The plan is the first clue that the change is larger than one argument.
-
-When replacement is expected, the pull request should say so plainly:
-
-```text
-Expected replacement:
-  Replace development invoice queue to test FIFO ordering.
-  No production queue replacement.
-  No data migration needed because dev queue is disposable.
-```
-
-That explanation gives reviewers something concrete to verify. If production appears in the plan, or if the
-replacement affects a non-disposable resource, the plan does not match the stated risk.
-
-## Unknown Values and Sensitive Values
-
-Plans often contain values shown as `(known after apply)`. This means Terraform cannot know the value until
-the provider creates or reads the remote object. Generated IDs, ARNs, timestamps, hosted zone IDs, and URLs
-often appear this way.
+Terraform sometimes cannot know a value until apply. Plan output often represents this as `(known after apply)`.
 
 ```text
   + arn = (known after apply)
-  + id  = (known after apply)
 ```
 
-Unknown values are normal. They do not mean the plan is incomplete. The reviewer should focus on the values
-that are known before apply: names, regions, account IDs, public access settings, IAM actions, tags, retention
-periods, and replacement markers.
+Unknown values are normal for provider-generated attributes. A bucket ARN, generated ID, endpoint hostname, or creation timestamp may only be available after the provider creates or updates the object.
 
-Unknown values can still hide dependency effects. If a generated queue ARN flows into an IAM policy, the
-policy document may also include unknown values until apply. Review the surrounding known fields to confirm
-the policy is attached to the intended role and contains the intended actions.
+Unknown does not mean unsafe by itself. It means the reviewer cannot inspect that exact value before apply. The safe response depends on what the value controls.
 
-Sensitive values are different. Terraform can mark values as sensitive so they are hidden in CLI output:
+| Unknown value | Typical posture |
+| --- | --- |
+| Provider-generated ID | Usually normal |
+| Computed ARN from a new resource | Usually normal |
+| Policy document with unknown broad resource | Needs careful review |
+| Count or for_each keys unknown | Often a configuration design problem |
+
+The review habit is to ask whether the unknown value hides a decision the team should make before apply. If it is just the provider returning an ID later, fine. If it hides access scope, routing, or count, slow down.
+
+## Sensitive Values
+
+Sensitive values are redacted in normal plan output:
 
 ```text
-  + password = (sensitive value)
+  ~ password = (sensitive value)
 ```
 
-That redaction protects the terminal display, not every storage location. State and saved plan files may
-still contain sensitive data needed for future operations. A reviewer should treat plan files and state like
-operational secrets, even when the terminal output hides the value.
+Redaction protects display. It does not automatically prove the secret is stored safely, rotated correctly, or absent from state. It also makes review harder because the exact value is intentionally hidden.
 
-For the orders service, a plan that adds a secret directly to Terraform deserves scrutiny:
+For sensitive values, reviewers should focus on flow and control:
+
+- Where does the value come from?
+- Does it enter through a secret manager or protected CI variable?
+- Does Terraform store it in state?
+- Which resource receives it?
+- Is rotation handled outside the pull request?
+
+Do not approve secret changes just because the plan hides the value. Redaction is a display feature, not a complete secrets strategy.
+
+## Drift
+
+Terraform plans refresh information about managed resources and can show when reality differs from the state and configuration. Drift often appears as changes Terraform plans to make even though the current pull request did not edit those fields.
+
+Example:
 
 ```text
-  # aws_secretsmanager_secret_version.orders_db will be created
-  + resource "aws_secretsmanager_secret_version" "orders_db" {
-      + secret_id     = "orders-db-prod"
-      + secret_string = (sensitive value)
+Note: Objects have changed outside of Terraform
+
+  # aws_s3_bucket.orders_invoices has changed
+  ~ tags = {
+      + temporary = "debug"
     }
 ```
 
-This may be acceptable in some workflows, but it should be intentional. Ask where the value comes from, who
-can read state, how rotation works, and whether a dedicated secret creation path would reduce exposure. Do
-not approve sensitive changes because the value is hidden in the plan output.
+This is not automatically a disaster. Maybe an emergency tag was added during an incident. Maybe a console edit was accidental. Maybe another automation owns that tag and Terraform should ignore it. The plan is asking the team to decide.
 
-## Drift in a Normal Plan
+The Terraform-specific habit is to locate the drift at the resource address and field, then decide whether to update code, restore reality, import ownership, adjust lifecycle behavior, or investigate state.
 
-A normal plan refreshes state by default before proposing changes. That refresh can reveal drift, which means
-real infrastructure changed outside the current Terraform configuration. Drift often appears as an in-place
-update that the pull request did not directly edit.
+## Saved Plans
 
-Suppose someone temporarily disabled public access blocking in the AWS console while testing invoice downloads
-and forgot to restore it. The next plan may show this:
-
-```text
-  # aws_s3_bucket_public_access_block.orders_invoices will be updated in-place
-  ~ resource "aws_s3_bucket_public_access_block" "orders_invoices" {
-      ~ block_public_acls       = false -> true
-      ~ block_public_policy     = false -> true
-      ~ ignore_public_acls      = false -> true
-      ~ restrict_public_buckets = false -> true
-    }
-
-Plan: 0 to add, 1 to change, 0 to destroy.
-```
-
-The file did not necessarily change. Terraform is proposing to return reality to the file. That may be exactly
-what the team wants. The reviewer should still record the drift and, if needed, ask why production was changed
-outside Terraform.
-
-Drift can also mean the code needs to change. If an emergency console change fixed a real production issue,
-the team may decide to update the `.tf` files to match the new intended state. The wrong response is to leave
-the console change undocumented while Terraform keeps trying to undo it.
-
-There is also a refresh-only planning mode for inspecting drift without proposing normal configuration changes:
-
-```bash
-$ terraform plan -refresh-only
-```
-
-A refresh-only plan can be useful before a larger refactor or during an investigation. It asks, "what does
-Terraform's state learn if it refreshes from the provider?" It does not replace a normal plan for a pull
-request, but it can separate drift discovery from intended code changes.
-
-Use this drift reading pattern:
-
-| Plan Shape | Likely Meaning | Review Response |
-|------------|----------------|-----------------|
-| File changed and plan follows it | Intended change | Review risk and correctness. |
-| File did not change but plan updates reality | Drift correction | Confirm whether to revert reality or update code. |
-| Plan wants to create known existing object | State gap or wrong backend | Inspect state and backend before apply. |
-| Plan wants replacement after a rename | Address or identity change | Use moved block, import, or migration plan if needed. |
-
-The plan does not know the social reason for drift. It only reports the difference. The team has to decide
-whether the file or the real system is the source of truth for the next change.
-
-## Saved Plans and JSON Evidence
-
-For team workflows, a saved plan can connect review and apply more tightly. The `-out` flag writes the plan
-to a file:
+Terraform can save a plan file with `-out`:
 
 ```bash
 $ terraform plan -out=tfplan
-```
-
-Applying that saved plan tells Terraform to apply the exact actions captured in the file, rather than creating
-a fresh plan at apply time:
-
-```bash
 $ terraform apply tfplan
 ```
 
-This can be useful in CI/CD because the reviewed plan and applied plan are the same artifact. It also has
-limits. A saved plan is tied to the configuration, state, provider selections, and environment at the time it
-was created. If the world changes after the plan was saved, the apply may fail or no longer represent the
-latest desired decision.
+A saved plan connects review and apply more tightly because `apply tfplan` applies the exact planned actions in that file. In automation, saved plans need careful handling. HashiCorp documents that plan files can contain configuration, state-derived data, variable values, and backend configuration details. Treat them as sensitive artifacts.
 
-Saved plans can contain sensitive data. Do not commit them, attach them casually to tickets, or keep them
-as permanent build artifacts without access controls and retention rules. Treat `tfplan` files with the same
-care as state.
+For pull request review, many teams use throwaway plans without `-out`. The plan helps review the proposed branch but is not applied later. After merge, the apply workflow creates a fresh plan against the latest main branch and current state.
 
-Terraform can also show a saved plan in human-readable form:
+The right pattern depends on the automation model, but the review rule is stable: know whether the plan being approved is the plan being applied.
 
-```bash
-$ terraform show tfplan
-```
+## Putting It All Together
 
-For automation and policy tools, Terraform can show JSON:
+The orders team saw a lifecycle-rule pull request with an unexplained destroy. Reading the Terraform plan gave them a path.
 
-```bash
-$ terraform show -json tfplan > tfplan.json
-```
+- Plan inputs are configuration, state, and provider data.
+- The summary shows whether counts match the story.
+- Adds and changes need resource-address and field-level review.
+- Replacement deserves migration-level attention.
+- Destroy needs a clear reason, especially for stateful resources.
+- Unknown values are normal only when they do not hide important decisions.
+- Sensitive values reduce display but still require state and secret controls.
+- Drift turns unexpected reality into an explicit decision.
+- Saved plans can connect review to apply but must be protected.
 
-A small JSON excerpt might include planned actions like this:
+Terraform plan reading is not a separate skill from engineering judgment. It is how the judgment gets evidence.
 
-```json
-{
-  "resource_changes": [
-    {
-      "address": "aws_s3_bucket_versioning.orders_invoices",
-      "type": "aws_s3_bucket_versioning",
-      "change": {
-        "actions": ["create"]
-      }
-    },
-    {
-      "address": "aws_s3_bucket.orders_invoices",
-      "type": "aws_s3_bucket",
-      "change": {
-        "actions": ["update"]
-      }
-    }
-  ]
-}
-```
+## What's Next
 
-The JSON form is not easier for humans to read than the normal plan. It is useful when automation needs to
-count actions, block risky patterns, or produce a compact pull request comment. A simple policy might fail
-the build if any production plan contains a delete action:
-
-```text
-Policy check:
-  environment: prod
-  delete actions: 0
-  replacement actions: 0
-  public CIDR additions: 0
-  result: pass
-```
-
-Policy output should support human review, not replace it. A policy can catch known risky shapes. A reviewer
-still checks whether the plan matches the service, environment, and intent.
-
-OpenTofu has the same working pattern with `tofu plan -out`, `tofu apply`, and `tofu show`. The exact JSON
-details should be checked against the version your team uses before building long-lived automation around it.
-
-## Plan Failures and Diagnostic Clues
-
-Sometimes the plan does not produce a plan at all. The failure still teaches you where Terraform got stuck.
-Read the error by workflow stage: initialization, configuration validation, backend access, provider
-authentication, provider lookup, or remote API permissions.
-
-A backend error happens before Terraform can safely compare managed resources:
-
-```text
-Error: Failed to load state
-
-Error loading state:
-  AccessDenied: Access Denied
-  status code: 403
-```
-
-That points at state access. Check the backend bucket, key, credentials, IAM permissions, encryption key
-access, and whether the job is using the intended environment identity. Do not "fix" this by switching to a
-new empty backend key unless you mean to start a new state.
-
-A provider credential error means Terraform reached the provider step but cannot authenticate:
-
-```text
-Error: configuring Terraform AWS Provider: no valid credential sources for Terraform AWS Provider found
-```
-
-For the orders service, that usually means the developer shell, CI role, AWS profile, or role assumption is
-not set for the target account. The fix belongs in the credential path, not in hardcoded access keys inside
-Terraform files.
-
-A data source error can mean the plan is looking for an external object that does not exist or cannot be read:
-
-```text
-Error: reading IAM Role (orders-api-prod): NoSuchEntity:
-  The role with name orders-api-prod cannot be found.
-
-  with data.aws_iam_role.orders_api,
-  on iam.tf line 1, in data "aws_iam_role" "orders_api":
-   1: data "aws_iam_role" "orders_api" {
-```
-
-That error includes the address and file location. Check the role name, target account, region if relevant,
-and whether this root module should create the role instead of reading it.
-
-A planning error can also reveal invalid configuration:
-
-```text
-Error: Reference to undeclared resource
-
-  on iam.tf line 14, in resource "aws_iam_policy" "orders_invoice_writer":
-  14: Resource = "${aws_s3_bucket.order_invoices.arn}/*"
-
-A managed resource "aws_s3_bucket" "order_invoices" has not been declared.
-```
-
-Here the resource address is misspelled. The configuration says `order_invoices`, but the real block is
-`orders_invoices`. Fix the file and rerun `terraform validate` and `terraform plan`.
-
-Use failures as routing information:
-
-| Error Area | What To Inspect First |
-|------------|-----------------------|
-| Backend access | State bucket, key, credentials, encryption, network path |
-| Provider credentials | Profile, role, environment variables, CI identity |
-| Data source lookup | Name, account, region, ownership boundary |
-| Undeclared reference | Resource address spelling and module outputs |
-| Lock acquisition | Active apply, stale lock, CI concurrency |
-
-The goal is not to memorize every error string. The goal is to ask which system Terraform was talking to
-when it failed. That points you toward the right owner and the right fix.
-
-## A Reviewer Checklist for devpolaris-orders
-
-When reviewing a plan, keep the checklist small enough to actually use. The orders team can start with the
-summary, destructive actions, sensitive fields, environment identity, and verification path.
-
-```text
-Plan review checklist:
-  1. Does the summary match the pull request intent?
-  2. Are all creates expected and named in the review?
-  3. Are all updates safe for the existing resource?
-  4. Are there any destroys or replacements?
-  5. Do IAM actions, public access flags, and CIDR blocks look intentional?
-  6. Are sensitive values handled through the approved path?
-  7. Is the plan using the correct backend, account, region, and environment?
-  8. Is there a verification step after apply?
-```
-
-Now apply it to a compact orders plan:
-
-```text
-Plan summary:
-  Plan: 3 to add, 1 to change, 0 to destroy.
-
-Creates:
-  aws_s3_bucket_versioning.orders_invoices
-  aws_s3_bucket_public_access_block.orders_invoices
-  aws_iam_policy.orders_invoice_writer
-
-Update:
-  aws_s3_bucket.orders_invoices tags add cost-center = orders
-
-Sensitive:
-  no secret values introduced
-
-Environment:
-  backend key devpolaris-orders/prod/terraform.tfstate
-  provider region eu-west-2
-```
-
-That plan matches the stated change if the pull request promised exactly those actions. It still needs normal
-review of the IAM policy document and bucket settings, but the shape is coherent: no delete, no replacement,
-no unexpected environment.
-
-Here is a plan that should stop the review:
-
-```text
-Plan summary:
-  Plan: 3 to add, 1 to change, 1 to destroy.
-
-Destroy:
-  aws_sqs_queue.invoice_jobs
-
-Replacement:
-  none shown
-
-Pull request intent:
-  Add bucket versioning and public access block.
-```
-
-The queue destroy is unrelated to the stated intent. It might have a valid reason, but the current review
-does not explain it. Ask for the reason, inspect the code diff and state, and confirm whether the queue is
-still used by invoice workers before approving any apply.
-
-The final habit is to read the plan after apply as well. A follow-up plan should usually be quiet:
-
-```text
-No changes. Your infrastructure matches the configuration.
-```
-
-If the follow-up plan immediately shows changes, the apply did not settle into the state described by the
-files. That may be provider behavior, drift from another automation, a missing argument, or a real failed
-change. Read the new plan before starting another apply.
+The next article turns repeated Terraform shapes into modules. You will see when reuse makes infrastructure clearer, and when a module hides too much.
 
 ---
 
 **References**
 
-- [terraform plan command](https://developer.hashicorp.com/terraform/cli/commands/plan) - Documents plan modes, planning options, saved plans, and detailed exit codes.
-- [terraform show command](https://developer.hashicorp.com/terraform/cli/commands/show) - Explains how to inspect state or saved plan files, including JSON output.
-- [Terraform JSON Output Format](https://developer.hashicorp.com/terraform/internals/json-format) - Describes the machine-readable plan and state representation used by automation.
-- [Terraform Manage Sensitive Data](https://developer.hashicorp.com/terraform/language/manage-sensitive-data) - Explains how sensitive values behave in configuration, plans, and state.
-- [OpenTofu plan command](https://opentofu.org/docs/cli/commands/plan/) - Provides the OpenTofu reference for planning modes and options.
-- [OpenTofu show command](https://opentofu.org/docs/cli/commands/show/) - Documents OpenTofu inspection of state and saved plan files.
+- [Terraform plan command](https://developer.hashicorp.com/terraform/cli/commands/plan)
+- [Terraform apply command](https://developer.hashicorp.com/terraform/cli/commands/apply)
+- [Terraform state](https://developer.hashicorp.com/terraform/language/state)
+- [Terraform automation guide](https://developer.hashicorp.com/terraform/tutorials/automation/automate-terraform)
