@@ -1,6 +1,6 @@
 ---
 title: "Add Module Inputs"
-sectionSlug: inputs-are-the-module-contract
+sectionSlug: inputs
 order: 2
 ---
 

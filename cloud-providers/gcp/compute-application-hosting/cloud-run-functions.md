@@ -66,7 +66,7 @@ The event should carry enough context to do the job, but not so much that it bec
 
 A trigger defines why the function runs. In GCP, Cloud Run functions can be triggered by HTTP requests or by events routed through services such as Eventarc and Pub/Sub.
 
-The trigger is part of the design, not just deployment glue. It decides who can invoke the function, what event format the handler receives, and what retry behavior may occur. If the trigger is too broad, the function runs for events it should ignore. If it is too narrow, real work is missed.
+The trigger is part of the design and deployment shape. It decides who can invoke the function, what event format the handler receives, and what retry behavior may occur. If the trigger is too broad, the function runs for events it should ignore. If it is too narrow, real work is missed.
 
 | Trigger shape | Good use |
 | --- | --- |
@@ -159,7 +159,7 @@ Functions are not the smallest answer to every problem. A Cloud Run service can 
 
 A function is best when the job is specific and event-shaped. A service is better when the job is a normal application surface. A VM is better when the host matters. GKE is better when Kubernetes is already the operating platform.
 
-This choice is not about prestige. It is about making the next failure easy to understand.
+This choice is about making the next failure easy to understand.
 
 ## Sample Function Shape
 
@@ -191,7 +191,7 @@ Pub/Sub retries help with temporary failures, but they make idempotency necessar
 
 ## What's Next
 
-Cloud Run services and functions cover many beginner GCP workloads. The last compute article covers GKE, where the requirement is not just running a container, but running on Kubernetes.
+Cloud Run services and functions cover many beginner GCP workloads. The last compute article covers GKE, where the requirement is running on Kubernetes.
 
 ---
 

@@ -31,7 +31,7 @@ aliases:
 
 The Orders API creates files. A customer receives a receipt PDF. Finance downloads a nightly CSV export. Support attaches screenshots to a ticket. Product images need a stable home.
 
-These are not order rows. They are file-like bytes:
+These are file-like bytes:
 
 - The app writes the whole receipt PDF and later reads it by name.
 - Support needs a safe temporary link to one attachment.

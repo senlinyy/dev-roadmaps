@@ -215,7 +215,7 @@ $ dig app.example.com
 ;; connection timed out; no servers could be reached
 ```
 
-**Stale cache during migration** is the silent failure: no errors, no timeouts, just the wrong answer. You changed an A record from IP-old to IP-new, but resolvers that cached the old record before you made the change will keep serving IP-old until the TTL expires. Users on those resolvers silently hit the old server. This is not a bug; it is DNS working exactly as designed. The fix was described in the previous section: lower TTLs before you migrate, not after.
+**Stale cache during migration** is the silent failure: no errors, no timeouts, just the wrong answer. You changed an A record from IP-old to IP-new, but resolvers that cached the old record before you made the change will keep serving IP-old until the TTL expires. Users on those resolvers silently hit the old server. DNS is honoring the cached answer exactly as designed. The fix was described in the previous section: lower TTLs before you migrate, not after.
 
 Here is a diagnostic cheat sheet for quick triage:
 

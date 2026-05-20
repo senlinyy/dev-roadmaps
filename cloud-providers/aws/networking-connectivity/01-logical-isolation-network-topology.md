@@ -70,7 +70,7 @@ flowchart TB
     Fix --> Endpoints["Endpoints"]
 ```
 
-The important habit is to treat the VPC as the place where network intent starts. If a resource is reachable from the internet, that should be because it sits in a subnet whose route table allows that path and because the resource has the right public address behavior. If a resource is private, that should be visible in its subnet choice and route table, not only in its name.
+The important habit is to treat the VPC as the place where network intent starts. If a resource is reachable from the internet, that should be because it sits in a subnet whose route table allows that path and because the resource has the right public address behavior. If a resource is private, that should be visible in its subnet choice, route table, and name.
 
 ## CIDR Blocks
 
@@ -93,7 +93,7 @@ First, you cannot increase or decrease an existing VPC CIDR block after creating
 
 Second, AWS reserves the first four IP addresses and the last IP address in each subnet CIDR block. A `/28` has 16 total IPv4 addresses, but not 16 usable addresses for your resources. Small subnets disappear faster than they look on a whiteboard, especially when managed services place network interfaces into them.
 
-For a teaching example, this article will use `10.40.0.0/16` for one production VPC. The exact range is not magic. The habit matters more: choose a range intentionally, record why it was chosen, and check it against every network you may need to connect.
+For a teaching example, this article will use `10.40.0.0/16` for one production VPC. The exact range matters less than the habit: choose a range intentionally, record why it was chosen, and check it against every network you may need to connect.
 
 ## Subnets
 
@@ -256,7 +256,7 @@ The topology can be described without any command line:
 
 This design answers the opener's problems.
 
-The database is not public by placement. It lives in data subnets whose route tables do not point to the internet gateway. Later, packet controls can restrict which app security group reaches the database port, but the topology already says the database is not an internet tier.
+The database stays private by placement. It lives in data subnets whose route tables do not point to the internet gateway. Later, packet controls can restrict which app security group reaches the database port, but the topology already keeps the database out of the internet tier.
 
 Public and private access are no longer guesses. Public subnets have an internet gateway route. App subnets use NAT only for outbound access they truly need. Data subnets avoid general internet egress. Endpoint routes make AWS service access visible.
 

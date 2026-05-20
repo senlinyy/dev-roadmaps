@@ -78,7 +78,7 @@ The item shape should match the read path. Do not store a large nested order doc
 
 ## Containers
 
-A container stores items and defines important behavior such as partitioning and throughput. In Cosmos DB, the container is not just a folder. It is the place where scale and partition-key design become real.
+A container stores items and defines important behavior such as partitioning and throughput. In Cosmos DB, the container is the place where scale and partition-key design become real.
 
 For the orders system, idempotency records and export job statuses might be separate containers if they have different access patterns, retention needs, and throughput behavior. They might share a container if the data model and operational boundary truly fit together. The point is to choose the container around workload behavior, not around vague nouns.
 

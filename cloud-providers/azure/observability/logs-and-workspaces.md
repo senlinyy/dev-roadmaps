@@ -63,7 +63,7 @@ The diagram shows the subtle part. Metrics may be ready before you do anything. 
 
 A diagnostic setting tells Azure what data to send from a resource and where to send it. Common destinations include a Log Analytics workspace, a storage account, an event hub, or a partner destination. For this module, the important destination is the Log Analytics workspace because the team wants searchable incident evidence.
 
-Each resource that needs resource log collection needs its own diagnostic setting. That is the part beginners often miss. Creating one workspace does not magically pull every resource log into it. The workspace is the destination. Diagnostic settings are the routes.
+Each resource that needs resource log collection needs its own diagnostic setting. That is the part beginners often miss. The workspace is the destination. Diagnostic settings are the routes that send resource logs into it.
 
 For checkout, the storage account might need a diagnostic setting that sends Blob Storage read, write, and delete logs to the production workspace. Azure SQL might need its own diagnostic configuration for database-level signals. The app runtime might send application logs through Application Insights or another logging path.
 
@@ -77,7 +77,7 @@ Second, diagnostic settings can outlive assumptions. If you delete, rename, move
 
 A Log Analytics workspace is the data store where Azure Monitor Logs keeps log data. It is also the query boundary most learners meet first. When someone says, "search the Azure logs," they often mean "open the workspace and run a KQL query."
 
-The workspace is not just a folder. It has region, retention, access control, table plans, cost behavior, and sometimes organizational boundaries. A small learning system can use one production workspace for app and resource logs. A larger company may split workspaces by environment, compliance boundary, team ownership, or data residency.
+The workspace has region, retention, access control, table plans, cost behavior, and sometimes organizational boundaries. A small learning system can use one production workspace for app and resource logs. A larger company may split workspaces by environment, compliance boundary, team ownership, or data residency.
 
 For the orders app, the beginner-friendly workspace design might look like this:
 
@@ -124,7 +124,7 @@ requests
 | order by failures desc
 ```
 
-The point is not that every workspace has this exact table and column shape. The point is the habit. Time first. Narrow to the app and operation. Filter failure. Summarize after you have the right slice.
+The habit matters more than this exact table and column shape. Time first. Narrow to the app and operation. Filter failure. Summarize after you have the right slice.
 
 KQL is also where inconsistent logging hurts. If half your services write `requestId`, a few write `correlation_id`, and one buries the ID in a sentence, queries become fragile. The language can help, but it cannot fully rescue sloppy telemetry design.
 
@@ -151,7 +151,7 @@ Logs cost money because collecting, storing, and querying data uses a service. T
 
 Cost and access are linked. A workspace that holds production checkout logs may include user IDs, resource names, error messages, endpoint paths, and operational details. It should be readable by people who need to operate the system, not by everyone who can deploy a demo resource.
 
-This is why workspace design is not only an observability decision. It is also an ownership decision. Ask:
+This is why workspace design is an observability and ownership decision. Ask:
 
 | Design question | Why it matters |
 | --- | --- |

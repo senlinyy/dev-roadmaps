@@ -49,7 +49,7 @@ Amazon DynamoDB is a managed NoSQL database service built around tables, items, 
 
 For a beginner, the most important sentence is this: DynamoDB works best when the application knows how it will access the data. If you need "get item by this exact key," "list records for this customer in time order," or "claim this idempotency key if it does not exist," DynamoDB can be a strong fit. If you need flexible ad hoc joins across changing relationships, RDS is usually easier to reason about.
 
-DynamoDB is not "SQL but serverless." It has its own design contract:
+DynamoDB has its own design contract:
 
 | DynamoDB concept | Plain-English job |
 | --- | --- |
@@ -131,7 +131,7 @@ For idempotency, a simple partition key works well:
 
 The gotcha is distribution. If many writes use the same partition key, they create pressure in one place. A table where every active write uses `partitionKey = "today"` is not using DynamoDB's distribution well. A table where keys spread by request id, order id, customer id, or another natural identifier is usually easier to scale.
 
-The partition key is not just a column. It is the address and distribution decision.
+The partition key is the address and distribution decision.
 
 ## Sort Keys
 
@@ -155,7 +155,7 @@ Conditional writes are one of DynamoDB's most practical features for application
 
 For idempotency, the app can try to claim a request key. If the item is missing, the write succeeds and the request can proceed. If the item already exists, the write fails the condition and the app knows this request has already been seen.
 
-The useful behavior is not just speed. It is atomic decision-making around one key. Two retrying callers can race, but only one should claim the missing key.
+The useful behavior is atomic decision-making around one key. Two retrying callers can race, but only one should claim the missing key.
 
 This prevents a common failure pattern:
 
@@ -216,7 +216,7 @@ flowchart TB
     Seen --> Return["Return known result"]
 ```
 
-The table is not just storing a marker. It is helping the app decide whether this request owns the right to perform the side effect.
+The table stores a marker and helps the app decide whether this request owns the right to perform the side effect.
 
 For order events, the shape changes:
 

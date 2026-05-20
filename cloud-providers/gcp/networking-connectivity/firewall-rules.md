@@ -106,7 +106,7 @@ Targets answer which resources the rule applies to. For VM instances, GCP firewa
 
 Network tags are simple labels on VM instances. They are easy to understand and easy to overuse. Service account targets can be more precise when identity already expresses the workload role. If the Orders worker VM runs as `orders-worker@...`, a rule targeting that service account can follow the workload purpose better than a tag someone might copy onto a test VM.
 
-Cloud Run is different. You do not attach a normal VPC firewall target to a Cloud Run instance the way you target a VM. Cloud Run has service-level ingress controls for callers and separate VPC egress settings for outbound traffic. If Cloud Run sends traffic through a VPC path to a VM or private resource, the target resource's rules still matter, but the Cloud Run service is not just another tagged VM.
+Cloud Run is different. You do not attach a normal VPC firewall target to a Cloud Run instance the way you target a VM. Cloud Run has service-level ingress controls for callers and separate VPC egress settings for outbound traffic. If Cloud Run sends traffic through a VPC path to a VM or private resource, the target resource's rules still matter, because the Cloud Run service uses a different targeting model than a tagged VM.
 
 | Target style | Good for | Watch out for |
 | --- | --- | --- |
@@ -177,7 +177,7 @@ The bastion should accept SSH only from the admin VPN range. That is an ingress 
 
 The internal worker should call the private backend port. The backend needs an ingress allow from the worker's source identity or range. If outbound traffic is restricted, the worker may also need a matching egress rule. The route still has to exist first.
 
-The lower-numbered deny can beat a later allow because priority decides rule order. Read the number, not just the presence of an allow rule.
+The lower-numbered deny can beat a later allow because priority decides rule order. Read the number and the presence of an allow rule together.
 
 IAM does not open TCP ports. Firewall rules do not grant API permission. A healthy GCP review can say which check is failing instead of throwing every control into one bucket.
 

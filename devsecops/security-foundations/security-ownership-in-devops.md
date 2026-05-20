@@ -1,302 +1,146 @@
 ---
-id: article-devsecops-security-foundations-security-ownership-in-devops
-title: "Security Ownership in DevOps"
-description: "Learn how DevOps teams share security responsibility through reviews, risk decisions, and clear production ownership."
-overview: "Security ownership means the people who build and operate a system also understand the risks they accept. This article shows how application, platform, and security roles cooperate around one production service."
-tags: ["ownership", "reviews", "risk"]
+title: "Security Ownership"
+description: "Decide who owns security decisions across application code, platform controls, production operations, and incident follow-up."
+overview: "Security ownership means the people who build and operate a system can explain the risks they accept and the controls they maintain. This article uses open source maintainer cases and a production service example to make ownership practical."
+tags: ["ownership", "reviews", "risk", "maintainers"]
 order: 6
+id: article-devsecops-security-foundations-security-ownership-in-devops
+aliases:
+  - security-ownership-in-devops
+  - article-devsecops-security-foundations-security-ownership-in-devops
+  - devsecops/security-foundations/security-ownership-in-devops.md
 ---
 
 ## Table of Contents
 
-1. [What Security Ownership in DevOps Means in Delivery Work](#what-security-ownership-in-devops-means-in-delivery-work)
-2. [The Operating Context](#the-operating-context)
-3. [A Useful Baseline Workflow](#a-useful-baseline-workflow)
-4. [Artifacts That Make the Risk Concrete](#artifacts-that-make-the-risk-concrete)
-5. [Diagnostic Path](#diagnostic-path)
-6. [Failure Modes and Fix Directions](#failure-modes-and-fix-directions)
-7. [Engineering Tradeoffs](#engineering-tradeoffs)
-8. [Production Access Review Practice](#production-access-review-practice)
+1. [What Is Security Ownership?](#what-is-security-ownership)
+2. [Owners by Boundary](#owners-by-boundary)
+3. [Decision Records](#decision-records)
+4. [Review Paths](#review-paths)
+5. [Case Study: event-stream](#case-study-event-stream)
+6. [Ownership Failure Modes](#ownership-failure-modes)
+7. [Putting It All Together](#putting-it-all-together)
 
-## What Security Ownership in DevOps Means in Delivery Work
+## What Is Security Ownership?
 
-Security ownership means the right people can explain
-risks, approve changes, and
-maintain controls after the review is over. It exists
-because security work fails when
-everyone assumes someone else owns the delivery path.
+Security ownership means someone is responsible for keeping a boundary understandable and healthy. The owner may not do every task personally. They are the person or team accountable for the rules, evidence, review path, and response when the boundary changes.
 
-The running example is devpolaris-orders-api, a Node.js
-service stored in GitHub,
-tested and deployed with GitHub Actions, and hosted in a
-small cloud account. The team
-uses a production GitHub environment, a package registry
-image, a cloud deploy role,
-and a monthly production access review. That example is
-small enough to inspect by
-hand, but it contains the same trust questions that appear
-in larger delivery systems.
+In a DevOps system, ownership is spread across several teams. Application engineers own application code and dependencies. Platform engineers own CI/CD foundations, runner configuration, cloud roles, and deployment paths. Security engineers help with threat modeling, detection, review standards, and incident response. On-call engineers own the immediate production reality when something breaks.
 
-A delivery system is not only a build script. It is a set
-of identities, artifacts,
-approvals, and logs that can change production. When you
-look at security through that
-lens, the useful question is not "is this secure" in a
-vague way. The useful question
-is which identity can perform which action, at which
-boundary, with which evidence
-left behind.
+Shared ownership works when each boundary has a named owner. It fails when every team assumes another team is watching.
 
-For a junior engineer, this framing is helpful because it
-turns security from a
-separate language into normal debugging. If a deploy
-failed, you inspect the actor,
-the permission, and the target. If a deploy succeeded when
-it should not have, you
-inspect the same things and then tighten the boundary that
-allowed it.
+For `devpolaris-orders-api`, ownership should answer questions like these:
 
-## The Operating Context
+- Who reviews workflow permission changes?
+- Who owns package publish configuration?
+- Who owns runtime secret access?
+- Who decides whether a vulnerability exception is acceptable?
+- Who rotates a credential after a CI incident?
+- Who signs off that an incident follow-up is complete?
 
-The service path is intentionally ordinary. A developer
-opens a pull request, GitHub
-Actions runs tests, the merge to main builds an image, and
-the deploy job updates
-production after environment approval. The cloud account
-contains the production app,
-a database, a log workspace, a secret store, and a few IAM
-or RBAC roles.
+If the answer is "the security team" for every question, the model is too vague. Security teams guide and verify, but the people closest to a system need to own many of the decisions because they understand how the system actually ships.
 
-```mermaid
-flowchart TD
-    A["Pull request"] --> B["GitHub Actions test job"]
-    B --> C["Merge to main"]
-    C --> D["Image digest in registry"]
-    D --> E["Production environment approval"]
-    E --> F["Cloud deploy role"]
-    F --> G["devpolaris-orders-api"]
-    H["Audit logs"] -. records .-> E
-    H -. records .-> F
-```
+## Owners by Boundary
 
-The diagram is the first artifact. It gives the team a
-shared object to point at
-during review. If someone says the pipeline is safe, ask
-which arrow they mean. If
-someone says a risk is accepted, ask which box owns that
-risk and which log proves the
-action later.
+The easiest way to assign ownership is to follow the delivery trust model.
 
-## A Useful Baseline Workflow
+| Boundary | Primary owner | Support owner | Example responsibility |
+|----------|---------------|---------------|------------------------|
+| Application source | Orders team | Security | Review risky code and dependency changes |
+| Workflow files | Platform team | Orders team | Keep untrusted PR jobs separate from trusted jobs |
+| Package publishing | Platform team | Security | Control publish identity and provenance |
+| Cloud deployment role | Platform team | Cloud security | Scope production deployment access |
+| Runtime secrets | Orders team | Platform | Know which services consume each secret |
+| Incident response | On-call lead | Security | Coordinate containment, evidence, and communication |
 
-A baseline workflow should separate untrusted validation
-from trusted deployment. Pull
-request code can run tests, but it should not receive
-production secrets or broad
-write permissions. Deployment should happen from the
-protected branch and should use
-an environment that records approval.
+The `Primary owner` column names who should notice drift first. The `Support owner` column names who helps with specialized review. This distinction prevents both extremes: security decisions made by distant reviewers with no system context, and application decisions made without security expertise.
 
-```yaml
-name: orders-api-delivery
-on:
-  pull_request:
-    branches: ["main"]
-  push:
-    branches: ["main"]
+Ownership should be visible in the repository. `CODEOWNERS`, team names, runbook owners, secret owners, and service catalog entries all help. The point is not to create a perfect org chart. The point is to make the next change find the right people.
 
-permissions:
-  contents: read
+## Decision Records
 
-jobs:
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-          cache: "npm"
-      - run: npm ci
-      - run: npm test
+Security decisions often involve tradeoffs. A team may accept a temporary vulnerability exception because the vulnerable code path is unreachable. A platform team may allow an emergency admin session because production is down. A service team may delay a dependency upgrade because the fix requires application changes.
 
-  deploy-prod:
-    needs: test
-    if: github.ref == 'refs/heads/main'
-    environment: production
-    permissions:
-      contents: read
-      id-token: write
-      packages: read
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - run: ./scripts/login-cloud-oidc.sh
-      - run: ./scripts/deploy-prod.sh
-```
-
-This workflow is not perfect, but the shape is healthy.
-The top-level token is
-read-only. The deploy job asks for the extra permissions
-it needs. The deploy job runs
-only from main and uses a named production environment. A
-reviewer can now inspect one
-job and understand why it has more power than the test
-job.
-
-If a failure appears, avoid broadening everything at once.
-A denied package read needs
-a package read permission. A denied cloud action needs the
-exact cloud action on the
-exact resource. A missing approval needs an environment
-rule, not a larger token.
-
-## Artifacts That Make the Risk Concrete
-
-Security reviews improve when they use real artifacts
-instead of opinions. A workflow
-file, role policy, audit event, access review note, or
-deployment record lets the team
-discuss the same facts.
+Those decisions need short records.
 
 ```text
+Decision: temporary exception for package example-lib CVE-2026-1234
 Service: devpolaris-orders-api
-Commit: 8f2a91d4c0b8
-Workflow run: orders-api-delivery #1842
-Image: ghcr.io/devpolaris/orders-api@sha256:4e1b9f...c71a
-Cloud principal: orders-api-prod-deployer
-Environment approver: maya-dev
-Target: rg-devpolaris-orders-prod/orders-api
-Health check: GET /health returned 200
+Reason: vulnerable parser path is not used by the service
+Compensating control: dependency is not reachable from user input
+Expiry: 2026-06-19
+Owner: orders-team
+Reviewer: security-team
+Follow-up: remove package during parser cleanup
 ```
 
-This record gives the team a path backward from production
-to source. If the running
-image does not match the workflow output, investigate the
-deploy script or a manual
-production change. If the cloud principal is a human admin
-instead of the deploy role,
-investigate why the normal path was bypassed.
+The `Reason` line explains the judgment. `Compensating control` explains why the team believes the risk is bounded. `Expiry` prevents the exception from becoming permanent. `Owner` and `Reviewer` split system ownership from security review.
 
-The tradeoff is that evidence takes storage and design.
-The fix is to automate facts
-where possible and keep human notes for judgment,
-exceptions, and decisions.
+Without a record, the same discussion repeats every time the scanner reports the finding. With a record, the team can revisit the decision when evidence changes.
 
-## Diagnostic Path
+## Review Paths
 
-A good security habit should help when something breaks.
-The diagnostic path below
-works for most delivery security questions because it
-follows the change from code to
-production.
+Ownership should appear at the point where risky changes happen. Workflow permissions, deployment roles, package publishing, and production secrets deserve more careful review than ordinary application code.
 
 ```text
-Diagnostic path
-1. Start with the pull request, commit SHA, actor, and changed files.
-2. Open the workflow run and record event, ref, job permissions, and approval.
-3. Compare the artifact digest with the digest running in production.
-4. Check the cloud activity log for principal, action, resource, and result.
-5. Match the finding to a fix: narrow a permission, rotate a secret, add review, or improve evidence.
+.github/workflows/release.yml       @platform-team @security-team
+infra/production/iam/               @platform-team @cloud-security
+src/payments/                       @orders-team @security-team
+deploy/kubernetes/prod/             @platform-team @orders-team
+runbooks/security/                  @security-team @oncall-leads
 ```
 
-The important detail is order. Starting in the cloud
-console can show what changed,
-but it may not show why the change was allowed. Starting
-in the pull request can show
-intent, but it may not show the acting identity. Walking
-the whole chain keeps the
-team from fixing the first symptom and missing the broken
-boundary.
+This `CODEOWNERS`-style map is small, but it changes behavior. A workflow permission change automatically reaches the platform and security reviewers. IAM changes reach cloud security. Payment code reaches the application and security reviewers.
 
-For devpolaris-orders-api, the most useful fields are
-commit SHA, workflow event, job
-permissions, image digest, cloud principal, and target
-resource. If one field is
-missing, add it to the workflow output or release
-evidence.
+Review paths should match risk. Requiring security review for every small text change teaches people to route around the process. Requiring the right review for boundaries that can change production keeps attention where it matters.
 
-## Failure Modes and Fix Directions
+## Case Study: event-stream
 
-Most delivery security failures repeat familiar shapes.
-Learn to recognize the shape,
-then choose the narrow fix.
+In 2018, the npm ecosystem dealt with the `event-stream` incident. The package maintainer had transferred maintenance of a widely used package to another person. A malicious dependency was later introduced through that maintenance path and targeted a specific downstream application. npm's public writeup emphasized that the affected package was widely used and that the malicious code arrived through dependency and maintainer trust.
 
-| Failure mode | What it looks like | Fix direction |
-| :--- | :--- | :--- |
-| Trust boundary is missing | PR job can deploy or publish | Split jobs and restrict events |
-| Permission is too broad | One role can change every service | Scope role to one service and environment |
-| Secret is long-lived | Static cloud key sits in GitHub secrets | Replace with OIDC or rotate and restrict |
-| Evidence is weak | Production changed with no visible approver | Add environment approvals and audit retention |
-| Ownership is unclear | Nobody knows who reviews workflow changes | Add CODEOWNERS and a review checklist |
+The lesson is ownership drift. A package can have millions of users while the real maintenance work depends on a very small number of people. When ownership changes, the trust model changes. Downstream teams may keep installing the package as if nothing changed because the package name is the same.
 
-A fix direction is not the same as a command. The command
-depends on the provider and
-repository. The engineering decision is stable: reduce
-blast radius, make the boundary
-explicit, and keep enough evidence to prove the next
-change.
-
-## Engineering Tradeoffs
-
-Security controls have costs. Narrow roles take longer to
-write than admin roles.
-Environment approval slows an urgent release. Secret
-rotation can break old processes
-if the team does not plan the handoff. Audit retention
-costs money and needs a
-retrieval path.
-
-The answer is not to remove friction everywhere. Put
-friction where the risk changes.
-A normal application code change can move with peer review
-and tests. A workflow
-permission change, deploy role change, or production
-secret change should receive a
-more careful review because it changes what the delivery
-system can do.
-
-For the orders API team, the practical target is
-explainable security. If a junior
-engineer can trace who approved a change, which identity
-deployed it, which artifact
-ran, and which permission allowed it, the system is much
-easier to operate and
-improve.
-
-## Production Access Review Practice
-
-Monthly production access reviews are where the mental
-model meets people. The review
-should compare current access with current responsibility.
-It should remove old users,
-confirm service identities, and record any exception with
-an owner and date.
+Read the path:
 
 ```text
-Review: devpolaris-orders-api production access
-Date: 2026-05-08
-Human admins: maya-dev, oren-platform
-Log readers: orders-oncall-group
-Deploy role: orders-api-prod-deployer
-Removed: old-ci-service-user, sam-contractor
-Exception: shared log reader remains until workspace split, owner oren-platform
-Next review: 2026-06-05
+trusted package name
+  -> maintainer handoff
+  -> new dependency
+  -> downstream install
+  -> targeted malicious behavior
 ```
 
-This artifact is small, but it answers important
-questions. Who still has access?
-Which temporary exception remains? Who owns the cleanup?
-If the review finds an
-account nobody recognizes, disable it or remove access
-first, then investigate why it
-was still present.
+For a consuming team, the control is not to personally audit every line of every dependency. The control is to notice ownership and dependency changes that affect important paths. Lockfiles, dependency review, maintainer health signals, SBOMs, and vulnerability intelligence all help turn a silent ownership change into a visible review event.
+
+Map that back to `devpolaris-orders-api`. If a core package changes maintainers, adds a new install script, or introduces a new transitive dependency in a sensitive path, the application owner should know who reviews it. Dependency ownership is part of application ownership.
+
+## Ownership Failure Modes
+
+Ownership failures usually appear as missing names.
+
+| Failure | What it looks like | Repair |
+|---------|--------------------|--------|
+| No workflow owner | Anyone can edit trusted release jobs | Add CODEOWNERS and required review for workflow paths. |
+| No secret owner | Leaked secret has unknown consumers | Record owner, authority, consumers, and rotation path. |
+| No exception owner | Vulnerability exception never expires | Add owner and expiry to every exception. |
+| No package owner | Dependency changes merge without system context | Assign dependency review to the application team. |
+| No incident owner | Response has many helpers and no coordinator | Name an incident lead for containment and evidence. |
+
+The repair is usually simple. Name the owner where the change happens. Then make the owner visible in tooling so future changes reach them.
+
+## Putting It All Together
+
+Security ownership is the human layer of the delivery trust model. Tools can block, scan, sign, and log, but people decide which boundaries matter, which risks are accepted, and which controls are maintained.
+
+For `devpolaris-orders-api`, ownership follows the path. The orders team owns application code and dependency choices. The platform team owns trusted workflow and deployment machinery. Security helps review high-risk changes and incident decisions. On-call leads own coordination when production is affected.
+
+The event-stream case shows why this matters beyond one company. A trusted name can hide an ownership change. A healthy DevSecOps practice makes ownership changes, sensitive dependency changes, and production boundary changes visible before they become incidents.
 
 ---
 
 **References**
 
-- [OWASP Software Assurance Maturity Model](https://owaspsamm.org/) - OWASP SAMM helps teams discuss ownership, governance, and secure delivery maturity.
-- [NIST Secure Software Development Framework](https://csrc.nist.gov/Projects/ssdf) - NIST describes secure software practices that map well to delivery systems.
-- [GitHub Actions security hardening](https://docs.github.com/actions/security-guides/security-hardening-for-github-actions) - GitHub explains token scope, secret handling, and safer workflow patterns.
-- [NIST SP 800-53 controls](https://csrc.nist.gov/publications/detail/sp/800-53/rev-5/final) - NIST provides a catalog of control ideas that auditors often reference.
+- [npm: Details about the event-stream incident](https://blog.npmjs.org/post/180565383195/details-about-the-event-stream-incident) - npm describes the event-stream incident and how malicious code entered through dependency trust.
+- [OpenSSF: XZ Backdoor CVE-2024-3094](https://openssf.org/blog/2024/03/30/xz-backdoor-cve-2024-3094/) - OpenSSF summarizes a maintainer and release-process supply-chain compromise.
+- [GitHub CODEOWNERS documentation](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners) - GitHub documents file ownership and automatic review requests.
+- [NIST SP 800-218 Secure Software Development Framework](https://csrc.nist.gov/pubs/sp/800/218/final) - NIST frames secure software development as practices assigned to responsible roles and processes.

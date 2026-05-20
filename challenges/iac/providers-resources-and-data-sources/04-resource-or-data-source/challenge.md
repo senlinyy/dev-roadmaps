@@ -1,6 +1,6 @@
 ---
 title: "Choose Resource or Data Source"
-sectionSlug: resource-or-data-source
+sectionSlug: ownership
 order: 4
 ---
 

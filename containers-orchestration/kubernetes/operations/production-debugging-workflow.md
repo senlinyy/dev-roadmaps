@@ -132,7 +132,7 @@ $ kubectl -n orders logs pod/devpolaris-orders-api-78b6f596dc-kzt9p --tail=40
 2026-05-07T10:06:33Z error readiness failed component=database error="relation orders_outbox does not exist"
 ```
 
-This is not a Kubernetes networking problem. The new image expects a database table that does not exist. The next decision is mitigation.
+The new image expects a database table that does not exist. The next decision is mitigation.
 
 ## Use Safe Mitigations Before Deep Fixes
 

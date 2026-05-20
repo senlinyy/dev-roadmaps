@@ -131,7 +131,7 @@ REVISION  STATUS      CHART             DESCRIPTION
 2         deployed    orders-api-0.1.1  Upgrade complete
 ```
 
-Kustomize does not store a release object. It builds manifests and relies on Kubernetes apply state, Git history, and your delivery tool for history. That is not worse, but it is different. A GitOps controller may provide the release timeline instead of Kustomize itself.
+Kustomize builds manifests and relies on Kubernetes apply state, Git history, and your delivery tool for history. A GitOps controller may provide the release timeline instead of Kustomize itself.
 
 For drift diagnosis, both paths eventually use Kubernetes:
 
@@ -250,11 +250,11 @@ $ kubectl kustomize k8s/overlays/prod > /tmp/orders-desired.yaml
 $ kubectl diff -f /tmp/orders-desired.yaml
 ```
 
-That gives you the desired manifests from the current repository state and the difference from the cluster. If a GitOps controller is involved, check its sync status too. The incident workflow is not harder, but the evidence lives in different places.
+That gives you the desired manifests from the current repository state and the difference from the cluster. If a GitOps controller is involved, check its sync status too. The incident workflow uses the same questions, with evidence spread across different places.
 
 ## A Small Decision Matrix
 
-Use a small matrix when a team is stuck debating tool preference. The goal is not to crown a winner. The goal is to make the operating model visible.
+Use a small matrix when a team is stuck debating tool preference. The goal is to make the operating model visible.
 
 | Situation | Usually lean toward | Reason |
 |-----------|---------------------|--------|

@@ -150,7 +150,7 @@ The Orders API needs at least two access stories:
 | Deployment caller | Can it deploy Cloud Run, read images, and update the right service? |
 | Runtime service account | Can the app read its secret, connect to the database path, and write receipts? |
 
-Secret Manager belongs in this conversation because secrets are not just strings. They are resources with versions and access policies. A Cloud Run service can have the right image and still fail because its runtime service account cannot access the secret or database path.
+Secret Manager belongs in this conversation because secrets are resources with versions and access policies. A Cloud Run service can have the right image and still fail because its runtime service account cannot access the secret or database path.
 
 Do not fix access problems by making the app broadly powerful. Match the role to the job and the scope to the resource.
 
@@ -201,7 +201,7 @@ What signal proves recovery worked?
 
 ## Debugging With The Map
 
-The map is not only for learning service names. It is a debugging tool.
+The map is a debugging tool.
 
 If customers cannot reach checkout, start with traffic and compute. If the app starts but cannot read the database URL, inspect access and secrets. If orders are accepted but missing from reports, inspect state and downstream jobs. If the bill jumps, group cost by project, service, label, and time. If a release changed behavior, inspect Artifact Registry image, Cloud Run revision, traffic split, runtime config, and logs.
 

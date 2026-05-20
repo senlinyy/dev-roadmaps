@@ -1,6 +1,6 @@
 ---
 title: "Choose Import, Recreate, or Reference"
-sectionSlug: import-recreate-or-reference
+sectionSlug: import-or-reference
 order: 3
 ---
 

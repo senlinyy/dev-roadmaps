@@ -1,319 +1,159 @@
 ---
-id: article-devsecops-pipeline-security-secret-scanning
 title: "Secret Scanning"
-description: "Learn how secret scanning finds exposed tokens, how to respond to leaks, and how to design workflows that avoid long-lived credentials."
-overview: "Secret scanning catches tokens and credentials that enter code, issues, logs, or pull requests. This article follows devpolaris-orders-api through push protection, alert triage, rotation, and safer workflow identity."
-tags: ["secrets", "tokens", "scanning"]
+description: "Find exposed credentials in code, logs, and pull requests, then rotate the authority they carried."
+overview: "Secret scanning catches credentials before or after they enter source control. This article explains token evidence, push protection, rotation, and the Nx supply-chain incident as a real secret-exposure case."
+tags: ["secrets", "tokens", "scanning", "rotation"]
 order: 4
+id: article-devsecops-pipeline-security-secret-scanning
 ---
 
 ## Table of Contents
 
-1. [The Small String That Can Act Like a Person](#the-small-string-that-can-act-like-a-person)
-2. [The Operating Model for devpolaris-orders-api](#the-operating-model-for-devpolaris-orders-api)
-3. [Trust Boundaries in the Workflow](#trust-boundaries-in-the-workflow)
-4. [Evidence Review During a Pull Request](#evidence-review-during-a-pull-request)
-5. [Diagnostic Path When the Check Fails](#diagnostic-path-when-the-check-fails)
-6. [Common Failure Modes](#common-failure-modes)
-7. [Engineering Tradeoffs](#engineering-tradeoffs)
-8. [Operational Checklist](#operational-checklist)
+1. [What Secret Scanning Finds](#what-secret-scanning-finds)
+2. [The Authority Behind a Token](#the-authority-behind-a-token)
+3. [Push Protection](#push-protection)
+4. [Alert Triage](#alert-triage)
+5. [Case Study: Nx S1ngularity](#case-study-nx-s1ngularity)
+6. [Rotation Evidence](#rotation-evidence)
+7. [Putting It All Together](#putting-it-all-together)
+8. [What's Next](#whats-next)
 
-## The Small String That Can Act Like a Person
+## What Secret Scanning Finds
 
-One copied token can let another person or script act as devpolaris-orders-api in a package registry, cloud account, or deployment system. The repository is a Node.js orders service with pull request checks, a main branch release workflow, and production deployment through GitHub Actions. The security control only matters when it changes that path in a way a reviewer can see.
+Secret scanning looks for credentials in places where they should not be: source code, commit history, pull requests, issues, logs, packages, or artifacts. A scanner may find API keys, cloud access keys, npm tokens, private keys, database URLs, webhook secrets, or provider-specific credentials.
 
-The concept fits between source control and production. It does not replace code review, tests, or runtime monitoring. It gives the team evidence before a risky change gets merged, packaged, or deployed. In this article the same service appears in every example so the checks stay connected to real work instead of floating as separate rules.
-
-```yaml
-name: pipeline-security
-
-on:
-  pull_request:
-  push:
-    branches: [main]
-
-permissions:
-  contents: read
-
-jobs:
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version-file: .nvmrc
-          cache: npm
-      - run: npm ci
-      - run: npm test
-```
-
-## The Operating Model for devpolaris-orders-api
-
-The team treats the pipeline as a small production system. It has inputs, permissions, logs, artifacts, and failure states. A workflow file is reviewed like application code because it decides which commands run, which tokens are available, and which output becomes trusted.
-
-The useful mental model is a chain of custody. Source code enters from a branch, checks run on a runner, evidence is uploaded, and a deploy job changes an environment. If one link is too broad or too quiet, the team loses the ability to explain what happened later.
+A secret is dangerous because it carries authority. The string itself is small, but another system may accept it as proof of identity.
 
 ```text
-remote: error: GH013: Repository rule violations found for refs/heads/feature/export-refactor.
-remote: - Push cannot contain secrets
-remote:   GitHub Personal Access Token
-remote:   locations:
-remote:     commit: 4a81c2d
-remote:     path: .env.production:3
+ghp_xxxxxxxxxxxxxxxxxxxx
+npm_xxxxxxxxxxxxxxxxxxxx
+AKIAxxxxxxxxxxxxxxxx
+-----BEGIN PRIVATE KEY-----
+postgres://orders_user:password@example/db
 ```
 
-## Trust Boundaries in the Workflow
-
-A trust boundary is the line between work the team has reviewed and work it has not reviewed yet. Pull request code is lower trust than code merged to main. A production deployment job is higher impact than a unit test job. Good pipeline security keeps those differences visible in YAML and repository settings.
-
-For this service, pull request jobs should not receive production secrets, write package releases, or run on production network runners. Release jobs can receive more access, but only after the earlier evidence exists. The boundary is not about distrusting developers. It is about limiting what a mistake or compromised dependency can do.
-
-| Leak location | Example | First fix direction |
-| :--- | :--- | :--- |
-| Git commit | `.env.production` | Revoke and remove from history if needed |
-| Workflow log | `printenv` output | Rotate and remove debug step |
-| Artifact | Workspace zip includes `.npmrc` | Expire artifact and stop upload |
-
-## Evidence Review During a Pull Request
-
-A security check is only useful if humans know how to read its output. Reviewers should look for the field that proves the claim: a package path, an alert rule, a runner label, a token scope, an environment name, a checksum, or a digest. Without that field, the result becomes a red or green badge with little teaching value.
-
-The devpolaris-orders-api team keeps the review question concrete: does this change increase what untrusted code can touch, and does the evidence show the exact file, job, or artifact involved? That question works for most pipeline controls in this module.
+These examples are different formats, but the review question is the same:
 
 ```text
-Secret scanning alert
-Repository: devpolaris/orders-api
-Secret type: npm access token
-Location: .github/workflows/release.yml:28
-Detected: 2026-05-08T11:02:44Z
-Validity: active
+What could someone do if they had this value?
 ```
 
-## Diagnostic Path When the Check Fails
+Deleting the value from the pull request is not enough if the value was already committed, logged, downloaded, or copied. The safe response is to revoke or rotate the credential, then remove the exposure path.
 
-Start diagnosis with the smallest artifact that names the failure. In GitHub Actions that is often the failed job, step, exit code, and first meaningful log line. After that, move to the source file or repository setting that controls the behavior. Reading every log line first wastes time because pipeline failures usually point to one missing permission, one changed path, or one blocked gate.
+## The Authority Behind a Token
 
-The fix direction should change the system, not only silence the symptom. If a scanner reports a real issue, update the dependency or code path. If a deployment waits for approval, review the environment rule. If a checksum fails, stop the deployment and rebuild from trusted source.
+Treat every secret alert as an authority question.
 
 ```text
-2026-05-08T11:16:40Z Deploy step
-AWS_ACCESS_KEY_ID=***
-NPM_TOKEN_PREFIX=npm_4f2
-DEBUG_CONFIG={"registryToken":"npm_4f2abc..."}
-Uploading artifact orders-api-workspace.zip
+Secret type: npm token
+Owner: devpolaris-orders-api release automation
+Authority: publish @devpolaris/orders-api
+Found in: GitHub Actions log
+First exposed: workflow run #1842
+Status: revoked
+Replacement: trusted publishing through OIDC
 ```
 
-## Common Failure Modes
+`Secret type` tells you what kind of system accepts the value. `Owner` tells you who is responsible for rotation. `Authority` tells you what the value could do. `Found in` and `First exposed` tell you where evidence exists. `Status` tells you whether the value still works. `Replacement` records the safer path.
 
-Failure modes are patterns that repeat across teams. A job can run with a broader token than it needs. A pull request can trigger work on a trusted runner. A scanner can fail closed and block a merge, or fail open because nobody made it required. An artifact can be rebuilt in deploy instead of verified from build output.
+The authority line is the line to read first. A test-only token with read access to a sandbox service is different from a production package token with publish access. Both should be cleaned up. They do not have the same blast radius.
 
-The right response is specific to the failure. Broad permissions need a narrower `permissions:` block. Missing evidence needs a workflow change. Noisy alerts need triage rules, not deletion. A bypass needs an owner and a record because future reviewers need to know why the normal path was not used.
+## Push Protection
 
-| Failure mode | What it looks like | Fix direction |
-| :--- | :--- | :--- |
-| Active leaked token | Alert validity is active | Revoke first |
-| Token in artifact | Alert points to upload | Expire artifact and rotate |
-| Broad token | One value can write packages | Create scoped token or OIDC |
+Push protection tries to stop a secret before it enters the remote repository. When a developer pushes a commit containing a recognized token pattern, the platform can block the push or require explicit bypass.
 
-## Engineering Tradeoffs
+The developer experience may look like this:
 
-Every control has a cost. Hosted runners reduce operational burden, but may not reach private networks. Self-hosted runners can deploy inside a network, but they need isolation and cleanup. Strict scan thresholds catch risk earlier, but they can slow urgent fixes. Protected environments create a useful pause, but they require reviewers who understand the evidence.
-
-Good teams make those tradeoffs explicit. For devpolaris-orders-api, the default is strict on production paths and practical on development paths. Pull requests get fast checks with no secrets. Main branch builds create durable evidence. Production deployment waits for a reviewer only after staging has passed.
-
-```yaml
-jobs:
-  publish:
-    environment: release
-    permissions:
-      contents: read
-      id-token: write
-    steps:
-      - uses: actions/checkout@v4
-      - run: npm publish --provenance
+```text
+Push blocked
+Reason: potential npm token detected
+File: scripts/release.env
+Line: 3
+Action: remove the token from the commit or confirm a safe bypass
 ```
 
-## Operational Checklist
+The useful details are file, line, token type, and action. The developer should remove the token from the commit, rotate it if it was real, and move the secret into the approved secret store if the workflow truly needs it.
 
-The checklist at the end of a pipeline-security article should not be a substitute for thought. It is a memory aid for review and incident response. When the pipeline changes, each item asks whether the trusted path is still clear.
+Push protection is strongest for known token formats and providers. It may miss custom secrets, short passwords, encoded values, or new token formats. It is a guardrail, not a replacement for secret design.
 
-Use the checklist while reading workflow diffs. If the answer is not obvious from YAML, repository settings, or a log artifact, add the missing evidence before production depends on it.
+## Alert Triage
 
-- Revoke before polishing history.
-- Check provider audit logs after exposure time.
-- Remove secrets from artifacts and logs.
-- Prefer scoped or short-lived identity for release jobs.
+When an alert appears, triage it in this order:
 
-- Review note: secret response starts with revocation, scope review, and evidence of where the token was used.
+```text
+1. Identify the secret type.
+2. Identify the authority.
+3. Revoke or rotate the value.
+4. Find where it was exposed.
+5. Remove or rewrite the exposure path.
+6. Record the replacement.
+```
 
-- Review note: secret response starts with revocation, scope review, and evidence of where the token was used.
+The order matters because exposure cleanup can take time. Revocation stops the old value from working while cleanup continues.
 
-- Review note: secret response starts with revocation, scope review, and evidence of where the token was used.
+Here is a triage record:
 
-- Review note: secret response starts with revocation, scope review, and evidence of where the token was used.
+```text
+Alert: secret-scanning-2026-05-19-004
+Type: cloud access key
+Location: commit 8f2a91d scripts/debug-prod.sh
+Authority: read production logs
+Action: key disabled, replacement moved to OIDC role
+Owner: platform-team
+Closed: 2026-05-19T11:20Z
+```
 
-- Review note: secret response starts with revocation, scope review, and evidence of where the token was used.
+This record lets the team prove that the leaked value was disabled and that the replacement path is safer.
 
-- Review note: secret response starts with revocation, scope review, and evidence of where the token was used.
+## Case Study: Nx S1ngularity
 
-- Review note: secret response starts with revocation, scope review, and evidence of where the token was used.
+Nx published a postmortem for the 2025 S1ngularity npm supply-chain incident. The attack involved a GitHub Actions workflow injection path, a stolen npm token, malicious package versions, and local developer secret exposure behavior. Nx's response included package cleanup, token rotation, and hardening work.
 
-- Review note: secret response starts with revocation, scope review, and evidence of where the token was used.
+The secret-scanning lesson is that leaked tokens can become publishing authority. Once a publish token is stolen, the registry may accept malicious versions from an attacker. Downstream users then install a package that appears to come from the trusted project name.
 
-- Review note: secret response starts with revocation, scope review, and evidence of where the token was used.
+Read the path:
 
-- Review note: secret response starts with revocation, scope review, and evidence of where the token was used.
+```text
+workflow injection
+  -> npm token exposure
+  -> malicious package publish
+  -> downstream install
+  -> local secrets at risk
+```
 
-- Review note: secret response starts with revocation, scope review, and evidence of where the token was used.
+Secret scanning can help at several points. It can catch a token committed to source. It can alert when a token appears in a log. It can help responders search for exposed credentials after malicious code runs. It cannot repair the trust path by itself. The token still needs revocation, and the workflow path that exposed it still needs hardening.
 
-- Review note: secret response starts with revocation, scope review, and evidence of where the token was used.
+## Rotation Evidence
 
-- Review note: secret response starts with revocation, scope review, and evidence of where the token was used.
+A rotation record should prove that the old value stopped working and the new path works.
 
-- Review note: secret response starts with revocation, scope review, and evidence of where the token was used.
+```text
+Credential: npm automation token
+Reason: exposed in workflow log
+Old value: revoked at 2026-05-19T10:52Z
+Replacement: npm trusted publishing
+Validation: package dry-run succeeded from release workflow #1848
+Exposure cleanup: log access restricted, workflow output redacted
+Owner: platform-team
+```
 
-- Review note: secret response starts with revocation, scope review, and evidence of where the token was used.
+The `Old value` line matters because removal from source does not revoke a credential. The `Validation` line matters because replacement credentials can break delivery. The `Exposure cleanup` line records what happened to the place where the secret appeared.
 
-- Review note: secret response starts with revocation, scope review, and evidence of where the token was used.
+## Putting It All Together
 
-- Review note: secret response starts with revocation, scope review, and evidence of where the token was used.
+Secret scanning finds sensitive values that escaped their intended storage path. The right response starts with authority, not the string. What could the token do? Where did it appear? Who owns it? Is it revoked? What replaces it?
 
-- Review note: secret response starts with revocation, scope review, and evidence of where the token was used.
+The Nx incident shows how secret exposure can connect directly to package publishing and downstream compromise. For `devpolaris-orders-api`, secret scanning should be paired with push protection, low-power pull request jobs, short-lived OIDC identity where possible, and rotation records that prove old values are dead.
 
-- Review note: secret response starts with revocation, scope review, and evidence of where the token was used.
+## What's Next
 
-- Review note: secret response starts with revocation, scope review, and evidence of where the token was used.
-
-- Review note: secret response starts with revocation, scope review, and evidence of where the token was used.
-
-- Review note: secret response starts with revocation, scope review, and evidence of where the token was used.
-
-- Review note: secret response starts with revocation, scope review, and evidence of where the token was used.
-
-- Review note: secret response starts with revocation, scope review, and evidence of where the token was used.
-
-- Review note: secret response starts with revocation, scope review, and evidence of where the token was used.
-
-- Review note: secret response starts with revocation, scope review, and evidence of where the token was used.
-
-- Review note: secret response starts with revocation, scope review, and evidence of where the token was used.
-
-- Review note: secret response starts with revocation, scope review, and evidence of where the token was used.
-
-- Review note: secret response starts with revocation, scope review, and evidence of where the token was used.
-
-- Review note: secret response starts with revocation, scope review, and evidence of where the token was used.
-
-- Review note: secret response starts with revocation, scope review, and evidence of where the token was used.
-
-- Review note: secret response starts with revocation, scope review, and evidence of where the token was used.
-
-- Review note: secret response starts with revocation, scope review, and evidence of where the token was used.
-
-- Review note: secret response starts with revocation, scope review, and evidence of where the token was used.
-
-- Review note: secret response starts with revocation, scope review, and evidence of where the token was used.
-
-- Review note: secret response starts with revocation, scope review, and evidence of where the token was used.
-
-- Review note: secret response starts with revocation, scope review, and evidence of where the token was used.
-
-- Review note: secret response starts with revocation, scope review, and evidence of where the token was used.
-
-- Review note: secret response starts with revocation, scope review, and evidence of where the token was used.
-
-- Review note: secret response starts with revocation, scope review, and evidence of where the token was used.
-
-- Review note: secret response starts with revocation, scope review, and evidence of where the token was used.
-
-- Review note: secret response starts with revocation, scope review, and evidence of where the token was used.
-
-- Review note: secret response starts with revocation, scope review, and evidence of where the token was used.
-
-- Review note: secret response starts with revocation, scope review, and evidence of where the token was used.
-
-- Review note: secret response starts with revocation, scope review, and evidence of where the token was used.
-
-- Review note: secret response starts with revocation, scope review, and evidence of where the token was used.
-
-- Review note: secret response starts with revocation, scope review, and evidence of where the token was used.
-
-- Review note: secret response starts with revocation, scope review, and evidence of where the token was used.
-
-- Review note: secret response starts with revocation, scope review, and evidence of where the token was used.
-
-- Review note: secret response starts with revocation, scope review, and evidence of where the token was used.
-
-- Review note: secret response starts with revocation, scope review, and evidence of where the token was used.
-
-- Review note: secret response starts with revocation, scope review, and evidence of where the token was used.
-
-- Review note: secret response starts with revocation, scope review, and evidence of where the token was used.
-
-- Review note: secret response starts with revocation, scope review, and evidence of where the token was used.
-
-- Review note: secret response starts with revocation, scope review, and evidence of where the token was used.
-
-- Review note: secret response starts with revocation, scope review, and evidence of where the token was used.
-
-- Review note: secret response starts with revocation, scope review, and evidence of where the token was used.
-
-- Review note: secret response starts with revocation, scope review, and evidence of where the token was used.
-
-- Review note: secret response starts with revocation, scope review, and evidence of where the token was used.
-
-- Review note: secret response starts with revocation, scope review, and evidence of where the token was used.
-
-- Review note: secret response starts with revocation, scope review, and evidence of where the token was used.
-
-- Review note: secret response starts with revocation, scope review, and evidence of where the token was used.
-
-- Review note: secret response starts with revocation, scope review, and evidence of where the token was used.
-
-- Review note: secret response starts with revocation, scope review, and evidence of where the token was used.
-
-- Review note: secret response starts with revocation, scope review, and evidence of where the token was used.
-
-- Review note: secret response starts with revocation, scope review, and evidence of where the token was used.
-
-- Review note: secret response starts with revocation, scope review, and evidence of where the token was used.
-
-- Review note: secret response starts with revocation, scope review, and evidence of where the token was used.
-
-- Review note: secret response starts with revocation, scope review, and evidence of where the token was used.
-
-- Review note: secret response starts with revocation, scope review, and evidence of where the token was used.
-
-- Review note: secret response starts with revocation, scope review, and evidence of where the token was used.
-
-- Review note: secret response starts with revocation, scope review, and evidence of where the token was used.
-
-- Review note: secret response starts with revocation, scope review, and evidence of where the token was used.
-
-- Review note: secret response starts with revocation, scope review, and evidence of where the token was used.
-
-- Review note: secret response starts with revocation, scope review, and evidence of where the token was used.
-
-- Review note: secret response starts with revocation, scope review, and evidence of where the token was used.
-
-- Review note: secret response starts with revocation, scope review, and evidence of where the token was used.
-
-- Review note: secret response starts with revocation, scope review, and evidence of where the token was used.
-
-- Review note: secret response starts with revocation, scope review, and evidence of where the token was used.
-
-- Review note: secret response starts with revocation, scope review, and evidence of where the token was used.
-
-- Review note: secret response starts with revocation, scope review, and evidence of where the token was used.
-
-- Review note: secret response starts with revocation, scope review, and evidence of where the token was used.
+Secrets and code scanning protect the source and workflow path. Protected branches and environments add gates around merge and deployment so sensitive changes cannot move through the path without the right checks and approvals.
 
 ---
 
 **References**
 
-- [GitHub secret scanning](https://docs.github.com/en/code-security/secret-scanning/about-secret-scanning) - Official documentation for secret scanning alerts and supported workflows.
-- [GitHub push protection](https://docs.github.com/en/code-security/secret-scanning/push-protection-for-repositories-and-organizations) - Official documentation for blocking supported secrets before they enter the repository.
-- [GitHub Actions security hardening](https://docs.github.com/en/actions/security-guides/security-hardening-for-github-actions) - Official workflow guidance for handling secrets safely in Actions.
-- [OpenSSF Scorecard](https://github.com/ossf/scorecard) - Canonical project that checks repository practices including token permissions.
+- [Nx S1ngularity postmortem](https://nx.dev/blog/s1ngularity-postmortem) - Nx describes the 2025 npm supply-chain incident, token exposure, malicious publishes, and hardening work.
+- [GitHub secret scanning](https://docs.github.com/en/code-security/secret-scanning/about-secret-scanning) - GitHub documents secret scanning behavior and supported secret detection.
+- [GitHub push protection](https://docs.github.com/en/code-security/secret-scanning/push-protection-for-repositories-and-organizations) - GitHub documents push protection for blocking supported secrets before they enter repositories.
+- [npm trusted publishing](https://docs.npmjs.com/trusted-publishers) - npm documents publishing packages through trusted identity instead of long-lived automation tokens.

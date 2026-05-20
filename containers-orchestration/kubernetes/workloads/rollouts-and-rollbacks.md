@@ -24,7 +24,7 @@ An update to `devpolaris-orders-api` usually means the team has built a new cont
 
 That process is called a rollout. A rollback tells Kubernetes to return a Deployment to an earlier Pod template revision. Both operations depend on readiness probes because Kubernetes needs a signal that a new Pod can receive traffic.
 
-The goal is not "replace everything as fast as possible." The goal is to keep enough healthy replicas available while moving from old code to new code.
+The goal is to keep enough healthy replicas available while moving from old code to new code.
 
 ```mermaid
 flowchart TD

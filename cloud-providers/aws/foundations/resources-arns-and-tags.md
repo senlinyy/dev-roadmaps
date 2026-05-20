@@ -55,7 +55,7 @@ That means a name can be useful without being complete.
 
 In the alert story, search results show several resources that all look related to orders. The name tells you where to start. It does not prove you have the resource that the failing API is actually using.
 
-This is why the investigation should move from a human label to stronger evidence. First ask what kind of resource the alert names. Then ask where it lives. Then copy the identifier that AWS uses, not only the label that humans prefer.
+This is why the investigation should move from a human label to stronger evidence. First ask what kind of resource the alert names. Then ask where it lives. Then copy the identifier that AWS uses along with the label that humans prefer.
 
 ## Resource IDs
 
@@ -140,7 +140,7 @@ For the orders API, useful tags might look like this:
 | `CostCenter` | `commerce-042` | Lets finance group usage and cost after cost allocation tags are activated. |
 | `ManagedBy` | `terraform` | Warns you that a console edit may drift from infrastructure code. |
 
-This is not a governance program. It is a findability habit. During the incident, tags let the team search for resources that belong together. They also expose mismatches. A bucket named like production but tagged `Environment=staging` should make you pause. A role with no owner tag may still be the right role, but now the missing context is visible.
+This is a findability habit. During the incident, tags let the team search for resources that belong together. They also expose mismatches. A bucket named like production but tagged `Environment=staging` should make you pause. A role with no owner tag may still be the right role, but now the missing context is visible.
 
 There are practical limits to what tags can do.
 
@@ -162,7 +162,7 @@ Use tags to make resources easier to find, group, and explain. Use ARNs and reso
 
 ## Safer Naming
 
-Good naming is not about making AWS pretty. It is about reducing hesitation when someone is tired, rushed, and trying not to break production.
+Good naming reduces hesitation when someone is tired, rushed, and trying not to break production.
 
 A safer name tells a human the workload, job, and environment before they open the details pane. The exact pattern depends on the team's conventions, but the name should make common mistakes less likely.
 
@@ -184,7 +184,7 @@ There are a few useful habits:
 - Avoid secrets, customer names, incident details, or private data in names and tags.
 - Avoid names that can stay true only for a week, such as `temporary`, unless the tag or owner makes cleanup explicit.
 
-The point is not to memorize one naming scheme. The point is to make the console, CLI output, alerts, and tickets agree enough that someone can identify the resource quickly and then verify it with an ARN.
+The point is to make the console, CLI output, alerts, and tickets agree enough that someone can identify the resource quickly and then verify it with an ARN.
 
 ## Evidence Before Changes
 

@@ -40,7 +40,7 @@ But a rollback can fail if the database has already changed, if the previous art
 Roll forward feels risky because it changes production again while production is already unhappy.
 But it can be safer when the fix is tiny, the cause is clear, and going backward would make the system more confused.
 
-This article teaches the decision, not just the command.
+This article teaches the decision behind the command.
 We will keep using `devpolaris-orders-api`, a Node.js backend deployed to Amazon ECS.
 The service is rolling out version `1.8.4`.
 The new ECS task set reaches ten percent traffic through CodeDeploy, then checkout errors rise.
@@ -284,7 +284,7 @@ In those cases, the safer move may be redeploying the previous artifact.
 An **artifact** is the built thing you deploy.
 For our Node service, it is a container image digest.
 If a team deploys a package directly instead of a container image, the same rule applies:
-record the exact checksum, not just the friendly version name.
+record the exact checksum alongside the friendly version name.
 
 Redeploying the previous artifact is different from reverting traffic.
 Traffic revert says, "Use the old running task set."
@@ -374,9 +374,7 @@ After disabling the flag, verify behavior through the public service.
 The smoke checkout should return `accepted` and report `discountEngine: v1`.
 That proves the recovery came from changing behavior, not from moving traffic.
 
-This is not a code rollback.
-The new artifact may still be running.
-The recovery is that the bad behavior is no longer active.
+The new artifact may still be running while the bad behavior is no longer active.
 
 That distinction matters for the release record.
 

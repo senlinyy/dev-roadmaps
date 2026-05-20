@@ -81,7 +81,7 @@ Registry image: ghcr.io/devpolaris/orders-api
 Critical endpoints: /healthz, /readyz, /internal/config
 ```
 
-Add recovery expectations, not only object names.
+Add recovery expectations alongside object names.
 
 ```text
 Recovery expectations
@@ -96,7 +96,7 @@ That last line matters. Restore is not complete when YAML applies successfully. 
 
 ## Backing Up Manifests and Cluster State
 
-Git is not a full backup of a Kubernetes cluster, but it is a strong backup of intended configuration when you practice declarative delivery. If your Deployments, ConfigMaps, Services, RBAC, and PVC manifests live in Git, you can recreate much of the desired API state.
+Git is a strong backup of intended configuration when you practice declarative delivery. If your Deployments, ConfigMaps, Services, RBAC, and PVC manifests live in Git, you can recreate much of the desired API state. Cluster recovery still needs separate backups for runtime state and data.
 
 A simple export command can help during learning, but it is not a clean source of truth because live objects contain generated fields.
 
@@ -165,7 +165,7 @@ spec:
       storage: 20Gi
 ```
 
-Snapshots are not always application-consistent. If the app writes several files as one logical operation, a storage snapshot might capture the middle of that operation. Databases need database-aware backup procedures, not only disk snapshots.
+Snapshots can capture storage in the middle of an application operation. If the app writes several files as one logical operation, a storage snapshot might capture the middle of that operation. Databases need database-aware backup procedures alongside disk snapshots.
 
 ## Restore Drills and Verification
 
@@ -195,11 +195,11 @@ $ kubectl exec deploy/orders-api -n devpolaris-restore-drill -- wget -qO- http:/
 ok
 ```
 
-A restored Pod that cannot connect to its database is not restored. A restored volume that contains files but wrong ownership is not restored. Verification should match the service's real job.
+A useful restore proves the service can do its job: Pods connect to their databases, restored volumes contain the right files, and file ownership lets the application use them.
 
 ## Failure Mode: The Backup Exists but Cannot Restore the Service
 
-The painful failure is not "there was no backup." It is "there was a backup, but it did not restore the service." This happens when the backup covers only one layer.
+The painful failure is having a backup that cannot restore the service. This happens when the backup covers only one layer.
 
 A realistic incident might look like this:
 
@@ -237,11 +237,11 @@ A backup checklist should be short enough to use and specific enough to prevent 
 | Registry | Can Kubernetes pull the required image? | Pod starts with the expected image digest |
 | DNS and ingress | Can users reach the service? | Health check passes through the real route |
 
-Run the checklist before you need it. A restore drill turns backup from a hopeful file into an operational capability. The goal is not to memorize every Kubernetes recovery tool. The goal is to know which state you lost, which system owns that state, and which evidence proves the service is useful again.
+Run the checklist before you need it. A restore drill turns backup from a hopeful file into an operational capability. The useful recovery skill is knowing which state you lost, which system owns that state, and which evidence proves the service is useful again.
 
 ### Restore Order Matters
 
-A restore plan also needs an order. Restoring a Deployment before its Secret, PVC, or database is ready may create noisy CrashLoopBackOff Pods. That noise is not fatal, but it can hide the real missing dependency.
+A restore plan also needs an order. Restoring a Deployment before its Secret, PVC, or database is ready may create noisy CrashLoopBackOff Pods. That noise can hide the real missing dependency while the team is trying to recover.
 
 For `devpolaris-orders-api`, a clean restore order is usually infrastructure first, data second, workload last.
 
@@ -257,7 +257,7 @@ Suggested restore order
 
 This order prevents the application from starting into an empty environment. It also gives you clearer checkpoints. If PVC restore fails at step 3, you know the Deployment is not the problem yet.
 
-You can still use automation. The point is not to run every step by hand. The point is for the automation to respect dependency order and report which layer failed.
+Automation is useful when it respects dependency order and reports which layer failed.
 
 ### What Not to Call a Backup
 

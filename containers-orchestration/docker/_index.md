@@ -1,6 +1,6 @@
 ---
 title: "Docker"
-description: "Build, run, network, persist, compose, and debug containers with Docker."
-tags: ["docker", "dockerfile", "compose"]
-order: 2
+description: "Learn Docker through a deeper path: foundations, image builds, container runtime behavior, runtime boundaries, Compose, and debugging."
+tags: ["docker", "images", "containers", "compose"]
+order: 1
 ---

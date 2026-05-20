@@ -159,7 +159,7 @@ fn print_all<T: std::fmt::Display>(items: &[T]) {
 }
 ```
 
-The `Display` bound is not ceremony. It is the price tag on the operation. Printing with `{}` only works for types that know how to display themselves.
+The `Display` bound is the price tag on the operation. Printing with `{}` only works for types that know how to display themselves.
 
 This is a useful review habit:
 
@@ -353,7 +353,7 @@ Count back to the opener:
 - Trait bounds say what those item types must provide.
 - `impl Trait`, named type parameters, and `where` clauses give different ways to express the same idea clearly.
 
-Generics are not about making code abstract for its own sake. They are about removing repetition while keeping the contract visible.
+Generics remove repetition while keeping the contract visible.
 
 ## What's Next
 

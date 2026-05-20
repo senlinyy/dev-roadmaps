@@ -1,319 +1,168 @@
 ---
-id: article-devsecops-pipeline-security-sast-and-codeql
 title: "SAST and CodeQL"
-description: "Learn how static application security testing and CodeQL find risky code paths, how to tune scans, and how to diagnose code scanning failures."
-overview: "SAST reads source code before the application runs. This article uses CodeQL on devpolaris-orders-api to show how queries become alerts, why data flow matters, and how to turn findings into useful fixes."
+description: "Use static analysis to find risky source-code paths before the application runs."
+overview: "Static application security testing reads code as evidence. This article explains sources, sinks, data flow, CodeQL alerts, and how to turn findings into useful fixes."
 tags: ["sast", "codeql", "code-scanning"]
 order: 3
+id: article-devsecops-pipeline-security-sast-and-codeql
 ---
 
 ## Table of Contents
 
-1. [Reading Code Before It Runs](#reading-code-before-it-runs)
-2. [The Operating Model for devpolaris-orders-api](#the-operating-model-for-devpolaris-orders-api)
-3. [Trust Boundaries in the Workflow](#trust-boundaries-in-the-workflow)
-4. [Evidence Review During a Pull Request](#evidence-review-during-a-pull-request)
-5. [Diagnostic Path When the Check Fails](#diagnostic-path-when-the-check-fails)
-6. [Common Failure Modes](#common-failure-modes)
-7. [Engineering Tradeoffs](#engineering-tradeoffs)
-8. [Operational Checklist](#operational-checklist)
+1. [What SAST Reads](#what-sast-reads)
+2. [Sources and Sinks](#sources-and-sinks)
+3. [Data Flow](#data-flow)
+4. [CodeQL Alerts](#codeql-alerts)
+5. [False Positives and Real Fixes](#false-positives-and-real-fixes)
+6. [Review Evidence](#review-evidence)
+7. [Putting It All Together](#putting-it-all-together)
+8. [What's Next](#whats-next)
 
-## Reading Code Before It Runs
+## What SAST Reads
 
-Some security bugs are visible in source code before the API starts or receives traffic. The repository is a Node.js orders service with pull request checks, a main branch release workflow, and production deployment through GitHub Actions. The security control only matters when it changes that path in a way a reviewer can see.
+Static application security testing, usually called SAST, reads source code before the application runs. It looks for code patterns that commonly produce security problems: user input reaching SQL queries, shell commands, templates, redirects, file paths, deserialization, or secrets.
 
-The concept fits between source control and production. It does not replace code review, tests, or runtime monitoring. It gives the team evidence before a risky change gets merged, packaged, or deployed. In this article the same service appears in every example so the checks stay connected to real work instead of floating as separate rules.
+For `devpolaris-orders-api`, SAST belongs in the pull request path. It should help reviewers notice risky code while the change is still small.
 
-```yaml
-name: pipeline-security
+Here is a simple route handler:
 
-on:
-  pull_request:
-  push:
-    branches: [main]
-
-permissions:
-  contents: read
-
-jobs:
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version-file: .nvmrc
-          cache: npm
-      - run: npm ci
-      - run: npm test
+```ts
+app.get('/orders/search', async (req, res) => {
+  const status = String(req.query.status ?? '');
+  const rows = await db.query(`select * from orders where status = '${status}'`);
+  res.json(rows);
+});
 ```
 
-## The Operating Model for devpolaris-orders-api
+The risky part is the query string. `req.query.status` comes from the HTTP request. The SQL string is built by concatenating that input into a query. A scanner does not need to run the app to see that path.
 
-The team treats the pipeline as a small production system. It has inputs, permissions, logs, artifacts, and failure states. A workflow file is reviewed like application code because it decides which commands run, which tokens are available, and which output becomes trusted.
+SAST is useful because humans miss repeated patterns when reviewing large changes. It is limited because it reads code through rules and models. It may misunderstand framework behavior, miss runtime configuration, or report a path that cannot happen in practice.
 
-The useful mental model is a chain of custody. Source code enters from a branch, checks run on a runner, evidence is uploaded, and a deploy job changes an environment. If one link is too broad or too quiet, the team loses the ability to explain what happened later.
+## Sources and Sinks
 
-```yaml
-name: codeql
-on:
-  pull_request:
-  push:
-    branches: [main]
-permissions:
-  contents: read
-  security-events: write
-  actions: read
-jobs:
-  analyze:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: github/codeql-action/init@v3
-        with:
-          languages: javascript-typescript
-      - uses: github/codeql-action/analyze@v3
-```
-
-## Trust Boundaries in the Workflow
-
-A trust boundary is the line between work the team has reviewed and work it has not reviewed yet. Pull request code is lower trust than code merged to main. A production deployment job is higher impact than a unit test job. Good pipeline security keeps those differences visible in YAML and repository settings.
-
-For this service, pull request jobs should not receive production secrets, write package releases, or run on production network runners. Release jobs can receive more access, but only after the earlier evidence exists. The boundary is not about distrusting developers. It is about limiting what a mistake or compromised dependency can do.
+Most SAST findings are easier to understand through sources and sinks.
 
 ```text
-Code scanning alert
+source -> transformation -> sink
+```
+
+A source is where data enters the program. A sink is where data can cause harm if it is untrusted. Transformations are the steps in between.
+
+| Term | Example in orders API |
+|------|-----------------------|
+| Source | `req.query.status`, request body, header, uploaded file |
+| Transformation | `String(...)`, parser, validator, mapper |
+| Sink | SQL query, shell command, file path, template render |
+
+The vulnerable example has a request query source and a SQL query sink.
+
+```text
+req.query.status
+  -> String(...)
+  -> SQL query string
+  -> database engine
+```
+
+The fix is to break the dangerous data flow by using a parameterized query.
+
+```ts
+app.get('/orders/search', async (req, res) => {
+  const status = String(req.query.status ?? '');
+  const rows = await db.query('select * from orders where status = $1', [status]);
+  res.json(rows);
+});
+```
+
+The input still reaches the database, but it reaches the database as a parameter, not as executable SQL text.
+
+## Data Flow
+
+Data flow is how a scanner follows values through the program. CodeQL is built around this idea. It treats code as a database that can be queried, then uses language models and security queries to find paths from sources to sinks.
+
+Here is a slightly longer path:
+
+```ts
+function requestedStatus(req: Request): string {
+  return String(req.query.status ?? '');
+}
+
+app.get('/orders/search', async (req, res) => {
+  const status = requestedStatus(req);
+  const sql = `select * from orders where status = '${status}'`;
+  const rows = await db.query(sql);
+  res.json(rows);
+});
+```
+
+The source is now hidden behind `requestedStatus`. A simple text search for `req.query` near `db.query` may miss it. A data-flow query can still follow the returned value into the SQL string.
+
+This is the practical value of CodeQL-style analysis. It can find paths that are spread across helper functions and files. The reviewer still has to decide whether the path is real, whether the framework model is accurate, and which fix is safest.
+
+## CodeQL Alerts
+
+A useful CodeQL alert should give you the rule, severity, location, path, and explanation.
+
+```text
 Rule: js/sql-injection
-Severity: error
-Source: src/routes/orders.ts:42 req.query.status
-Sink: src/db/orders.ts:18 db.raw(query)
-Path: routes/orders.ts -> services/order-search.ts -> db/orders.ts
+Severity: high
+File: src/routes/orders.ts
+Line: 18
+Source: req.query.status
+Sink: db.query(sql)
+Path: req.query.status -> requestedStatus -> sql template -> db.query
 ```
 
-## Evidence Review During a Pull Request
+Read the alert from bottom to top if you are debugging it. The sink tells you where harm could happen. The source tells you where untrusted input entered. The path tells you why the tool believes the two are connected.
 
-A security check is only useful if humans know how to read its output. Reviewers should look for the field that proves the claim: a package path, an alert rule, a runner label, a token scope, an environment name, a checksum, or a digest. Without that field, the result becomes a red or green badge with little teaching value.
+The first question is whether the source is attacker-controlled. The second question is whether the sink interprets the value in a dangerous way. The third question is whether validation, escaping, or parameterization occurs on the path.
 
-The devpolaris-orders-api team keeps the review question concrete: does this change increase what untrusted code can touch, and does the evidence show the exact file, job, or artifact involved? That question works for most pipeline controls in this module.
+## False Positives and Real Fixes
 
-```typescript
-const status = String(req.query.status ?? "open");
-const orders = await db.raw(
-  "select * from orders where status = ?",
-  [status]
-);
-```
-
-## Diagnostic Path When the Check Fails
-
-Start diagnosis with the smallest artifact that names the failure. In GitHub Actions that is often the failed job, step, exit code, and first meaningful log line. After that, move to the source file or repository setting that controls the behavior. Reading every log line first wastes time because pipeline failures usually point to one missing permission, one changed path, or one blocked gate.
-
-The fix direction should change the system, not only silence the symptom. If a scanner reports a real issue, update the dependency or code path. If a deployment waits for approval, review the environment rule. If a checksum fails, stop the deployment and rebuild from trusted source.
+A false positive is a finding that does not represent a real vulnerability in the current code. False positives happen. The response should still leave evidence.
 
 ```text
-2026-05-08T10:14:31Z github/codeql-action/autobuild
-Error: We were unable to automatically build your code.
-Command failed: npm run build
-src/generated/routes.ts: No such file or directory
+Finding: js/sql-injection
+Decision: dismissed
+Reason: value is selected from a fixed enum before reaching the query
+Evidence: validateOrderStatus rejects values outside allowed set
+Reviewer: maya-dev
 ```
 
-## Common Failure Modes
+A real fix should change the code path. Comments and suppressions should be rare. If the issue is SQL injection, use parameterization. If the issue is command injection, avoid shell interpretation or pass arguments safely. If the issue is path traversal, normalize and restrict paths to an allowed root.
 
-Failure modes are patterns that repeat across teams. A job can run with a broader token than it needs. A pull request can trigger work on a trusted runner. A scanner can fail closed and block a merge, or fail open because nobody made it required. An artifact can be rebuilt in deploy instead of verified from build output.
+For the orders API example, the useful fix is the parameterized query. It is better than adding a comment that says the input should be safe.
 
-The right response is specific to the failure. Broad permissions need a narrower `permissions:` block. Missing evidence needs a workflow change. Noisy alerts need triage rules, not deletion. A bypass needs an owner and a record because future reviewers need to know why the normal path was not used.
+## Review Evidence
 
-| Failure mode | Diagnosis | Fix direction |
-| :--- | :--- | :--- |
-| Alert has source and sink | Read data flow path | Fix the code path |
-| Autobuild fails | Generated file missing | Add real build steps |
-| Alert dismissed without reason | No evidence for reviewer | Require reason and owner |
-
-## Engineering Tradeoffs
-
-Every control has a cost. Hosted runners reduce operational burden, but may not reach private networks. Self-hosted runners can deploy inside a network, but they need isolation and cleanup. Strict scan thresholds catch risk earlier, but they can slow urgent fixes. Protected environments create a useful pause, but they require reviewers who understand the evidence.
-
-Good teams make those tradeoffs explicit. For devpolaris-orders-api, the default is strict on production paths and practical on development paths. Pull requests get fast checks with no secrets. Main branch builds create durable evidence. Production deployment waits for a reviewer only after staging has passed.
+Keep SAST evidence small.
 
 ```text
-Pull request #417
-unit-test: success
-npm-audit: success
-codeql: success
-new code scanning alerts: 1
-required action: fixed or dismissed with reviewed reason
+Alert: js/sql-injection
+Service: devpolaris-orders-api
+Source: req.query.status
+Sink: db.query
+Fix: parameterized query
+Pull request: #421
+Status: fixed
+Regression: test covers apostrophe in status input
 ```
 
-## Operational Checklist
+The `Regression` line matters. A security fix should usually have a small test or example that proves the risky input path changed.
 
-The checklist at the end of a pipeline-security article should not be a substitute for thought. It is a memory aid for review and incident response. When the pipeline changes, each item asks whether the trusted path is still clear.
+## Putting It All Together
 
-Use the checklist while reading workflow diffs. If the answer is not obvious from YAML, repository settings, or a log artifact, add the missing evidence before production depends on it.
+SAST reads source code before the application runs. The beginner model is source, path, sink. CodeQL makes that model practical by querying code structure and data flow.
 
-- Treat source, sink, and path as the core alert evidence.
-- Keep scanner permissions separate from deployment permissions.
-- Fix risky data flow before dismissing alerts.
-- Add custom build steps when autobuild misses generated files.
+For `devpolaris-orders-api`, SAST is useful when it helps reviewers find a risky path early. It should not become a wall of unexplained alerts. Each meaningful finding needs a source, sink, path, decision, fix, and evidence.
 
-- Review note: static analysis findings need source, sink, path, and a reviewed fix.
+## What's Next
 
-- Review note: static analysis findings need source, sink, path, and a reviewed fix.
-
-- Review note: static analysis findings need source, sink, path, and a reviewed fix.
-
-- Review note: static analysis findings need source, sink, path, and a reviewed fix.
-
-- Review note: static analysis findings need source, sink, path, and a reviewed fix.
-
-- Review note: static analysis findings need source, sink, path, and a reviewed fix.
-
-- Review note: static analysis findings need source, sink, path, and a reviewed fix.
-
-- Review note: static analysis findings need source, sink, path, and a reviewed fix.
-
-- Review note: static analysis findings need source, sink, path, and a reviewed fix.
-
-- Review note: static analysis findings need source, sink, path, and a reviewed fix.
-
-- Review note: static analysis findings need source, sink, path, and a reviewed fix.
-
-- Review note: static analysis findings need source, sink, path, and a reviewed fix.
-
-- Review note: static analysis findings need source, sink, path, and a reviewed fix.
-
-- Review note: static analysis findings need source, sink, path, and a reviewed fix.
-
-- Review note: static analysis findings need source, sink, path, and a reviewed fix.
-
-- Review note: static analysis findings need source, sink, path, and a reviewed fix.
-
-- Review note: static analysis findings need source, sink, path, and a reviewed fix.
-
-- Review note: static analysis findings need source, sink, path, and a reviewed fix.
-
-- Review note: static analysis findings need source, sink, path, and a reviewed fix.
-
-- Review note: static analysis findings need source, sink, path, and a reviewed fix.
-
-- Review note: static analysis findings need source, sink, path, and a reviewed fix.
-
-- Review note: static analysis findings need source, sink, path, and a reviewed fix.
-
-- Review note: static analysis findings need source, sink, path, and a reviewed fix.
-
-- Review note: static analysis findings need source, sink, path, and a reviewed fix.
-
-- Review note: static analysis findings need source, sink, path, and a reviewed fix.
-
-- Review note: static analysis findings need source, sink, path, and a reviewed fix.
-
-- Review note: static analysis findings need source, sink, path, and a reviewed fix.
-
-- Review note: static analysis findings need source, sink, path, and a reviewed fix.
-
-- Review note: static analysis findings need source, sink, path, and a reviewed fix.
-
-- Review note: static analysis findings need source, sink, path, and a reviewed fix.
-
-- Review note: static analysis findings need source, sink, path, and a reviewed fix.
-
-- Review note: static analysis findings need source, sink, path, and a reviewed fix.
-
-- Review note: static analysis findings need source, sink, path, and a reviewed fix.
-
-- Review note: static analysis findings need source, sink, path, and a reviewed fix.
-
-- Review note: static analysis findings need source, sink, path, and a reviewed fix.
-
-- Review note: static analysis findings need source, sink, path, and a reviewed fix.
-
-- Review note: static analysis findings need source, sink, path, and a reviewed fix.
-
-- Review note: static analysis findings need source, sink, path, and a reviewed fix.
-
-- Review note: static analysis findings need source, sink, path, and a reviewed fix.
-
-- Review note: static analysis findings need source, sink, path, and a reviewed fix.
-
-- Review note: static analysis findings need source, sink, path, and a reviewed fix.
-
-- Review note: static analysis findings need source, sink, path, and a reviewed fix.
-
-- Review note: static analysis findings need source, sink, path, and a reviewed fix.
-
-- Review note: static analysis findings need source, sink, path, and a reviewed fix.
-
-- Review note: static analysis findings need source, sink, path, and a reviewed fix.
-
-- Review note: static analysis findings need source, sink, path, and a reviewed fix.
-
-- Review note: static analysis findings need source, sink, path, and a reviewed fix.
-
-- Review note: static analysis findings need source, sink, path, and a reviewed fix.
-
-- Review note: static analysis findings need source, sink, path, and a reviewed fix.
-
-- Review note: static analysis findings need source, sink, path, and a reviewed fix.
-
-- Review note: static analysis findings need source, sink, path, and a reviewed fix.
-
-- Review note: static analysis findings need source, sink, path, and a reviewed fix.
-
-- Review note: static analysis findings need source, sink, path, and a reviewed fix.
-
-- Review note: static analysis findings need source, sink, path, and a reviewed fix.
-
-- Review note: static analysis findings need source, sink, path, and a reviewed fix.
-
-- Review note: static analysis findings need source, sink, path, and a reviewed fix.
-
-- Review note: static analysis findings need source, sink, path, and a reviewed fix.
-
-- Review note: static analysis findings need source, sink, path, and a reviewed fix.
-
-- Review note: static analysis findings need source, sink, path, and a reviewed fix.
-
-- Review note: static analysis findings need source, sink, path, and a reviewed fix.
-
-- Review note: static analysis findings need source, sink, path, and a reviewed fix.
-
-- Review note: static analysis findings need source, sink, path, and a reviewed fix.
-
-- Review note: static analysis findings need source, sink, path, and a reviewed fix.
-
-- Review note: static analysis findings need source, sink, path, and a reviewed fix.
-
-- Review note: static analysis findings need source, sink, path, and a reviewed fix.
-
-- Review note: static analysis findings need source, sink, path, and a reviewed fix.
-
-- Review note: static analysis findings need source, sink, path, and a reviewed fix.
-
-- Review note: static analysis findings need source, sink, path, and a reviewed fix.
-
-- Review note: static analysis findings need source, sink, path, and a reviewed fix.
-
-- Review note: static analysis findings need source, sink, path, and a reviewed fix.
-
-- Review note: static analysis findings need source, sink, path, and a reviewed fix.
-
-- Review note: static analysis findings need source, sink, path, and a reviewed fix.
-
-- Review note: static analysis findings need source, sink, path, and a reviewed fix.
-
-- Review note: static analysis findings need source, sink, path, and a reviewed fix.
-
-- Review note: static analysis findings need source, sink, path, and a reviewed fix.
-
-- Review note: static analysis findings need source, sink, path, and a reviewed fix.
-
-- Review note: static analysis findings need source, sink, path, and a reviewed fix.
+SAST finds risky code paths. Secret scanning finds sensitive values that accidentally enter source, logs, or workflow output. The next article covers the small strings that can act like identities.
 
 ---
 
 **References**
 
-- [About code scanning with CodeQL](https://docs.github.com/en/code-security/code-scanning/introduction-to-code-scanning/about-code-scanning-with-codeql) - Official GitHub overview of CodeQL and code scanning alerts.
-- [CodeQL documentation](https://codeql.github.com/docs/) - Canonical CodeQL language, query, and CLI documentation.
-- [Uploading SARIF to GitHub code scanning](https://docs.github.com/en/code-security/code-scanning/integrating-with-code-scanning/uploading-a-sarif-file-to-github) - Official reference for uploading scanner results into GitHub code scanning.
-- [OWASP Code Review Guide](https://owasp.org/www-project-code-review-guide/) - Canonical guide for reviewing application code for security flaws.
+- [GitHub CodeQL documentation](https://docs.github.com/en/code-security/code-scanning/introduction-to-code-scanning/about-code-scanning-with-codeql) - GitHub explains CodeQL code scanning and how CodeQL treats code as data.
+- [CodeQL data flow analysis](https://codeql.github.com/docs/writing-codeql-queries/about-data-flow-analysis/) - CodeQL documentation explains sources, sinks, and data-flow paths.
+- [OWASP SQL Injection Prevention Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/SQL_Injection_Prevention_Cheat_Sheet.html) - OWASP documents parameterized queries and other SQL injection defenses.

@@ -116,7 +116,7 @@ Do not hide the connection model in one unreviewed secret. A production app shou
 
 Schema changes are application deployments. Adding a column, changing a constraint, creating an index, or splitting a table can change how old and new application versions behave.
 
-The danger is not only that a migration fails. It is that a migration succeeds at the wrong time. If the database schema changes before all app instances understand it, a rollout can break. If a column is removed while old code still reads it, the application can fail after the database did exactly what the migration requested.
+The danger includes migrations that fail and migrations that succeed at the wrong time. If the database schema changes before all app instances understand it, a rollout can break. If a column is removed while old code still reads it, the application can fail after the database did exactly what the migration requested.
 
 Treat schema changes as part of the release plan. Make migrations repeatable, review them like code, and think about forward and backward compatibility when the app rolls across multiple instances.
 

@@ -223,8 +223,7 @@ canary task definition orders-api:42 version 1.8.4:
 ```
 
 This is the moment where a canary becomes useful.
-The canary is not just "up."
-It is behaving close to stable for the same kind of traffic.
+The canary is handling the same kind of traffic with behavior close to stable.
 
 For a real team, those numbers usually come from an observability system.
 The beginner lesson is the same even if the tool changes:
@@ -372,7 +371,6 @@ canary task definition orders-api:42:
 The canary did not prove checkout.
 It received zero checkout requests.
 
-The fix is not to promote blindly.
 Use a longer window, route a named internal account, run a synthetic checkout against canary, or choose a higher slice if the risk allows it.
 A synthetic checkout is an automated test that places a fake order through the real service path.
 

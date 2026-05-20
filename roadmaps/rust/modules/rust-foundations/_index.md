@@ -1,7 +1,7 @@
 ---
 title: "Rust Foundations"
-description: "Understand why Rust exists, where it is used, how its toolchain works, and how to read and organize small Rust programs before ownership becomes the center of the story."
-tags: ["rust", "cargo", "syntax", "modules"]
+description: "Understand where Rust came from, what it is for, how Cargo keeps the daily workflow steady, how to read small programs, and how project files grow into modules."
+tags: ["rust", "history", "cargo", "syntax", "modules"]
 icon: "Code2"
 order: 1
 ---

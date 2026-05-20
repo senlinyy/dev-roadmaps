@@ -1,6 +1,6 @@
 ---
 title: "Call a Private Bucket Module"
-sectionSlug: root-modules-and-child-modules
+sectionSlug: root-and-child-modules
 order: 1
 ---
 

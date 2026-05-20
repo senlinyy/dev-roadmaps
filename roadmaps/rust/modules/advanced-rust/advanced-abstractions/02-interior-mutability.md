@@ -37,7 +37,7 @@ Normal Rust borrowing says an immutable `&self` method cannot mutate fields. Mos
 
 Interior mutability is the pattern where a wrapper type allows one private field to change anyway, while still enforcing rules inside the wrapper.
 
-That is different from casual mutation in JavaScript or Python. The mutation is not hidden free-for-all state. It is routed through a type such as `Cell`, `RefCell`, or `Mutex` that controls how access happens.
+That is different from casual mutation in JavaScript or Python. The mutation is routed through a type such as `Cell`, `RefCell`, or `Mutex` that controls how access happens.
 
 ## The Pattern
 
@@ -51,7 +51,7 @@ The key is that the rules move into the wrapper type:
 | `RefCell<T>` | Single-threaded runtime borrow checking |
 | `Mutex<T>` | Shared mutation across threads or async boundaries |
 
-This is not "turning off Rust." Safe interior mutability types still enforce rules. They just enforce them differently.
+Safe interior mutability types still enforce Rust's rules. They enforce them through the wrapper type.
 
 The Rust Book describes `RefCell<T>` as checking borrowing rules at runtime instead of compile time. If you break the rules, the program panics rather than compiling the mistake away.
 

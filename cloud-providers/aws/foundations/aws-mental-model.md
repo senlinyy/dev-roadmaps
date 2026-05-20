@@ -39,7 +39,7 @@ That is the first AWS question:
 
 The answer is not "everything." AWS takes over some infrastructure jobs by giving you resources: compute, storage, networks, identities, logs, metrics, and control-plane APIs. Your team still owns the application behavior, the data meaning, the access choices, the network exposure, the release process, and the evidence you trust.
 
-This article follows that one orders API as local responsibilities become cloud jobs. The goal is not to memorize services. The goal is to learn the questions that keep an AWS system understandable:
+This article follows that one orders API as local responsibilities become cloud jobs. The goal is to learn the questions that keep an AWS system understandable:
 
 | Question | Why It Matters |
 | --- | --- |
@@ -174,11 +174,11 @@ customer browser
   -> database in data subnets
 ```
 
-The front door is not just a URL. It is a chain of resources doing separate jobs. DNS gives the name. A load balancer receives requests. A target group decides which running copies are healthy enough for traffic. Subnets and route tables decide where packets can go. Security groups and other controls decide what is allowed on those paths.
+The front door is a chain of resources doing separate jobs. DNS gives the name. A load balancer receives requests. A target group decides which running copies are healthy enough for traffic. Subnets and route tables decide where packets can go. Security groups and other controls decide what is allowed on those paths.
 
 This is why "the app is running" does not always mean "customers can reach the app." A task can be alive while the load balancer refuses to send traffic because the health check path is wrong. A database can be private and still reachable by the app because the app lives inside the VPC and the right private path is allowed. A resource can have permission to call an AWS API and still lack the network path to reach that API from its subnet.
 
-The second non-obvious AWS truth is that public and private are built from placement, routing, addressing, and rules. They are not just labels in a diagram. A subnet named `private` is only private if its routing and exposure match that intent.
+The second non-obvious AWS truth is that public and private are built from placement, routing, addressing, and rules. A subnet named `private` is only private if its routing and exposure match that intent.
 
 Later networking articles will take this path apart carefully. For the mental model, one question is enough: where does traffic enter, and what proves the next hop is allowed and healthy?
 
@@ -255,7 +255,7 @@ Use the same five questions against each line:
 | Export bucket | keep files | prod account, bucket, Region | app role, finance reader | object metadata, access logs or events | key design, policy, lifecycle, deletion safety |
 | Log group | keep app output | account and Region | runtime logging path | log streams and events | useful messages, retention, alerting |
 
-This checklist is the first operating habit. It is not complete enough for a mature production system, but it is enough to stop clicking randomly. Each resource has a job, a place, a caller, evidence, and a remaining owner.
+This checklist is the first operating habit. It gives enough structure to stop clicking randomly before a mature production system has a fuller operating model. Each resource has a job, a place, a caller, evidence, and a remaining owner.
 
 ## Putting It All Together
 

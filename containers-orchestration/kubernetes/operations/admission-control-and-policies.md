@@ -284,7 +284,7 @@ This tradeoff should be explicit in the policy review:
 | Policy type | Typical failure policy | Reason |
 |-------------|------------------------|--------|
 | Image signature verification | `Fail` | Running unverified images is a security risk |
-| Required ownership labels | Depends on maturity | Missing labels hurt operations but may not justify outage |
+| Required ownership labels | Depends on maturity | Missing labels hurt operations, while an outage may be too costly |
 | Sidecar injection | Depends on workload | Some services can run without injection, others cannot |
 | Restricted Pod settings | `Fail` when enforced | Unsafe Pods should not start in protected namespaces |
 

@@ -1,6 +1,6 @@
 ---
 title: "Return a Module Output"
-sectionSlug: outputs-connect-modules-without-guessing
+sectionSlug: outputs
 order: 3
 ---
 

@@ -95,7 +95,7 @@ flowchart TD
 
 The DaemonSet controller evaluates eligible nodes and creates one Pod per matching node. The scheduler still has to place the Pod, and the Pod still needs enough resources, image pull access, and any required tolerations.
 
-For a log agent, the DaemonSet should usually run before or alongside application Pods. Missing node agents create blind spots in logs and metrics. That makes DaemonSet health part of application observability, not only platform plumbing.
+For a log agent, the DaemonSet should usually run before or alongside application Pods. Missing node agents create blind spots in logs and metrics. That makes DaemonSet health part of application observability and platform plumbing.
 
 ## Node Selection, Taints, and Tolerations
 

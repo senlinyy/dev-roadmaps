@@ -85,7 +85,7 @@ latest_complete_checkpoint: step-18000
 
 This status tells a good training story. All workers are alive. Step count is increasing. GPUs are busy. Data loading is not causing long waits. A complete checkpoint exists at step 18000.
 
-Training operations care about steady progress. One customer is not waiting on step 18420. The team may care that the job finishes by tomorrow, but a short interruption is manageable if checkpoints are healthy.
+Training operations care about steady progress. Step 18420 matters to the job timeline rather than to a live customer waiting for an answer. The team may care that the job finishes by tomorrow, but a short interruption is manageable if checkpoints are healthy.
 
 PyTorch Fully Sharded Data Parallel (FSDP) is a useful official anchor because it shows how distributed training spreads model and optimiser state across workers. NVIDIA Collective Communications Library (NCCL) is another useful anchor because distributed GPU jobs often need collective operations where every rank participates. The first operating lesson is simple: distributed training has many cooperating workers, so progress depends on the group.
 
@@ -183,7 +183,7 @@ The inference operator turns the user report into a measurable request story.
 
 Not every inference request has a user waiting on the next token. A nightly eval run, document classification job, embedding refresh, report summary, or support-ticket labelling job uses a trained model to produce outputs, but it can wait in a queue.
 
-Batch inference is not training because it does not update model weights. It is not live inference because one user is not waiting for the next answer. It sits between the two operating styles: the work is inference, but the scheduling feels more like batch work.
+Batch inference uses a trained model to produce outputs without updating model weights. It sits between training and live inference: the work is inference, but the scheduling feels more like batch work because users are not waiting for the next token.
 
 OpenAI's Batch API is a useful managed-provider anchor because the docs describe asynchronous groups of requests for jobs that do not need immediate responses, with a clear 24-hour turnaround window. Anthropic's API overview is useful as a second anchor because it lists Message Batches as an asynchronous API surface for processing large volumes of Messages requests.
 
@@ -328,7 +328,7 @@ If the platform treats all GPU work as one identical pool, live traffic can be d
 09:12 customers report slow chat answers
 ```
 
-The fix is not to ban sharing. Sharing can save money. The fix is to make sharing rules explicit.
+Sharing can save money when the rules are explicit.
 
 ```yaml
 capacity_policy:

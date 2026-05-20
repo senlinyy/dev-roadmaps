@@ -40,7 +40,7 @@ One checkout creates related facts:
 - A schema migration should not break the running app.
 - The database should be reachable from the app without becoming a casual public target.
 
-This is relational data. The problem is not only saving bytes. The problem is preserving relationships, constraints, transactions, query behavior, connection safety, and recovery.
+This is relational data. The problem is preserving relationships, constraints, transactions, query behavior, connection safety, and recovery.
 
 ## What Is Cloud SQL
 
@@ -125,7 +125,7 @@ pooling: configured with max connections
 timeout behavior: visible in logs
 ```
 
-The database is part of the runtime path, not only the data layer.
+The database is part of the runtime path and the data layer.
 
 ## Private Access
 

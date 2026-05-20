@@ -53,7 +53,7 @@ Private access starts by naming the kind of managed boundary you are crossing.
 
 ## Cloud SQL Private IP
 
-Cloud SQL private IP lets clients connect to a database through a private address instead of a public database address. That is a strong design choice for production systems, but it is not magic. The client still needs a path to that private address, and the Cloud SQL instance must be configured for the right network.
+Cloud SQL private IP lets clients connect to a database through a private address instead of a public database address. That is a strong design choice for production systems. The client still needs a path to that private address, and the Cloud SQL instance must be configured for the right network.
 
 For a Cloud Run service, the outbound path might be Direct VPC egress into the same VPC that has the private service connection. For a VM, the VM's subnet and route behavior matter directly. Either way, private IP is a network path plus database-level access, not merely a label on the instance.
 

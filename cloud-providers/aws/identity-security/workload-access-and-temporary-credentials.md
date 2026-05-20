@@ -68,9 +68,9 @@ allowed AWS work:
 
 Two sides matter. The trust policy says who is allowed to receive credentials for the role. The permissions policy says what those credentials can do after they exist.
 
-That split is one of the first non-obvious IAM habits. If the role has the right S3 permission but the runtime is not trusted to assume it, the app will not receive the role. If the runtime is trusted but the permission is too broad, the app works with more power than its job needs. If the permission is attached to a different role, the error will keep pointing at the caller that actually made the request.
+That split is one of the first non-obvious IAM habits. If the role has the right S3 permission but its trust policy excludes the runtime, the app will not receive the role. If the runtime is trusted but the permission is too broad, the app works with more power than its job needs. If the permission is attached to a different role, the error will keep pointing at the caller that actually made the request.
 
-The role is not a secret value you copy into the app. It is the identity AWS attaches to the running workload. The app still makes normal AWS SDK calls, but the runtime supplies the credentials for that role session.
+The role is the identity AWS attaches to the running workload. The app still makes normal AWS SDK calls, but the runtime supplies the credentials for that role session.
 
 ## Temporary Credentials
 
@@ -114,7 +114,7 @@ That distinction prevents a very common false repair. The receipt worker receive
 
 Task roles also give better evidence. ECS task credentials include task context for auditing, so a CloudTrail event can tie API activity back to the task that received the credentials. That is much more readable than a shared IAM user key named `prod-app`.
 
-There is still a boundary gotcha. ECS task roles separate permissions better than a shared EC2 instance profile, but containers are not a universal security boundary. AWS explicitly warns that containers are not a security boundary, and ECS on EC2 needs extra care around metadata access and task isolation. Keep using task roles, but avoid packing unrelated trust zones onto the same host and assuming the role name alone creates hard isolation.
+There is still a boundary gotcha. ECS task roles separate permissions better than a shared EC2 instance profile, but the shared host still matters. AWS treats container isolation as a workload boundary with host-level caveats, and ECS on EC2 needs extra care around metadata access and task isolation. Keep using task roles, but avoid packing unrelated trust zones onto the same host and assuming the role name alone creates hard isolation.
 
 ## EC2 Instances
 

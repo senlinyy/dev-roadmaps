@@ -75,7 +75,7 @@ The API exposes four small endpoints that make release checks easier:
 Those endpoints are not decoration.
 They give the deployment pipeline a way to ask the service simple questions.
 Without them, the pipeline can only say "AWS accepted the deploy request."
-That is not the same as "the checkout API is healthy."
+The checkout API still needs its own health signal.
 
 The setup has four named pieces.
 The code lives in `github.com/devpolaris/orders-api`.
@@ -431,8 +431,7 @@ default path:
   record release and rollback task definition
 ```
 
-That is not fancy.
-It is dependable.
+That path is dependable.
 It teaches the team to keep release identity, environment access, checks, approvals, and rollback in one clear path.
 
 ---

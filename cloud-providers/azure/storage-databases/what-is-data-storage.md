@@ -95,7 +95,7 @@ The diagram is not a final architecture. It is a review habit. Once the shape is
 | Does the app read by a known key or by flexible queries? | Known-key items can fit NoSQL. Flexible relational questions often fit SQL. |
 | Does the data change in place? | Updates, transactions, and concurrency rules matter. |
 | Does it need to be mounted by an operating system? | A disk or file share may be required for VM-shaped work. |
-| What happens after accidental delete or corruption? | Backup and restore design belongs to the feature, not only to operations. |
+| What happens after accidental delete or corruption? | Backup and restore design belongs to the feature and operations. |
 
 ## Files
 
@@ -105,7 +105,7 @@ In Azure, Blob Storage is the usual home for durable file-like data. The importa
 
 Blob Storage moves the file outside the compute runtime. The app writes the receipt to a blob container, stores the metadata or pointer where the business record lives, and later serves or authorizes access to that blob.
 
-The gotcha is that object names are not a database. A blob name such as `receipts/2026/05/order-417.pdf` looks like a path, but it does not replace an order table. Store the file in Blob Storage. Store the order state, customer relationship, and receipt pointer in the right record store.
+The gotcha is that object names cannot do a database's job. A blob name such as `receipts/2026/05/order-417.pdf` looks like a path, but it does not replace an order table. Store the file in Blob Storage. Store the order state, customer relationship, and receipt pointer in the right record store.
 
 ## Records
 
@@ -113,7 +113,7 @@ Records are business facts with relationships and rules. An order belongs to a c
 
 That shape points toward a relational database. In Azure, the usual first managed choice is Azure SQL Database. SQL gives the team tables, constraints, transactions, indexes, queries, and a mature recovery model.
 
-The important beginner idea is that a relational database is not just "where structured JSON goes." It protects business meaning. A checkout flow needs to avoid half-written orders. A support view needs to join facts. A migration needs to change schema deliberately. Those are relational pressures, not blob pressures.
+The important beginner idea is that a relational database protects business meaning. A checkout flow needs to avoid half-written orders. A support view needs to join facts. A migration needs to change schema deliberately. Those are relational pressures, not blob pressures.
 
 ## Items
 
@@ -159,9 +159,9 @@ A first pass at the orders system can be small and clear:
 | Checkout idempotency key | Known-key item | Cosmos DB or SQL table | Read by request key; may expire after a retention window. |
 | Export job status | Known-key item | Cosmos DB | Short-lived item with predictable reads and possible TTL. |
 | Legacy import workspace | Disk or file share | Managed Disk or Azure Files | VM-shaped or shared-folder behavior during migration. |
-| Accidental delete recovery | Recovery promise | Service-specific protection | Restore must be usable, not just theoretically enabled. |
+| Accidental delete recovery | Recovery promise | Service-specific protection | Restore must be usable in practice. |
 
-This table is not a rulebook. It is a conversation starter. The right answer can change with product needs, compliance rules, cost, and the team's operating skills. But the shape-first review prevents the two worst defaults: stuffing every file into a database and using object storage as a pretend database.
+Use this table as a conversation starter. The right answer can change with product needs, compliance rules, cost, and the team's operating skills. But the shape-first review prevents the two worst defaults: stuffing every file into a database and using object storage as a pretend database.
 
 ## Putting It All Together
 

@@ -1,6 +1,6 @@
 ---
 title: "Read Account Context"
-sectionSlug: data-sources-read-existing-information
+sectionSlug: data-sources
 order: 3
 ---
 

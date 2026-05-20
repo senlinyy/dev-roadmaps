@@ -1,7 +1,7 @@
 ---
 title: "Functions"
 description: "Use Azure Functions when the runtime should start from an event, with clear triggers, invocations, bindings, timeouts, retries, and hosting-plan tradeoffs."
-overview: "Functions are not just smaller web apps. They are event-started units of work. This article explains the trigger model, the function app boundary, and the operational details that still matter in a serverless runtime."
+overview: "Functions are event-started units of work with their own runtime shape. This article explains the trigger model, the function app boundary, and the operational details that still matter in a serverless runtime."
 tags: ["azure", "functions", "serverless", "events", "triggers"]
 order: 4
 id: article-cloud-providers-azure-compute-application-hosting-azure-functions-event-driven-work
@@ -34,7 +34,7 @@ The team could add everything to the web app:
 - A background loop could poll for reconciliation work every minute.
 - A timer library inside the app could try to run the nightly job.
 
-Those choices make the web app responsible for work that is not really request-response traffic. They also blur failure boundaries. A slow email provider could slow checkout. A retry loop could run twice after scale-out. A nightly job could disappear when the web app restarts.
+Those choices make the web app responsible for background or event work. They also blur failure boundaries. A slow email provider could slow checkout. A retry loop could run twice after scale-out. A nightly job could disappear when the web app restarts.
 
 Azure Functions gives this work a different shape. The code starts because an event happens, and the trigger becomes part of the runtime contract.
 
@@ -124,7 +124,7 @@ Functions are not a prize for making code small. Sometimes a normal service is s
 
 If the code is a steady HTTP API with shared request middleware, connection pooling, long-lived caches, and predictable traffic, App Service or Container Apps may be clearer. If the code is a containerized worker with custom libraries and event-based scaling, Container Apps can be a better host. If the code needs direct operating system control, a VM may be honest.
 
-The warning sign is when the function design recreates a web service by scattering one product feature across many tiny handlers. That can make local development, deployment, logs, retries, and ownership harder. Use Functions when the event boundary makes the system simpler, not just smaller.
+The warning sign is when the function design recreates a web service by scattering one product feature across many tiny handlers. That can make local development, deployment, logs, retries, and ownership harder. Use Functions when the event boundary makes the system simpler and smaller.
 
 ## Putting It All Together
 

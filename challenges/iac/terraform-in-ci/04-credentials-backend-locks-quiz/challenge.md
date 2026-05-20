@@ -1,6 +1,6 @@
 ---
 title: "Handle Credentials, Backends, and Locks"
-sectionSlug: credentials-backends-and-locks
+sectionSlug: aws-identity
 order: 4
 ---
 

@@ -167,7 +167,7 @@ Not every recovery starts with an outage. Some start with wrong data.
 
 A bad deploy may write incorrect order statuses. A script may delete rows. A worker may overwrite receipt objects. A retry bug may create duplicate side effects. In those cases, the service might still be online while the data is no longer trustworthy.
 
-Bad writes are hard because the team must choose a point in time carefully. Restoring too far back loses valid orders. Restoring too late preserves corruption. Sometimes the safest path is not full restore but targeted repair from logs, backups, exports, or application records.
+Bad writes are hard because the team must choose a point in time carefully. Restoring too far back loses valid orders. Restoring too late preserves corruption. Sometimes the safest path is targeted repair from logs, backups, exports, or application records.
 
 The plan should answer:
 

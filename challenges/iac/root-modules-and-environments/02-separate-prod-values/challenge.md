@@ -1,6 +1,6 @@
 ---
 title: "Separate Prod Values"
-sectionSlug: variables-that-differ-by-environment
+sectionSlug: environment-values
 order: 2
 ---
 

@@ -43,7 +43,7 @@ The familiar names are a decent starting point, but Rust collections add ownersh
 | JavaScript `Set` or Python `set` | `HashSet<T>` | Great for uniqueness; do not rely on display order |
 | JavaScript/Python string | `String` and `&str` | Owned text and borrowed text are different types |
 
-When you put a value into a Rust collection, ownership matters. `notes.push(note)` moves the note into the vector. `notes.get(0)` borrows a note from the vector. The collection is not only a container; it is also an owner.
+When you put a value into a Rust collection, ownership matters. `notes.push(note)` moves the note into the vector. `notes.get(0)` borrows a note from the vector. The collection owns the values it stores.
 
 ## Vec
 
@@ -76,7 +76,7 @@ Use `first`, `get`, and other safe access methods when the index might be missin
 
 The ownership rule is simple: a `Vec<Note>` owns its notes. Passing `&notes` borrows the list. Passing `notes` moves the list.
 
-:::expand[Vec owns the list, not just the pointer]{kind="design"}
+:::expand[Vec owns the list and its buffer]{kind="design"}
 A vector has a small value on the stack that points to heap storage. That heap storage holds the elements.
 
 For a `Vec<Note>`, the vector owns the buffer, and the buffer owns each `Note`. Each `Note` owns its `String` fields.

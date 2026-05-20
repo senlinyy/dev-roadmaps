@@ -57,7 +57,7 @@ The reference does not own the value. It does not keep the value alive by itself
 | `&T` | Shared reference to a `T` | Read-style access; many can exist together |
 | `&mut T` | Mutable reference to a `T` | Write-capable access; it must be exclusive |
 
-That is the big difference from managed-language references. Rust references are not just aliases that can float around freely. The compiler checks when they start, when they stop being used, and whether they overlap with mutation.
+That is the big difference from managed-language references. The compiler checks when Rust references start, when they stop being used, and whether they overlap with mutation.
 
 :::expand[JS and Python references vs Rust references]{kind="design"}
 The same word, "reference," can point to different ideas.
@@ -146,7 +146,7 @@ fn preview_title(title: &str) {
 
 These functions make different promises. `save_note(title: String)` takes ownership. It can store the title, return it, move it into another struct, or drop it. `preview_title(title: &str)` only borrows text. It can read the title during the call, but it cannot keep owning that title afterward.
 
-That makes signatures part of the design, not just syntax.
+That makes signatures part of the design.
 
 | Signature shape | Meaning |
 | --- | --- |

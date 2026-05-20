@@ -1,6 +1,6 @@
 ---
 title: "Terraform"
-description: "Provision cloud resources with workflow, providers, values, state, modules, imports, environments, and CI review."
-tags: ["Terraform", "OpenTofu", "State", "Modules"]
-order: 2
+description: "Learn Terraform and OpenTofu through a deeper AWS-first path: foundations, configuration blocks, values, state and plans, modules, environments, and automation."
+tags: ["Terraform", "OpenTofu", "AWS", "State", "Modules"]
+order: 1
 ---

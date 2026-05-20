@@ -25,7 +25,7 @@ A container filesystem is a poor place for important data. When Kubernetes repla
 
 A PersistentVolume is a Kubernetes object representing durable storage that exists beyond one Pod. A PersistentVolumeClaim is an application's request for that storage. The claim says how much storage the workload needs and what access pattern it expects. The cluster then binds the claim to a real volume, either one an administrator created or one created dynamically by a StorageClass.
 
-For `devpolaris-orders-api`, imagine the API generates invoice PDFs before a background worker ships them to object storage. The team wants a small durable work directory so a Pod restart does not lose files that have not been uploaded yet. That is a reasonable use for a PVC. It is not a replacement for a database or long-term object storage, but it protects a narrow handoff.
+For `devpolaris-orders-api`, imagine the API generates invoice PDFs before a background worker ships them to object storage. The team wants a small durable work directory so a Pod restart does not lose files that have not been uploaded yet. That is a reasonable use for a PVC: it protects a narrow handoff while the database and long-term object storage remain the systems of record.
 
 ```mermaid
 flowchart TD
@@ -115,7 +115,7 @@ spec:
               mountPath: /var/lib/devpolaris/orders-work
 ```
 
-The application now writes invoice work files under `/var/lib/devpolaris/orders-work`. That path is not just a directory in the image. It is backed by the volume bound to the PVC.
+The application now writes invoice work files under `/var/lib/devpolaris/orders-work`. That path is backed by the volume bound to the PVC.
 
 ```bash
 $ kubectl exec deploy/orders-api -n devpolaris-staging -- sh -c 'echo invoice-123 > /var/lib/devpolaris/orders-work/probe.txt'
@@ -147,7 +147,7 @@ spec:
     - ReadWriteOnce
 ```
 
-If you ask for `ReadWriteMany` but the cluster only has block-disk storage, the claim may remain Pending. The fix is not to retry the Pod. The fix is to choose a supported storage class or change the application design so it does not require shared writes.
+If you ask for `ReadWriteMany` but the cluster only has block-disk storage, the claim may remain Pending. Choose a supported storage class or change the application design so it does not require shared writes.
 
 ## Binding, Reclaim Policy, and Lifecycle
 
@@ -220,7 +220,7 @@ Do not add `runAsUser: 0` as the first fix. Running the app as root may hide the
 
 ## Storage Tradeoffs for Application Teams
 
-Persistent volumes are useful, but they are not the default answer to every state problem. Kubernetes makes it easy to attach storage, but your application still has to handle concurrency, backup, restore, performance, and data ownership.
+Persistent volumes are useful for state that belongs near a Pod. Databases, object storage, queues, and managed services may fit other state problems better. Kubernetes makes it easy to attach storage, but your application still has to handle concurrency, backup, restore, performance, and data ownership.
 
 | Need | Better Fit |
 |------|------------|
@@ -259,7 +259,7 @@ This is an engineering tradeoff. Quotas slow down surprise growth, but they also
 
 ### Migrating Data Between Claims
 
-Sometimes the fix is not resizing a claim. You may need to move data from one PVC to another, perhaps because the original claim used the wrong StorageClass. Kubernetes does not have a universal "change this PVC to another class" button. The migration depends on the storage system and the data.
+Sometimes the fix is moving data from one PVC to another, perhaps because the original claim used the wrong StorageClass. Kubernetes does not have a universal "change this PVC to another class" button. The migration depends on the storage system and the data.
 
 A simple file-level migration uses a temporary Job or Pod that mounts both claims and copies files. This is appropriate for small work directories, not live databases.
 

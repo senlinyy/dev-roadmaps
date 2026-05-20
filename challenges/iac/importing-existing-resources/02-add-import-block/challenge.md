@@ -1,6 +1,6 @@
 ---
 title: "Add the Import Block"
-sectionSlug: import-blocks-in-review
+sectionSlug: import-blocks
 order: 2
 ---
 

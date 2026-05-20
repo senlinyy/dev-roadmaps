@@ -348,7 +348,7 @@ For serving, restart is rarely the first idea. First find where the request wait
 
 A canary is a limited rollout. Instead of sending every request to the candidate model, the gateway sends a small percentage first.
 
-For models, canary is not only a server-health check. A candidate can be fast and still write worse answers. It can be cheaper but call tools incorrectly. It can pass a simple smoke test and fail policy examples.
+For models, canary checks answer behaviour as well as server health. A candidate can be fast and still write worse answers. It can be cheaper but call tools incorrectly. It can pass a simple smoke test and fail policy examples.
 
 The release function gives the gateway a release decision:
 
@@ -425,7 +425,7 @@ Roll back if support-policy eval pass rate drops below 0.90.
 Roll back if tool-call error rate is 2x higher than the stable route.
 ```
 
-OpenAI's evaluation best-practices docs are useful here because they explain that model output needs task-specific evaluation, not only uptime. A rollback trigger can include both runtime signals and behaviour signals.
+OpenAI's evaluation best-practices docs are useful here because they explain that model output needs task-specific evaluation alongside uptime. A rollback trigger can include both runtime signals and behaviour signals.
 
 ## Who Owns Each Part
 

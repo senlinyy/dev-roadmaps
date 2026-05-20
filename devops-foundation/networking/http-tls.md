@@ -238,7 +238,7 @@ The handshake proves you have a private channel. But a private channel to who? W
 
 Think of a certificate like a passport. It is a document that says "the holder of this passport is allowed to speak for `example.com`," and it includes a public key the server can prove it owns. Like a passport, anyone could print one on their own; what makes it trustworthy is the official stamp. That stamp is a digital signature from a Certificate Authority (CA), an organization browsers and operating systems have agreed to trust. Names you have probably seen: Let's Encrypt, DigiCert, Cloudflare, Sectigo.
 
-The CA does not just hand out certificates. Before signing, it verifies that the applicant actually controls the domain (the most common way is to ask the server to host a specific file at a specific URL, or to add a specific DNS record). Once the CA is satisfied, it signs the certificate with its own private key. Now any client with the CA's public key can verify the signature is genuine.
+Before a CA signs a certificate, it verifies that the applicant actually controls the domain. The most common proof is to ask the server to host a specific file at a specific URL, or to add a specific DNS record. Once the CA is satisfied, it signs the certificate with its own private key. Now any client with the CA's public key can verify the signature is genuine.
 
 In practice, no CA signs your certificate directly with its root key. Root keys are too valuable to use day-to-day, so they live offline in a vault and only sign a small number of intermediate CA keys. Those intermediates are what actually sign your server's certificate. So when your browser checks `example.com`, it walks a chain: server certificate signed by intermediate CA, intermediate CA signed by root CA, root CA pre-installed and pre-trusted on your device. Your operating system ships with a list of root CAs (open Keychain Access on macOS or `/etc/ssl/certs/` on Linux to see them). If every link in the chain checks out and ends at one of those pre-trusted roots, the connection proceeds. If any link is broken (an expired certificate, an unknown signer, a name on the certificate that does not match the domain you typed), the client refuses to continue.
 
@@ -290,7 +290,7 @@ HTTP and TLS failures tend to produce cryptic error messages that send engineers
 
 ### Expired Certificates
 
-The most common TLS failure. Your certificate's `notAfter` date passes, and every client immediately refuses to connect. The error message varies by client: browsers show "Your connection is not private" or "NET::ERR_CERT_DATE_INVALID." `curl` reports `SSL certificate problem: certificate has expired.` Node.js throws `CERT_HAS_EXPIRED`. The fix is straightforward (renew the certificate), but the real fix is monitoring: set up alerts for any certificate expiring within 30 days so you never get surprised.
+The most common TLS failure. Your certificate's `notAfter` date passes, and every client immediately refuses to connect. The error message varies by client: browsers show a privacy warning or "NET::ERR_CERT_DATE_INVALID." `curl` reports `SSL certificate problem: certificate has expired.` Node.js throws `CERT_HAS_EXPIRED`. Renew the certificate, then add monitoring so any certificate expiring within 30 days alerts before users discover it.
 
 ### Mixed Content
 
@@ -338,7 +338,7 @@ The certificate is valid, signed by a real CA, and not expired. But the name on 
 Sometimes the server sends its own certificate but forgets to include the intermediate CA certificate. Your browser might still work (browsers often cache intermediates from previous sites), but `curl`, API clients, and your own backend services will fail. The error messages to recognize:
 
 - `curl`: `SSL certificate problem: unable to get local issuer certificate`
-- Node.js: `UNABLE_TO_GET_ISSUER_CERT_LOCALLY` or `SELF_SIGNED_CERT_IN_CHAIN` (the latter usually means the chain ended at a self-signed cert that is not in the trust store, common in corporate networks with their own internal CA)
+- Node.js: `UNABLE_TO_GET_ISSUER_CERT_LOCALLY` or `SELF_SIGNED_CERT_IN_CHAIN` (the latter usually means the chain ended at a self-signed cert outside the trust store, common in corporate networks with their own internal CA)
 - Python `requests`: `SSLError: certificate verify failed: unable to get local issuer certificate`
 
 The symptom is misleading because the server itself is fine; the certificate just was not delivered with its full chain attached. The fix is to configure your server (Nginx, Apache, your load balancer) to serve the full chain file: your leaf certificate plus all intermediate certificates concatenated together, in order. Let's Encrypt's `certbot` produces a `fullchain.pem` for exactly this reason. Use that file, not `cert.pem`.

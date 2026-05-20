@@ -34,7 +34,7 @@ flowchart TD
     E --> F[orders Pods]
 ```
 
-The split between object and controller is important. Creating an Ingress object without a controller is like writing an Nginx config file on a machine that is not running Nginx. The API stores your intent, but no traffic changes.
+The split between object and controller is important. Creating an Ingress object without a controller is like writing an Nginx config file on a machine without Nginx running. The API stores your intent, but no traffic changes.
 
 ## A First Ingress for devpolaris-orders-api
 
@@ -199,7 +199,7 @@ $ kubectl -n web run netcheck --rm -it --restart=Never --image=curlimages/curl -
   curl -i http://devpolaris-orders-api.orders/healthz
 ```
 
-The point is not to archive a large command transcript. The point is to leave enough proof that another engineer can see which network layers were healthy at the time of the check.
+Leave enough proof that another engineer can see which network layers were healthy at the time of the check.
 
 A useful Ingress evidence packet includes the rule, the controller address, the backend Service, and one external request. The goal is to prove whether the failure is at the edge or behind it.
 

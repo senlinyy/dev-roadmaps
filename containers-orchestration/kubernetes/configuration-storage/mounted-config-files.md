@@ -26,7 +26,7 @@ Environment variables are convenient for short strings, but many tools already e
 
 Kubernetes supports this by mounting ConfigMaps and Secrets as volumes. A volume is a directory made available inside the container filesystem. For ConfigMaps and Secrets, Kubernetes builds that directory from object keys. Each key becomes a file, and the value becomes the file content.
 
-For `devpolaris-orders-api`, imagine the team adds an embedded policy file for order cancellation rules. The file is not secret, but it is multi-line YAML. Keeping it in one mounted file is easier to review than flattening it into environment variables.
+For `devpolaris-orders-api`, imagine the team adds an embedded policy file for order cancellation rules. The file is non-sensitive multi-line YAML. Keeping it in one mounted file is easier to review than flattening it into environment variables.
 
 ```mermaid
 flowchart TD

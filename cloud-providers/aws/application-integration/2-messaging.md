@@ -70,7 +70,7 @@ A queue stores messages between producers and consumers. For checkout, the API c
 
 That changes the failure boundary. If the email provider is slow, messages build up in the queue. Checkout can still create orders. Operators can scale workers, pause workers, or let the backlog drain after the provider recovers.
 
-A queue is not just a list. It is a buffer with delivery behavior, retry behavior, visibility timeout, and monitoring signals. The queue owns the waiting room. Workers own the processing.
+A queue is a buffer with delivery behavior, retry behavior, visibility timeout, and monitoring signals. The queue owns the waiting room. Workers own the processing.
 
 The gotcha is that a queue does not make work harmless. If workers send duplicate emails or call a rate-limited vendor too quickly, the queue preserves the work but does not fix the side effect. Worker code still needs idempotency and downstream limits.
 

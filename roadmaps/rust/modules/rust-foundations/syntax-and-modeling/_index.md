@@ -1,6 +1,6 @@
 ---
-title: "Syntax And Modeling"
-description: "Read ordinary Rust code and model small domains with functions, structs, enums, matches, modules, and crates."
+title: "Code Basics"
+description: "Read small Rust programs, model data with structs and enums, and organize code into crates and modules."
 tags: ["syntax", "structs", "enums", "modules"]
-order: 3
+order: 2
 ---

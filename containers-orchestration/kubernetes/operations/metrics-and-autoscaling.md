@@ -159,7 +159,7 @@ Conditions:
   ScalingActive  False   FailedGetResourceMetric   missing request for cpu in container api of Pod devpolaris-orders-api-7c96df7d7c-2vd6k
 ```
 
-The fix is not to change the HPA target. Add realistic CPU requests to the Deployment, roll out the change, and then watch HPA status again. Requests should come from observation. Start with a value near normal steady usage plus headroom, then refine after load testing.
+Add realistic CPU requests to the Deployment, roll out the change, and then watch HPA status again. Requests should come from observation. Start with a value near normal steady usage plus headroom, then refine after load testing.
 
 ## Failure Mode: Scaling the Wrong Thing
 
@@ -182,7 +182,7 @@ The diagnostic path is:
 3. Identify which component owns the slow step.
 4. Scale that component only if the dependency can absorb the extra work.
 
-This is why autoscaling is operations work, not only YAML.
+This is why autoscaling is operations work expressed through YAML.
 
 ## Operational Review Questions
 

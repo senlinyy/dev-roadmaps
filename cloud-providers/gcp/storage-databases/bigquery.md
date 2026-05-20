@@ -93,7 +93,7 @@ Partitioning divides a table into segments, often by date or timestamp. This hel
 
 For checkout events, partitioning by event date is a natural starting point. Most reports ask about a time window: yesterday, last week, this quarter. If the query filters on the partition, BigQuery can avoid scanning unrelated partitions.
 
-Partitioning is not only performance. It is a cost habit. BigQuery charges by work performed in common usage patterns, so scanning less data matters.
+Partitioning is a performance and cost habit. BigQuery charges by work performed in common usage patterns, so scanning less data matters.
 
 ## Clustering
 

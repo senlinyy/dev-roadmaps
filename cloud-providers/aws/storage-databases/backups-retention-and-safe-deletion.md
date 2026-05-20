@@ -1,7 +1,7 @@
 ---
 title: "Backups and Retention"
 description: "Protect AWS data by deciding what recovery copy exists, how long it is kept, who can delete it, and how restore is proven."
-overview: "Data safety is not only taking backups. This article explains recovery points, versioning, snapshots, retention windows, restore drills, and safe deletion as one operating habit."
+overview: "Data safety combines recovery points, versioning, snapshots, retention windows, restore drills, and safe deletion as one operating habit."
 tags: ["aws", "backups", "retention", "recovery"]
 order: 6
 id: article-cloud-providers-aws-storage-databases-backups-retention-safe-deletion
@@ -56,7 +56,7 @@ A useful backup has a job:
 | Who can delete it? | A controlled role or protected process |
 | How is it restored? | A documented and tested restore path |
 
-Backups are not only for cloud outages. Many recovery events are caused by normal application work: bad migrations, mistaken deletes, broken scripts, incorrect lifecycle rules, or overwrites with the wrong key.
+Backups protect against normal application mistakes as well as cloud outages: bad migrations, mistaken deletes, broken scripts, incorrect lifecycle rules, or overwrites with the wrong key.
 
 The backup question should appear while designing storage, not after the first incident.
 
@@ -84,7 +84,7 @@ Versioning keeps earlier versions of an object when the same key changes. In S3,
 
 For receipt PDFs, versioning is a strong safety layer. If a bug writes blank files over existing receipts, the current object may be wrong, but the previous versions can still exist. That gives the team a way to repair without asking customers to regenerate history.
 
-Versioning also creates retention responsibility. Old versions can accumulate. Delete markers can make an object appear deleted while older versions remain. Lifecycle rules need to say what happens to noncurrent versions, not only current objects.
+Versioning also creates retention responsibility. Old versions can accumulate. Delete markers can make an object appear deleted while older versions remain. Lifecycle rules need to say what happens to noncurrent versions and current objects.
 
 The lesson is that versioning protects change, while lifecycle controls age. They should be designed together.
 
@@ -96,7 +96,7 @@ EBS snapshots are incremental after the first snapshot, which means later snapsh
 
 Snapshots have an application-consistency gotcha. A snapshot can capture the storage layer while an application has pending writes or cached data. For some workloads, a crash-consistent snapshot may be acceptable. For others, the app must pause, flush, quiesce, or use a backup-aware workflow.
 
-The snapshot question is not only "does one exist?" It is "what would restoring this snapshot prove?"
+The snapshot question is "what would restoring this snapshot prove?"
 
 ## Point-In-Time Recovery
 

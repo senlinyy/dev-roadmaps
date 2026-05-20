@@ -88,7 +88,7 @@ When a Runner picks up a job, it creates an isolated workspace. If you are debug
 3. **Checkout**: Almost every job starts with a "Checkout" step. The Runner executes a `git clone` or `git fetch` to pull the specific commit hash that triggered the pipeline into the working directory.
 4. **Execution**: The Runner starts executing your `steps` sequentially inside the working directory.
 
-If your pipeline fails saying `File not found: package.json`, the first thing to check is whether you actually included the Checkout step. The Runner boots up entirely empty. It does not magically have your code until you tell it to fetch the code.
+If your pipeline fails saying `File not found: package.json`, the first thing to check is whether you actually included the Checkout step. The Runner boots up entirely empty. It receives your code only after the workflow tells it to fetch the code.
 
 ## Execution Contexts: Shell vs. Container
 

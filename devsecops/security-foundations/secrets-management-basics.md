@@ -1,303 +1,182 @@
 ---
-id: article-devsecops-security-foundations-secrets-management-basics
-title: "Secrets Management Basics"
-description: "Learn how secrets are stored, delivered, rotated, and removed from delivery systems and production services."
-overview: "Secrets are credentials that let software prove identity to another system. This article shows how to keep them out of code, reduce long-lived keys, and debug common secret failures."
-tags: ["secrets", "rotation", "vaults"]
+title: "Secrets Management"
+description: "Store, deliver, rotate, and remove credentials without letting them become permanent production keys."
+overview: "Secrets are the values software uses to prove identity to another system. This article explains where secrets live, how they move through delivery systems, and what real incidents teach about rotation and exposure."
+tags: ["secrets", "rotation", "vaults", "ci"]
 order: 4
+id: article-devsecops-security-foundations-secrets-management-basics
+aliases:
+  - secrets-management-basics
+  - article-devsecops-security-foundations-secrets-management-basics
+  - devsecops/security-foundations/secrets-management-basics.md
 ---
 
 ## Table of Contents
 
-1. [What Secrets Management Basics Means in Delivery Work](#what-secrets-management-basics-means-in-delivery-work)
-2. [The Operating Context](#the-operating-context)
-3. [A Useful Baseline Workflow](#a-useful-baseline-workflow)
-4. [Artifacts That Make the Risk Concrete](#artifacts-that-make-the-risk-concrete)
-5. [Diagnostic Path](#diagnostic-path)
-6. [Failure Modes and Fix Directions](#failure-modes-and-fix-directions)
-7. [Engineering Tradeoffs](#engineering-tradeoffs)
-8. [Production Access Review Practice](#production-access-review-practice)
+1. [What Is a Secret?](#what-is-a-secret)
+2. [Where Secrets Appear](#where-secrets-appear)
+3. [Delivery Secrets](#delivery-secrets)
+4. [Runtime Secrets](#runtime-secrets)
+5. [Rotation](#rotation)
+6. [Case Study: Codecov](#case-study-codecov)
+7. [Leak Evidence](#leak-evidence)
+8. [Putting It All Together](#putting-it-all-together)
+9. [What's Next](#whats-next)
 
-## What Secrets Management Basics Means in Delivery Work
+## What Is a Secret?
 
-Secrets management means storing and delivering sensitive
-credentials through systems
-built for access control, audit logs, and rotation. It
-exists because repositories,
-workflow logs, and laptops are poor places to keep
-production passwords.
+A secret is a value that lets one actor prove identity to another system. Passwords, API keys, deploy tokens, private keys, webhook signing keys, database URLs, session secrets, and cloud credentials are all secrets. The value matters because another system trusts it.
 
-The running example is devpolaris-orders-api, a Node.js
-service stored in GitHub,
-tested and deployed with GitHub Actions, and hosted in a
-small cloud account. The team
-uses a production GitHub environment, a package registry
-image, a cloud deploy role,
-and a monthly production access review. That example is
-small enough to inspect by
-hand, but it contains the same trust questions that appear
-in larger delivery systems.
+Secrets are different from configuration. A region name, feature flag, or service URL may be configuration. A database password is a secret because anyone who has it can act as the database user. A cloud access key is a secret because anyone who has it can call the cloud API as that identity.
 
-A delivery system is not only a build script. It is a set
-of identities, artifacts,
-approvals, and logs that can change production. When you
-look at security through that
-lens, the useful question is not "is this secure" in a
-vague way. The useful question
-is which identity can perform which action, at which
-boundary, with which evidence
-left behind.
+The core questions are practical:
 
-For a junior engineer, this framing is helpful because it
-turns security from a
-separate language into normal debugging. If a deploy
-failed, you inspect the actor,
-the permission, and the target. If a deploy succeeded when
-it should not have, you
-inspect the same things and then tighten the boundary that
-allowed it.
-
-## The Operating Context
-
-The service path is intentionally ordinary. A developer
-opens a pull request, GitHub
-Actions runs tests, the merge to main builds an image, and
-the deploy job updates
-production after environment approval. The cloud account
-contains the production app,
-a database, a log workspace, a secret store, and a few IAM
-or RBAC roles.
-
-```mermaid
-flowchart TD
-    A["Pull request"] --> B["GitHub Actions test job"]
-    B --> C["Merge to main"]
-    C --> D["Image digest in registry"]
-    D --> E["Production environment approval"]
-    E --> F["Cloud deploy role"]
-    F --> G["devpolaris-orders-api"]
-    H["Audit logs"] -. records .-> E
-    H -. records .-> F
+```text
+Where is the secret stored?
+Who can read it?
+How does it reach the process that needs it?
+How do we rotate it?
+How do we know it was exposed?
 ```
 
-The diagram is the first artifact. It gives the team a
-shared object to point at
-during review. If someone says the pipeline is safe, ask
-which arrow they mean. If
-someone says a risk is accepted, ask which box owns that
-risk and which log proves the
-action later.
+If the team cannot answer those questions, the secret will eventually become a hidden dependency. Hidden secrets are hard to rotate because nobody knows which job, service, developer laptop, or old script still uses them.
 
-## A Useful Baseline Workflow
+## Where Secrets Appear
 
-A baseline workflow should separate untrusted validation
-from trusted deployment. Pull
-request code can run tests, but it should not receive
-production secrets or broad
-write permissions. Deployment should happen from the
-protected branch and should use
-an environment that records approval.
+Secrets appear in more places than teams expect. The safest design is to assume they can leak anywhere code or automation can read environment variables, files, process memory, logs, caches, or build artifacts.
+
+| Place | Example | Risk |
+|-------|---------|------|
+| Repository | `.env`, private key, token in a script | Long-lived leak through source history |
+| CI secret store | `NPM_TOKEN`, cloud key | Exposed to workflow steps with secret access |
+| Runner environment | Environment variables during a job | Read by scripts, dependencies, or actions |
+| Runtime secret store | Database password, API key | Exposed to the application process |
+| Logs | Command output or stack trace | Secret copied into searchable evidence |
+| Cache or artifact | Build cache, test report, archive | Secret moves to a later job or download |
+| Developer machine | CLI config, SSH key, npm token | Local compromise becomes service compromise |
+
+This table is not a reason to panic. It is a map. Each row needs a storage rule and a delivery rule. Repository secrets need scanning and removal from history when leaked. CI secrets need workflow boundaries. Runtime secrets need service identity and narrow read access. Logs need redaction and review. Developer machines need credential hygiene and short-lived access when possible.
+
+## Delivery Secrets
+
+Delivery secrets are used by CI/CD systems. They publish packages, push images, assume cloud roles, sign artifacts, call deployment APIs, or notify other systems.
+
+The first improvement is to avoid long-lived secrets where a short-lived identity can do the job. In GitHub Actions, OpenID Connect lets a workflow request a short-lived token and exchange it with a cloud provider or supported registry. The workflow still needs careful boundaries, but there is no static cloud key sitting in the repository secret store.
 
 ```yaml
-name: orders-api-delivery
-on:
-  pull_request:
-    branches: ["main"]
-  push:
-    branches: ["main"]
-
 permissions:
   contents: read
+  id-token: write
 
 jobs:
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-          cache: "npm"
-      - run: npm ci
-      - run: npm test
-
   deploy-prod:
-    needs: test
-    if: github.ref == 'refs/heads/main'
     environment: production
-    permissions:
-      contents: read
-      id-token: write
-      packages: read
-    runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - run: ./scripts/login-cloud-oidc.sh
+      - run: ./scripts/exchange-oidc-for-cloud-token.sh
       - run: ./scripts/deploy-prod.sh
 ```
 
-This workflow is not perfect, but the shape is healthy.
-The top-level token is
-read-only. The deploy job asks for the extra permissions
-it needs. The deploy job runs
-only from main and uses a named production environment. A
-reviewer can now inspect one
-job and understand why it has more power than the test
-job.
+The `id-token: write` line is powerful. It allows the job to request a GitHub OIDC token. The `environment: production` line matters because environment protection rules can require approval before the job receives environment-specific secrets or proceeds with deployment. The script should exchange the token for access scoped to the repository, workflow, branch, and environment the cloud provider expects.
 
-If a failure appears, avoid broadening everything at once.
-A denied package read needs
-a package read permission. A denied cloud action needs the
-exact cloud action on the
-exact resource. A missing approval needs an environment
-rule, not a larger token.
+Short-lived identity reduces one class of secret, but it does not remove the need for trust boundaries. If untrusted code can run inside the deploy job, it can use the short-lived identity while it exists.
 
-## Artifacts That Make the Risk Concrete
+## Runtime Secrets
 
-Security reviews improve when they use real artifacts
-instead of opinions. A workflow
-file, role policy, audit event, access review note, or
-deployment record lets the team
-discuss the same facts.
+Runtime secrets are used by the running application. The orders service needs a database credential. It may need a payment API token. It may need a signing key for sessions. Those values should be delivered to the service at runtime from a controlled secret store, not baked into the image.
 
 ```text
-Service: devpolaris-orders-api
-Commit: 8f2a91d4c0b8
-Workflow run: orders-api-delivery #1842
-Image: ghcr.io/devpolaris/orders-api@sha256:4e1b9f...c71a
-Cloud principal: orders-api-prod-deployer
-Environment approver: maya-dev
-Target: rg-devpolaris-orders-prod/orders-api
-Health check: GET /health returned 200
+orders-api container image
+  -> no database password inside image
+  -> runtime identity reads orders/prod/database-url
+  -> process receives value as mounted file or environment variable
 ```
 
-This record gives the team a path backward from production
-to source. If the running
-image does not match the workflow output, investigate the
-deploy script or a manual
-production change. If the cloud principal is a human admin
-instead of the deploy role,
-investigate why the normal path was bypassed.
+The image should be reusable across environments. The same image digest can run in staging and production because the environment supplies the secret at runtime. If the secret is baked into the image, rotating the secret requires rebuilding and republishing the image. It also means anyone who can pull the image may be able to recover the secret.
 
-The tradeoff is that evidence takes storage and design.
-The fix is to automate facts
-where possible and keep human notes for judgment,
-exceptions, and decisions.
+Environment variables are convenient, but they are not invisible. They can appear in process inspection, crash reports, debug output, or accidental logs. Mounted secret files have their own risks. The important choice is to know how the value reaches the process and which tools can read it.
 
-## Diagnostic Path
+## Rotation
 
-A good security habit should help when something breaks.
-The diagnostic path below
-works for most delivery security questions because it
-follows the change from code to
-production.
+Rotation means replacing a secret with a new value and retiring the old value. Rotation is easy to say and hard to do when the secret has spread.
+
+A good rotation plan has two phases:
 
 ```text
-Diagnostic path
-1. Start with the pull request, commit SHA, actor, and changed files.
-2. Open the workflow run and record event, ref, job permissions, and approval.
-3. Compare the artifact digest with the digest running in production.
-4. Check the cloud activity log for principal, action, resource, and result.
-5. Match the finding to a fix: narrow a permission, rotate a secret, add review, or improve evidence.
+1. Add the new secret and move consumers to it.
+2. Disable the old secret after evidence shows consumers have moved.
 ```
 
-The important detail is order. Starting in the cloud
-console can show what changed,
-but it may not show why the change was allowed. Starting
-in the pull request can show
-intent, but it may not show the acting identity. Walking
-the whole chain keeps the
-team from fixing the first symptom and missing the broken
-boundary.
+The first phase avoids downtime. The second phase removes risk. If the old value stays enabled forever, rotation did not finish.
 
-For devpolaris-orders-api, the most useful fields are
-commit SHA, workflow event, job
-permissions, image digest, cloud principal, and target
-resource. If one field is
-missing, add it to the workflow output or release
-evidence.
-
-## Failure Modes and Fix Directions
-
-Most delivery security failures repeat familiar shapes.
-Learn to recognize the shape,
-then choose the narrow fix.
-
-| Failure mode | What it looks like | Fix direction |
-| :--- | :--- | :--- |
-| Trust boundary is missing | PR job can deploy or publish | Split jobs and restrict events |
-| Permission is too broad | One role can change every service | Scope role to one service and environment |
-| Secret is long-lived | Static cloud key sits in GitHub secrets | Replace with OIDC or rotate and restrict |
-| Evidence is weak | Production changed with no visible approver | Add environment approvals and audit retention |
-| Ownership is unclear | Nobody knows who reviews workflow changes | Add CODEOWNERS and a review checklist |
-
-A fix direction is not the same as a command. The command
-depends on the provider and
-repository. The engineering decision is stable: reduce
-blast radius, make the boundary
-explicit, and keep enough evidence to prove the next
-change.
-
-## Engineering Tradeoffs
-
-Security controls have costs. Narrow roles take longer to
-write than admin roles.
-Environment approval slows an urgent release. Secret
-rotation can break old processes
-if the team does not plan the handoff. Audit retention
-costs money and needs a
-retrieval path.
-
-The answer is not to remove friction everywhere. Put
-friction where the risk changes.
-A normal application code change can move with peer review
-and tests. A workflow
-permission change, deploy role change, or production
-secret change should receive a
-more careful review because it changes what the delivery
-system can do.
-
-For the orders API team, the practical target is
-explainable security. If a junior
-engineer can trace who approved a change, which identity
-deployed it, which artifact
-ran, and which permission allowed it, the system is much
-easier to operate and
-improve.
-
-## Production Access Review Practice
-
-Monthly production access reviews are where the mental
-model meets people. The review
-should compare current access with current responsibility.
-It should remove old users,
-confirm service identities, and record any exception with
-an owner and date.
+Here is a small rotation record:
 
 ```text
-Review: devpolaris-orders-api production access
-Date: 2026-05-08
-Human admins: maya-dev, oren-platform
-Log readers: orders-oncall-group
-Deploy role: orders-api-prod-deployer
-Removed: old-ci-service-user, sam-contractor
-Exception: shared log reader remains until workspace split, owner oren-platform
-Next review: 2026-06-05
+Secret: orders/prod/database-url
+Reason: quarterly rotation
+New version: 2026-05-19-01
+Consumers: orders-api-prod, orders-worker-prod
+Validation: both services opened database connections with new version
+Old version disabled: 2026-05-19T12:30Z
+Owner: orders-team
 ```
 
-This artifact is small, but it answers important
-questions. Who still has access?
-Which temporary exception remains? Who owns the cleanup?
-If the review finds an
-account nobody recognizes, disable it or remove access
-first, then investigate why it
-was still present.
+The `Consumers` line matters because a secret usually has more than one reader. The `Validation` line matters because rotation should be proven through behavior, not hope. The `Old version disabled` line matters because enabled old secrets keep the original risk alive.
+
+## Case Study: Codecov
+
+Codecov's April 2021 postmortem described a compromise of its Bash Uploader. The incident involved an attacker modifying the uploader script, which customers commonly ran in CI. The modified script could collect credentials from CI environments and send them to an attacker-controlled server. Codecov's response included customer notification, rotation guidance, and investigation of affected uploaders.
+
+The lesson is direct: a CI environment often contains valuable secrets because it can build, test, publish, and deploy. A script that runs inside that environment may be able to read those values. The script may come from a vendor, a package, a shell command, or a checked-in helper.
+
+Read the risk path:
+
+```text
+CI job
+  -> downloads uploader script
+  -> runs script with environment variables present
+  -> script reads secrets
+  -> secrets leave the environment
+```
+
+The controls are also direct. Pin or verify downloaded tooling. Prefer official actions or checked-in scripts over unchecked network scripts. Keep CI secrets scoped to the exact job that needs them. Avoid putting production secrets in test jobs. Rotate secrets when there is credible evidence that a CI job or runner may have exposed them.
+
+Codecov is also a reminder that secret management includes response. A team needs to know which secrets were present in affected jobs, which systems accepted those secrets, and which rotations prove the old values no longer work.
+
+## Leak Evidence
+
+When a secret leak alert fires, start by identifying the secret and its authority.
+
+```text
+Secret type: npm automation token
+Found in: GitHub Actions log
+Repository: devpolaris-orders-api
+First seen: workflow run #1842
+Authority: publish packages under @devpolaris/orders-api
+Status: revoked
+Replacement: npm trusted publishing via OIDC
+```
+
+`Secret type` tells you what kind of value leaked. `Found in` tells you where evidence exists. `Authority` tells you what the value could do. `Status` tells you whether the old value still works. `Replacement` records the safer path.
+
+Do not stop after deleting the visible copy. If a secret reached Git history, logs, caches, build artifacts, or a public package, assume it was copied. The safe response is revoke or rotate the value, then remove the exposure path.
+
+## Putting It All Together
+
+Secrets are credentials in motion. They start in a secret store, reach a workflow or process, and let that actor call another system. The security job is to keep that path narrow and reviewable.
+
+For `devpolaris-orders-api`, delivery secrets belong only in trusted jobs. Runtime secrets are delivered by the environment, not baked into the image. Long-lived static cloud keys are replaced with short-lived identity where possible. Rotation records name consumers and prove the old value was disabled.
+
+The Codecov case shows why this matters. A script running in CI can become a secret collection point if secrets are broadly available. Narrow job scopes, verified tooling, and rotation evidence reduce the damage when a tool or workflow is compromised.
+
+## What's Next
+
+Secrets prove identity. Audit logs and evidence show how those identities were used. The next article explains which records help a team answer what changed, who acted, and what production is running now.
 
 ---
 
 **References**
 
-- [GitHub Actions security hardening](https://docs.github.com/actions/security-guides/security-hardening-for-github-actions) - GitHub explains token scope, secret handling, and safer workflow patterns.
-- [GitHub Actions OpenID Connect](https://docs.github.com/actions/deployment/security-hardening-your-deployments/about-security-hardening-with-openid-connect) - GitHub describes replacing long-lived cloud secrets with short-lived federation.
-- [AWS Secrets Manager documentation](https://docs.aws.amazon.com/secretsmanager/latest/userguide/intro.html) - AWS explains managed secret storage, retrieval, and rotation concepts.
-- [HashiCorp Vault documentation](https://developer.hashicorp.com/vault/docs) - Vault documents dynamic secrets, leases, and centralized secret workflows.
+- [Codecov April 2021 postmortem](https://about.codecov.io/apr-2021-post-mortem/) - Codecov describes the Bash Uploader compromise, investigation, and customer guidance.
+- [CircleCI January 2023 incident report](https://circleci.com/blog/jan-4-2023-incident-report/) - CircleCI describes an incident involving customer secrets and broad rotation guidance.
+- [GitHub Actions OpenID Connect](https://docs.github.com/en/actions/deployment/security-hardening-your-deployments/about-security-hardening-with-openid-connect) - GitHub explains short-lived OIDC tokens for deployment workflows.
+- [GitHub encrypted secrets documentation](https://docs.github.com/en/actions/security-for-github-actions/security-guides/using-secrets-in-github-actions) - GitHub documents how secrets are stored and made available to workflows.

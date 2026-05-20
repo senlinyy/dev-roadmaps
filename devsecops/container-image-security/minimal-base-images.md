@@ -1,318 +1,149 @@
 ---
-id: article-devsecops-container-image-security-minimal-base-images
 title: "Minimal Base Images"
-description: "Choose container base images that keep runtime files small, reviewable, and easier to patch."
-overview: "Minimal base images reduce the amount of operating system and tooling that travels with an application image. You will learn how to compare image contents, keep build tools out of runtime layers, and debug the tradeoff when a smaller image lacks familiar shell tools."
+description: "Choose container base images that keep runtime files small, patchable, and easier to inspect."
+overview: "A base image is the filesystem your application starts from. This article explains what travels in a runtime image, how multi-stage builds remove build tools, and why smaller images are easier to scan and patch."
 tags: ["images", "base-images", "docker"]
 order: 1
+id: article-devsecops-container-image-security-minimal-base-images
 ---
 
 ## Table of Contents
 
-1. [The First Boundary To Understand](#the-first-boundary-to-understand)
-2. [The devpolaris-orders-api Thread](#the-devpolaris-orders-api-thread)
-3. [The Smallest Useful Artifact](#the-smallest-useful-artifact)
-4. [Reading The Evidence](#reading-the-evidence)
-5. [Diagnostic Path Before Changes](#diagnostic-path-before-changes)
-6. [Failure Modes And Fix Directions](#failure-modes-and-fix-directions)
-7. [Review Questions For Pull Requests](#review-questions-for-pull-requests)
-8. [Operational Tradeoffs](#operational-tradeoffs)
+1. [What Is a Base Image?](#what-is-a-base-image)
+2. [What Ships With Your App](#what-ships-with-your-app)
+3. [Build Stage and Runtime Stage](#build-stage-and-runtime-stage)
+4. [Comparing Images](#comparing-images)
+5. [Tradeoffs](#tradeoffs)
+6. [Review Evidence](#review-evidence)
+7. [Putting It All Together](#putting-it-all-together)
+8. [What's Next](#whats-next)
 
-## The First Boundary To Understand
+## What Is a Base Image?
 
-Minimal Base Images matters when the team can connect a security idea to a specific image that will run somewhere. In this section, the image is `devpolaris-orders-api`, built with Docker, published to GHCR for review, and promoted to ECR for production. The service listens on port `3000`, exposes `GET /health`, and is deployed by digest after the release workflow records evidence.
+A container image is a filesystem plus metadata. Your application files sit on top of a base image. The base image may contain a Linux distribution, package manager, shell, CA certificates, language runtime, libraries, and tools.
 
-The concept in focus here is runtime boundary. In plain terms, it is the part of the container workflow that helps you answer one operational question before the image reaches production. The question may be what files are present, which known vulnerabilities are reported, who produced the digest, who can replace it in the registry, or what Linux privileges the process receives after startup.
+For `devpolaris-orders-api`, a base image might be `node:22`, `node:22-slim`, or a distroless Node image. Each choice changes what ships with the app.
 
-You should read the examples as review evidence, not as commands to paste blindly. A senior reviewer is not looking for perfect-looking YAML. They are looking for a chain of proof: this image was built from this source, contains these components, passed these checks, and runs with these limits.
-
-```yaml
-securityContext:
-  runAsNonRoot: true
-  allowPrivilegeEscalation: false
-  readOnlyRootFilesystem: true
-  capabilities:
-    drop: ["ALL"]
+```text
+orders-api image
+|-- application files
+|-- node runtime
+|-- operating system libraries
+|-- certificates
+|-- shell and package manager
+`-- extra tools
 ```
 
-The first diagnostic step is to anchor the discussion to a digest. A tag can help humans find an image, but the digest identifies the immutable content. When a report mentions `ghcr.io/devpolaris/orders-api@sha256:2f4a1234`, everyone can inspect the same artifact instead of arguing about where `latest` pointed yesterday.
+Minimal base images reduce what travels into production. Fewer packages usually means fewer known vulnerabilities, fewer tools available to an attacker after compromise, and less content for reviewers to inspect.
 
-For runtime boundary, the useful evidence is small and specific. Capture the command output that proves the claim, the file or policy that controls the behavior, and the failure text that appears when the behavior is wrong. A long terminal transcript is weaker than five lines that show the image, actor, package, setting, or denied operation.
+## What Ships With Your App
 
-A realistic failure path starts with one mismatch. The Dockerfile says the process runs as `node`, but inspection shows an empty user field. The scanner report says a package is vulnerable, but the base image has a vendor backport. The signature verifies, but the certificate identity belongs to a pull request workflow instead of the release workflow. Each mismatch points to a different fix direction.
+A common beginner surprise is that a container image ships operating system files as well as application files. If the image starts from a full distribution, it may include shell utilities, package-manager metadata, documentation, and libraries your app never uses.
 
-Do not fix these problems by adding broad permissions or copying more files into the image. Fix the durable boundary. Update the Dockerfile, dependency lockfile, registry policy, signing workflow, deployment manifest, or exception record. Then rebuild or republish the image so the new evidence belongs to a new digest.
+The first review artifact is an image inventory:
 
-For pull request review, ask three questions. What exact artifact will run? Which command proves the claim in this section? What would fail if this control were removed? If the answer depends on a person remembering a manual step, move that step into CI or a checked-in policy.
+```text
+Image: ghcr.io/devpolaris/orders-api@sha256:4e1b9f30...
+Base: node:22-slim
+Application size: 38 MB
+OS packages: 92
+Package manager present: yes
+Shell present: yes
+Runs as root: no
+```
 
-The tradeoff is worth naming in the pull request. Tighter images reduce scan noise but can remove shell diagnostics. Strict scan gates catch known risks but can block urgent changes. Signatures prove producer identity but need verification policy. Registry separation improves access control but adds promotion work. Runtime hardening reduces blast radius but exposes hidden write and permission assumptions.
+The `Base` line tells you where the filesystem starts. `OS packages` gives scanning scope. `Package manager present` and `Shell present` tell you what tools exist inside the running container. `Runs as root` belongs here because base image choice often affects default users.
 
-Keep the orders API thread visible as you learn the topic. The service is ordinary, and that is the point. Container security work becomes repeatable when the team can apply the same evidence pattern to every normal API, worker, and scheduled job it ships.
+## Build Stage and Runtime Stage
 
-## The devpolaris-orders-api Thread
+Multi-stage builds separate tools needed to build from files needed to run.
 
-Minimal Base Images matters when the team can connect a security idea to a specific image that will run somewhere. In this section, the image is `devpolaris-orders-api`, built with Docker, published to GHCR for review, and promoted to ECR for production. The service listens on port `3000`, exposes `GET /health`, and is deployed by digest after the release workflow records evidence.
-
-The concept in focus here is base image choice. In plain terms, it is the part of the container workflow that helps you answer one operational question before the image reaches production. The question may be what files are present, which known vulnerabilities are reported, who produced the digest, who can replace it in the registry, or what Linux privileges the process receives after startup.
-
-You should read the examples as review evidence, not as commands to paste blindly. A senior reviewer is not looking for perfect-looking YAML. They are looking for a chain of proof: this image was built from this source, contains these components, passed these checks, and runs with these limits.
-
-```dockerfile
-FROM node:22-slim AS build
-WORKDIR /workspace
+```Dockerfile
+FROM node:22 AS build
+WORKDIR /app
 COPY package*.json ./
 RUN npm ci
-COPY src ./src
-RUN npm run build && npm prune --omit=dev
+COPY . .
+RUN npm run build
+RUN npm prune --omit=dev
 
 FROM node:22-slim AS runtime
 WORKDIR /app
-COPY --from=build /workspace/node_modules ./node_modules
-COPY --from=build /workspace/dist ./dist
+ENV NODE_ENV=production
+COPY --from=build /app/package*.json ./
+COPY --from=build /app/node_modules ./node_modules
+COPY --from=build /app/dist ./dist
 USER node
 CMD ["node", "dist/server.js"]
 ```
 
-The first diagnostic step is to anchor the discussion to a digest. A tag can help humans find an image, but the digest identifies the immutable content. When a report mentions `ghcr.io/devpolaris/orders-api@sha256:2f4a1234`, everyone can inspect the same artifact instead of arguing about where `latest` pointed yesterday.
+The `build` stage has the full toolchain. It installs dependencies and compiles the application. The `runtime` stage starts from a smaller image and receives only the files needed to run. The `USER node` line prevents the process from running as root by default.
 
-For base image choice, the useful evidence is small and specific. Capture the command output that proves the claim, the file or policy that controls the behavior, and the failure text that appears when the behavior is wrong. A long terminal transcript is weaker than five lines that show the image, actor, package, setting, or denied operation.
+This pattern is useful because production does not need the whole build workspace. If test fixtures, build caches, local config, or development dependencies remain in the runtime image, they become part of the shipped artifact.
 
-A realistic failure path starts with one mismatch. The Dockerfile says the process runs as `node`, but inspection shows an empty user field. The scanner report says a package is vulnerable, but the base image has a vendor backport. The signature verifies, but the certificate identity belongs to a pull request workflow instead of the release workflow. Each mismatch points to a different fix direction.
+## Comparing Images
 
-Do not fix these problems by adding broad permissions or copying more files into the image. Fix the durable boundary. Update the Dockerfile, dependency lockfile, registry policy, signing workflow, deployment manifest, or exception record. Then rebuild or republish the image so the new evidence belongs to a new digest.
+Compare images with facts instead of feelings.
 
-For pull request review, ask three questions. What exact artifact will run? Which command proves the claim in this section? What would fail if this control were removed? If the answer depends on a person remembering a manual step, move that step into CI or a checked-in policy.
+| Image | Size | OS packages | Shell | Package manager | Debuggability |
+|-------|------|-------------|-------|-----------------|---------------|
+| `node:22` | Larger | More | Yes | Yes | Easier |
+| `node:22-slim` | Medium | Fewer | Yes | Limited | Still familiar |
+| Distroless Node | Smaller | Minimal | Usually no | No | Harder |
 
-The tradeoff is worth naming in the pull request. Tighter images reduce scan noise but can remove shell diagnostics. Strict scan gates catch known risks but can block urgent changes. Signatures prove producer identity but need verification policy. Registry separation improves access control but adds promotion work. Runtime hardening reduces blast radius but exposes hidden write and permission assumptions.
+Smaller is not automatically better for every team. A distroless image can reduce runtime contents, but it also removes tools engineers may use during debugging. The right question is whether the runtime image contains what the service needs and whether the team has another debugging path when production is broken.
 
-Keep the orders API thread visible as you learn the topic. The service is ordinary, and that is the point. Container security work becomes repeatable when the team can apply the same evidence pattern to every normal API, worker, and scheduled job it ships.
+For the orders API, `node:22-slim` may be a practical first step. It removes some unused content while keeping enough familiar behavior for the team. A later move to distroless can happen after logging, health checks, and debug procedures are mature.
 
-## The Smallest Useful Artifact
+## Tradeoffs
 
-Minimal Base Images matters when the team can connect a security idea to a specific image that will run somewhere. In this section, the image is `devpolaris-orders-api`, built with Docker, published to GHCR for review, and promoted to ECR for production. The service listens on port `3000`, exposes `GET /health`, and is deployed by digest after the release workflow records evidence.
+Minimal images introduce a real operational tradeoff. If a container has no shell, you cannot `kubectl exec` into it and run `sh`, `cat`, or `curl`. That is often good for security, but it changes incident response.
 
-The concept in focus here is multi stage builds. In plain terms, it is the part of the container workflow that helps you answer one operational question before the image reaches production. The question may be what files are present, which known vulnerabilities are reported, who produced the digest, who can replace it in the registry, or what Linux privileges the process receives after startup.
+The replacement is better runtime evidence:
 
-You should read the examples as review evidence, not as commands to paste blindly. A senior reviewer is not looking for perfect-looking YAML. They are looking for a chain of proof: this image was built from this source, contains these components, passed these checks, and runs with these limits.
-
-```dockerfile
-FROM node:22-slim AS build
-WORKDIR /workspace
-COPY package*.json ./
-RUN npm ci
-COPY src ./src
-RUN npm run build && npm prune --omit=dev
-
-FROM node:22-slim AS runtime
-WORKDIR /app
-COPY --from=build /workspace/node_modules ./node_modules
-COPY --from=build /workspace/dist ./dist
-USER node
-CMD ["node", "dist/server.js"]
+```text
+Debug path without shell
+- health endpoint exposes version and dependency status
+- structured logs include request IDs
+- metrics show error rates and latency
+- ephemeral debug container can inspect the pod network
+- image digest and SBOM are available from release evidence
 ```
 
-The first diagnostic step is to anchor the discussion to a digest. A tag can help humans find an image, but the digest identifies the immutable content. When a report mentions `ghcr.io/devpolaris/orders-api@sha256:2f4a1234`, everyone can inspect the same artifact instead of arguing about where `latest` pointed yesterday.
+The goal is to avoid depending on random tools inside the production image. The app should explain itself through logs, metrics, health checks, and release evidence.
 
-For multi stage builds, the useful evidence is small and specific. Capture the command output that proves the claim, the file or policy that controls the behavior, and the failure text that appears when the behavior is wrong. A long terminal transcript is weaker than five lines that show the image, actor, package, setting, or denied operation.
+## Review Evidence
 
-A realistic failure path starts with one mismatch. The Dockerfile says the process runs as `node`, but inspection shows an empty user field. The scanner report says a package is vulnerable, but the base image has a vendor backport. The signature verifies, but the certificate identity belongs to a pull request workflow instead of the release workflow. Each mismatch points to a different fix direction.
+A base image review should record the before and after.
 
-Do not fix these problems by adding broad permissions or copying more files into the image. Fix the durable boundary. Update the Dockerfile, dependency lockfile, registry policy, signing workflow, deployment manifest, or exception record. Then rebuild or republish the image so the new evidence belongs to a new digest.
-
-For pull request review, ask three questions. What exact artifact will run? Which command proves the claim in this section? What would fail if this control were removed? If the answer depends on a person remembering a manual step, move that step into CI or a checked-in policy.
-
-The tradeoff is worth naming in the pull request. Tighter images reduce scan noise but can remove shell diagnostics. Strict scan gates catch known risks but can block urgent changes. Signatures prove producer identity but need verification policy. Registry separation improves access control but adds promotion work. Runtime hardening reduces blast radius but exposes hidden write and permission assumptions.
-
-Keep the orders API thread visible as you learn the topic. The service is ordinary, and that is the point. Container security work becomes repeatable when the team can apply the same evidence pattern to every normal API, worker, and scheduled job it ships.
-
-## Reading The Evidence
-
-Minimal Base Images matters when the team can connect a security idea to a specific image that will run somewhere. In this section, the image is `devpolaris-orders-api`, built with Docker, published to GHCR for review, and promoted to ECR for production. The service listens on port `3000`, exposes `GET /health`, and is deployed by digest after the release workflow records evidence.
-
-The concept in focus here is image inspection. In plain terms, it is the part of the container workflow that helps you answer one operational question before the image reaches production. The question may be what files are present, which known vulnerabilities are reported, who produced the digest, who can replace it in the registry, or what Linux privileges the process receives after startup.
-
-You should read the examples as review evidence, not as commands to paste blindly. A senior reviewer is not looking for perfect-looking YAML. They are looking for a chain of proof: this image was built from this source, contains these components, passed these checks, and runs with these limits.
-
-```dockerfile
-FROM node:22-slim AS build
-WORKDIR /workspace
-COPY package*.json ./
-RUN npm ci
-COPY src ./src
-RUN npm run build && npm prune --omit=dev
-
-FROM node:22-slim AS runtime
-WORKDIR /app
-COPY --from=build /workspace/node_modules ./node_modules
-COPY --from=build /workspace/dist ./dist
-USER node
-CMD ["node", "dist/server.js"]
+```text
+Service: devpolaris-orders-api
+Old base: node:22
+New base: node:22-slim
+Reason: reduce unused OS packages in runtime image
+Build tools removed: yes, multi-stage build
+Runtime user: node
+Scanner result: critical 0, high 2
+Debug impact: shell remains available
+Owner: orders-team
 ```
 
-The first diagnostic step is to anchor the discussion to a digest. A tag can help humans find an image, but the digest identifies the immutable content. When a report mentions `ghcr.io/devpolaris/orders-api@sha256:2f4a1234`, everyone can inspect the same artifact instead of arguing about where `latest` pointed yesterday.
+This record gives the reviewer enough context to understand the tradeoff. If a later scanner finding appears, the team can see which base image introduced it.
 
-For image inspection, the useful evidence is small and specific. Capture the command output that proves the claim, the file or policy that controls the behavior, and the failure text that appears when the behavior is wrong. A long terminal transcript is weaker than five lines that show the image, actor, package, setting, or denied operation.
+## Putting It All Together
 
-A realistic failure path starts with one mismatch. The Dockerfile says the process runs as `node`, but inspection shows an empty user field. The scanner report says a package is vulnerable, but the base image has a vendor backport. The signature verifies, but the certificate identity belongs to a pull request workflow instead of the release workflow. Each mismatch points to a different fix direction.
+A base image is the filesystem your application inherits. Minimal base images reduce the amount of operating system content, tools, and package metadata that travel into production. Multi-stage builds keep build tools out of the runtime layer.
 
-Do not fix these problems by adding broad permissions or copying more files into the image. Fix the durable boundary. Update the Dockerfile, dependency lockfile, registry policy, signing workflow, deployment manifest, or exception record. Then rebuild or republish the image so the new evidence belongs to a new digest.
+For `devpolaris-orders-api`, the practical habit is to choose a base image deliberately, compare image contents, run as a non-root user, remove development files from runtime layers, and keep a debug path that does not depend on a large production image.
 
-For pull request review, ask three questions. What exact artifact will run? Which command proves the claim in this section? What would fail if this control were removed? If the answer depends on a person remembering a manual step, move that step into CI or a checked-in policy.
+## What's Next
 
-The tradeoff is worth naming in the pull request. Tighter images reduce scan noise but can remove shell diagnostics. Strict scan gates catch known risks but can block urgent changes. Signatures prove producer identity but need verification policy. Registry separation improves access control but adds promotion work. Runtime hardening reduces blast radius but exposes hidden write and permission assumptions.
-
-Keep the orders API thread visible as you learn the topic. The service is ordinary, and that is the point. Container security work becomes repeatable when the team can apply the same evidence pattern to every normal API, worker, and scheduled job it ships.
-
-## Diagnostic Path Before Changes
-
-Minimal Base Images matters when the team can connect a security idea to a specific image that will run somewhere. In this section, the image is `devpolaris-orders-api`, built with Docker, published to GHCR for review, and promoted to ECR for production. The service listens on port `3000`, exposes `GET /health`, and is deployed by digest after the release workflow records evidence.
-
-The concept in focus here is missing runtime files. In plain terms, it is the part of the container workflow that helps you answer one operational question before the image reaches production. The question may be what files are present, which known vulnerabilities are reported, who produced the digest, who can replace it in the registry, or what Linux privileges the process receives after startup.
-
-You should read the examples as review evidence, not as commands to paste blindly. A senior reviewer is not looking for perfect-looking YAML. They are looking for a chain of proof: this image was built from this source, contains these components, passed these checks, and runs with these limits.
-
-```yaml
-securityContext:
-  runAsNonRoot: true
-  allowPrivilegeEscalation: false
-  readOnlyRootFilesystem: true
-  capabilities:
-    drop: ["ALL"]
-```
-
-The first diagnostic step is to anchor the discussion to a digest. A tag can help humans find an image, but the digest identifies the immutable content. When a report mentions `ghcr.io/devpolaris/orders-api@sha256:2f4a1234`, everyone can inspect the same artifact instead of arguing about where `latest` pointed yesterday.
-
-For missing runtime files, the useful evidence is small and specific. Capture the command output that proves the claim, the file or policy that controls the behavior, and the failure text that appears when the behavior is wrong. A long terminal transcript is weaker than five lines that show the image, actor, package, setting, or denied operation.
-
-A realistic failure path starts with one mismatch. The Dockerfile says the process runs as `node`, but inspection shows an empty user field. The scanner report says a package is vulnerable, but the base image has a vendor backport. The signature verifies, but the certificate identity belongs to a pull request workflow instead of the release workflow. Each mismatch points to a different fix direction.
-
-Do not fix these problems by adding broad permissions or copying more files into the image. Fix the durable boundary. Update the Dockerfile, dependency lockfile, registry policy, signing workflow, deployment manifest, or exception record. Then rebuild or republish the image so the new evidence belongs to a new digest.
-
-For pull request review, ask three questions. What exact artifact will run? Which command proves the claim in this section? What would fail if this control were removed? If the answer depends on a person remembering a manual step, move that step into CI or a checked-in policy.
-
-The tradeoff is worth naming in the pull request. Tighter images reduce scan noise but can remove shell diagnostics. Strict scan gates catch known risks but can block urgent changes. Signatures prove producer identity but need verification policy. Registry separation improves access control but adds promotion work. Runtime hardening reduces blast radius but exposes hidden write and permission assumptions.
-
-Keep the orders API thread visible as you learn the topic. The service is ordinary, and that is the point. Container security work becomes repeatable when the team can apply the same evidence pattern to every normal API, worker, and scheduled job it ships.
-
-## Failure Modes And Fix Directions
-
-Minimal Base Images matters when the team can connect a security idea to a specific image that will run somewhere. In this section, the image is `devpolaris-orders-api`, built with Docker, published to GHCR for review, and promoted to ECR for production. The service listens on port `3000`, exposes `GET /health`, and is deployed by digest after the release workflow records evidence.
-
-The concept in focus here is debug targets. In plain terms, it is the part of the container workflow that helps you answer one operational question before the image reaches production. The question may be what files are present, which known vulnerabilities are reported, who produced the digest, who can replace it in the registry, or what Linux privileges the process receives after startup.
-
-You should read the examples as review evidence, not as commands to paste blindly. A senior reviewer is not looking for perfect-looking YAML. They are looking for a chain of proof: this image was built from this source, contains these components, passed these checks, and runs with these limits.
-
-```dockerfile
-FROM node:22-slim AS build
-WORKDIR /workspace
-COPY package*.json ./
-RUN npm ci
-COPY src ./src
-RUN npm run build && npm prune --omit=dev
-
-FROM node:22-slim AS runtime
-WORKDIR /app
-COPY --from=build /workspace/node_modules ./node_modules
-COPY --from=build /workspace/dist ./dist
-USER node
-CMD ["node", "dist/server.js"]
-```
-
-The first diagnostic step is to anchor the discussion to a digest. A tag can help humans find an image, but the digest identifies the immutable content. When a report mentions `ghcr.io/devpolaris/orders-api@sha256:2f4a1234`, everyone can inspect the same artifact instead of arguing about where `latest` pointed yesterday.
-
-For debug targets, the useful evidence is small and specific. Capture the command output that proves the claim, the file or policy that controls the behavior, and the failure text that appears when the behavior is wrong. A long terminal transcript is weaker than five lines that show the image, actor, package, setting, or denied operation.
-
-A realistic failure path starts with one mismatch. The Dockerfile says the process runs as `node`, but inspection shows an empty user field. The scanner report says a package is vulnerable, but the base image has a vendor backport. The signature verifies, but the certificate identity belongs to a pull request workflow instead of the release workflow. Each mismatch points to a different fix direction.
-
-Do not fix these problems by adding broad permissions or copying more files into the image. Fix the durable boundary. Update the Dockerfile, dependency lockfile, registry policy, signing workflow, deployment manifest, or exception record. Then rebuild or republish the image so the new evidence belongs to a new digest.
-
-For pull request review, ask three questions. What exact artifact will run? Which command proves the claim in this section? What would fail if this control were removed? If the answer depends on a person remembering a manual step, move that step into CI or a checked-in policy.
-
-The tradeoff is worth naming in the pull request. Tighter images reduce scan noise but can remove shell diagnostics. Strict scan gates catch known risks but can block urgent changes. Signatures prove producer identity but need verification policy. Registry separation improves access control but adds promotion work. Runtime hardening reduces blast radius but exposes hidden write and permission assumptions.
-
-Keep the orders API thread visible as you learn the topic. The service is ordinary, and that is the point. Container security work becomes repeatable when the team can apply the same evidence pattern to every normal API, worker, and scheduled job it ships.
-
-## Review Questions For Pull Requests
-
-Minimal Base Images matters when the team can connect a security idea to a specific image that will run somewhere. In this section, the image is `devpolaris-orders-api`, built with Docker, published to GHCR for review, and promoted to ECR for production. The service listens on port `3000`, exposes `GET /health`, and is deployed by digest after the release workflow records evidence.
-
-The concept in focus here is CI evidence. In plain terms, it is the part of the container workflow that helps you answer one operational question before the image reaches production. The question may be what files are present, which known vulnerabilities are reported, who produced the digest, who can replace it in the registry, or what Linux privileges the process receives after startup.
-
-You should read the examples as review evidence, not as commands to paste blindly. A senior reviewer is not looking for perfect-looking YAML. They are looking for a chain of proof: this image was built from this source, contains these components, passed these checks, and runs with these limits.
-
-```dockerfile
-FROM node:22-slim AS build
-WORKDIR /workspace
-COPY package*.json ./
-RUN npm ci
-COPY src ./src
-RUN npm run build && npm prune --omit=dev
-
-FROM node:22-slim AS runtime
-WORKDIR /app
-COPY --from=build /workspace/node_modules ./node_modules
-COPY --from=build /workspace/dist ./dist
-USER node
-CMD ["node", "dist/server.js"]
-```
-
-The first diagnostic step is to anchor the discussion to a digest. A tag can help humans find an image, but the digest identifies the immutable content. When a report mentions `ghcr.io/devpolaris/orders-api@sha256:2f4a1234`, everyone can inspect the same artifact instead of arguing about where `latest` pointed yesterday.
-
-For CI evidence, the useful evidence is small and specific. Capture the command output that proves the claim, the file or policy that controls the behavior, and the failure text that appears when the behavior is wrong. A long terminal transcript is weaker than five lines that show the image, actor, package, setting, or denied operation.
-
-A realistic failure path starts with one mismatch. The Dockerfile says the process runs as `node`, but inspection shows an empty user field. The scanner report says a package is vulnerable, but the base image has a vendor backport. The signature verifies, but the certificate identity belongs to a pull request workflow instead of the release workflow. Each mismatch points to a different fix direction.
-
-Do not fix these problems by adding broad permissions or copying more files into the image. Fix the durable boundary. Update the Dockerfile, dependency lockfile, registry policy, signing workflow, deployment manifest, or exception record. Then rebuild or republish the image so the new evidence belongs to a new digest.
-
-For pull request review, ask three questions. What exact artifact will run? Which command proves the claim in this section? What would fail if this control were removed? If the answer depends on a person remembering a manual step, move that step into CI or a checked-in policy.
-
-The tradeoff is worth naming in the pull request. Tighter images reduce scan noise but can remove shell diagnostics. Strict scan gates catch known risks but can block urgent changes. Signatures prove producer identity but need verification policy. Registry separation improves access control but adds promotion work. Runtime hardening reduces blast radius but exposes hidden write and permission assumptions.
-
-Keep the orders API thread visible as you learn the topic. The service is ordinary, and that is the point. Container security work becomes repeatable when the team can apply the same evidence pattern to every normal API, worker, and scheduled job it ships.
-
-## Operational Tradeoffs
-
-Minimal Base Images matters when the team can connect a security idea to a specific image that will run somewhere. In this section, the image is `devpolaris-orders-api`, built with Docker, published to GHCR for review, and promoted to ECR for production. The service listens on port `3000`, exposes `GET /health`, and is deployed by digest after the release workflow records evidence.
-
-The concept in focus here is tradeoffs. In plain terms, it is the part of the container workflow that helps you answer one operational question before the image reaches production. The question may be what files are present, which known vulnerabilities are reported, who produced the digest, who can replace it in the registry, or what Linux privileges the process receives after startup.
-
-You should read the examples as review evidence, not as commands to paste blindly. A senior reviewer is not looking for perfect-looking YAML. They are looking for a chain of proof: this image was built from this source, contains these components, passed these checks, and runs with these limits.
-
-```dockerfile
-FROM node:22-slim AS build
-WORKDIR /workspace
-COPY package*.json ./
-RUN npm ci
-COPY src ./src
-RUN npm run build && npm prune --omit=dev
-
-FROM node:22-slim AS runtime
-WORKDIR /app
-COPY --from=build /workspace/node_modules ./node_modules
-COPY --from=build /workspace/dist ./dist
-USER node
-CMD ["node", "dist/server.js"]
-```
-
-The first diagnostic step is to anchor the discussion to a digest. A tag can help humans find an image, but the digest identifies the immutable content. When a report mentions `ghcr.io/devpolaris/orders-api@sha256:2f4a1234`, everyone can inspect the same artifact instead of arguing about where `latest` pointed yesterday.
-
-For tradeoffs, the useful evidence is small and specific. Capture the command output that proves the claim, the file or policy that controls the behavior, and the failure text that appears when the behavior is wrong. A long terminal transcript is weaker than five lines that show the image, actor, package, setting, or denied operation.
-
-A realistic failure path starts with one mismatch. The Dockerfile says the process runs as `node`, but inspection shows an empty user field. The scanner report says a package is vulnerable, but the base image has a vendor backport. The signature verifies, but the certificate identity belongs to a pull request workflow instead of the release workflow. Each mismatch points to a different fix direction.
-
-Do not fix these problems by adding broad permissions or copying more files into the image. Fix the durable boundary. Update the Dockerfile, dependency lockfile, registry policy, signing workflow, deployment manifest, or exception record. Then rebuild or republish the image so the new evidence belongs to a new digest.
-
-For pull request review, ask three questions. What exact artifact will run? Which command proves the claim in this section? What would fail if this control were removed? If the answer depends on a person remembering a manual step, move that step into CI or a checked-in policy.
-
-The tradeoff is worth naming in the pull request. Tighter images reduce scan noise but can remove shell diagnostics. Strict scan gates catch known risks but can block urgent changes. Signatures prove producer identity but need verification policy. Registry separation improves access control but adds promotion work. Runtime hardening reduces blast radius but exposes hidden write and permission assumptions.
-
-Keep the orders API thread visible as you learn the topic. The service is ordinary, and that is the point. Container security work becomes repeatable when the team can apply the same evidence pattern to every normal API, worker, and scheduled job it ships.
+Once you know what is inside the image, scan it. The next article explains how image scanners turn operating system and application package metadata into security findings.
 
 ---
 
 **References**
 
-- [Docker multi-stage builds](https://docs.docker.com/build/building/multi-stage/) - Official or canonical reference for the behavior described in this article.
-- [Dockerfile reference](https://docs.docker.com/reference/dockerfile/) - Official or canonical reference for the behavior described in this article.
-- [OCI image spec](https://github.com/opencontainers/image-spec) - Official or canonical reference for the behavior described in this article.
-- [Distroless images](https://github.com/GoogleContainerTools/distroless) - Official or canonical reference for the behavior described in this article.
+- [Docker multi-stage builds](https://docs.docker.com/build/building/multi-stage/) - Docker documents using separate build and runtime stages.
+- [Dockerfile best practices](https://docs.docker.com/develop/develop-images/dockerfile_best-practices/) - Docker documents practical image-building guidance, including base image and layer choices.
+- [Google Distroless images](https://github.com/GoogleContainerTools/distroless) - Distroless documents minimal runtime images that omit package managers and shells.

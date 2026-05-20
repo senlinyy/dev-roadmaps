@@ -160,7 +160,7 @@ $ kubectl label namespace orders gateway-access=public-api
 namespace/orders labeled
 ```
 
-That fix is an ownership decision, not just a command. The platform team should decide which namespaces may attach to a public listener.
+That fix is an ownership decision. The platform team should decide which namespaces may attach to a public listener.
 
 ## Gateway API and Ingress Tradeoffs
 
@@ -211,7 +211,7 @@ $ kubectl -n web run netcheck --rm -it --restart=Never --image=curlimages/curl -
   curl -i http://devpolaris-orders-api.orders/healthz
 ```
 
-The point is not to archive a large command transcript. The point is to leave enough proof that another engineer can see which network layers were healthy at the time of the check.
+Leave enough proof that another engineer can see which network layers were healthy at the time of the check.
 
 A Gateway API evidence packet should include both sides of the ownership boundary. The platform team needs to see listener status. The application team needs to see route status and backend references.
 

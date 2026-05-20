@@ -1,318 +1,195 @@
 ---
-id: article-devsecops-pipeline-security-securing-cicd-runners
 title: "Securing CI/CD Runners"
-description: "Learn how to isolate GitHub Actions runners, reduce token permissions, and diagnose unsafe runner behavior before a pipeline can damage production."
-overview: "A CI/CD runner is the machine that executes workflow steps. This article follows devpolaris-orders-api as the team separates trusted and untrusted work, locks down runner access, and reads runner evidence when something looks wrong."
-tags: ["runners", "isolation", "ci"]
+description: "Separate untrusted and trusted workflow work so the machine running CI cannot become a path to publishing or production."
+overview: "A CI/CD runner executes the commands in a workflow. This article explains runner trust, job permissions, caches, third-party actions, and the TanStack npm compromise as a real example of runner boundaries failing."
+tags: ["runners", "isolation", "ci", "github-actions"]
 order: 1
+id: article-devsecops-pipeline-security-securing-cicd-runners
 ---
 
 ## Table of Contents
 
-1. [The Machine That Executes Your Trust](#the-machine-that-executes-your-trust)
-2. [The Operating Model for devpolaris-orders-api](#the-operating-model-for-devpolaris-orders-api)
-3. [Trust Boundaries in the Workflow](#trust-boundaries-in-the-workflow)
-4. [Evidence Review During a Pull Request](#evidence-review-during-a-pull-request)
-5. [Diagnostic Path When the Check Fails](#diagnostic-path-when-the-check-fails)
-6. [Common Failure Modes](#common-failure-modes)
-7. [Engineering Tradeoffs](#engineering-tradeoffs)
-8. [Operational Checklist](#operational-checklist)
+1. [What Is a Runner?](#what-is-a-runner)
+2. [Trusted and Untrusted Jobs](#trusted-and-untrusted-jobs)
+3. [Runner State](#runner-state)
+4. [Job Permissions](#job-permissions)
+5. [Third-Party Actions](#third-party-actions)
+6. [Case Study: TanStack](#case-study-tanstack)
+7. [Runner Evidence](#runner-evidence)
+8. [Putting It All Together](#putting-it-all-together)
+9. [What's Next](#whats-next)
 
-## The Machine That Executes Your Trust
+## What Is a Runner?
 
-A pull request becomes real work when a runner starts executing commands for devpolaris-orders-api. The repository is a Node.js orders service with pull request checks, a main branch release workflow, and production deployment through GitHub Actions. The security control only matters when it changes that path in a way a reviewer can see.
+A runner is the machine that executes a CI/CD job. In GitHub Actions, it may be hosted by GitHub or hosted by your organization. In other systems, it may be called an agent, worker, executor, or build node. The name changes, but the job is the same: it checks out code, runs commands, uses tokens, writes logs, and sometimes publishes or deploys.
 
-The concept fits between source control and production. It does not replace code review, tests, or runtime monitoring. It gives the team evidence before a risky change gets merged, packaged, or deployed. In this article the same service appears in every example so the checks stay connected to real work instead of floating as separate rules.
+The runner is where trust becomes real. A YAML file may say `npm test`, but the runner is the machine that actually runs the command. If the command can read environment variables, write files, call the network, restore a cache, or use a token, the runner is the place where those things happen.
+
+For `devpolaris-orders-api`, the important question is:
+
+```text
+Which runner jobs can touch untrusted code, and which runner jobs can touch trusted credentials?
+```
+
+Those two abilities should stay separate. A test job can run pull request code if it has low power. A deploy job can use production identity if it only runs trusted code. Trouble starts when one runner job receives both untrusted code and trusted power.
+
+## Trusted and Untrusted Jobs
+
+Start by labeling jobs by trust level.
+
+| Job | Input | Power | Trust level |
+|-----|-------|-------|-------------|
+| `test-pr` | Pull request code | Read source, upload test result | Untrusted input, low power |
+| `build-main` | Protected `main` | Publish image | Trusted input, publish power |
+| `deploy-prod` | Published image digest | Cloud deploy role | Trusted input, production power |
+
+This table does not say the pull request author is malicious. It says the workflow should behave safely even when pull request code is hostile. That is the right baseline for public repositories, forks, and any repository where contributors do not all have the same production trust.
+
+Here is a safer split:
 
 ```yaml
-name: pipeline-security
+jobs:
+  test-pr:
+    if: github.event_name == 'pull_request'
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - run: npm ci
+      - run: npm test
 
-on:
-  pull_request:
-  push:
-    branches: [main]
+  publish:
+    if: github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - run: npm ci
+      - run: npm run build
+      - run: npm publish
+```
 
+The first job runs pull request code with read access. The second job publishes only from `main`. If an attacker opens a pull request that changes `package.json` scripts, the test job may run those scripts, but the publish job does not run from that untrusted branch.
+
+## Runner State
+
+Runner state is anything that survives long enough to affect another step or job. The most common forms are workspace files, dependency caches, build outputs, artifacts, Docker layers, and installed tools.
+
+```text
+runner state
+|-- workspace files
+|-- dependency cache
+|-- build artifact
+|-- environment variables
+|-- process memory
+`-- network access
+```
+
+Hosted runners usually start clean for each job, but the job can still restore caches and download artifacts created earlier. Self-hosted runners need more care because files, containers, credentials, or processes may survive between jobs if the runner is not isolated correctly.
+
+Caches deserve special attention. A cache is useful because it moves data from one run to another. That is also why it can become a trust boundary. If a pull request job can write a cache that a release job later restores, untrusted state may cross into a trusted job.
+
+Use cache keys that include the trust context. A cache written by pull request validation should not be accepted by a release job with publish or deploy authority.
+
+## Job Permissions
+
+The runner receives power through tokens and secrets. In GitHub Actions, the `GITHUB_TOKEN` permissions and any explicit secrets or OIDC tokens define what the job can do.
+
+```yaml
 permissions:
   contents: read
 
 jobs:
   test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version-file: .nvmrc
-          cache: npm
-      - run: npm ci
-      - run: npm test
-```
-
-## The Operating Model for devpolaris-orders-api
-
-The team treats the pipeline as a small production system. It has inputs, permissions, logs, artifacts, and failure states. A workflow file is reviewed like application code because it decides which commands run, which tokens are available, and which output becomes trusted.
-
-The useful mental model is a chain of custody. Source code enters from a branch, checks run on a runner, evidence is uploaded, and a deploy job changes an environment. If one link is too broad or too quiet, the team loses the ability to explain what happened later.
-
-```text
-Runner trust map
-unit-test: pull_request, ubuntu-latest, no secrets
-dependency-review: pull_request, ubuntu-latest, no secrets
-build-image: push to main, ubuntu-latest, package write only
-deploy-staging: main, runner group staging, staging OIDC
-deploy-production: approved environment, runner group production, production OIDC
-```
-
-## Trust Boundaries in the Workflow
-
-A trust boundary is the line between work the team has reviewed and work it has not reviewed yet. Pull request code is lower trust than code merged to main. A production deployment job is higher impact than a unit test job. Good pipeline security keeps those differences visible in YAML and repository settings.
-
-For this service, pull request jobs should not receive production secrets, write package releases, or run on production network runners. Release jobs can receive more access, but only after the earlier evidence exists. The boundary is not about distrusting developers. It is about limiting what a mistake or compromised dependency can do.
-
-```yaml
-jobs:
-  unit-test:
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
     permissions:
       contents: read
-  deploy-production:
-    if: github.ref == 'refs/heads/main'
-    runs-on: [self-hosted, production]
+
+  deploy:
     environment: production
     permissions:
       contents: read
       id-token: write
 ```
 
-## Evidence Review During a Pull Request
+The top-level `contents: read` sets a low default. The deploy job asks for `id-token: write` because it needs cloud identity. The production environment lets the platform apply approval and environment rules before deployment.
 
-A security check is only useful if humans know how to read its output. Reviewers should look for the field that proves the claim: a package path, an alert rule, a runner label, a token scope, an environment name, a checksum, or a digest. Without that field, the result becomes a red or green badge with little teaching value.
+Read permissions as part of the job design. If a test job suddenly needs `id-token: write`, ask why a test needs cloud identity. If a lint job needs package write permission, ask which step publishes. If a deploy job runs on pull request events, ask how untrusted code is kept away from production identity.
 
-The devpolaris-orders-api team keeps the review question concrete: does this change increase what untrusted code can touch, and does the evidence show the exact file, job, or artifact involved? That question works for most pipeline controls in this module.
+## Third-Party Actions
+
+A third-party action is code you run inside your workflow. It can read files, environment variables, and tokens available to the job. Treat it like a dependency that executes in CI.
+
+```yaml
+steps:
+  - uses: vendor/action-name@v2
+```
+
+The `@v2` part is a mutable reference unless the owner keeps it fixed. A safer high-security pattern is to pin important third-party actions to a full commit SHA and review updates intentionally.
+
+```yaml
+steps:
+  - uses: vendor/action-name@8f2a91d4c0b8d1f4a2b6c3d4e5f60718293abcde
+```
+
+Pinning is not free. It creates update work. The benefit is that the action content cannot change after review just because a tag moved. For workflows that can publish, deploy, or read sensitive secrets, that tradeoff is usually worth the maintenance.
+
+## Case Study: TanStack
+
+TanStack's May 2026 npm supply-chain postmortem is a clear runner-boundary case. The attack path involved a `pull_request_target` workflow, cache poisoning across fork and base repository trust boundaries, and extraction of an OIDC token from the runner process. The result was malicious versions published to npm across multiple TanStack packages.
+
+The useful runner lesson is the movement of trust:
 
 ```text
-2026-05-08T09:22:17Z job=unit-test event=pull_request runner=self-hosted-prod-02
-2026-05-08T09:22:19Z npm ci
-2026-05-08T09:22:23Z postinstall: node scripts/collect-env.js
-2026-05-08T09:22:24Z job failed with exit code 6
+untrusted pull request
+  -> workflow with base repository context
+  -> cache state crossing boundary
+  -> trusted runner context
+  -> publish-capable identity
+  -> malicious npm versions
 ```
 
-## Diagnostic Path When the Check Fails
+The compromised publish did not require a long-lived npm token sitting in a repository secret. Trusted publishing through OIDC can still be abused if the trusted runner context is reachable by attacker-controlled code or state. OIDC reduces static secret risk, but the runner boundary still has to be correct.
 
-Start diagnosis with the smallest artifact that names the failure. In GitHub Actions that is often the failed job, step, exit code, and first meaningful log line. After that, move to the source file or repository setting that controls the behavior. Reading every log line first wastes time because pipeline failures usually point to one missing permission, one changed path, or one blocked gate.
+The hardening direction follows the same path in reverse: remove unsafe `pull_request_target` patterns, separate untrusted and trusted jobs, limit cache sharing across trust levels, pin sensitive third-party actions, add ownership around workflow changes, and watch package publishes.
 
-The fix direction should change the system, not only silence the symptom. If a scanner reports a real issue, update the dependency or code path. If a deployment waits for approval, review the environment rule. If a checksum fails, stop the deployment and rebuild from trusted source.
+## Runner Evidence
 
-```bash
-$ gh run view 8459021331 --repo devpolaris/orders-api --json event,headBranch,workflowName,jobs
-{
-  "event": "pull_request",
-  "headBranch": "feature/cart-refactor",
-  "workflowName": "pipeline-security",
-  "jobs": [{"name": "unit-test", "labels": ["self-hosted", "production"]}]
-}
-```
-
-## Common Failure Modes
-
-Failure modes are patterns that repeat across teams. A job can run with a broader token than it needs. A pull request can trigger work on a trusted runner. A scanner can fail closed and block a merge, or fail open because nobody made it required. An artifact can be rebuilt in deploy instead of verified from build output.
-
-The right response is specific to the failure. Broad permissions need a narrower `permissions:` block. Missing evidence needs a workflow change. Noisy alerts need triage rules, not deletion. A bypass needs an owner and a record because future reviewers need to know why the normal path was not used.
-
-| Failure mode | What it means | Fix direction |
-| :--- | :--- | :--- |
-| Pull request on production runner | Untrusted code reached trusted network | Move to hosted runner |
-| Test job has `id-token: write` | Test can request cloud identity | Grant OIDC only to deploy |
-| Docker socket on shared runner | Job may control host containers | Isolate or recreate runner |
-
-## Engineering Tradeoffs
-
-Every control has a cost. Hosted runners reduce operational burden, but may not reach private networks. Self-hosted runners can deploy inside a network, but they need isolation and cleanup. Strict scan thresholds catch risk earlier, but they can slow urgent fixes. Protected environments create a useful pause, but they require reviewers who understand the evidence.
-
-Good teams make those tradeoffs explicit. For devpolaris-orders-api, the default is strict on production paths and practical on development paths. Pull requests get fast checks with no secrets. Main branch builds create durable evidence. Production deployment waits for a reviewer only after staging has passed.
+When reviewing a runner job, capture the fields that explain its trust level.
 
 ```text
-Tradeoff record
-Hosted runner: clean by default, less private network access
-Self-hosted runner: network access, more cleanup and patching
-Ephemeral runner: best isolation, more automation work
+Workflow: release.yml
+Job: publish
+Event: push
+Ref: refs/heads/main
+Runner: github-hosted ubuntu-latest
+Permissions: contents:read, id-token:write
+Secrets: none
+Cache restore: npm-main-${{ hashFiles('package-lock.json') }}
+Publishes: @devpolaris/orders-api
 ```
 
-## Operational Checklist
+`Event` and `Ref` tell you whether the source is trusted. `Runner` tells you where the commands ran. `Permissions` and `Secrets` tell you what authority was present. `Cache restore` tells you whether state crossed from earlier work. `Publishes` tells you the sensitive output.
 
-The checklist at the end of a pipeline-security article should not be a substitute for thought. It is a memory aid for review and incident response. When the pipeline changes, each item asks whether the trusted path is still clear.
+This evidence is also useful after an incident. If a third-party action is compromised, you can search which jobs used it and which permissions those jobs had.
 
-Use the checklist while reading workflow diffs. If the answer is not obvious from YAML, repository settings, or a log artifact, add the missing evidence before production depends on it.
+## Putting It All Together
 
-- Pull request jobs use hosted runners.
-- Self-hosted runners are grouped by environment.
-- Production jobs require environment approval.
-- Job permissions are explicit.
+A CI/CD runner is a machine that turns workflow text into real action. It can run untrusted code safely only when the job has low power and clean boundaries. It can publish or deploy safely only when the job receives trusted input and narrow identity.
 
-- Review note: runner isolation must match the trust level of the code being executed.
+The TanStack case shows why this distinction matters. A workflow boundary, cache boundary, and runner identity boundary combined into one attack path. Each one looked like implementation detail until the path was visible.
 
-- Review note: runner isolation must match the trust level of the code being executed.
+For `devpolaris-orders-api`, runner security means separate jobs for untrusted validation and trusted publishing, low default token permissions, careful cache scope, reviewed third-party actions, and evidence that names the event, ref, runner, permissions, cache, and publish target.
 
-- Review note: runner isolation must match the trust level of the code being executed.
+## What's Next
 
-- Review note: runner isolation must match the trust level of the code being executed.
-
-- Review note: runner isolation must match the trust level of the code being executed.
-
-- Review note: runner isolation must match the trust level of the code being executed.
-
-- Review note: runner isolation must match the trust level of the code being executed.
-
-- Review note: runner isolation must match the trust level of the code being executed.
-
-- Review note: runner isolation must match the trust level of the code being executed.
-
-- Review note: runner isolation must match the trust level of the code being executed.
-
-- Review note: runner isolation must match the trust level of the code being executed.
-
-- Review note: runner isolation must match the trust level of the code being executed.
-
-- Review note: runner isolation must match the trust level of the code being executed.
-
-- Review note: runner isolation must match the trust level of the code being executed.
-
-- Review note: runner isolation must match the trust level of the code being executed.
-
-- Review note: runner isolation must match the trust level of the code being executed.
-
-- Review note: runner isolation must match the trust level of the code being executed.
-
-- Review note: runner isolation must match the trust level of the code being executed.
-
-- Review note: runner isolation must match the trust level of the code being executed.
-
-- Review note: runner isolation must match the trust level of the code being executed.
-
-- Review note: runner isolation must match the trust level of the code being executed.
-
-- Review note: runner isolation must match the trust level of the code being executed.
-
-- Review note: runner isolation must match the trust level of the code being executed.
-
-- Review note: runner isolation must match the trust level of the code being executed.
-
-- Review note: runner isolation must match the trust level of the code being executed.
-
-- Review note: runner isolation must match the trust level of the code being executed.
-
-- Review note: runner isolation must match the trust level of the code being executed.
-
-- Review note: runner isolation must match the trust level of the code being executed.
-
-- Review note: runner isolation must match the trust level of the code being executed.
-
-- Review note: runner isolation must match the trust level of the code being executed.
-
-- Review note: runner isolation must match the trust level of the code being executed.
-
-- Review note: runner isolation must match the trust level of the code being executed.
-
-- Review note: runner isolation must match the trust level of the code being executed.
-
-- Review note: runner isolation must match the trust level of the code being executed.
-
-- Review note: runner isolation must match the trust level of the code being executed.
-
-- Review note: runner isolation must match the trust level of the code being executed.
-
-- Review note: runner isolation must match the trust level of the code being executed.
-
-- Review note: runner isolation must match the trust level of the code being executed.
-
-- Review note: runner isolation must match the trust level of the code being executed.
-
-- Review note: runner isolation must match the trust level of the code being executed.
-
-- Review note: runner isolation must match the trust level of the code being executed.
-
-- Review note: runner isolation must match the trust level of the code being executed.
-
-- Review note: runner isolation must match the trust level of the code being executed.
-
-- Review note: runner isolation must match the trust level of the code being executed.
-
-- Review note: runner isolation must match the trust level of the code being executed.
-
-- Review note: runner isolation must match the trust level of the code being executed.
-
-- Review note: runner isolation must match the trust level of the code being executed.
-
-- Review note: runner isolation must match the trust level of the code being executed.
-
-- Review note: runner isolation must match the trust level of the code being executed.
-
-- Review note: runner isolation must match the trust level of the code being executed.
-
-- Review note: runner isolation must match the trust level of the code being executed.
-
-- Review note: runner isolation must match the trust level of the code being executed.
-
-- Review note: runner isolation must match the trust level of the code being executed.
-
-- Review note: runner isolation must match the trust level of the code being executed.
-
-- Review note: runner isolation must match the trust level of the code being executed.
-
-- Review note: runner isolation must match the trust level of the code being executed.
-
-- Review note: runner isolation must match the trust level of the code being executed.
-
-- Review note: runner isolation must match the trust level of the code being executed.
-
-- Review note: runner isolation must match the trust level of the code being executed.
-
-- Review note: runner isolation must match the trust level of the code being executed.
-
-- Review note: runner isolation must match the trust level of the code being executed.
-
-- Review note: runner isolation must match the trust level of the code being executed.
-
-- Review note: runner isolation must match the trust level of the code being executed.
-
-- Review note: runner isolation must match the trust level of the code being executed.
-
-- Review note: runner isolation must match the trust level of the code being executed.
-
-- Review note: runner isolation must match the trust level of the code being executed.
-
-- Review note: runner isolation must match the trust level of the code being executed.
-
-- Review note: runner isolation must match the trust level of the code being executed.
-
-- Review note: runner isolation must match the trust level of the code being executed.
-
-- Review note: runner isolation must match the trust level of the code being executed.
-
-- Review note: runner isolation must match the trust level of the code being executed.
-
-- Review note: runner isolation must match the trust level of the code being executed.
-
-- Review note: runner isolation must match the trust level of the code being executed.
-
-- Review note: runner isolation must match the trust level of the code being executed.
-
-- Review note: runner isolation must match the trust level of the code being executed.
-
-- Review note: runner isolation must match the trust level of the code being executed.
-
-- Review note: runner isolation must match the trust level of the code being executed.
-
-- Review note: runner isolation must match the trust level of the code being executed.
-
-- Review note: runner isolation must match the trust level of the code being executed.
+Once runner boundaries are clear, the next risk is the code you did not write. Dependency scanning explains how packages enter the delivery path and how to decide whether a finding needs a patch, replacement, or exception.
 
 ---
 
 **References**
 
-- [GitHub Actions security hardening](https://docs.github.com/en/actions/security-guides/security-hardening-for-github-actions) - Official guidance on workflow permissions, untrusted input, third party actions, and runner hardening.
-- [GitHub Actions self-hosted runners](https://docs.github.com/en/actions/hosting-your-own-runners) - Official runner operations documentation for labels, groups, and self-hosted runner behavior.
-- [OpenSSF Scorecard](https://github.com/ossf/scorecard) - Canonical project for repository supply chain checks that help catch unsafe workflow patterns.
-- [SLSA Threats](https://slsa.dev/spec/latest/threats) - Explains build pipeline threats such as compromised builders and tampered source inputs.
+- [TanStack npm supply-chain compromise postmortem](https://tanstack.com/blog/npm-supply-chain-compromise-postmortem) - TanStack documents the attack chain and affected package publishes.
+- [Hardening TanStack after the npm compromise](https://tanstack.com/blog/incident-followup) - TanStack describes follow-up hardening, including workflow and action changes.
+- [GitHub Actions secure use reference](https://docs.github.com/en/actions/how-tos/security-for-github-actions/security-guides/using-githubs-security-features-to-secure-your-use-of-github-actions) - GitHub documents safer workflow patterns, token handling, and third-party action risk.
+- [GitHub Actions workflow syntax permissions](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#permissions) - GitHub documents job and workflow token permissions.

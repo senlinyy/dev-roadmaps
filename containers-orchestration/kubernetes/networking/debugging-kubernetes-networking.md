@@ -24,7 +24,7 @@ id: article-containers-orchestration-kubernetes-networking-debugging-kubernetes-
 
 Kubernetes networking has several moving parts, so random debugging wastes time. A client request may pass through DNS, a Service, EndpointSlices, kube-proxy or a CNI data plane, NetworkPolicies, an Ingress or Gateway controller, and finally the application process. A failure message usually tells you which layer to inspect next, but only if you separate the layers.
 
-The running example is `devpolaris-web` calling `devpolaris-orders-api`. The symptom is simple: order pages show an error because the web app cannot reach the orders API. The goal is not to memorize every command. The goal is to build a reliable path of evidence.
+The running example is `devpolaris-web` calling `devpolaris-orders-api`. The symptom is simple: order pages show an error because the web app cannot reach the orders API. The goal is to build a reliable path of evidence.
 
 ```mermaid
 flowchart TD
@@ -233,7 +233,7 @@ $ kubectl -n web run netcheck --rm -it --restart=Never --image=curlimages/curl -
   curl -i http://devpolaris-orders-api.orders/healthz
 ```
 
-The point is not to archive a large command transcript. The point is to leave enough proof that another engineer can see which network layers were healthy at the time of the check.
+Leave enough proof that another engineer can see which network layers were healthy at the time of the check.
 
 Here is the same debug method as a compact incident note. Notice that each line records a fact and the next layer it points to.
 

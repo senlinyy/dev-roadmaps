@@ -144,7 +144,7 @@ There are two caveats worth knowing before you rely on these triggers. Scheduled
 
 ## The Event Payload and Contexts
 
-When an event fires, GitHub does not just trigger the workflow blindly. It exposes the event payload, which is the JSON object describing what happened. The payload is available through `github.event`, and the path to the raw payload file is available through `github.event_path`.
+When an event fires, GitHub exposes the event payload, which is the JSON object describing what happened. The payload is available through `github.event`, and the path to the raw payload file is available through `github.event_path`.
 
 You access this data using context syntax, which looks like this: `${{ context.property }}`. Contexts are not the same thing as environment variables. Contexts are evaluated by GitHub Actions before or during the run depending on where they appear. Environment variables like `$GITHUB_REF` exist inside the runner process once the job is already executing.
 

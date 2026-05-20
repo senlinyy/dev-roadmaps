@@ -278,7 +278,7 @@ $ umask 077
 # New directory:  777 - 077 = 700  (rwx------)
 ```
 
-Note that the subtraction is not arithmetic subtraction but bitwise. The umask 022 removes write permission for group and others. You will not commonly see umask values that would "subtract" a permission bit that was never in the default (like setting umask to 123), because the math works on bits, not decimal digits.
+Note that the subtraction is bitwise rather than ordinary arithmetic. The umask 022 removes write permission for group and others. You will rarely see umask values that would "subtract" a permission bit that was never in the default (like setting umask to 123), because the math works on bits, not decimal digits.
 
 The umask is typically set in `/etc/profile`, `/etc/login.defs`, or your shell's rc file. For service accounts, the umask is often configured in the systemd unit file (the `.service` configuration file that tells systemd how to run a daemon) using the `UMask=` directive. Setting an appropriate umask is an easy way to ensure that files created by automated processes are not accidentally world-readable.
 
@@ -382,7 +382,7 @@ One thing worth knowing when auditing systems: the password hash in `/etc/shadow
 
 Root is the superuser, UID 0, and root can do anything on the system with no permission checks. Logging in as root directly is dangerous because every command runs with full privileges, and a single typo can destroy the system. The `sudo` command lets normal users run specific commands with elevated privileges, with full logging.
 
-It is worth pausing on what makes root "root" in the first place, because the answer is more mechanical than people often assume. The kernel does not have a list of "root-equivalent" usernames. It does not check whether the running process is owned by a user named "root". It checks one specific number: is the effective UID of this process equal to 0? If yes, skip every permission check. If no, run the normal checks. That is it. The username "root" is just a convention enforced by `/etc/passwd`, which maps the name to UID 0. If you renamed root to "admin" in `/etc/passwd`, the account would still be all-powerful because the kernel only cares about the number. Conversely, if you created a second user with UID 0 (some systems used to call it `toor`), that user would also bypass every permission check. This is also why "remove root access" really means "remove UID 0 access", and why audits look at every account's UID, not just the names.
+It is worth pausing on what makes root "root" in the first place, because the answer is more mechanical than people often assume. The kernel has no list of "root-equivalent" usernames and ignores whether the running process is owned by a user named "root". It checks one specific number: is the effective UID of this process equal to 0? If yes, skip every permission check. If no, run the normal checks. That is it. The username "root" is just a convention enforced by `/etc/passwd`, which maps the name to UID 0. If you renamed root to "admin" in `/etc/passwd`, the account would still be all-powerful because the kernel only cares about the number. Conversely, if you created a second user with UID 0 (some systems used to call it `toor`), that user would also bypass every permission check. This is also why "remove root access" really means "remove UID 0 access", and why audits look at every account's UID alongside its name.
 
 ```mermaid
 graph TD

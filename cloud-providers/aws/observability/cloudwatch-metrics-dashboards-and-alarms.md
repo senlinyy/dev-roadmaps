@@ -154,7 +154,7 @@ A good dashboard tells a story from outside to inside:
 | Async work | Are queues, events, or workflows behind? |
 | Alarms and notes | What already thinks this is urgent? |
 
-Dashboards are not just wall art. During an incident, a dashboard should help the team decide the next check. During normal operation, it should show whether the service is inside expected behavior.
+Dashboards are decision surfaces. During an incident, a dashboard should help the team decide the next check. During normal operation, it should show whether the service is inside expected behavior.
 
 The gotcha is dashboard sprawl. A dashboard with forty unrelated graphs creates work. A dashboard that starts with user impact and moves toward dependencies creates context.
 

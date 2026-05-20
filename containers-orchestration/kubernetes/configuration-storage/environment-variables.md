@@ -103,7 +103,7 @@ env:
     value: "http://$(ORDERS_HOST):8080"
 ```
 
-Inside the container, `ORDERS_BASE_URL` becomes `http://orders-api.devpolaris-staging.svc.cluster.local:8080`. This is not shell expansion. It happens while Kubernetes builds the container environment.
+Inside the container, `ORDERS_BASE_URL` becomes `http://orders-api.devpolaris-staging.svc.cluster.local:8080`. Kubernetes performs this expansion while it builds the container environment.
 
 A broken order leaves the reference unresolved in many cases, which can produce a confusing application error later.
 
@@ -257,7 +257,7 @@ k8s/prod/orders-api-configmap.yaml:  CATALOG_API_URL: "http://catalog-api.devpol
 k8s/staging/orders-api-configmap.yaml:  CATALOG_API_URL: "http://catalog-api.devpolaris-staging.svc.cluster.local:8080"
 ```
 
-The fix is not in the Service or DNS layer. The wrong string was injected. Correct the production ConfigMap, roll the Deployment, and add a review check that environment-specific hostnames match the target namespace.
+The wrong string was injected through configuration. Correct the production ConfigMap, roll the Deployment, and add a review check that environment-specific hostnames match the target namespace.
 
 This is why environment variables should be reviewed as a contract. They are strings, but those strings decide which systems your application trusts and calls.
 

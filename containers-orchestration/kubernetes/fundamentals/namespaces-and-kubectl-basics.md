@@ -1,7 +1,7 @@
 ---
 title: "Namespaces and kubectl Basics"
-description: "Use namespaces and kubectl to inspect Kubernetes resources, avoid context mistakes, and diagnose common beginner failures."
-overview: "Namespaces give Kubernetes objects a scope, and kubectl is the main command-line client for asking the cluster what exists, what changed, and why something is stuck."
+description: "Use namespaces and kubectl to inspect Kubernetes resources, avoid context mistakes, and read the first useful evidence from the cluster."
+overview: "Namespaces scope many Kubernetes objects, and kubectl is the main tool for asking the API server what exists, what changed, and why something is stuck."
 tags: ["kubernetes", "namespaces", "kubectl", "contexts"]
 order: 5
 id: article-containers-orchestration-kubernetes-fundamentals-namespaces-and-kubectl-basics
@@ -9,180 +9,196 @@ id: article-containers-orchestration-kubernetes-fundamentals-namespaces-and-kube
 
 ## Table of Contents
 
-1. [The First Safety Boundary](#the-first-safety-boundary)
-2. [What a Namespace Does](#what-a-namespace-does)
-3. [kubectl Talks to the API Server](#kubectl-talks-to-the-api-server)
-4. [Contexts Decide Which Cluster You Touch](#contexts-decide-which-cluster-you-touch)
-5. [Listing and Describing Objects](#listing-and-describing-objects)
-6. [Working in the Right Namespace](#working-in-the-right-namespace)
-7. [Logs, Events, and JSON Output](#logs-events-and-json-output)
-8. [Failure Mode: The Object Exists, but Not Where You Looked](#failure-mode-the-object-exists-but-not-where-you-looked)
-9. [A Small Daily kubectl Routine](#a-small-daily-kubectl-routine)
+1. [Before You Run a Command](#before-you-run-a-command)
+2. [Namespaces](#namespaces)
+3. [kubectl](#kubectl)
+4. [Contexts](#contexts)
+5. [Reading Objects](#reading-objects)
+6. [Namespaced and Cluster-Scoped Resources](#namespaced-and-cluster-scoped-resources)
+7. [Logs and Events](#logs-and-events)
+8. [Structured Output](#structured-output)
+9. [A Daily Inspection Routine](#a-daily-inspection-routine)
+10. [Putting It All Together](#putting-it-all-together)
+11. [What's Next](#whats-next)
 
-## The First Safety Boundary
+## Before You Run a Command
 
-Kubernetes gives a team one API for many environments, services, and system components. That is useful, but it also means a beginner needs a strong habit for checking where a command is going. The same `kubectl get pods` command can inspect a local learning cluster, staging, or production depending on your current context and namespace.
+The previous articles introduced the Kubernetes API and the reconciliation loop. That model is useful only if you know which API server you are talking to and which namespace your command is reading.
 
-For `devpolaris-orders-api`, the team might use namespaces named `orders-dev`, `orders-staging`, and `orders-prod`. A namespace is a scope for many Kubernetes object names. The API can have a Deployment named `devpolaris-orders-api` in each namespace without those names colliding.
+The same command can inspect a local learning cluster, staging, or production:
 
-The first safety rule is simple: before changing anything, know the cluster and namespace your command will use. This is similar to checking `AWS_PROFILE` and region before running a cloud command, or checking the Git branch before pushing.
+```bash
+$ kubectl get pods
+```
+
+That command looks harmless. It depends on hidden local configuration. Your current context decides the cluster and user. Your current namespace decides the default scope for many objects. If those values point at production, the command reads production. If you run a write command, it changes production.
+
+The first habit is simple: check the target before changing anything.
 
 ```bash
 $ kubectl config current-context
 devpolaris-prod
 
 $ kubectl config view --minify --output 'jsonpath={..namespace}{"\n"}'
-orders-prod
+devpolaris-prod
 ```
 
 The first command prints the current context. The second prints the default namespace for that context, if one is set. If the namespace output is blank, `kubectl` uses `default` unless you pass `-n`.
 
-## What a Namespace Does
+This is the Kubernetes version of checking the Git branch before pushing or checking the cloud profile before running an infrastructure command. It is basic, and it prevents expensive mistakes.
 
-A namespace divides namespaced resources inside one cluster. Deployments, Pods, Services, ConfigMaps, and Secrets are usually namespaced. Nodes and StorageClasses are cluster-scoped, which means they are not inside one namespace.
+## Namespaces
 
-Namespaces are not the same as separate clusters. Workloads in different namespaces can still share the same physical nodes, cluster DNS system, and control plane. Whether they can talk to each other depends on networking policy and service names, not the namespace alone. Whether people can access them depends on RBAC, which is role-based access control.
+A namespace gives a scope to many Kubernetes object names. Deployments, Pods, Services, ConfigMaps, and Secrets usually live inside a namespace. A cluster can have a Deployment named `devpolaris-api` in `devpolaris-staging` and another Deployment with the same name in `devpolaris-prod`.
+
+```bash
+$ kubectl get deployment devpolaris-api -n devpolaris-staging
+NAME             READY   UP-TO-DATE   AVAILABLE   AGE
+devpolaris-api   2/2     2            2           12d
+
+$ kubectl get deployment devpolaris-api -n devpolaris-prod
+NAME             READY   UP-TO-DATE   AVAILABLE   AGE
+devpolaris-api   3/3     3            3           18d
+```
+
+The same object name can appear in both environments because the namespace is part of the object's identity. That is useful for consistent naming. It also makes namespace mistakes easy.
+
+Namespaces are a scope inside one cluster. They are not separate clusters. Workloads in different namespaces can still share nodes, the same control plane, the same cluster DNS system, and often the same network. Permissions and network policies decide many of the practical boundaries.
+
+You can list namespaces:
 
 ```bash
 $ kubectl get namespaces
-NAME              STATUS   AGE
-default           Active   31d
-kube-node-lease   Active   31d
-kube-public       Active   31d
-kube-system       Active   31d
-orders-dev        Active   18d
-orders-staging    Active   18d
-orders-prod       Active   18d
+NAME                  STATUS   AGE
+default               Active   31d
+kube-node-lease       Active   31d
+kube-public           Active   31d
+kube-system           Active   31d
+devpolaris-staging    Active   18d
+devpolaris-prod       Active   18d
 ```
 
-Kubernetes starts with system namespaces such as `kube-system` and `kube-node-lease`. Application teams usually create their own namespaces. For production workloads, using the `default` namespace makes it harder to see ownership and harder to apply clean permissions later.
+Kubernetes creates several system namespaces. Application teams usually create their own. For production workloads, putting everything in `default` makes ownership and access control harder to see later.
 
-The name scope is easy to demonstrate:
+## kubectl
+
+`kubectl` is the main command-line client for Kubernetes. It reads your kubeconfig, chooses a context, authenticates to the API server, sends API requests, and prints the response.
+
+For normal operations, `kubectl` talks to the API server. It does not SSH to worker nodes to list Pods. That matters because the API server is the shared source for objects and status.
+
+```mermaid
+flowchart LR
+    A["kubectl"] --> B["kubeconfig"]
+    B --> C["API server"]
+    C --> D["Kubernetes objects"]
+    D --> C
+    C --> A
+```
+
+Most early Kubernetes work uses a small set of verbs:
+
+| Command shape | Purpose |
+| --- | --- |
+| `kubectl get` | List objects or show compact status |
+| `kubectl describe` | Show a human-readable detail view and events |
+| `kubectl logs` | Read container logs through the API |
+| `kubectl apply` | Create or update objects from manifests |
+| `kubectl delete` | Delete objects |
+| `kubectl rollout` | Inspect or control Deployment rollouts |
+
+You do not need to memorize every flag. Learn the shape of the request: verb, resource type, resource name, context, namespace, and output format.
 
 ```bash
-$ kubectl get deployment devpolaris-orders-api -n orders-staging
-NAME                    READY   UP-TO-DATE   AVAILABLE   AGE
-devpolaris-orders-api   2/2     2            2           12d
-
-$ kubectl get deployment devpolaris-orders-api -n orders-prod
-NAME                    READY   UP-TO-DATE   AVAILABLE   AGE
-devpolaris-orders-api   3/3     3            3           18d
+$ kubectl get deployment devpolaris-api --context devpolaris-prod -n devpolaris-prod
+NAME             READY   UP-TO-DATE   AVAILABLE   AGE
+devpolaris-api   3/3     3            3           18d
 ```
 
-The same Deployment name can exist in both namespaces. That is useful for consistent environment naming, but it also makes namespace mistakes easy.
+This command is longer than `kubectl get deploy devpolaris-api`, but it records the cluster and namespace in the command line. That clarity is valuable in runbooks and incident notes.
 
-## kubectl Talks to the API Server
+## Contexts
 
-`kubectl` is the main command-line tool for Kubernetes. It does not talk directly to worker nodes for normal operations. It reads your kubeconfig, chooses a context, authenticates to the API server, sends HTTP requests, and prints the API response in a human-friendly form.
-
-The kubeconfig file usually lives at `$HOME/.kube/config`. It can contain several clusters, users, and contexts. A context combines a cluster, a user, and often a namespace. That combination decides where commands go.
+A kubeconfig file can contain multiple clusters, users, and contexts. A context combines a cluster, a user, and often a namespace. The current context is the default target for `kubectl`.
 
 ```bash
 $ kubectl config get-contexts
-CURRENT   NAME                 CLUSTER              AUTHINFO              NAMESPACE
-*         devpolaris-prod      prod-eu-west-2       senlin-prod          orders-prod
-          devpolaris-staging   staging-eu-west-2    senlin-staging       orders-staging
-          kind-devpolaris      kind-devpolaris      kind-devpolaris      default
+CURRENT   NAME                 CLUSTER              AUTHINFO                NAMESPACE
+*         devpolaris-prod      prod-eu-west-2       devpolaris-prod-user    devpolaris-prod
+          devpolaris-staging   staging-eu-west-2    devpolaris-stage-user   devpolaris-staging
+          kind-devpolaris      kind-devpolaris      kind-devpolaris         default
 ```
 
-The star marks the current context. If the star points at production, every command without an explicit `--context` goes to production. This is why many teams make context names loud and specific.
+The star marks the current context. If the star points at production, commands without `--context` go to production.
 
-You can switch context deliberately:
+You can switch context:
 
 ```bash
 $ kubectl config use-context devpolaris-staging
 Switched to context "devpolaris-staging".
 ```
 
-For read-only inspection, switching context is normal. For changes, many operators prefer passing `--context` and `-n` explicitly in scripts so the command records its target in the line itself.
-
-## Contexts Decide Which Cluster You Touch
-
-A context mistake can be more dangerous than a YAML mistake. If you apply the correct staging manifest to production, Kubernetes may accept it and begin reconciling production toward staging settings. Namespaces reduce naming collisions, but they do not protect you from using the wrong context.
-
-Before applying a change to `devpolaris-orders-api`, check both context and namespace:
+Switching is convenient during a focused work session. Explicit targeting is safer in shared commands:
 
 ```bash
-$ kubectl config current-context
-devpolaris-staging
-
-$ kubectl config view --minify --output 'jsonpath={..namespace}{"\n"}'
-orders-staging
+$ kubectl get pods --context devpolaris-staging -n devpolaris-staging
 ```
 
-If your context has no namespace, pass it:
+Both habits are useful. The key is to avoid guessing. Before a write command such as `apply`, `delete`, `scale`, or `rollout undo`, know the context and namespace.
+
+## Reading Objects
+
+`get` gives a compact view. Start with the object closest to the request. For `devpolaris-api`, that is usually the Deployment:
 
 ```bash
-$ kubectl get deployment devpolaris-orders-api --context devpolaris-staging -n orders-staging
-NAME                    READY   UP-TO-DATE   AVAILABLE   AGE
-devpolaris-orders-api   2/2     2            2           12d
+$ kubectl get deployment devpolaris-api -n devpolaris-prod
+NAME             READY   UP-TO-DATE   AVAILABLE   AGE
+devpolaris-api   3/3     3            3           18d
 ```
 
-That command is longer, but it is clear. In production runbooks, clear targeting is worth the extra characters. The person reviewing an incident note can see exactly which cluster and namespace were inspected.
-
-## Listing and Describing Objects
-
-Two `kubectl` verbs carry a lot of early Kubernetes work: `get` and `describe`. `get` lists objects and compact status. `describe` shows a more detailed human-readable view, including events.
-
-For `devpolaris-orders-api`, start with the Deployment:
+Then list the Pods selected by the app label:
 
 ```bash
-$ kubectl get deployment devpolaris-orders-api -n orders-prod
-NAME                    READY   UP-TO-DATE   AVAILABLE   AGE
-devpolaris-orders-api   3/3     3            3           18d
+$ kubectl get pods -n devpolaris-prod -l app=devpolaris-api
+NAME                              READY   STATUS    RESTARTS   AGE
+devpolaris-api-6d8f7d9f8c-2k9sl   1/1     Running   0          2h
+devpolaris-api-6d8f7d9f8c-h6p8d   1/1     Running   0          2h
+devpolaris-api-6d8f7d9f8c-xr4mf   1/1     Running   0          2h
 ```
 
-Then list related Pods:
+Use `describe` when the compact row is not enough:
 
 ```bash
-$ kubectl get pods -n orders-prod -l app=devpolaris-orders-api
-NAME                                     READY   STATUS    RESTARTS   AGE
-devpolaris-orders-api-6d8f7d9f8c-2k9sl   1/1     Running   0          2h
-devpolaris-orders-api-6d8f7d9f8c-h6p8d   1/1     Running   0          2h
-devpolaris-orders-api-6d8f7d9f8c-xr4mf   1/1     Running   0          2h
-```
-
-Use `describe` when status is not enough:
-
-```bash
-$ kubectl describe deployment devpolaris-orders-api -n orders-prod
-Name:                   devpolaris-orders-api
-Namespace:              orders-prod
+$ kubectl describe deployment devpolaris-api -n devpolaris-prod
+Name:                   devpolaris-api
+Namespace:              devpolaris-prod
 Replicas:               3 desired | 3 updated | 3 total | 3 available
 StrategyType:           RollingUpdate
 Events:
   Type    Reason             From                   Message
   ----    ------             ----                   -------
-  Normal  ScalingReplicaSet  deployment-controller  Scaled up replica set devpolaris-orders-api-6d8f7d9f8c to 3
+  Normal  ScalingReplicaSet  deployment-controller  Scaled up replica set devpolaris-api-6d8f7d9f8c to 3
 ```
 
-`describe` output is not stable enough for automation, but it is friendly for human diagnosis. Scripts should prefer structured output such as JSON.
+`describe` output is meant for humans. It is useful during investigation because it collects status, related objects, and events in one place. Scripts should use structured output, which appears later in this article.
 
-## Working in the Right Namespace
+## Namespaced and Cluster-Scoped Resources
 
-You can pass `-n` or `--namespace` to target a namespace for one command. This is usually the safest habit while learning because the command carries its scope with it.
+Many Kubernetes resources are namespaced. Some are cluster-scoped. A namespaced resource belongs inside a namespace. A cluster-scoped resource belongs to the whole cluster.
 
-```bash
-$ kubectl get svc -n orders-prod
-NAME                    TYPE        CLUSTER-IP      EXTERNAL-IP   PORT(S)   AGE
-devpolaris-orders-api   ClusterIP   10.96.184.37    <none>        80/TCP    18d
-```
+| Resource | Scope |
+| --- | --- |
+| Pod | Namespaced |
+| Deployment | Namespaced |
+| Service | Namespaced |
+| ConfigMap | Namespaced |
+| Secret | Namespaced |
+| Namespace | Cluster-scoped |
+| Node | Cluster-scoped |
+| StorageClass | Cluster-scoped |
 
-You can also set the default namespace on the current context:
-
-```bash
-$ kubectl config set-context --current --namespace=orders-prod
-Context "devpolaris-prod" modified.
-```
-
-That is convenient for a focused work session. The tradeoff is hidden state. A command copied from your terminal may behave differently on a teammate's machine if their context uses a different namespace. In shared documentation and incident notes, include `-n`.
-
-Some resources are not namespaced. Nodes are the clearest beginner example:
+This difference explains a common beginner confusion. Passing `-n devpolaris-prod` makes sense for Pods. It does not make sense for Nodes.
 
 ```bash
-$ kubectl get nodes -n orders-prod
-error: a resource cannot be retrieved by name across all namespaces
-
 $ kubectl get nodes
 NAME        STATUS   ROLES    AGE   VERSION
 worker-01   Ready    <none>   31d   v1.34.2
@@ -190,9 +206,7 @@ worker-02   Ready    <none>   31d   v1.34.2
 worker-03   Ready    <none>   31d   v1.34.2
 ```
 
-If a namespace flag seems to make no sense for a resource, check whether that resource is cluster-scoped.
-
-`kubectl api-resources` can answer that directly:
+You can ask Kubernetes which resources are namespaced:
 
 ```bash
 $ kubectl api-resources --namespaced=true | head
@@ -207,112 +221,128 @@ nodes         no           v1           false        Node
 namespaces    ns           v1           false        Namespace
 ```
 
-This is a useful command when a new object kind appears in a tutorial or runbook. It tells you whether `-n` should matter before you spend time chasing the wrong scope.
+This command is useful when you meet a new resource kind. It tells you whether a namespace should be part of the command.
 
-## Logs, Events, and JSON Output
+## Logs and Events
 
-`kubectl logs` reads container logs through the Kubernetes API. For a single-container Pod, you can give the Pod name. For a Deployment, `kubectl` can choose matching Pods and stream logs from them.
+Logs and events answer different questions.
+
+Logs come from containers. They show what the application process wrote to stdout or stderr. Events come from Kubernetes components. They show scheduling, image pulling, container creation, probe failures, volume mount errors, and controller activity.
+
+For a healthy Deployment, logs might show application behavior:
 
 ```bash
-$ kubectl logs deployment/devpolaris-orders-api -n orders-prod --tail=20
+$ kubectl logs deployment/devpolaris-api -n devpolaris-prod --tail=20
 2026-05-07T08:16:11.204Z info server listening on :3000
 2026-05-07T08:16:14.821Z info health check passed
-2026-05-07T08:17:02.441Z info created order id=ord_7J9mW region=eu-west-2
+2026-05-07T08:17:02.441Z info request completed path=/courses status=200
 ```
 
-If a container is crashing, `--previous` asks for logs from the previous crashed instance of the container:
+For a crashing container, `--previous` asks for logs from the last terminated container instance:
 
 ```bash
-$ kubectl logs pod/devpolaris-orders-api-55b7f957c8-k8v4p -n orders-prod --previous
-2026-05-07T09:02:33.118Z error failed to connect to database: password authentication failed
+$ kubectl logs pod/devpolaris-api-55b7f957c8-k8v4p -n devpolaris-prod --previous
+2026-05-07T09:02:33.118Z error missing required env var DATABASE_URL
 ```
 
-Events give cluster-side facts. Logs give application-side facts. Use both. If a Pod is `ImagePullBackOff`, logs may not exist because the container never started. If the Pod is running but returns 500s, events may be quiet while application logs show the real error.
-
-Structured output helps when you need exact fields:
+If the container never started, logs may be empty. Events are then more useful:
 
 ```bash
-$ kubectl get deployment devpolaris-orders-api -n orders-prod -o jsonpath='{.status.readyReplicas}{" ready\n"}'
+$ kubectl describe pod devpolaris-api-55b7f957c8-k8v4p -n devpolaris-prod
+Events:
+  Type     Reason   From     Message
+  ----     ------   ----     -------
+  Warning  Failed   kubelet  Failed to pull image "ghcr.io/devpolaris/api:1.4.3": not found
+```
+
+The practical rule is direct: use events for cluster-side steps, and use logs after the container starts.
+
+## Structured Output
+
+`kubectl get` and `kubectl describe` are good for people. Automation needs stable fields. `kubectl` can print YAML, JSON, JSONPath, and custom columns.
+
+YAML shows the object shape:
+
+```bash
+$ kubectl get deployment devpolaris-api -n devpolaris-prod -o yaml
+```
+
+JSONPath extracts one field:
+
+```bash
+$ kubectl get deployment devpolaris-api -n devpolaris-prod \
+  -o jsonpath='{.status.readyReplicas}{" ready\n"}'
 3 ready
 ```
 
-JSONPath is not required on day one, but knowing that `kubectl` can print exact fields helps you move from manual inspection to scripts and checks later.
-
-## Failure Mode: The Object Exists, but Not Where You Looked
-
-A very common beginner failure is looking in the wrong namespace. Someone applies a Deployment to `orders-staging`, then checks `orders-prod` and thinks the object disappeared. Or they forget `-n`, check `default`, and see nothing.
+Custom columns make a compact table:
 
 ```bash
-$ kubectl get deployment devpolaris-orders-api
-Error from server (NotFound): deployments.apps "devpolaris-orders-api" not found
+$ kubectl get deployment devpolaris-api -n devpolaris-prod \
+  -o custom-columns=NAME:.metadata.name,DESIRED:.spec.replicas,READY:.status.readyReplicas,IMAGE:.spec.template.spec.containers[0].image
+NAME             DESIRED   READY   IMAGE
+devpolaris-api   3         3       ghcr.io/devpolaris/api:1.4.2
 ```
 
-Before editing YAML, ask the cluster across namespaces:
+Structured output becomes useful in CI checks, release scripts, and incident notes. It also teaches you the object model because every field path has to name where the data lives.
 
-```bash
-$ kubectl get deployment --all-namespaces | grep devpolaris-orders-api
-orders-staging   devpolaris-orders-api   2/2   2   2   12d
-orders-prod      devpolaris-orders-api   3/3   3   3   18d
-```
+## A Daily Inspection Routine
 
-Now the problem is clear. The Deployment exists, but the first command searched the current namespace only. The fix is to pass the right `-n` value or set the namespace on your context.
+A good daily `kubectl` routine follows the object relationships from broad to specific. Start with the target, then move toward the running container.
 
-A similar mistake happens with logs:
-
-```bash
-$ kubectl logs deployment/devpolaris-orders-api
-Error from server (NotFound): deployments.apps "devpolaris-orders-api" not found in namespace "default"
-```
-
-The error message gives the clue: `namespace "default"`. The diagnostic path is to check current context, check current namespace, then rerun with the intended namespace.
-
-The same mistake can hide successful changes. If a staging apply accidentally omits `-n`, Kubernetes may create objects in `default` instead of `orders-staging`. Always inspect the namespace column when something appears duplicated or missing.
-
-```bash
-$ kubectl get pods --all-namespaces -l app=devpolaris-orders-api
-NAMESPACE        NAME                                     READY   STATUS
-default          devpolaris-orders-api-7844c5d5f6-l8pqh   1/1     Running
-orders-staging   devpolaris-orders-api-75c9444bd7-m9nbt   1/1     Running
-orders-prod      devpolaris-orders-api-6d8f7d9f8c-2k9sl   1/1     Running
-```
-
-The unexpected `default` Pod is not a mystery anymore. Delete or correct it according to the team's process, then update the runbook or script so future commands pass the namespace explicitly.
-
-## A Small Daily kubectl Routine
-
-A good daily routine keeps inspection boring and explicit. Start with context, then namespace, then high-level objects, then Pods, then details. This sequence is enough for many first Kubernetes conversations.
+For `devpolaris-api`, a normal read-only inspection might be:
 
 ```bash
 $ kubectl config current-context
-$ kubectl config view --minify --output 'jsonpath={..namespace}{"\n"}'
-$ kubectl get deployment devpolaris-orders-api -n orders-prod
-$ kubectl get pods -n orders-prod -l app=devpolaris-orders-api -o wide
-$ kubectl describe pod <pod-name> -n orders-prod
-$ kubectl logs <pod-name> -n orders-prod --tail=50
+$ kubectl get deployment devpolaris-api -n devpolaris-prod
+$ kubectl get rs -n devpolaris-prod -l app=devpolaris-api
+$ kubectl get pods -n devpolaris-prod -l app=devpolaris-api -o wide
+$ kubectl describe pod <pod-name> -n devpolaris-prod
+$ kubectl logs <pod-name> -n devpolaris-prod --tail=50
 ```
 
-When you make changes, prefer a small loop: inspect current state, apply the reviewed manifest, watch rollout status, then verify Pods and logs.
+Each command narrows the question.
+
+| Step | Question |
+| --- | --- |
+| Current context | Which cluster am I talking to? |
+| Deployment | What did the app object report? |
+| ReplicaSets | Which rollout generation owns the Pods? |
+| Pods | Which copies are running, ready, or stuck? |
+| Describe Pod | What events explain the state? |
+| Logs | What did the application process report? |
+
+This routine is intentionally simple. It works because it follows Kubernetes relationships instead of jumping straight to random commands.
+
+## Putting It All Together
+
+Namespaces scope many application objects. Contexts decide which cluster and user `kubectl` uses. `kubectl` sends requests to the API server and prints object data, status, events, and logs.
+
+The safety habit is to make the target visible:
 
 ```bash
-$ kubectl apply -f deployment.yaml -n orders-staging
-deployment.apps/devpolaris-orders-api configured
-
-$ kubectl rollout status deployment/devpolaris-orders-api -n orders-staging
-deployment "devpolaris-orders-api" successfully rolled out
-
-$ kubectl get pods -n orders-staging -l app=devpolaris-orders-api
-NAME                                     READY   STATUS    RESTARTS   AGE
-devpolaris-orders-api-75c9444bd7-m9nbt   1/1     Running   0          2m
-devpolaris-orders-api-75c9444bd7-r5ksp   1/1     Running   0          2m
+$ kubectl config current-context
+$ kubectl get deployment devpolaris-api --context devpolaris-prod -n devpolaris-prod
 ```
 
-The commands are not a full deployment strategy. They are the basic language you need before more advanced Kubernetes topics make sense. Namespaces tell you where to look. Contexts tell you which cluster you are touching. `kubectl` gives you a direct way to ask the API server what exists, what changed, and what failed.
+The reading habit is to follow the object chain:
+
+```text
+Deployment -> ReplicaSet -> Pod -> events -> logs
+```
+
+Those two habits will save more time than memorizing a long command list. Kubernetes has many object types, but the first question is usually simple: which cluster, which namespace, which object, and what did the API report?
+
+## What's Next
+
+The next submodule starts with Pods. You have the cluster model, the main components, reconciliation, namespaces, and `kubectl` basics. Now you can look closely at the smallest runnable unit Kubernetes schedules around your containers.
 
 ---
 
 **References**
 
-- [Namespaces](https://kubernetes.io/docs/concepts/overview/working-with-objects/namespaces/) - Official namespace documentation covering scope, initial namespaces, and namespace usage.
-- [The kubectl Command-Line Tool](https://kubernetes.io/docs/concepts/overview/kubectl/) - Official overview of kubectl, kubeconfig, and communication with the Kubernetes API.
-- [kubectl Reference](https://kubernetes.io/docs/reference/kubectl/generated/) - Official generated reference for kubectl commands and flags.
-- [Object Names and IDs](https://kubernetes.io/docs/concepts/overview/working-with-objects/names/) - Official explanation of Kubernetes names, UIDs, and name uniqueness.
+- [kubectl overview](https://kubernetes.io/docs/concepts/overview/kubectl/) - Official overview of the Kubernetes command-line tool.
+- [Organizing Cluster Access Using kubeconfig Files](https://kubernetes.io/docs/concepts/configuration/organize-cluster-access-kubeconfig/) - Official explanation of kubeconfig files, clusters, users, and contexts.
+- [Namespaces](https://kubernetes.io/docs/concepts/overview/working-with-objects/namespaces/) - Official documentation for namespace behavior and scope.
+- [kubectl commands reference](https://kubernetes.io/docs/reference/generated/kubectl/kubectl-commands) - Official generated reference for kubectl commands and flags.
+- [Managing Kubernetes Objects](https://kubernetes.io/docs/tasks/manage-kubernetes-objects/) - Official task documentation for applying, inspecting, and managing Kubernetes objects.

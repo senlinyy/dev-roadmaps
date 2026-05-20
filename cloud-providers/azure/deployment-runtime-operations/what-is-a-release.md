@@ -42,7 +42,7 @@ The beginner habit is simple: before users depend on a change, know what version
 
 A release is the controlled movement of a change into a live system. The change may be application code, a container image, an App Service package, an environment variable, a Key Vault reference, a scaling setting, or a traffic split. The user does not care which file changed. The user cares whether checkout still works.
 
-That is why "deployment succeeded" is not enough evidence. A deployment can succeed while the release fails. Azure accepted the package or image. The app may even be running. But the runtime can still be wrong for production: wrong secret reference, wrong identity, wrong database, wrong traffic target, wrong health path, or no rollback plan.
+That is why "deployment succeeded" gives incomplete evidence. A deployment can succeed while the release fails. Azure accepted the package or image. The app may even be running. But the runtime can still be wrong for production: wrong secret reference, wrong identity, wrong database, wrong traffic target, wrong health path, or no rollback plan.
 
 Think of a release as five connected promises:
 
@@ -92,7 +92,7 @@ The runtime is where the artifact actually runs. In this roadmap, the main Azure
 
 Runtime matters because the same artifact can behave differently in different places. A staging slot can have different settings from production. A Container Apps revision can receive no traffic, 10 percent traffic, or all traffic. A health check can be configured for one runtime but absent in another.
 
-The runtime question is not only "where is the app?" It is:
+The runtime question asks what production is actually running:
 
 | Runtime evidence | Why it matters |
 | --- | --- |
@@ -122,7 +122,7 @@ CHECKOUT_PAYMENTS_ENABLED=true
 
 The release question is not "does the setting exist somewhere?" It is "does the candidate version receive the values it needs, and can its identity read the secrets it references?"
 
-That identity boundary matters. A Key Vault reference in an App Service setting is not magic. The app's managed identity still needs permission to read the secret. A Container Apps secret can exist while the app points at the wrong secret name or revision. Configuration and identity are part of release safety.
+That identity boundary matters. A Key Vault reference in an App Service setting depends on the app's managed identity having permission to read the secret. A Container Apps secret can exist while the app points at the wrong secret name or revision. Configuration and identity are part of release safety.
 
 ## Traffic
 
@@ -159,7 +159,7 @@ The previous observability module taught logs, metrics, traces, and alerts. A re
 
 Rollback means returning users to a known working path. That path might be the previous App Service slot, the older Container Apps revision, a previous app setting value, a disabled feature flag, or an older package.
 
-Rollback is not a magic undo button. It works only if the team knows what to return to and what else changed. A release that changes both code and configuration may need both restored. A release that changed a database schema may not be safely reversible without a data plan. A release that changed a Key Vault secret reference may require identity and secret checks.
+Rollback works when the team knows what to return to and what else changed. A release that changes both code and configuration may need both restored. A release that changed a database schema may not be safely reversible without a data plan. A release that changed a Key Vault secret reference may require identity and secret checks.
 
 A useful rollback note is concrete:
 
@@ -171,7 +171,7 @@ Rollback target:
   Evidence: checkout success rate normal for 15 minutes
 ```
 
-The point is not to roll back every time. Sometimes fixing forward is faster and safer. The point is that the decision should be based on evidence and a known recovery path, not panic.
+Sometimes fixing forward is faster and safer than rolling back. The decision should be based on evidence and a known recovery path, not panic.
 
 ## Putting It All Together
 

@@ -209,7 +209,7 @@ $ kubectl get deployment devpolaris-orders-api -o jsonpath='{.spec.template.spec
 ghcr.io/devpolaris/orders-api:2026-05-07.1
 ```
 
-Those commands are not pretty, but they answer two high-value questions quickly: which Pods will the Deployment create, and which image will they run? In a production review, your deployment system or Git diff should show the same information more clearly.
+Those commands answer two high-value questions quickly: which Pods will the Deployment create, and which image will they run? In a production review, your deployment system or Git diff should show the same information more clearly.
 
 When a Deployment is not healthy, inspect its conditions. Conditions are structured status records. They explain whether the Deployment has enough available replicas and whether the rollout is progressing.
 

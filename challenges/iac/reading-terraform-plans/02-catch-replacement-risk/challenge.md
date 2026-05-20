@@ -1,6 +1,6 @@
 ---
 title: "Catch Replacement Risk"
-sectionSlug: replacement-deserves-extra-attention
+sectionSlug: replacements
 order: 2
 ---
 

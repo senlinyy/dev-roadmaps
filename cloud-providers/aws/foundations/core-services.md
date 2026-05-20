@@ -38,7 +38,7 @@ The mistake is starting with names. AWS has many service names because productio
 
 > Which AWS service family should I look at first for this app need?
 
-This article builds that map around one production backend. Each section starts with the app need, points to the first AWS family to inspect, and shows the evidence a teammate would use later. By the end, the map has become a debugging habit, not only a study aid.
+This article builds that map around one production backend. Each section starts with the app need, points to the first AWS family to inspect, and shows the evidence a teammate would use later. By the end, the map has become a debugging habit as well as a study aid.
 
 ## The Job-Based Map
 
@@ -109,7 +109,7 @@ A first production map might look like this:
 | Runtime permission | IAM role | The task needs limited permission to read the secret and write exports. |
 | Operational evidence | CloudWatch | Logs, metrics, and alarms need a durable home. |
 | Cost watch | AWS Budgets and Cost Explorer | The team needs alerts and usage views before spend surprises become normal. |
-| Recovery | AWS Backup or service backups | Important state needs a restore path, not only a storage location. |
+| Recovery | AWS Backup or service backups | Important state needs a restore path as well as a storage location. |
 
 Many architectures can be correct. Another backend might use Lambda because requests are short and event-driven. Another might use DynamoDB because every query is known by key. Another might use EC2 because it needs host-level control.
 
@@ -166,7 +166,7 @@ Compute answers:
 
 On a laptop, the answer might be `npm start`. In AWS, the answer is a runtime shape. EC2 gives you virtual servers. ECS runs and manages containers. Fargate lets ECS run containers without your team managing the EC2 instances underneath. Lambda runs code in response to events without managing servers.
 
-The orders API is a long-running HTTP container, so ECS with Fargate is the first compute family to inspect. The useful words are not only "ECS" and "Fargate." The useful runtime shape is:
+The orders API is a long-running HTTP container, so ECS with Fargate is the first compute family to inspect. The useful runtime shape is more specific than the labels "ECS" and "Fargate":
 
 ```text
 compute:
@@ -229,7 +229,7 @@ exports:
   access question: who can write and who can read?
 ```
 
-The non-obvious truth is that storage services are not interchangeable just because they all "keep data." S3 stores objects in buckets. Treating it like a mounted disk leads to the wrong design. RDS runs relational database engines and takes over many database administration tasks, but your team still owns schema design, query behavior, and application use. DynamoDB works best when the access pattern is designed around keys instead of ad hoc joins.
+The non-obvious truth is that each storage service has a different data contract. S3 stores objects in buckets. Treating it like a mounted disk leads to the wrong design. RDS runs relational database engines and takes over many database administration tasks, but your team still owns schema design, query behavior, and application use. DynamoDB works best when the access pattern is designed around keys instead of ad hoc joins.
 
 A good map also names recovery early. "The data is in RDS" is not the same as "we can restore checkout after a bad migration." "The export is in S3" is not the same as "finance can find the correct bucket, prefix, and version." The state family should always lead to the restore question.
 
@@ -334,7 +334,7 @@ deployment:
 
 The important tradeoff is speed versus proof. A deployment event can prove AWS accepted a new desired state. It does not prove the app read the right secret, connected to the database, passed health checks, and served real checkout traffic. That proof comes from traffic, compute, access, and signals together.
 
-Cost visibility is also operational work. AWS Budgets can track costs and usage and send alerts when actual or forecasted spend crosses a threshold. Cost Explorer lets teams view and analyze cost and usage trends. These services are not a substitute for architecture review, but they make drift visible. The earlier you tag resources by service, environment, and owner, the easier it is to understand which part of the app is spending money.
+Cost visibility is also operational work. AWS Budgets can track costs and usage and send alerts when actual or forecasted spend crosses a threshold. Cost Explorer lets teams view and analyze cost and usage trends. These services make drift visible during architecture review. The earlier you tag resources by service, environment, and owner, the easier it is to understand which part of the app is spending money.
 
 Recovery belongs beside cost because both become painful when they are added too late. AWS Backup can centralize and automate data protection for supported resources. Many services also have their own backup, snapshot, versioning, retention, or restore controls. The first question is not "which backup feature exists?" It is:
 
@@ -393,7 +393,7 @@ access and secrets:
   secret was rotated after the previous tasks started
 ```
 
-The map narrows the story. DNS is not the first suspect because the name reaches the expected load balancer. ECS did start the runtime because two tasks are running. Target health is failing because the app returns an unhealthy response. Logs point to missing database configuration. The secret exists and the role can read it, but the running task needs to be refreshed after the secret change.
+The map narrows the story. DNS has evidence pointing away from it because the name reaches the expected load balancer. ECS did start the runtime because two tasks are running. Target health is failing because the app returns an unhealthy response. Logs point to missing database configuration. The secret exists and the role can read it, but the running task needs to be refreshed after the secret change.
 
 The correction is now specific: update the runtime reference if it is wrong, or roll new tasks so the container receives the current secret value. That is a very different conversation from "AWS is down."
 

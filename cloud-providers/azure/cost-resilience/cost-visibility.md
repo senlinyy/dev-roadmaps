@@ -119,7 +119,7 @@ Resource groups and tags work together. Resource groups show lifecycle boundarie
 
 Budgets help teams plan for and drive accountability. A budget can track actual or forecasted cost at a scope and send notifications when thresholds are reached.
 
-The important beginner gotcha: budgets notify. They do not automatically stop Azure resources from running. Microsoft documents that resources are not affected and consumption is not stopped when budget thresholds are exceeded. That is good for uptime, but it means a budget is an alarm, not a circuit breaker.
+The important beginner gotcha: budgets notify while Azure resources keep running. Microsoft documents that resources are unaffected and consumption continues when budget thresholds are exceeded. That is good for uptime, but it means a budget is an alarm, not a circuit breaker.
 
 Useful budget design starts with the scope:
 
@@ -172,7 +172,7 @@ Common Azure cost leaks for a learning production service:
 | Leak | Why it happens | Safer fix |
 | --- | --- | --- |
 | Forgotten staging resources | Release test resources remain always on. | Tag and review staging separately; scale down or delete with owner approval. |
-| Log ingestion spike | A release logs too much detail or retries noisily. | Fix logging volume and retention, not only workspace size. |
+| Log ingestion spike | A release logs too much detail or retries noisily. | Fix logging volume and retention alongside workspace size. |
 | Blob versions grow | Versioning protects data but every write can create retained versions. | Apply lifecycle policies and separate containers by retention need. |
 | Deleted database backups linger | Azure SQL keeps backups for PITR until retention expires. | Understand retention before deleting/recreating databases repeatedly. |
 | Overprovisioned database | Tier sized for a rare peak or old assumption. | Compare peak windows, latency, and recovery promise before downsizing. |

@@ -97,7 +97,7 @@ struct SearchHit {
 }
 ```
 
-They do not have one obvious parent. A `Notebook` is not a kind of `Note`. A `SearchHit` is not a stored note. But all three can offer a compact display string.
+They share behavior without sharing one parent type. `Notebook`, `Note`, and `SearchHit` are separate shapes, and all three can offer a compact display string.
 
 The design pressure is separation. Structs describe what data a value owns. Traits describe what a caller may ask the value to do. That separation keeps Rust APIs from forcing false family trees just to reuse one method name.
 :::
@@ -175,7 +175,7 @@ impl Summary for Note {
 
 `Summary` and `Note` are both local to the app.
 
-This is not allowed:
+Rust rejects this implementation:
 
 ```rust
 impl std::fmt::Display for Vec<Note> {
@@ -250,7 +250,7 @@ struct Note {
 
 `Debug` makes the value printable with `{:?}`. `Clone` lets you explicitly duplicate it. `PartialEq` lets you compare two notes with `==`.
 
-These derives are not magic decorations. They generate trait implementations based on the fields. That is why every field must also support the derived behavior.
+These derives generate trait implementations based on the fields. That is why every field must also support the derived behavior.
 
 If `Note` derives `Clone`, then `String` fields are fine because `String` implements `Clone`. If a field does not implement `Clone`, Rust cannot derive `Clone` for the whole struct.
 

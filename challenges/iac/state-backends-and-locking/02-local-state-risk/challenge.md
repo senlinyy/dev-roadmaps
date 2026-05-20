@@ -1,6 +1,6 @@
 ---
 title: "Judge Local State Risk"
-sectionSlug: local-state-is-a-learning-tool
+sectionSlug: moving-from-local-state
 order: 2
 ---
 

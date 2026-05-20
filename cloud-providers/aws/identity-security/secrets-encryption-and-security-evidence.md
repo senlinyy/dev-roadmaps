@@ -69,7 +69,7 @@ Some configuration is important but not secret. `PORT=3000`, `NODE_ENV=productio
 | Public application URL | Usually no | It identifies the app, but does not grant access by itself. |
 | Log level | Usually no | It changes behavior, but is not a credential. |
 
-The risk is not only that a human might read a value. Secrets spread. A value pasted into the wrong place can move into shell history, infrastructure state, deployment history, container inspection output, screenshots, logs, search indexes, and backup systems. A good design reduces how many systems ever touch the plaintext value.
+The risk is secret spread. A value pasted into the wrong place can move into shell history, infrastructure state, deployment history, container inspection output, screenshots, logs, search indexes, and backup systems. A good design reduces how many systems ever touch the plaintext value.
 
 ## Secrets Manager
 
@@ -183,11 +183,11 @@ Secrets Manager supports automatic rotation patterns, including managed rotation
 | Verify behavior | Do logs and metrics show successful use without printing the secret? |
 | Retire old value | Is the old value disabled after the cutover window? |
 
-The refresh step is where many teams get surprised. If ECS injected a secret into the environment when the task started, that running process does not magically update because the stored secret changed. The service needs a new deployment, or old tasks need to stop and start, before the process receives the new environment value.
+The refresh step is where many teams get surprised. If ECS injected a secret into the environment when the task started, that running process keeps the value it received at startup. The service needs a new deployment, or old tasks need to stop and start, before the process receives the new environment value.
 
 Runtime fetching changes that tradeoff. The app can retrieve the current version after a rotation, especially if it uses a caching strategy with a reasonable refresh window. That can reduce restarts, but it makes secret handling part of application code. For many apps, startup injection is simpler until there is a real need for live refresh.
 
-Rotation is not only a scheduled hygiene task. It is also an incident response tool. If a secret appears in logs, source control, a ticket, or a third-party incident report, assume the old value may be known and rotate it. Deleting the visible copy is not enough.
+Rotation is a scheduled hygiene task and an incident response tool. If a secret appears in logs, source control, a ticket, or a third-party incident report, assume the old value may be known and rotate it. Deleting the visible copy is not enough.
 
 ## Evidence
 

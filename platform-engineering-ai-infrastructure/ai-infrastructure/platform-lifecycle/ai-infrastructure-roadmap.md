@@ -40,7 +40,7 @@ flowchart TD
     G --> E
 ```
 
-Read this as a learning path, not a rule for every company. Some teams stay on managed APIs for years. Some teams start by self-hosting an open model. Some teams buy dedicated inference from a provider. The roadmap still helps because the jobs are the same: call the model, route the request, prepare context, serve the model, protect capacity, release safely, and connect training output to serving.
+Use this as a learning path across the operating jobs most AI platforms eventually meet. Some teams stay on managed APIs for years. Some teams start by self-hosting an open model. Some teams buy dedicated inference from a provider. The roadmap still helps because the jobs are the same: call the model, route the request, prepare context, serve the model, protect capacity, release safely, and connect training output to serving.
 
 The important question is:
 
@@ -96,7 +96,7 @@ The first tradeoff is speed versus control:
 
 For a first product feature, speed is often the right choice. The team should still keep good records because those records become the evidence for every later stage.
 
-Some inference is not live. Eval runs, embedding refreshes, document classification, and nightly labelling jobs use a model but do not update weights. They are batch inference, not training. Treat them as inference work with batch-style evidence: batch status, queue age, completion count, result file, and error file. OpenAI's Batch API is a useful anchor here because it supports asynchronous model requests with a 24-hour completion window.
+Some inference runs in batch. Eval runs, embedding refreshes, document classification, and nightly labelling jobs use a model to produce outputs without updating weights. Treat them as inference work with batch-style evidence: batch status, queue age, completion count, result file, and error file. OpenAI's Batch API is a useful anchor here because it supports asynchronous model requests with a 24-hour completion window.
 
 You are ready for Stage 2 when two or more apps have copied provider-call rules and nobody can explain the route, retry, budget, or logging policy from one place.
 
@@ -172,7 +172,7 @@ You are ready for Stage 3 when the answer depends on documents, tools, files, or
 
 ## Stage 3: Add Context When The Model Needs Outside Facts
 
-The model often needs information that is not inside the user message. It may need a policy document, an uploaded file, an order record, a search result, or a tool result. That work belongs to the context platform.
+The model often needs information from outside the user message. It may need a policy document, an uploaded file, an order record, a search result, or a tool result. That work belongs to the context platform.
 
 Context means the extra information placed around the user question. Retrieval means fetching relevant documents before the model answers. A tool is an action the model can ask the system to run, such as looking up an order, searching a knowledge base, or creating a support handoff.
 
@@ -282,7 +282,7 @@ You are ready for Stage 5 when users depend on the endpoint and cold starts, que
 
 ## Stage 5: Protect Live Capacity
 
-Capacity is not just the number of GPUs. Capacity means the right model can run in the right region, on the right accelerator type, with enough memory, at the moment the request arrives.
+Capacity means the right model can run in the right region, on the right accelerator type, with enough memory, at the moment the request arrives.
 
 For a live AI assistant, the customer is waiting. A server that starts five minutes later is not useful for a chat request. That is why live inference usually needs warm replicas. A warm replica is a model server that has already loaded the model and can start work quickly.
 
@@ -298,7 +298,7 @@ target: p95 first-token latency under 900 ms
 batch_borrowing: disabled_during_business_hours
 ```
 
-CoreWeave is a useful comparison anchor for dedicated inference because its Inference API docs describe gateways, model deployments, and capacity claims. The docs also mark that API as `v1alpha1`, so treat it as a learning anchor rather than a stable contract to copy. The important point is that a customer-facing inference endpoint needs capacity evidence, not just a running container.
+CoreWeave is a useful comparison anchor for dedicated inference because its Inference API docs describe gateways, model deployments, and capacity claims. The docs also mark that API as `v1alpha1`, so treat it as a learning anchor rather than a stable contract to copy. The important point is that a customer-facing inference endpoint needs capacity evidence alongside a running container.
 
 Capacity incidents should be written in customer language:
 

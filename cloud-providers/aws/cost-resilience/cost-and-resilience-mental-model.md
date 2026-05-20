@@ -94,7 +94,7 @@ Resilience also has shapes. Some choices help the service keep serving. Others h
 | Recovery point | Data can return to an earlier state | RDS PITR, DynamoDB PITR, S3 versions |
 | Evidence | Operators can understand what happened | Logs, metrics, traces, CloudTrail |
 
-These are not free. Redundancy runs more components. Headroom may leave capacity idle. Recovery points consume storage. Evidence creates log and metric cost. Isolation can add services and operational work.
+Each choice has a cost. Redundancy runs more components. Headroom may leave capacity idle. Recovery points consume storage. Evidence creates log and metric cost. Isolation can add services and operational work.
 
 The mistake is to call every extra cost waste. Some of it is insurance, but insurance still needs a reason.
 
@@ -175,11 +175,11 @@ A good monthly review asks the same small set of questions:
 6. What metric proves the change helped or hurt?
 7. How do we roll it back?
 
-This keeps the conversation away from blame. The goal is not to punish a team for spend. The goal is to keep the system proportionate: large enough for real risk, small enough to avoid careless waste.
+This keeps the conversation away from blame. The goal is a proportionate system: large enough for real risk, small enough to avoid careless waste.
 
 ## Putting It All Together
 
-The opening bill was not just a finance problem. It was an architecture and operations problem.
+The opening bill was an architecture and operations problem as much as a finance problem.
 
 Cost shapes show how AWS spending grows: capacity, usage, storage, support services, and recovery options. Resilience shapes show what that spending may protect: redundancy, headroom, isolation, recovery points, and evidence. Headroom is useful when it protects a real failure or spike. Waste is spend without current purpose. Safe changes start with metrics, retention needs, recovery targets, and rollback plans. A review table keeps the tradeoff visible.
 

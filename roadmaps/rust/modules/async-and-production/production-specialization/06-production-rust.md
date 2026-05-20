@@ -22,7 +22,7 @@ id: article-rust-async-and-production-production-rust
 
 ## The Problem
 
-The notes app has become a service used by other people. Now the hard parts are not only language features.
+The notes app has become a service used by other people. Now the hard parts include operations, deployment, observability, and team maintenance.
 
 Production pressure asks different questions:
 
@@ -31,7 +31,7 @@ Production pressure asks different questions:
 - Can errors keep source detail without leaking internals everywhere?
 - Can builds stay repeatable as dependencies grow?
 
-Production Rust is not a bag of advanced tricks. It is ordinary Rust habits made durable: clear boundaries, structured errors, useful telemetry, explicit config, and repeatable checks.
+Production Rust is ordinary Rust habits made durable: clear boundaries, structured errors, useful telemetry, explicit config, and repeatable checks.
 
 ## Packages, Crates, And Workspaces
 
@@ -258,7 +258,7 @@ The exact commands may differ by project, but each one answers a real question:
 | `cargo doc` | Do public docs build? |
 | `cargo tree` | Do dependencies look understandable? |
 
-This is not bureaucracy. It is a way to catch boring failures before they become expensive.
+This routine catches boring failures before they become expensive.
 
 ## Putting It All Together
 

@@ -140,7 +140,7 @@ These are design signals:
 | Shared mounted path | Filestore |
 | Fast document lookup by known path | Firestore |
 
-Choosing Firestore should make the access pattern simpler, not just make the first write easier.
+Choosing Firestore should make the access pattern simpler beyond the first write.
 
 ## Sample Document Shape
 

@@ -184,7 +184,7 @@ GitHub Actions identity
   -> Cloud Run deployment
 ```
 
-That still needs IAM review. Federation is not magic access. It controls how the caller authenticates. IAM still decides what the caller can do.
+That still needs IAM review. Federation controls how the caller authenticates. IAM still decides what the caller can do.
 
 ## Failure Evidence
 

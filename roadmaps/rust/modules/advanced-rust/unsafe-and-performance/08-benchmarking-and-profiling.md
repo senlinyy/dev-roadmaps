@@ -48,7 +48,7 @@ For quick manual checks:
 cargo run --release -- index ./notes
 ```
 
-This still is not a proper benchmark, but it prevents one common mistake: making performance decisions from debug-mode behavior.
+This quick check prevents one common mistake: making performance decisions from debug-mode behavior. Use a real benchmark before trusting the numbers.
 
 ## Benchmark vs Profile
 

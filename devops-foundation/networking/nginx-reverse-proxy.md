@@ -485,7 +485,7 @@ $ sudo systemctl status your-app
 $ curl -v http://localhost:3000
 ```
 
-If the first command shows your app is not running, start it. If it is running but the `curl` command fails, your app is listening on a different port or only on a specific network interface. A common mistake is binding your app to `127.0.0.1` on one port while Nginx is configured to forward to a different port.
+If the first command shows your app is stopped, start it. If it is running but the `curl` command fails, your app is listening on a different port or only on a specific network interface. A common mistake is binding your app to `127.0.0.1` on one port while Nginx is configured to forward to a different port.
 
 ### 504 Gateway Timeout
 

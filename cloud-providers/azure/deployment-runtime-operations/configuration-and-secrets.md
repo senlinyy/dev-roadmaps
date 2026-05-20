@@ -76,7 +76,7 @@ The gotcha is that "setting saved" does not prove "app healthy." The app still h
 
 Azure Container Apps can store secrets and expose values to containers through environment variables or other configuration references. Secrets are scoped to the container app, and revisions can reference them through their environment configuration.
 
-The release question is not just "does the secret exist?" It is:
+The release question asks how the secret reaches the running app:
 
 | Question | Why it matters |
 | --- | --- |

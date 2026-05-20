@@ -136,7 +136,7 @@ Some services directly invoke Lambda. API Gateway can invoke a function when an 
 
 Queues and streams usually use event source mappings. The mapping is a Lambda resource that polls the source, gathers records into batches, and invokes your function. SQS, Kinesis, DynamoDB Streams, Amazon MQ, Amazon MSK, self-managed Kafka, and DocumentDB use this pattern.
 
-The difference matters because "trigger" is not just a label in the console. It changes how retries, batching, and back pressure behave. A webhook helper behind API Gateway has a caller waiting. An SQS receipt worker has messages waiting in a queue. An S3 object event has an asynchronous delivery path. Those are different operating stories.
+The difference matters because "trigger" changes how retries, batching, and back pressure behave. A webhook helper behind API Gateway has a caller waiting. An SQS receipt worker has messages waiting in a queue. An S3 object event has an asynchronous delivery path. Those are different operating stories.
 
 Use narrow triggers when you can. One function that accepts API Gateway events, SQS records, S3 notifications, and scheduled events has to understand four contracts. Four small functions are usually easier to test, permission, observe, and retry safely.
 
@@ -171,7 +171,7 @@ For the receipt email job, duplicate delivery can become a real user problem. If
 
 Idempotency means repeated attempts produce the same real-world result. The handler can check whether `receipt:ord_1042` is already complete, skip the send if it is, and log the duplicate. The exact store can vary, but the principle does not: retries are normal enough that the function must be able to see the same work twice.
 
-Retries also shape batch design. If one bad SQS record causes the whole batch to fail, successfully processed messages may be retried with it unless you use partial batch response behavior or remove processed messages deliberately. A larger batch can improve throughput, but it can also make a single bad record affect more work. That is why batch size is an operating choice, not only a cost choice.
+Retries also shape batch design. If one bad SQS record causes the whole batch to fail, successfully processed messages may be retried with it unless you use partial batch response behavior or remove processed messages deliberately. A larger batch can improve throughput, but it can also make a single bad record affect more work. That is why batch size is an operating choice and a cost choice.
 
 ## When A Service Is Simpler
 

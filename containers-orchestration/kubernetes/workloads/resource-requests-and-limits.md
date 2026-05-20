@@ -145,7 +145,7 @@ Events:
   Warning  FailedScheduling   0/4 nodes are available: 4 Insufficient cpu.
 ```
 
-This is not an image or application problem. The scheduler cannot find a node with enough unrequested CPU. The fix might be to lower an unrealistic request, reduce replicas, add nodes, or move other workloads. Do not set requests to zero just to make the Pod schedule. That hides the problem and makes runtime contention worse.
+The scheduler cannot find a node with enough unrequested CPU. The fix might be to lower an unrealistic request, reduce replicas, add nodes, or move other workloads. Do not set requests to zero just to make the Pod schedule. That hides the problem and makes runtime contention worse.
 
 ## Failure Mode: OOMKilled
 
@@ -163,7 +163,7 @@ Last State:
     Exit Code:    137
 ```
 
-`OOMKilled` means the container exceeded memory available under its limit. The next check is application memory behavior, not only Kubernetes configuration.
+`OOMKilled` means the container exceeded memory available under its limit. The next check should include application memory behavior and Kubernetes configuration.
 
 ```bash
 $ kubectl logs devpolaris-orders-api-7b7d4b5f9c-h9x7b --previous --tail=20
@@ -265,7 +265,7 @@ Burstable
 
 `Burstable` is common for application Pods where requests are lower than limits. If a Pod has no requests or limits, it can be `BestEffort`, which is usually the first class you should fix for production services.
 
-Resource reviews should include init containers and sidecars too. A Pod is scheduled based on the whole Pod's resource shape, not only the main application container. If `devpolaris-orders-api` adds a sidecar for metrics, that helper needs requests and limits as well.
+Resource reviews should include init containers and sidecars too. A Pod is scheduled based on the whole Pod's resource shape. If `devpolaris-orders-api` adds a sidecar for metrics, that helper needs requests and limits as well.
 
 ```yaml
 containers:

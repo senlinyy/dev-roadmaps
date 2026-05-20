@@ -1,6 +1,6 @@
 ---
 title: "Spot Workspace Misuse"
-sectionSlug: cli-workspaces-useful-but-easy-to-overuse
+sectionSlug: workspaces
 order: 4
 ---
 

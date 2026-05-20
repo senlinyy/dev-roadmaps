@@ -60,7 +60,7 @@ The tradeoff is that AWS is not operating the application runtime for you. AWS p
 | Where does state collect? | Root and attached volumes | Disk sizing, logs, cleanup, and backups |
 | How does it call AWS? | An instance profile and IAM role | Least-privilege permissions for the app |
 
-That ownership map is the mental model for the rest of the article. EC2 is not just "compute." It is server-shaped compute.
+That ownership map is the mental model for the rest of the article. EC2 is server-shaped compute.
 
 ## AMI
 
@@ -70,15 +70,15 @@ This matters because instance replacement repeats the AMI story. If the AMI is o
 
 A useful beginner habit is to separate the base machine from the app release. The AMI should give you a known operating system and baseline tooling. The app release should still be versioned somewhere obvious, such as an artifact, package, or image-building pipeline. Baking everything into an AMI can work, but the team then needs a clear process for producing a new AMI whenever the OS, agent set, or app version changes.
 
-The non-obvious part is that "I patched one running server" is not the same as "new servers are patched." A running instance can drift away from the image that created it. If you later replace the instance from the old AMI, the old state returns. EC2 gives you the freedom to repair a live server, but reliable operations come from making the repair repeatable.
+The non-obvious part is the difference between patching one running server and patching the replacement path. A running instance can drift away from the image that created it. If you later replace the instance from the old AMI, the old state returns. EC2 gives you the freedom to repair a live server, but reliable operations come from making the repair repeatable.
 
 ## Instance Type
 
 The instance type is the virtual hardware shape. It determines the CPU, memory, storage options, and network performance available to the instance. A small instance type may be enough for a staging API. A memory-heavy process, busy web server, search node, or high-throughput worker may need a different family or size.
 
-This choice is easy to underthink because many tutorials pick the cheapest small instance that works for a demo. Production does not only ask whether the process starts. It asks whether the process has enough memory under load, enough CPU during bursts, enough network capacity for traffic, and enough storage performance for the way it reads and writes.
+This choice is easy to underthink because many tutorials pick the cheapest small instance that works for a demo. Production asks whether the process starts, has enough memory under load, enough CPU during bursts, enough network capacity for traffic, and enough storage performance for the way it reads and writes.
 
-The symptom of a bad instance type often appears far away from the launch screen. A Node process may crash because the machine runs out of memory. Health checks may become slow because CPU is saturated. A batch job may look "stuck" because disk or network throughput is the limiting resource. The instance type is part of the runtime contract, not just the bill.
+The symptom of a bad instance type often appears far away from the launch screen. A Node process may crash because the machine runs out of memory. Health checks may become slow because CPU is saturated. A batch job may look "stuck" because disk or network throughput is the limiting resource. The instance type is part of the runtime contract and the bill.
 
 You can change an instance type later, and teams often should test more than one. Still, treat that as an operational change, not as a free edit. The app may need downtime, replacement, or a rollout behind a load balancer. The better habit is to choose a type from the workload's shape, then measure it with the real service running.
 
@@ -189,7 +189,7 @@ For beginner EC2 operations, the patching model should be boring:
 | How do users avoid downtime? | More than one healthy target, or an accepted maintenance window |
 | How do you know it worked? | EC2 status checks pass, the process is active, and the load balancer target is healthy |
 
-The goal is not to memorize every patching tool. The goal is to avoid discovering during an urgent security update that nobody knows how to replace the server.
+The goal is to avoid discovering during an urgent security update that nobody knows how to replace the server.
 
 ## Sample Server Shape
 

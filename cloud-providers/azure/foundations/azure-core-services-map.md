@@ -41,7 +41,7 @@ What is the Azure S3?
 What is the Azure CloudWatch?
 ```
 
-Those questions are not useless, but they are too narrow. The better beginner question is:
+Those questions are useful and too narrow. The better beginner question is:
 
 > Which Azure service family should I look at first for this app need?
 
@@ -144,7 +144,7 @@ Other traffic services enter when the job changes:
 | API products, policies, quotas, versions, developer access | API Management |
 | Lower-level network load balancing | Azure Load Balancer |
 
-The AWS comparison helps here, but only if it stays job-based. Front Door is not just "the Azure ALB." Application Gateway is not just "the other ALB." API Management is not a load balancer with a nicer name. The traffic job decides the first service to inspect.
+The AWS comparison helps here when it stays job-based. Front Door, Application Gateway, and API Management each solve different traffic jobs. The traffic job decides the first service to inspect.
 
 ## Compute: Where The Code Runs
 

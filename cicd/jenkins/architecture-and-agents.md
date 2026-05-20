@@ -73,7 +73,7 @@ If you lose `$JENKINS_HOME`, you lose the entire Jenkins installation: every job
 
 When the controller dispatches a build to an agent, the agent creates a workspace directory for that build. The workspace is where the source code gets checked out and where the build runs. By default, the workspace path on the agent is `<agent_root>/workspace/<job_name>/`.
 
-Workspaces are not cleaned up automatically between builds by default. If you run the same job twice on the same agent, the second run reuses the same workspace directory. This can speed up builds (because cached dependencies like `node_modules` persist), but it can also cause subtle bugs if leftover files from a previous build interfere with the current one.
+Workspaces persist between builds by default. If you run the same job twice on the same agent, the second run reuses the same workspace directory. This can speed up builds (because cached dependencies like `node_modules` persist), but it can also cause subtle bugs if leftover files from a previous build interfere with the current one.
 
 You can force a clean workspace by adding a `cleanWs()` step to your pipeline, or by configuring the job to wipe the workspace before each build. Docker agents sidestep this problem entirely because every build gets a fresh container with no leftover state.
 

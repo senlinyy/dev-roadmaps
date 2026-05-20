@@ -36,13 +36,13 @@ Those values start in ordinary places because ordinary places are convenient:
 - A certificate is passed around as a file attachment.
 - A key rotation plan says "later" because nobody knows which apps still use the old value.
 
-The issue is not only leakage. It is also evidence. When someone asks who can read the payment secret, the team should not search source code, deployment logs, screenshots, chat messages, and old `.env` files. The answer should live in one controlled system.
+The issue includes leakage and evidence. When someone asks who can read the payment secret, the team should not search source code, deployment logs, screenshots, chat messages, and old `.env` files. The answer should live in one controlled system.
 
 Key Vault gives sensitive values a home that can be named, permissioned, versioned, monitored, and reviewed.
 
 ## What Is Key Vault
 
-Azure Key Vault is a service for storing and controlling access to secrets, keys, and certificates. It is not just a prettier environment-variable store. Its value is the operating model around sensitive material: one vault, named objects, access control, versions, logs, deletion protection, and evidence that does not require exposing the value.
+Azure Key Vault is a service for storing and controlling access to secrets, keys, and certificates. Its value is the operating model around sensitive material: one vault, named objects, access control, versions, logs, deletion protection, and evidence that does not require exposing the value.
 
 For the payments webhook, the vault is `kv-devpolaris-payments-prod`. The app runs with `mi-devpolaris-payments-webhook-prod`. The app does not store the database password or signing secret in its configuration. It stores references and asks Key Vault for the values at runtime.
 
@@ -88,7 +88,7 @@ That distinction prevents a common over-grant. The payments app may need to read
 
 A certificate combines public identity material with lifecycle concerns such as expiry and renewal. TLS certificates are the most familiar example. Certificates often include a private key, so they deserve the same controlled handling as other sensitive objects.
 
-Key Vault can store and help manage certificates. The operational value is not only storage. It is also the ability to see expiry, ownership, access, and renewal state in one place.
+Key Vault can store and help manage certificates. The operational value includes the ability to see expiry, ownership, access, and renewal state in one place.
 
 For the payments webhook, the TLS certificate may be consumed by an Azure gateway or platform integration rather than by the app code directly. That matters for access. The app's managed identity does not need certificate read access just because the app serves HTTPS through a platform path.
 
@@ -96,7 +96,7 @@ For the payments webhook, the TLS certificate may be consumed by an Azure gatewa
 
 Key Vault has two access-control stories that appear in real environments: Azure RBAC and the older vault access policy model. Newer designs often prefer Azure RBAC because it uses the same role assignment model covered in the first article.
 
-The key question is not "which button grants access?" The key question is still the RBAC shape:
+The key question is the RBAC shape:
 
 ```text
 principal + role + scope = access

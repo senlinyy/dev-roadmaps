@@ -82,7 +82,7 @@ The mistake is treating the Azure product menu as the model. The model is the qu
 
 A log is a written event. It says something happened at a time. Good logs include enough context to connect the event to a request, operation, resource, identity, or dependency.
 
-For checkout, a useful log is not just:
+For checkout, a useful log includes more than:
 
 ```text
 checkout failed
@@ -165,7 +165,7 @@ A useful checkout alert might be:
 | Action group | `orders-api-oncall` |
 | First check | Open Application Insights failures, then dependency failures for checkout |
 
-The last row is not an Azure requirement, but it is an operational gift. An alert should help the receiver start. Alerts that fire without direction train people to ignore them.
+The last row is an operational gift rather than an Azure requirement. An alert should help the receiver start. Alerts that fire without direction train people to ignore them.
 
 ## Azure Map
 

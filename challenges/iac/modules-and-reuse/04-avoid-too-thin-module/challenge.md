@@ -1,6 +1,6 @@
 ---
 title: "Avoid a Too-Thin Module"
-sectionSlug: when-a-module-is-too-thin
+sectionSlug: reuse-judgment
 order: 4
 ---
 

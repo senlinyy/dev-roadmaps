@@ -1,6 +1,6 @@
 ---
 title: "Resolve Lock Conflict"
-sectionSlug: locking-one-writer-at-a-time
+sectionSlug: locking
 order: 3
 ---
 

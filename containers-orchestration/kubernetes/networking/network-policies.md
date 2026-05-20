@@ -227,7 +227,7 @@ $ kubectl -n web run netcheck --rm -it --restart=Never --image=curlimages/curl -
   curl -i http://devpolaris-orders-api.orders/healthz
 ```
 
-The point is not to archive a large command transcript. The point is to leave enough proof that another engineer can see which network layers were healthy at the time of the check.
+Leave enough proof that another engineer can see which network layers were healthy at the time of the check.
 
 A NetworkPolicy evidence packet should prove both an allowed flow and a denied flow. Only proving the allowed flow can hide a policy that is too broad.
 

@@ -77,7 +77,7 @@ In Azure designs, TLS can terminate at different places:
 | Application Gateway | Regional layer 7 gateway inside or near the VNet. |
 | Backend app | End-to-end TLS or internal service requirements. |
 
-Termination is not only a security detail. It affects where HTTP routing decisions can happen, where certificates are managed, and what evidence you inspect during an incident.
+Termination affects security, HTTP routing decisions, certificate management, and the evidence you inspect during an incident.
 
 ## Front Door
 

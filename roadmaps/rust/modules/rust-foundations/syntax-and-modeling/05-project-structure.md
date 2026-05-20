@@ -1,382 +1,497 @@
 ---
 title: "Project Structure"
-description: "Organize a small Rust project with packages, crates, modules, visibility, lib.rs, main.rs, and integration tests."
-overview: "Once Rust code grows beyond one file, project structure becomes part of the design. This article shows how Cargo's package shape, crate roots, modules, visibility, and tests fit together."
+description: "Understand packages, crates, modules, paths, visibility, main.rs, lib.rs, and tests in a small Rust project."
+overview: "Rust projects use Cargo and a module system to organize code. This article explains the file layout and naming rules a beginner needs before reading larger repositories."
 tags: ["modules", "crates", "packages", "tests"]
-order: 3
+order: 5
 id: article-rust-rust-foundations-project-structure
 ---
 
 ## Table of Contents
 
-1. [The Problem](#the-problem)
+1. [What Is a Rust Project?](#what-is-a-rust-project)
 2. [The Map: Package, Crate, Module, Path](#the-map-package-crate-module-path)
-3. [Packages And Crates](#packages-and-crates)
-4. [main.rs And lib.rs](#mainrs-and-librs)
-5. [Modules](#modules)
+3. [main.rs And lib.rs](#mainrs-and-librs)
+4. [Modules](#modules)
+5. [Paths and use](#paths-and-use)
 6. [Visibility](#visibility)
 7. [Integration Tests](#integration-tests)
-8. [A Small Layout](#a-small-layout)
+8. [Common Layouts](#common-layouts)
 9. [Putting It All Together](#putting-it-all-together)
-10. [What's Next](#whats-next)
+10. [Toward Computer Science for Rust](#toward-computer-science-for-rust)
 
-## The Problem
+## What Is a Rust Project?
 
-The notes program has grown. `main.rs` now parses a command, stores notes, searches text, formats output, and prints results. It still compiles, but every change requires scrolling through one file.
+If you are used to small scripts, one file can feel like the whole program. Rust can start that way too. A beginner project created by Cargo has one manifest and one source file:
 
-That creates a different kind of bug. The program is not failing because Rust is strict. It is failing because the code has no map:
+```bash
+$ cargo new notes-cli
+    Creating binary (application) `notes-cli` package
+$ tree -L 2 notes-cli
+notes-cli
+├── Cargo.toml
+└── src
+    └── main.rs
+```
 
-- The command-line entry point is mixed with reusable logic.
-- Helper functions are visible only because they sit nearby.
-- Tests are awkward because the behavior lives inside the binary file.
-- Future modules have no obvious place to go.
+That is enough for a tiny command-line program. The manifest describes the package, and `src/main.rs` contains the executable code.
 
-Rust project structure solves this by separating package, crate, module, and visibility decisions. Those words sound abstract, but the day-to-day habit is practical: keep `main.rs` thin, put reusable behavior in `lib.rs` and modules, and expose only the pieces other code needs.
+The shape changes as soon as code needs to be reused. A notes program may need a command-line entry point, a note model, parsing helpers, and tests. If everything stays in `main.rs`, the file becomes hard to scan and harder to test. Rust's project structure gives you names for the pieces before the project gets large.
+
+Here is a slightly larger layout:
+
+```text
+notes-cli
+├── Cargo.toml
+├── Cargo.lock
+├── src
+│   ├── lib.rs
+│   ├── main.rs
+│   └── note.rs
+└── tests
+    └── note_summary.rs
+```
+
+This project has one package, a binary crate, a library crate, one module file, and one integration test. Those words are easy to mix up, so the next section builds the map slowly.
 
 ## The Map: Package, Crate, Module, Path
 
-Rust uses several organization words at once. They are easier to read if you attach each word to the thing it organizes.
+Rust uses four names that sound similar at first: package, crate, module, and path. They describe different layers of organization.
 
-| Word | What it organizes | Small example |
+| Word | Plain meaning | Example |
 | --- | --- | --- |
-| Package | The project Cargo manages | `rust-notes/` with one `Cargo.toml` |
-| Crate | One compiled library or executable | `src/lib.rs` or `src/main.rs` |
-| Module | A named area inside a crate | `parser`, `model`, `storage` |
-| Path | The route to an item through modules | `rust_notes::parser::count_words` |
+| Package | A Cargo project described by `Cargo.toml` | `notes-cli` |
+| Crate | A compilation unit that produces a library or executable | `src/main.rs` or `src/lib.rs` |
+| Module | A namespace inside a crate | `note` |
+| Path | A name that points to an item | `crate::note::Note` |
 
-The package is the folder Cargo understands. A crate is one thing the Rust compiler builds from that package. A module is how Rust code inside a crate is divided into names. A path is how code names an item once it is in that module tree.
+A package is Cargo's unit. It has a manifest, dependencies, build settings, and usually source files under `src/`.
 
-```text
-rust-notes/                 package
-  Cargo.toml
-  src/
-    lib.rs                  library crate root
-    main.rs                 binary crate root
-    parser.rs               parser module
-```
+A crate is Rust's compilation unit. A binary crate builds an executable. A library crate builds reusable code that other code can call. One package can contain a library crate and one or more binary crates.
 
-This differs from some JavaScript and Python habits. Rust does not automatically include every file just because it exists. A file becomes part of the crate when a module declaration connects it to the module tree.
+A module organizes items inside a crate. Items are things like functions, structs, enums, constants, traits, and nested modules. Modules let you group related code and control which names are visible from outside.
 
-## Packages And Crates
+A path is how Rust names an item. The path `crate::note::Note` means "start at this crate root, enter the `note` module, then find the `Note` item."
 
-Cargo works with packages. A package has a `Cargo.toml` manifest and contains one or more crates.
-
-A crate is the unit the compiler works on. A crate can be a binary crate, which builds an executable, or a library crate, which exposes reusable code.
-
-For a small app, Cargo's default layout starts here:
+The map is easier to see as a tree:
 
 ```text
-rust-notes/
-  Cargo.toml
-  src/
-    main.rs
+Package: notes-cli
+├── Cargo.toml
+├── Crate: library (src/lib.rs)
+│   └── Module: note (src/note.rs)
+│       └── Item: Note
+└── Crate: binary (src/main.rs)
+    └── uses the library crate
 ```
 
-That package contains one binary crate. `src/main.rs` is the crate root. The crate root is the file where the compiler starts building that crate's module tree.
-
-If you add `src/lib.rs`, the same package also contains a library crate:
-
-```text
-rust-notes/
-  Cargo.toml
-  src/
-    lib.rs
-    main.rs
-```
-
-This is a common shape for command-line apps. The binary crate handles startup, input, and output. The library crate holds behavior that can be tested and reused.
+When a Rust repository feels confusing, start by asking which layer you are looking at. `Cargo.toml` is package-level. `main.rs` and `lib.rs` are crate roots. `mod note;` declares a module. `crate::note::Note` is a path to an item.
 
 ## main.rs And lib.rs
 
-`main.rs` should answer one question: how does the program start?
+Cargo gives special meaning to two files under `src/`.
 
-For the notes app, keep it thin:
+`src/main.rs` is the default root of a binary crate. It builds an executable. If the package is a command-line tool or server, `main.rs` is where the process starts.
 
-```rust
-use rust_notes::count_words;
+`src/lib.rs` is the default root of a library crate. It builds reusable code that can be used by the package's binary, integration tests, examples, or other packages.
 
-fn main() {
-    let text = "Cargo creates Rust projects";
-    let count = count_words(text);
+A common beginner refactor is to move reusable logic out of `main.rs` and into `lib.rs` plus module files.
 
-    println!("{count} words");
-}
-```
-
-The reusable logic goes in `lib.rs`:
+Start with a crowded `main.rs`:
 
 ```rust
-pub fn count_words(text: &str) -> usize {
-    text.split_whitespace().count()
-}
-```
-
-The line `use rust_notes::count_words;` may look surprising. The binary crate can use the library crate from the same package by the package name, with hyphens converted to underscores. If the package is named `rust-notes`, the crate path is `rust_notes`. `use` brings a path into scope; it does not load a file the way some languages' imports do.
-
-This split gives you a cleaner testing path. Functions in `lib.rs` are library items. Integration tests can import them like external users would.
-
-## Modules
-
-As the library grows, split related code into modules.
-
-Start with a parser module:
-
-```text
-rust-notes/
-  src/
-    lib.rs
-    main.rs
-    parser.rs
-```
-
-Declare the module in `lib.rs`:
-
-```rust
-pub mod parser;
-
-pub fn count_words(text: &str) -> usize {
-    parser::words(text).len()
-}
-```
-
-Then define the module in `parser.rs`:
-
-```rust
-pub fn words(text: &str) -> Vec<&str> {
-    text.split_whitespace().collect()
-}
-```
-
-The module declaration `pub mod parser;` tells Rust to include `src/parser.rs` as the `parser` module. The `pub` makes the module visible to users of the library crate.
-
-Without `pub`, the module is private to the crate. That is often what you want for internal helpers.
-
-:::expand[Why Rust asks you to declare modules]{kind="design"}
-In many languages, a file becomes importable as soon as it exists at a path. Rust makes the crate's module tree explicit instead.
-
-This line in `lib.rs`:
-
-```rust
-pub mod parser;
-```
-
-does two jobs. It declares a module named `parser`, and it tells Rust where to look for that module's source, usually `src/parser.rs` or `src/parser/mod.rs`.
-
-That can feel like extra ceremony, but it gives the crate root a clear table of contents. A reader can open `lib.rs` and see which modules are part of the crate and which names are meant to be public.
-
-The design also separates file layout from public API. You might keep `parser.rs` private:
-
-```rust
-mod parser;
-
-pub use parser::count_words;
-```
-
-Now outside code can call `rust_notes::count_words`, but it does not rely on a public `rust_notes::parser` module. Later you can move parsing code into `src/text/parser.rs` and keep the same public path. The module declaration is not just about finding files; it is about deciding which structure the rest of the world is allowed to depend on.
-:::
-
-## Visibility
-
-Rust is private by default. This is true for modules, functions, structs, fields, and many other items.
-
-Private by default is useful because it makes the public API intentional. If other code cannot depend on an internal helper, you can change that helper later without breaking callers.
-
-Here is a small example:
-
-```rust
-pub struct Note {
-    pub title: String,
+struct Note {
+    title: String,
     body: String,
 }
 
 impl Note {
-    pub fn new(title: String, body: String) -> Note {
-        Note { title, body }
+    fn new(title: &str, body: &str) -> Self {
+        Self {
+            title: title.to_string(),
+            body: body.to_string(),
+        }
     }
 
-    pub fn word_count(&self) -> usize {
-        self.body.split_whitespace().count()
+    fn summary(&self) -> String {
+        format!("{}: {}", self.title, self.body)
+    }
+}
+
+fn main() {
+    let note = Note::new("Deploy notes", "Remember the release checklist");
+    println!("{}", note.summary());
+}
+```
+
+This works, but the model and the entry point are tied together. Split the reusable model into the library side.
+
+`src/lib.rs` becomes:
+
+```rust
+pub mod note;
+
+pub use note::Note;
+```
+
+`src/main.rs` becomes:
+
+```rust
+use notes_cli::Note;
+
+fn main() {
+    let note = Note::new("Deploy notes", "Remember the release checklist");
+    println!("{}", note.summary());
+}
+```
+
+The line `use notes_cli::Note;` imports the public `Note` type from the library crate. Cargo turns the package name `notes-cli` into the Rust crate name `notes_cli` because Rust crate names use underscores in code.
+
+This split gives tests and other code a clean public API to call. It also keeps `main.rs` focused on starting the program, parsing input, and connecting pieces together.
+
+## Modules
+
+A module is a namespace. It groups items and controls visibility.
+
+The line in `src/lib.rs` declares a module:
+
+```rust
+pub mod note;
+```
+
+That declaration tells Rust to load module code from a file. For a module named `note`, Rust looks for one of these standard shapes:
+
+| Declaration | File Rust reads |
+| --- | --- |
+| `mod note;` | `src/note.rs` |
+| `mod note;` | `src/note/mod.rs` |
+
+The flat file form is common for small modules:
+
+```text
+src
+├── lib.rs
+├── main.rs
+└── note.rs
+```
+
+The directory form is useful when a module grows its own submodules:
+
+```text
+src
+├── lib.rs
+├── main.rs
+└── note
+    ├── mod.rs
+    ├── parser.rs
+    └── status.rs
+```
+
+Inside `src/note.rs`, define the type:
+
+```rust
+pub struct Note {
+    title: String,
+    body: String,
+}
+
+impl Note {
+    pub fn new(title: &str, body: &str) -> Self {
+        Self {
+            title: title.to_string(),
+            body: body.to_string(),
+        }
+    }
+
+    pub fn summary(&self) -> String {
+        format!("{}: {}", self.title, self.body)
     }
 }
 ```
 
-Callers can read `title`, but they cannot directly read or change `body`. They must use behavior the type exposes, such as `word_count`.
+The struct and methods are marked `pub` so code outside the module can use them. The fields are private because callers should build notes through `Note::new` and read summaries through `summary`. Visibility is covered more below.
 
-This is not about hiding code for its own sake. It is about making promises smaller. Public items are promises to other code. Private items are implementation details you can reshape.
+The useful habit is to keep modules named after the job they own. A `note` module should own the note model and closely related behavior. A `parser` module should own parsing. A `storage` module should own storage concerns. Names should help a reader guess where code lives.
 
-:::expand[Keep modules private, re-export the API you mean]{kind="pattern"}
-A common library pattern is to keep the file layout private and re-export the small API callers should use.
+## Paths and use
 
-The project might look like this:
+A path names an item. Rust paths use `::` between segments.
 
-```text
-rust-notes/
-  src/
-    lib.rs
-    parser.rs
-    model.rs
-```
-
-In `lib.rs`:
+Inside the library crate, the full path to the note type is:
 
 ```rust
-mod parser;
-mod model;
-
-pub use parser::count_words;
-pub use model::Note;
+crate::note::Note
 ```
 
-In `parser.rs`:
+`crate` means the current crate root. `note` is the module declared in `lib.rs`. `Note` is the struct inside that module.
+
+You can write the full path each time:
 
 ```rust
-pub fn count_words(text: &str) -> usize {
-    text.split_whitespace().count()
+fn print_note(note: crate::note::Note) {
+    println!("{}", note.summary());
 }
 ```
 
-Now callers write:
+That becomes noisy, so Rust has `use` imports:
 
 ```rust
-let count = rust_notes::count_words("one two three");
+use crate::note::Note;
+
+fn print_note(note: Note) {
+    println!("{}", note.summary());
+}
 ```
 
-They do not depend on the fact that the function currently lives in `parser.rs`.
+The `use` line brings the name `Note` into the current scope. It does not copy code or load a package at runtime. It only gives the current module a shorter name for an item.
 
-Later, the internal layout might become:
+From the binary crate, the path starts with the library crate name:
 
-```text
-src/
-  lib.rs
-  text/
-    mod.rs
-    parser.rs
+```rust
+use notes_cli::Note;
 ```
 
-If `lib.rs` still re-exports `count_words`, outside callers do not change. That is the point of this pattern. Modules organize your implementation. Re-exports define the public path you want other code to rely on.
+That works because `src/lib.rs` re-exported the type:
 
-The trap is making every module `pub mod` too early. That exposes the file layout as part of your API. Start private, then re-export the names that form the real interface.
-:::
+```rust
+pub use note::Note;
+```
+
+A re-export makes an item available through a shorter public path. Without that line, callers would use:
+
+```rust
+use notes_cli::note::Note;
+```
+
+Both paths can be valid. The shorter public path is often nicer when `Note` is an important type in the library's API.
+
+## Visibility
+
+Rust items are private by default. That means code outside the current module cannot use them unless you mark them public.
+
+This struct is public, but its fields are private:
+
+```rust
+pub struct Note {
+    title: String,
+    body: String,
+}
+```
+
+External code can name `Note`, but it cannot build one by writing the fields directly:
+
+```rust
+let note = Note {
+    title: String::from("Deploy notes"),
+    body: String::from("Remember the release checklist"),
+};
+```
+
+That fails outside the module because the fields are private. Callers must use the public constructor:
+
+```rust
+let note = Note::new("Deploy notes", "Remember the release checklist");
+```
+
+This is a deliberate API boundary. The module controls how a valid note is built. Later, if the struct gains a `status` field or needs validation, callers can keep using `Note::new`.
+
+Public methods are marked on the method itself:
+
+```rust
+impl Note {
+    pub fn new(title: &str, body: &str) -> Self {
+        Self {
+            title: title.to_string(),
+            body: body.to_string(),
+        }
+    }
+
+    pub fn summary(&self) -> String {
+        format!("{}: {}", self.title, self.body)
+    }
+}
+```
+
+Visibility is one of Rust's main project-structure tools. It lets a module keep helper details private while exposing the smaller surface callers should use.
+
+The common levels are:
+
+| Visibility | Meaning |
+| --- | --- |
+| private by default | Usable only from the current module and its child modules. |
+| `pub` | Public to callers that can reach the module path. |
+| `pub(crate)` | Public inside the current crate, private to outside crates. |
+| `pub(super)` | Public to the parent module. |
+
+Start simple. Use private by default, then make a type or method public when another module genuinely needs it.
 
 ## Integration Tests
 
-Rust supports tests inside modules, but integration tests live in `tests/` and use the library from the outside.
+Rust has unit tests and integration tests. Unit tests often live next to the code they test. Integration tests live in the top-level `tests/` directory and compile as separate crates that use your library from the outside.
+
+That outside view is useful. It tests the public API the way another user of the crate would use it.
+
+Create this file:
 
 ```text
-rust-notes/
-  tests/
-    word_count_test.rs
+tests/note_summary.rs
 ```
 
-The test imports the library crate:
+Then write:
 
 ```rust
-use rust_notes::count_words;
+use notes_cli::Note;
 
 #[test]
-fn counts_words() {
-    assert_eq!(count_words("one two three"), 3);
+fn builds_summary() {
+    let note = Note::new("Deploy notes", "Remember the release checklist");
+
+    assert_eq!(
+        note.summary(),
+        "Deploy notes: Remember the release checklist"
+    );
 }
 ```
 
-Run it with:
+Run the tests:
 
 ```bash
-cargo test
+$ cargo test
+   Compiling notes-cli v0.1.0 (/home/you/notes-cli)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.37s
+     Running tests/note_summary.rs (target/debug/deps/note_summary-...)
+
+running 1 test
+test builds_summary ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored
 ```
 
-Integration tests are useful because they behave like a real caller. They can only use public API. If a test cannot reach a function, that is a design question: should the behavior be public, or should it be tested through a public function that uses it?
+The test imports `Note` through `use notes_cli::Note;`, just like the binary did. If `Note` or its methods are not public, this integration test will not compile. That is a feature, because it tells you whether the library API is actually usable from the outside.
 
-## A Small Layout
+Integration tests are a good reason to move reusable logic into `lib.rs`. A binary-only project can still be tested, but the cleanest public API usually lives in the library crate.
 
-A useful beginner layout for a command-line Rust project looks like this:
+## Common Layouts
+
+Rust projects tend to use a few recognizable layouts.
+
+The smallest binary project:
 
 ```text
-rust-notes/
-  Cargo.toml
-  src/
-    main.rs
-    lib.rs
-    model.rs
-    parser.rs
-  tests/
-    parser_test.rs
+notes-cli
+├── Cargo.toml
+└── src
+    └── main.rs
 ```
 
-One possible responsibility split:
+This is fine for a tiny program or learning exercise.
 
-| File | Job |
+A binary plus library:
+
+```text
+notes-cli
+├── Cargo.toml
+├── src
+│   ├── lib.rs
+│   ├── main.rs
+│   └── note.rs
+└── tests
+    └── note_summary.rs
+```
+
+This is common when the command-line entry point uses reusable logic that tests should call directly.
+
+A package with multiple binaries:
+
+```text
+notes-cli
+├── Cargo.toml
+└── src
+    ├── bin
+    │   ├── export.rs
+    │   └── import.rs
+    ├── lib.rs
+    └── note.rs
+```
+
+Each file under `src/bin/` becomes a separate binary target. This is useful when a package contains related commands that share the same library code.
+
+A module that grew into a directory:
+
+```text
+src
+├── lib.rs
+└── note
+    ├── mod.rs
+    ├── parser.rs
+    └── status.rs
+```
+
+This layout keeps a larger module split into focused files. The `note/mod.rs` file is the module root, and it can declare submodules such as `parser` and `status`.
+
+Here is the quick reference:
+
+| File or directory | Purpose |
 | --- | --- |
-| `main.rs` | Read inputs, call library code, print output |
-| `lib.rs` | Re-export the library's useful public API |
-| `model.rs` | Define structs and enums such as `Note` and `NoteStatus` |
-| `parser.rs` | Parse text into note data or words |
-| `tests/parser_test.rs` | Test behavior from the outside |
+| `Cargo.toml` | Package manifest and dependency requirements. |
+| `Cargo.lock` | Exact resolved dependency versions. |
+| `src/main.rs` | Default binary crate root. |
+| `src/lib.rs` | Default library crate root. |
+| `src/name.rs` | Flat module file. |
+| `src/name/mod.rs` | Directory-style module root. |
+| `src/bin/*.rs` | Additional binary targets. |
+| `tests/*.rs` | Integration tests. |
+| `target/` | Cargo-managed build output. |
 
-This is not the only valid structure. It is a starting map. The better rule is: split code when the split gives a reader a clearer place to look.
-
-:::expand[Split by responsibility, not by noun count]{kind="pitfall"}
-A new Rust file should earn its place by giving the reader a better map. It should not exist just because you introduced one more struct.
-
-This looks organized at first:
-
-```text
-src/
-  note.rs
-  note_status.rs
-  notebook.rs
-  word.rs
-  word_count.rs
-```
-
-But if those files are tiny and always change together, the split creates navigation tax. A reader has to open five files to understand one small model.
-
-For a beginner notes app, this may be clearer:
-
-```text
-src/
-  model.rs
-  parser.rs
-  storage.rs
-```
-
-`model.rs` can hold related types such as `Note`, `NoteStatus`, and `Notebook`. `parser.rs` earns its file because parsing has its own edge cases and tests. `storage.rs` earns its file once paths, serialization, and I/O errors become their own concern.
-
-Good reasons to split include:
-
-| Split pressure | What it means |
-| --- | --- |
-| Different tests | The behavior has its own edge cases |
-| Different dependencies | One area needs `serde`, another does not |
-| Different change rate | Storage changes often, model types stay stable |
-| Different audience | Some items are public API, others are internal helpers |
-
-Structure should reduce thinking load, not perform tidiness. If a split makes the reader ask "where did the code go?", it may be too early.
-:::
+When exploring a repository, start at `Cargo.toml`, then check whether `src/main.rs`, `src/lib.rs`, or both exist. From there, follow `mod` declarations and `use` paths.
 
 ## Putting It All Together
 
-The opening problem was a crowded `main.rs`. Rust gives you several layers for organizing code:
+The project started as one file:
 
-- A package is the Cargo-managed project described by `Cargo.toml`.
-- A crate is what the compiler builds as a library or executable.
-- `main.rs` is the normal root for a binary crate.
-- `lib.rs` is the normal root for a library crate.
-- Modules split code into named areas.
-- `pub` controls which parts become part of the public API.
-- Integration tests use the library like an outside caller.
+```text
+src/main.rs
+```
 
-The habit is simple: keep startup code near `main`, keep reusable behavior in the library, group related code into modules, and make public only what other code should rely on.
+That was enough to print text. As the notes program gained a model and tests, the structure became:
 
-## What's Next
+```text
+notes-cli
+├── Cargo.toml
+├── Cargo.lock
+├── src
+│   ├── lib.rs
+│   ├── main.rs
+│   └── note.rs
+└── tests
+    └── note_summary.rs
+```
 
-You now have the first Rust foundation: why Rust exists, how to run it, how to read it, how to model simple data, and how to organize a small project. The next module starts the real Rust gate: ownership, borrowing, references, strings, slices, and lifetimes.
+Each piece has a job:
+
+- The package is the Cargo project described by `Cargo.toml`.
+- The binary crate in `main.rs` starts the executable.
+- The library crate in `lib.rs` exposes reusable code.
+- The `note` module groups the note model and behavior.
+- Paths such as `notes_cli::Note` name items across crate boundaries.
+- Visibility keeps helper details private and exposes the intended API.
+- Integration tests use the public API from the outside.
+
+Project structure is a reading tool as much as an organization tool. Once you know the map, an unfamiliar Rust repository becomes less like a pile of files and more like a set of named boundaries.
+
+## Toward Computer Science for Rust
+
+Rust Foundations gave you the first surface: why Rust exists, how Cargo runs the workflow, how small programs read, how types model states, and where files live in a project.
+
+The next module goes underneath that surface. It explains what a running program is doing, where values live in memory, why stack and heap matter, how types give meaning to bits, and how data structures and threads change the shape of a Rust program.
 
 ---
 
 **References**
 
-- [Packages, Crates, and Modules](https://doc.rust-lang.org/book/ch07-00-managing-growing-projects-with-packages-crates-and-modules.html). Supports the role of packages, crates, modules, paths, scope, and privacy.
-- [Packages and Crates](https://doc.rust-lang.org/book/ch07-01-packages-and-crates.html). Supports package structure, binary crates, library crates, `src/main.rs`, and `src/lib.rs`.
-- [First Steps with Cargo](https://doc.rust-lang.org/stable/cargo/getting-started/first-steps.html). Supports Cargo's generated project layout and manifest behavior.
-- [Hello, Cargo!](https://doc.rust-lang.org/stable/book/ch01-03-hello-cargo.html). Supports Cargo's project workflow and generated package files.
+- [The Cargo Book: Package Layout](https://doc.rust-lang.org/cargo/guide/project-layout.html) - Official Cargo guide to standard project layout.
+- [The Rust Programming Language: Packages and Crates](https://doc.rust-lang.org/book/ch07-01-packages-and-crates.html) - Official explanation of packages, crates, binary crates, and library crates.
+- [The Rust Programming Language: Defining Modules](https://doc.rust-lang.org/book/ch07-02-defining-modules-to-control-scope-and-privacy.html) - Official guide to module declarations and file structure.
+- [The Rust Programming Language: Paths](https://doc.rust-lang.org/book/ch07-03-paths-for-referring-to-an-item-in-the-module-tree.html) - Official explanation of paths and the `use` keyword.
+- [The Rust Programming Language: Separating Modules Into Different Files](https://doc.rust-lang.org/book/ch07-05-separating-modules-into-different-files.html) - Official guide to module files and directory layout.
+- [The Rust Programming Language: Automated Tests](https://doc.rust-lang.org/book/ch11-00-testing.html) - Official guide to Rust tests, including integration tests.

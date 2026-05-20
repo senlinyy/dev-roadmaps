@@ -1,6 +1,6 @@
 ---
 title: "Choose a Safe Apply Boundary"
-sectionSlug: choosing-automation-boundaries
+sectionSlug: apply-boundaries
 order: 3
 ---
 

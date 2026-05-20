@@ -132,7 +132,7 @@ projects/_/buckets/devpolaris-orders-receipts-prod
 projects/devpolaris-orders-prod/secrets/orders-db-url
 ```
 
-The point is not to memorize every format today. The point is to copy the strong identifier when reviewing or changing production. A ticket that says "fix the orders service" is easy to misunderstand. A ticket that includes project, location, resource type, and exact resource path is much safer.
+The point is to copy the strong identifier when reviewing or changing production. A ticket that says "fix the orders service" is easy to misunderstand. A ticket that includes project, location, resource type, and exact resource path is much safer.
 
 Resource paths are the GCP version of the habit AWS taught with ARNs and Azure taught with resource IDs: make the target exact before changing it.
 
@@ -163,7 +163,7 @@ A useful naming and labeling review is small:
 | Database | `sql-orders-prod` | `service=orders-api`, `env=prod`, `component=db` |
 | Receipts | `devpolaris-orders-receipts-prod` | `service=orders-api`, `env=prod`, `component=receipts` |
 | Images | `orders-prod` | `service=orders-api`, `env=prod`, `component=images` |
-| Runtime identity | `orders-api-prod@...` | Use IAM evidence, not only labels. |
+| Runtime identity | `orders-api-prod@...` | Use IAM evidence alongside labels. |
 
 The exact prefix pattern can vary by team. The important part is that the name, project, labels, and resource path agree on the same story.
 

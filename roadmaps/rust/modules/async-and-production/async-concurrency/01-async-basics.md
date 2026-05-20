@@ -216,7 +216,7 @@ Count back to the opener:
 - `.await` marks a pause point.
 - Tokio drives the future on a runtime.
 
-Async Rust is not a replacement for ownership, errors, or traits. It is those same ideas applied to code that waits.
+Async Rust applies ownership, errors, and traits to code that waits.
 
 ## What's Next
 

@@ -92,7 +92,7 @@ The Role lets the release job update Deployments and read Pods and Events. It do
 
 ## ClusterRoles and ClusterRoleBindings
 
-A ClusterRole is a role object that is not stored inside a namespace. It can be used in two ways. You can bind it into one namespace with a RoleBinding, or you can bind it across the whole cluster with a ClusterRoleBinding.
+A ClusterRole is a role object stored at cluster scope. It can be used in two ways. You can bind it into one namespace with a RoleBinding, or you can bind it across the whole cluster with a ClusterRoleBinding.
 
 This distinction is useful because Kubernetes ships common ClusterRoles such as `view`, `edit`, and `admin`. You can bind `view` into the `orders` namespace without granting view access to the whole cluster.
 
@@ -196,7 +196,7 @@ roleRef:
   name: cluster-admin
 ```
 
-The failure mode is not only security. Broad permissions make automation bugs more dangerous. A script intended to delete old Pods in `orders` can delete workloads in another namespace if it has cluster-wide delete access.
+Broad permissions create security risk and make automation bugs more dangerous. A script intended to delete old Pods in `orders` can delete workloads in another namespace if it has cluster-wide delete access.
 
 The diagnostic path is to reproduce the forbidden action with `kubectl auth can-i`, then add the smallest missing verb and resource in the right namespace. If a job needs `patch deployments`, grant that. Do not grant every verb on every resource.
 

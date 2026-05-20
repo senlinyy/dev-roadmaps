@@ -59,15 +59,15 @@ A container app has a practical runtime contract:
 | Azure caller identity | Managed identity |
 | Runtime evidence | Logs and metrics |
 
-The service is not a container image validator. If the image cannot start, listens on the wrong port, or needs a setting that is not present, Container Apps will faithfully run a failing container. The image contract still belongs to the team.
+Container Apps runs the image the team provides. If the image fails to start, listens on the wrong port, or needs a missing setting, Container Apps will faithfully run a failing container. The image contract still belongs to the team.
 
 ## Environment
 
 A Container Apps environment is the boundary around one or more container apps. It provides the managed runtime context, networking scope, and log destination for the apps inside it. In many small systems, one environment holds a related set of APIs and workers for one product and stage.
 
-The environment matters because it is not just a folder. It affects how apps inside it communicate, where logs go, and how the platform is configured. A production environment and a staging environment should usually be separate so their network, identities, secrets, and logs do not blur.
+The environment matters because it affects how apps inside it communicate, where logs go, and how the platform is configured. A production environment and a staging environment should usually be separate so their network, identities, secrets, and logs do not blur.
 
-For the checkout API, an environment name such as `cae-orders-prod-eus` tells a human three useful things: it is a Container Apps environment, it belongs to orders production, and it sits in East US. The name is not the boundary by itself, but good names make the boundary easier to inspect.
+For the checkout API, an environment name such as `cae-orders-prod-eus` tells a human three useful things: it is a Container Apps environment, it belongs to orders production, and it sits in East US. The configured environment is the real boundary, and good names make that boundary easier to inspect.
 
 ## Container App
 
@@ -115,7 +115,7 @@ Ingress decides whether and how traffic reaches the container app. For an HTTP A
 
 External ingress means the app can receive traffic from outside the environment through a public endpoint. Internal ingress keeps traffic inside the environment or virtual network integration boundary. The right choice depends on the architecture. A public API may need external ingress. A private worker API usually should not.
 
-Ingress is not the whole security model. It is the front door shape. You still need identity, app-level authorization, network design, and secrets handled correctly. But ingress is the first place to look when the complaint is "the container runs, but nobody can reach it."
+Ingress is the front door shape within a broader security model. You still need identity, app-level authorization, network design, and secrets handled correctly. But ingress is the first place to look when the complaint is "the container runs, but nobody can reach it."
 
 ## Scaling
 

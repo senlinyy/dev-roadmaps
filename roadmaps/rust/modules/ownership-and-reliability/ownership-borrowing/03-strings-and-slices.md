@@ -49,7 +49,7 @@ struct Note {
 }
 ```
 
-This means each `Note` is responsible for keeping its own title and body alive. The text is not just a temporary view into a command line argument or a file buffer that might disappear.
+This means each `Note` is responsible for keeping its own title and body alive. The text remains valid independently of a command line argument or file buffer that might disappear.
 
 Creating a note can take owned strings too:
 
@@ -183,7 +183,7 @@ The bigger idea is still the same: a slice borrows part of an owner. It is cheap
 
 ## What A Slice Stores
 
-A slice is not a new collection. It is a view with two essential pieces of information:
+A slice is a view with two essential pieces of information:
 
 ```text
 slice = where the viewed data starts + how much of it is visible
@@ -290,7 +290,7 @@ Here is the common family pattern:
 | `Vec<T>` | `&[T]` | Reading a list without taking it |
 | `[T; N]` | `&[T]` | Reading an array through the same list view |
 
-This table is not a rule that replaces thought. It is a map. Owned containers keep data. Borrowed slices let helpers inspect data.
+Use this table as a map. Owned containers keep data. Borrowed slices let helpers inspect data.
 
 :::expand[Accept slices when a function only reads a list]{kind="pattern"}
 If a function only reads a list, prefer a slice parameter:

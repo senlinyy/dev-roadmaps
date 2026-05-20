@@ -42,7 +42,7 @@ The habit is simple: before creating a resource, name the account, Region, and z
 
 ## Accounts
 
-An AWS account is the first hard boundary around a workload. It is not just a login. It is the container where AWS resources are created and owned. It has its own account ID, identities, permissions, billing boundary, service quotas, and default isolation from other accounts.
+An AWS account is the first hard boundary around a workload. It is the container where AWS resources are created and owned. It has its own account ID, identities, permissions, billing boundary, service quotas, and default isolation from other accounts.
 
 That boundary changes how you read every resource. If the orders database is in account `333333333333`, then looking from account `222222222222` does not prove the database is missing. It proves you are standing outside the boundary that owns it. If a staging administrator can change production-like resources because both environments live in one shared account, the account boundary is not helping you.
 
@@ -83,7 +83,7 @@ You do not need a new account for every tiny resource. You need a separate accou
 
 Production and non-production usually deserve separate accounts because the cost of confusion is high. A developer should be able to break a development database without also owning the production database. A staging load test should not consume the same account-level quota that production depends on. A broad permission needed for an experiment should not automatically become broad permission near customer data.
 
-Different workloads may also deserve separate accounts when they have different owners, data sensitivity, compliance needs, release rhythms, or cost reporting needs. The point is not to make the account tree elaborate. The point is to avoid pretending that tags, naming, and good intentions are the same as a security and billing boundary.
+Different workloads may also deserve separate accounts when they have different owners, data sensitivity, compliance needs, release rhythms, or cost reporting needs. The point is to avoid pretending that tags, naming, and good intentions are the same as a security and billing boundary.
 
 | Boundary Question | Usually Same Account | Usually Separate Account |
 | --- | --- | --- |
@@ -100,7 +100,7 @@ AWS Organizations and Control Tower can help manage many accounts, but those too
 
 After account, choose the Region. A Region is a separate geographic area such as `us-east-1`, `eu-west-2`, or `ap-southeast-2`. Most AWS services support Regional resources. When you create a Regional resource, it belongs to the Region where you created it. Looking in another Region can make the console appear empty even when the resource is healthy somewhere else.
 
-That is why the Region selector is not cosmetic. If the app runs in `us-east-1`, the database lives in `us-west-2`, and the backup bucket is in `eu-west-1`, the workload is not one clean placement story. It may still function, but every recovery plan, data movement path, access review, and cost discussion starts with extra questions.
+That is why the Region selector affects the architecture. If the app runs in `us-east-1`, the database lives in `us-west-2`, and the backup bucket is in `eu-west-1`, the workload has a messy placement story. It may still function, but every recovery plan, data movement path, access review, and cost discussion starts with extra questions.
 
 Choose a Region by asking what the workload needs to be near:
 

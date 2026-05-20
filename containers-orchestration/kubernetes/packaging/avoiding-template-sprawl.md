@@ -46,7 +46,7 @@ Week 13:
   profile value that changes strategy, probes, and resources
 ```
 
-The fix is not to reject every option. The fix is to make every option earn its place by improving the rendered manifest or the review process.
+Keep the options that earn their place by improving the rendered manifest or the review process.
 
 ## Keep the Rendered Object in Mind
 

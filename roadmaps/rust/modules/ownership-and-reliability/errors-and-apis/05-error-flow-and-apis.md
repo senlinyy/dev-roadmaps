@@ -357,7 +357,7 @@ fn load_default_notebook(path: &str) -> Result<&str, ConfigError> {
 
 The returned `&str` would point into `text`. But `text` is a local `String`. When `load_default_notebook` returns, `text` goes out of scope and Rust drops it. The heap bytes that held the config file are cleaned up. A returned slice would point at data that no longer belongs to the program.
 
-The fix is not to fight lifetimes. The fix is to choose the right ownership boundary:
+Choose the right ownership boundary:
 
 ```rust
 fn load_default_notebook(path: &str) -> Result<String, ConfigError> {

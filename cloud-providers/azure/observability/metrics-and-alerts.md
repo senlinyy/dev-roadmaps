@@ -33,7 +33,7 @@ The previous article followed one checkout request through Application Insights.
 
 Metrics, dashboards, and alerts answer those broader operating questions. Metrics show numbers over time. Dashboards put important numbers where the team can see them together. Alert rules watch selected signals. Action groups decide who or what gets notified.
 
-The goal is not to measure everything. The goal is to notice meaningful change early enough to respond.
+The goal is to notice meaningful change early enough to respond.
 
 ## Metrics
 
@@ -59,7 +59,7 @@ For the orders API, a small first operating set is enough:
 | --- | --- |
 | Request count | Shows whether traffic is normal. |
 | Failed request rate | Shows user-visible failure. |
-| p95 response time | Shows slow tail behavior, not only average speed. |
+| p95 response time | Shows slow tail behavior alongside average speed. |
 | Dependency failures | Shows downstream services involved in failures. |
 | Runtime restarts or replica health | Shows whether the hosting layer is unstable. |
 | Database pressure | Shows whether data capacity or query load may be involved. |
@@ -89,7 +89,7 @@ For `devpolaris-orders-api`, useful application metrics might include:
 
 | Application metric | Why it matters |
 | --- | --- |
-| Checkout attempts | Shows business flow volume, not just HTTP traffic. |
+| Checkout attempts | Shows business flow volume alongside HTTP traffic. |
 | Checkout success rate | Ties directly to customer impact. |
 | Receipt upload failures | Points to one dependency in the workflow. |
 | Payment authorization latency | Separates payment-provider slowness from API slowness. |
@@ -156,7 +156,7 @@ Common noise patterns:
 | Alert every team for one service issue | Route to the owning service first, then escalate. |
 | Alert during planned maintenance | Use alert processing rules, maintenance windows, or deployment-aware routing where appropriate. |
 
-The point is not to hide problems. The point is to make alerts trustworthy. A trustworthy alert says, "this signal probably needs attention, and here is where to start."
+The point is to make alerts trustworthy. A trustworthy alert says, "this signal probably needs attention, and here is where to start."
 
 ## Putting It All Together
 

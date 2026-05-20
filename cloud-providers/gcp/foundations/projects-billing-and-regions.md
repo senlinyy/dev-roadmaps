@@ -122,7 +122,7 @@ Who can change that billing link?
 Which labels make cost review possible later?
 ```
 
-Billing is not only finance paperwork. It is part of the resource home.
+Billing is part of the resource home.
 
 ## APIs And Quotas
 

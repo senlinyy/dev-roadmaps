@@ -1,7 +1,7 @@
 ---
 title: "Backups and Retention"
 description: "Protect GCP data by deciding what previous copy exists, how long it is kept, who can delete it, and how restore is proven."
-overview: "Data safety is not only taking backups. This article explains recovery points, object versions, database backups, exports, time travel, snapshots, retention, safe deletion, and restore drills as one operating habit."
+overview: "Data safety combines backups, recovery points, object versions, database backups, exports, time travel, snapshots, retention, safe deletion, and restore drills as one operating habit."
 tags: ["gcp", "backups", "retention", "recovery"]
 order: 7
 id: article-cloud-providers-gcp-storage-databases-backups-retention
@@ -87,7 +87,7 @@ Lifecycle cleanup should not silently defeat recovery expectations.
 
 Cloud SQL recovery usually starts with automated backups and, where required, point-in-time recovery. Backups help restore an instance or database state from a previous copy. Point-in-time recovery helps recover closer to a specific moment when supported and enabled.
 
-Cloud SQL also needs migration discipline. A bad migration can be more dangerous than an instance failure because the database stays available while holding wrong data. Restore planning should include how to recover after bad writes, not only how to replace failed infrastructure.
+Cloud SQL also needs migration discipline. A bad migration can be more dangerous than an instance failure because the database stays available while holding wrong data. Restore planning should include how to recover after bad writes and how to replace failed infrastructure.
 
 A good Cloud SQL recovery review asks:
 
@@ -148,13 +148,13 @@ Different data needs different retention:
 | Analytics events | How long are historical trends useful? |
 | Backups | How long can old copies be kept under policy? |
 
-Retention is a product, legal, security, and operations decision, not only a storage setting.
+Retention is a product, legal, security, and operations decision.
 
 ## Safe Deletion
 
 Safe deletion is the set of controls that make destructive actions deliberate. It can include IAM restrictions, retention policies, soft delete, object holds, lifecycle review, separate production roles, and approval workflows.
 
-The goal is not to make deletion impossible forever. Some data must be deleted for privacy or lifecycle reasons. The goal is to keep one typo, script, or broad role from permanently removing important data before anyone can react.
+The goal is to keep one typo, script, or broad role from permanently removing important data before anyone can react. Some data must still be deleted for privacy or lifecycle reasons.
 
 Ask who can delete, what delay or recovery window exists, and how deletion is logged.
 

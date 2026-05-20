@@ -109,7 +109,7 @@ For learning projects, add dependencies deliberately:
 | HTTP client | `reqwest` |
 | Async runtime | `tokio` |
 
-The goal is not to memorize crate names. The goal is to recognize when the standard library is enough and when a well-known crate lets you focus on your project's actual design problem.
+The goal is to recognize when the standard library is enough and when a well-known crate lets you focus on your project's actual design problem.
 :::
 
 ## Add One Concept

@@ -1,7 +1,7 @@
 ---
 title: "Why Kubernetes Exists"
-description: "Explain the operational problems Kubernetes solves and recognize when a container platform is worth its complexity."
-overview: "Kubernetes exists because running one container is easy, while keeping many containerized services healthy across machines needs scheduling, replacement, networking, and a shared API."
+description: "Understand the operational problems Kubernetes solves after an application has already been packaged as a container."
+overview: "Kubernetes begins where a single container stops being enough. This article explains why teams use it, what kind of work it takes over, and where the extra complexity starts to pay for itself."
 tags: ["kubernetes", "containers", "scheduling", "operations"]
 order: 1
 id: article-containers-orchestration-kubernetes-fundamentals-why-kubernetes-exists
@@ -9,293 +9,283 @@ id: article-containers-orchestration-kubernetes-fundamentals-why-kubernetes-exis
 
 ## Table of Contents
 
-1. [The Problem After the First Container](#the-problem-after-the-first-container)
-2. [From One Host to a Fleet](#from-one-host-to-a-fleet)
-3. [What Kubernetes Adds](#what-kubernetes-adds)
-4. [The devpolaris-orders-api Example](#the-devpolaris-orders-api-example)
-5. [The Shared API as the Center](#the-shared-api-as-the-center)
-6. [Self-Healing and Replacement](#self-healing-and-replacement)
-7. [When Kubernetes Is Too Much](#when-kubernetes-is-too-much)
-8. [First Failure Mode: The Image Runs, but the Service Does Not](#first-failure-mode-the-image-runs-but-the-service-does-not)
-9. [What to Practice First](#what-to-practice-first)
+1. [After the First Container](#after-the-first-container)
+2. [The Work Around the Container](#the-work-around-the-container)
+3. [The First Kubernetes Words](#the-first-kubernetes-words)
+4. [A Cluster as a Shared Runtime](#a-cluster-as-a-shared-runtime)
+5. [The Kubernetes API](#the-kubernetes-api)
+6. [Desired State](#desired-state)
+7. [The devpolaris-api Example](#the-devpolaris-api-example)
+8. [When Kubernetes Helps](#when-kubernetes-helps)
+9. [When Kubernetes Adds Too Much](#when-kubernetes-adds-too-much)
+10. [Putting It All Together](#putting-it-all-together)
+11. [What's Next](#whats-next)
 
-## The Problem After the First Container
+## After the First Container
 
-Containers make application packaging feel tidy. You put the Node.js runtime, the compiled code, and the startup command for `devpolaris-orders-api` into an image. The image runs the same way on your laptop, in CI, and on a Linux server. That is a big step forward from a server that only works because one person installed the right package by hand last year.
+Docker makes the first step feel clean. You build an image for `devpolaris-api`, run it on your laptop, and the same image can run in CI or on a Linux server. The runtime, application files, environment assumptions, and startup command are now packaged together. That solves a real problem.
 
-The next problem appears when the image needs to serve real users. One container on one host is a process. A production service is a promise: the API should keep running when a process exits, move away from a broken machine, receive traffic through a stable address, roll out new versions without dropping every request, and expose enough state for operators to diagnose problems. Docker gives you the package and the local runtime. It does not, by itself, decide where the package should run across a fleet of machines.
+The next problem appears when the container has to serve real users. One process on one machine is easy to understand. A production service has more promises attached to it:
 
-Kubernetes is a platform for managing containerized workloads and services. It gives you one API for describing what should exist, then uses controllers to keep the real cluster close to that description. A controller is a loop that watches the system and takes action when current state differs from desired state. If that sounds similar to Terraform's plan and apply loop, the connection is useful: both tools care about declared state, but Kubernetes keeps reconciling while the system is running.
+- It should keep running when a process exits.
+- It should move away from a machine that is unhealthy.
+- It should have a stable address even when individual containers change.
+- It should roll out a new version without replacing every copy at once.
+- It should expose enough status for engineers to see what happened.
 
-This article uses `devpolaris-orders-api`, a small HTTP API that accepts orders and writes order events to a backing service. The example stays intentionally simple. The goal is not to deploy every Kubernetes object yet. The goal is to understand why teams reach for Kubernetes before you start memorizing object names.
+You can solve those problems with scripts, SSH, systemd, load balancers, cron jobs, deployment tooling, and careful runbooks. Many teams did that for years. Kubernetes exists because those pieces become hard to coordinate when a platform has many services, many machines, and many teams changing them.
 
-## From One Host to a Fleet
+Kubernetes is a system for running containerized applications across a group of machines. You describe the state you want through the Kubernetes API. The cluster stores that description, chooses machines for the work, starts containers, gives workloads network identities, and keeps checking whether the real system still matches the requested state.
 
-Imagine the team starts with a single Linux VM. A Docker container runs on port `3000`, Nginx forwards traffic, and systemd restarts the container when the host reboots. That setup can be perfectly reasonable for a small internal app. You can inspect it with familiar Linux commands, and the operating model fits in one person's head.
+That sentence includes many new words. The rest of this article unpacks them slowly.
 
-```text
-internet
-  |
-  v
-nginx on vm-orders-01
-  |
-  v
-container: devpolaris-orders-api:1.4.2
-```
+## The Work Around the Container
 
-The pressure begins when the service needs more than one host. Maybe the API receives more traffic during a course launch. Maybe the team wants staging and production to behave the same way. Maybe one host needs kernel patching while the service stays online. Each new host adds questions that a single Docker command does not answer.
+Start with a small service. The `devpolaris-api` image listens on port `3000`, connects to a database, and exposes a health endpoint at `/healthz`.
 
-| Question | Single-host habit | Fleet problem |
-|----------|-------------------|---------------|
-| Where should the container run? | You SSH to one machine | The system must choose among many machines |
-| What if it exits? | systemd restarts it locally | Replacement may need a different healthy machine |
-| How does traffic find it? | Nginx points to localhost | The address must survive container movement |
-| How do you roll out safely? | Replace the container | Several copies may need gradual replacement |
-| Who can change it? | Whoever has SSH | Changes need an API, review, and permissions |
-
-Kubernetes exists in that fleet problem. It is not mainly a nicer way to type `docker run`. It is a way to make many machines behave like one managed pool, while still giving you enough hooks to inspect the real containers when something goes wrong.
-
-## What Kubernetes Adds
-
-Kubernetes adds a few core ideas on top of containers. The first is scheduling. Scheduling means choosing a node, which is a machine in the cluster, for a workload. A workload is application work the cluster should run, such as the Pods behind `devpolaris-orders-api`. The scheduler looks at requested CPU and memory, node health, constraints, and existing load before choosing a place to run the Pod.
-
-The second idea is a stable object model. Instead of telling one host to start one process, you send a resource object to the Kubernetes API. A resource object is structured data, usually YAML, that describes something you want in the cluster. A Deployment can say "keep three copies of this API running." A Service can say "give these copies a stable network name." A Namespace can say "put this team's objects in a named scope."
-
-The third idea is continuous repair. Kubernetes components watch the API and compare desired state with current state. If a Pod disappears because a node fails, Kubernetes can create a replacement. If you update the image tag in a Deployment, Kubernetes can roll the new version out gradually. If a container fails its health check, Kubernetes can stop sending traffic to it.
-
-```mermaid
-flowchart TD
-    A["You submit desired state"] --> B["Kubernetes API"]
-    B --> C["Controllers watch objects"]
-    C --> D["Scheduler chooses nodes"]
-    D --> E["Kubelet starts Pods"]
-    E --> F["Status flows back"]
-    F --> C
-```
-
-The loop in the diagram is the reason Kubernetes feels different from a shell script. A shell script runs and exits. Kubernetes keeps watching. That can be helpful, but it also means you must learn to inspect both the thing you asked for and the status Kubernetes reports back.
-
-## The devpolaris-orders-api Example
-
-For the rest of this module, picture a service named `devpolaris-orders-api`. The container image has already been built by CI and pushed to a registry. The API listens on port `3000`, exposes `GET /healthz`, and needs two environment variables: `DATABASE_URL` and `ORDER_EVENTS_TOPIC`.
-
-The service might start as one manual container:
+On one server, the operating model might look like this:
 
 ```bash
 $ docker run -d \
-  --name devpolaris-orders-api \
+  --name devpolaris-api \
   -p 3000:3000 \
-  -e DATABASE_URL=postgres://orders-prod.example.internal/orders \
-  -e ORDER_EVENTS_TOPIC=orders.created \
-  ghcr.io/devpolaris/orders-api:1.4.2
-9f2fd7c51f3a
+  -e DATABASE_URL=postgres://db.internal/devpolaris \
+  ghcr.io/devpolaris/api:1.4.2
 ```
 
-That command is useful because it proves the image can run. It is not a durable operating model for a team. The command does not record who approved the environment variable, how much memory the service needs, what should happen when the host fails, or which copy should receive traffic during a rollout.
+That command proves the image can run. It does not answer the questions that appear when the service becomes important.
 
-In Kubernetes, the same intent starts to move into objects. A later article will teach Deployments and Pods in depth, but this small sketch shows the shape:
+| Question | Single-server answer | Fleet-level problem |
+| --- | --- | --- |
+| Where does the process run? | On the server you chose | The platform must choose among many machines |
+| What if the process exits? | Restart it locally | A replacement may need a different healthy machine |
+| How do clients find it? | Use the host address and port | Containers move, so clients need a stable name |
+| How is a new version released? | Stop the old one and start the new one | Several copies may need gradual replacement |
+| Who can change it? | Whoever can access the host | Teams need review, permissions, and an API trail |
+
+The container image is still valuable. It gives the platform a portable unit to run. Kubernetes focuses on the surrounding operating work: placement, replacement, health, networking, configuration, rollout, and access control.
+
+This is why Kubernetes usually appears after a team already understands containers. If the main problem is packaging an app, Docker is the first tool to learn. If the main problem is operating many containerized services consistently, Kubernetes starts to make sense.
+
+## The First Kubernetes Words
+
+Kubernetes has a lot of nouns. Start by tying the first few to the operating work from the previous section.
+
+| Term | Plain meaning | Why it exists |
+| --- | --- | --- |
+| Cluster | The whole Kubernetes environment | Gives the team one place to run and inspect workloads |
+| Node | A machine in the cluster | Provides real CPU, memory, disk, and network capacity |
+| Control plane | The coordinating part of the cluster | Stores requested state and tells other components what needs to happen |
+| Kubernetes API | The HTTP API exposed by the control plane | Gives humans and automation one normal way to read and change cluster objects |
+| Pod | The runnable wrapper around one or more containers | Gives Kubernetes a unit it can place, start, watch, and replace |
+| Controller | A loop that watches cluster state | Repairs gaps between what you requested and what is currently true |
+| Scheduler | The component that chooses a node for a Pod | Places work on a machine with suitable capacity and constraints |
+
+A Pod deserves special attention because it is usually the first unfamiliar object. Docker runs containers. Kubernetes runs containers inside Pods. The Pod adds Kubernetes context around the container: labels, networking, volumes, health checks, resource requests, and status. Later articles explain Pods in detail, but this first distinction matters now. When Kubernetes says a workload is running, it is usually reporting on Pods, not raw Docker containers.
+
+The API is the other early idea to slow down on. You do not normally SSH to a worker machine and start production containers by hand. You send a request to the Kubernetes API. The API stores an object that describes what should exist. Other components watch those objects and do the work needed to make them real.
+
+## A Cluster as a Shared Runtime
+
+A Kubernetes cluster is a group of machines managed through one control plane. The machines that run application containers are called nodes. The control plane stores desired state and coordinates work. A node runs Pods, which are the smallest application units Kubernetes schedules.
+
+For `devpolaris-api`, the team should not need to choose a specific machine for every release. The team should be able to say, "run three healthy copies of this image," and let the cluster find suitable nodes.
+
+```mermaid
+flowchart TD
+    A["Engineer or CI"] --> B["Kubernetes API"]
+    B --> C["Desired objects"]
+    C --> D["Scheduler"]
+    D --> E["worker-01"]
+    D --> F["worker-02"]
+    D --> G["worker-03"]
+    E --> H["Pod"]
+    F --> I["Pod"]
+    G --> J["Pod"]
+```
+
+The diagram shows the first important split. Humans and automation talk to the API. The API stores objects. The scheduler chooses nodes. The nodes run Pods.
+
+This does not make physical machines disappear. CPU, memory, disk, and network capacity still live on real nodes. A cluster gives the team one shared runtime surface for those machines. It lets engineers reason about applications as Kubernetes objects while still exposing enough detail to debug node-level failures.
+
+The word "shared" is important. A cluster can run several applications for several teams. The `devpolaris-api` Pods may run next to `devpolaris-web`, background workers, monitoring agents, and internal tools. Kubernetes needs objects and labels because it has to keep those workloads separate enough to manage, while still running them on a common pool of machines.
+
+## The Kubernetes API
+
+The Kubernetes API is the center of the system. `kubectl`, CI jobs, dashboards, controllers, and operators all talk to it. Normal cluster changes go through this API instead of through direct SSH sessions to worker nodes.
+
+That design gives the platform one place to validate requests, check permissions, store objects, and report status. If a developer applies a Deployment, the API server can check the object shape, authorize the caller, store the requested state, and make it visible to controllers.
+
+A Deployment is a Kubernetes object for running multiple copies of a stateless application. It does not contain the running process itself. It contains the request that says how many Pods should exist and what container those Pods should run.
+
+A small Deployment begins like this:
 
 ```yaml
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: devpolaris-orders-api
-  namespace: orders-prod
+  name: devpolaris-api
+  namespace: devpolaris-prod
 spec:
   replicas: 3
   selector:
     matchLabels:
-      app: devpolaris-orders-api
+      app: devpolaris-api
   template:
     metadata:
       labels:
-        app: devpolaris-orders-api
+        app: devpolaris-api
     spec:
       containers:
         - name: api
-          image: ghcr.io/devpolaris/orders-api:1.4.2
+          image: ghcr.io/devpolaris/api:1.4.2
           ports:
             - containerPort: 3000
 ```
 
-The YAML is not the point by itself. The point is that the team's desired state can be reviewed, applied, watched, and repaired through one API. A reviewer can see that production should run three copies. An operator can ask the cluster whether those three copies exist. A controller can create a replacement when reality drifts away from the description.
+This file is not a script. It does not say, "SSH to worker-02, pull this image, then start it." It describes an object the cluster should maintain.
 
-## The Shared API as the Center
+The top-level fields are the first YAML pattern to recognize:
 
-The Kubernetes API server is the front door of the cluster. `kubectl`, controllers, dashboards, CI jobs, and operators all talk to that API. This design matters because it gives the team one consistent place to validate, store, watch, and authorize changes.
+| Field | Meaning |
+| --- | --- |
+| `apiVersion` | Which Kubernetes API version defines this object shape |
+| `kind` | What kind of object this is |
+| `metadata` | Name, namespace, labels, and other identity data |
+| `spec` | The state you want Kubernetes to create or maintain |
 
-Without a shared API, each automation script invents its own view of the system. One script might SSH to hosts and run Docker. Another might edit an Nginx upstream file. A third might query a cloud load balancer. During an incident, the team has to piece together which tool last changed which machine. Kubernetes does not remove every source of complexity, but it does put the cluster's intended objects and reported status behind one API.
+Inside the `spec`, `replicas: 3` asks for three Pods. The `selector` says which Pods belong to this Deployment. The `template` is the pattern used to create each Pod. The container image inside the template is the same kind of image you would run with Docker, but Kubernetes now owns the surrounding lifecycle.
 
-You can see that API-centered habit in ordinary commands:
+The fields matter because they become part of the API object. A reviewer can inspect them. A controller can watch them. A status report can show whether the cluster has reached them.
+
+## Desired State
+
+Kubernetes works through desired state. You describe what should exist, and the cluster keeps comparing that request with what currently exists.
+
+For the Deployment above, desired state includes three replicas of `ghcr.io/devpolaris/api:1.4.2`. If one Pod exits, the current state has only two running copies. A controller notices the gap and creates another Pod. The scheduler chooses a node for that Pod. The kubelet, which is the node agent, starts the container and reports status back to the API.
+
+```mermaid
+flowchart LR
+    A["Spec<br/>(3 replicas)"] --> B["Controller"]
+    C["Status<br/>(2 ready)"] --> B
+    B --> D["Create replacement Pod"]
+    D --> E["Status updates"]
+    E --> B
+```
+
+This loop is called reconciliation. It is one of the main ideas behind Kubernetes. The cluster runs as a continuing control loop. It keeps watching. If current state drifts from desired state, controllers try to correct it.
+
+The loop is useful when the desired state is correct. It can also repeat a bad request. If the Deployment points at an image tag that does not exist, Kubernetes may keep trying to pull that image and keep reporting `ImagePullBackOff`. The cluster is doing what you asked. The request needs correction.
+
+That detail changes how you debug Kubernetes. You inspect both the request and the report:
 
 ```bash
-$ kubectl get deployments -n orders-prod
-NAME                    READY   UP-TO-DATE   AVAILABLE   AGE
-devpolaris-orders-api   3/3     3            3           18d
-
-$ kubectl get pods -n orders-prod -l app=devpolaris-orders-api
-NAME                                     READY   STATUS    RESTARTS   AGE
-devpolaris-orders-api-6d8f7d9f8c-2k9sl   1/1     Running   0          3h
-devpolaris-orders-api-6d8f7d9f8c-h6p8d   1/1     Running   0          3h
-devpolaris-orders-api-6d8f7d9f8c-xr4mf   1/1     Running   0          3h
+$ kubectl get deployment devpolaris-api -n devpolaris-prod
+NAME             READY   UP-TO-DATE   AVAILABLE   AGE
+devpolaris-api   2/3     3            2           18d
 ```
 
-The first command asks for the higher-level object, the Deployment. The second asks for the Pods selected by its label. A label is a key-value tag on a Kubernetes object, similar to tags on cloud resources or metadata on a GitHub issue. Labels let controllers and humans find related objects without relying on one long name.
+`READY 2/3` tells you the cluster has not reached the desired replica count. The next question is why the third Pod is not ready, not whether the YAML file exists.
 
-## Self-Healing and Replacement
+## The devpolaris-api Example
 
-Self-healing means Kubernetes can notice certain failures and take replacement actions. It does not mean the cluster understands your business logic. Kubernetes can restart a crashing container, create a new Pod when a node disappears, and avoid sending traffic to a Pod that fails a readiness check. It cannot decide whether an order was charged twice or whether a database migration is safe.
+This Kubernetes module uses one running example so the pieces connect. Picture a service named `devpolaris-api`.
 
-For `devpolaris-orders-api`, a useful self-healing story begins with replicas. If production should have three Pods and one Pod exits, the Deployment controller notices the mismatch. It asks the API server to create another Pod. The scheduler finds a node. The kubelet on that node asks the container runtime to start the container.
+The service has a simple shape:
 
-```text
-Desired state:
-  Deployment devpolaris-orders-api wants 3 replicas
+- It listens on port `3000`.
+- It exposes `GET /healthz`.
+- It reads non-secret settings from a ConfigMap.
+- It reads credentials from a Secret.
+- It should run three copies in production.
+- It should receive traffic through a stable Service.
 
-Current state after one Pod exits:
-  Running Pods: 2
+In Kubernetes, the first version of that application might involve several objects:
 
-Controller action:
-  Create 1 replacement Pod
+| Object | Job |
+| --- | --- |
+| Namespace | Groups related namespaced objects under one scope |
+| Deployment | Keeps the requested number of Pods running |
+| Pod | Wraps the application container so Kubernetes can run and watch it |
+| Service | Gives moving Pods a stable network name |
+| ConfigMap | Holds non-secret configuration, such as log level or feature flags |
+| Secret | Holds sensitive configuration, such as passwords or tokens |
+
+The important point is the relationship between these objects. A Deployment creates Pods from a template. A Service selects Pods by labels. ConfigMaps and Secrets feed configuration into Pods. A Namespace gives namespaced objects a scope.
+
+```mermaid
+flowchart TD
+    A["Namespace"] --> B["Deployment"]
+    B --> C["Pod"]
+    B --> D["Pod"]
+    B --> E["Pod"]
+    F["Service"] --> C
+    F --> D
+    F --> E
+    G["ConfigMap"] --> B
+    H["Secret"] --> B
 ```
 
-This is the part people often describe as "Kubernetes keeps apps running." A more precise version is: Kubernetes keeps the cluster close to the desired state you described, within the limits of available capacity, correct configuration, healthy nodes, and working application images.
+Kubernetes becomes easier to read when you trace these relationships instead of memorizing object names in isolation. Later articles will slow down and explain each object. For now, the useful habit is to ask what job each object owns.
 
-That precision matters during diagnosis. If the image name is wrong, Kubernetes may keep trying forever and still never get a running Pod. If the container starts but cannot connect to the database, Kubernetes can restart it, but the replacement will have the same broken configuration. Repair loops are useful only when the desired state is valid.
+## When Kubernetes Helps
 
-## When Kubernetes Is Too Much
+Kubernetes is most useful when the same operating problems repeat across services. A platform with one small API may not need it. A platform with many services, background workers, internal tools, and shared runtime rules often does.
 
-Kubernetes solves real problems, but it also creates a new operating surface. A team must understand cluster upgrades, RBAC, networking, admission policies, storage classes, controller behavior, observability, and cost. Managed Kubernetes reduces the burden of running the control plane, but it does not remove the need to operate the workloads and the cluster configuration.
+The signs are practical:
 
-A small static site or one low-traffic API may be better served by a platform service, a VM with systemd, a container app service, or a serverless runtime. Those options can be easier to secure and explain. The tradeoff is less control over scheduling, networking, custom controllers, and multi-service platform patterns.
+| Signal | Why Kubernetes can help |
+| --- | --- |
+| Many services need the same deploy pattern | A shared API and workload model reduce one-off scripts |
+| Services need gradual rollout and rollback | Deployments can replace Pods in controlled steps |
+| Workloads move across machines | Services and DNS give clients stable names |
+| Teams need consistent runtime rules | Namespaces, RBAC, policies, and admission can enforce boundaries |
+| Platform automation matters | Controllers can watch API objects and take action |
 
-| Option | Good fit | Tradeoff |
-|--------|----------|----------|
-| Single VM with Docker | One service, low team size, simple networking | Manual scaling and failover |
-| PaaS or container app service | Teams that want less platform work | Less control over cluster internals |
-| Kubernetes | Many services, shared platform needs, custom automation | More concepts and operational responsibility |
+Kubernetes is also useful when teams need a common language across environments. The same basic objects appear in local learning clusters, staging clusters, production clusters, and managed cloud clusters. The surrounding infrastructure changes, but the core API model remains recognizable.
 
-For `devpolaris-orders-api`, Kubernetes starts to make sense when it is part of a wider platform: orders, payments, notifications, course access, background workers, and internal tools all need consistent deployment, networking, secrets, and observability. The value comes from a shared operating model, not from putting one container into a more fashionable box.
+For DevPolaris, Kubernetes would make more sense when `devpolaris-api`, `devpolaris-web`, `devpolaris-worker`, search indexing, background jobs, and internal admin tools all need one deployment and operations model. The benefit comes from consistency across the platform.
 
-Here is a practical decision test for a small team considering Kubernetes for the first time:
+## When Kubernetes Adds Too Much
 
-| Signal | Kubernetes is probably helpful when | A simpler platform may be better when |
-|--------|-------------------------------------|---------------------------------------|
-| Service count | Many services need the same deployment model | One or two apps need hosting |
-| Team needs | Several teams need shared runtime rules | One team owns the whole stack |
-| Rollouts | Gradual replacement and rollback matter often | Manual release windows are acceptable |
-| Extensibility | Custom controllers or policies are valuable | Built-in platform features are enough |
-| Operations | The team can own cluster-level learning | The team mainly needs app hosting |
+Kubernetes brings a real operating cost. The team must understand cluster access, node capacity, networking, storage, security, workload identity, health checks, admission policies, upgrades, and observability. Managed Kubernetes services reduce control plane maintenance, but they do not remove workload operations.
 
-This table is not a scoring system. It is a way to keep the decision honest. Kubernetes is valuable when its shared operating model removes repeated work across services. It is expensive when it becomes a platform project for a workload that did not need one.
+A simpler runtime can be a better fit when the app is small and the team mainly needs hosting. A VM with systemd, a container app platform, a serverless function, or a managed application service may give enough reliability with fewer concepts to operate.
 
-## First Failure Mode: The Image Runs, but the Service Does Not
+| Runtime choice | Good fit | Main cost |
+| --- | --- | --- |
+| VM with Docker | One or two services with simple traffic | Manual failover and scaling |
+| PaaS or container app service | Teams that want managed app hosting | Less control over scheduling and cluster behavior |
+| Kubernetes | Many services with shared platform needs | More concepts and more operational responsibility |
 
-A common beginner failure is assuming that a successful image build means Kubernetes will run the service successfully. The image can be valid while the cluster cannot pull it, the app cannot start, or the service cannot become ready. The first diagnostic path is to inspect status before changing YAML.
+This decision should be based on the work the platform must do. If the team needs shared scheduling, service discovery, rollout control, and policy across many services, Kubernetes can be a strong foundation. If the team needs to host one low-traffic app, a smaller platform may be the cleaner choice.
 
-```bash
-$ kubectl get pods -n orders-prod -l app=devpolaris-orders-api
-NAME                                     READY   STATUS             RESTARTS   AGE
-devpolaris-orders-api-7bb7f99d9f-pv5ng   0/1     ImagePullBackOff   0          4m12s
-```
+## Putting It All Together
 
-`ImagePullBackOff` means the kubelet tried to pull the image and backed off after failures. The next useful command is `describe`, because it shows events attached to the Pod.
+The opening problem was simple: a container image is ready, but production needs more than a running process. The service needs placement, replacement, traffic, configuration, rollout, and status.
 
-```bash
-$ kubectl describe pod devpolaris-orders-api-7bb7f99d9f-pv5ng -n orders-prod
-Events:
-  Type     Reason     Age                  From               Message
-  ----     ------     ----                 ----               -------
-  Normal   Scheduled  4m20s                default-scheduler  Successfully assigned orders-prod/devpolaris-orders-api-7bb7f99d9f-pv5ng to worker-02
-  Normal   Pulling    3m58s                kubelet            Pulling image "ghcr.io/devpolaris/orders-api:1.4.3"
-  Warning  Failed     3m57s                kubelet            Failed to pull image "ghcr.io/devpolaris/orders-api:1.4.3": not found
-  Warning  BackOff    22s (x6 over 3m20s)  kubelet            Back-off pulling image "ghcr.io/devpolaris/orders-api:1.4.3"
-```
+Kubernetes answers that problem by giving the team:
 
-This output tells you the scheduler did its job. The Pod was assigned to `worker-02`. The failure moved to the kubelet and registry boundary. A reasonable fix direction is to check whether CI pushed `ghcr.io/devpolaris/orders-api:1.4.3`, whether the tag is spelled correctly, and whether the namespace has the right image pull secret for private images.
+- A cluster: many machines managed through one control plane.
+- An API: one place for normal changes, validation, permissions, and status.
+- Objects: records that describe the workloads, networking, configuration, and boundaries the team wants.
+- Controllers: loops that compare desired state with current state and take corrective action.
+- Nodes: real machines where Pods run.
 
-If the status is `CrashLoopBackOff`, the diagnostic path changes. Now the image was pulled and the container started, but the process exited repeatedly. You would inspect logs:
+For `devpolaris-api`, the first Kubernetes lesson is not every YAML field. The first lesson is the operating model. You describe the service through API objects, then inspect whether the cluster reached that requested state.
 
-```bash
-$ kubectl logs -n orders-prod deploy/devpolaris-orders-api
-2026-05-07T09:18:42.104Z starting devpolaris-orders-api
-2026-05-07T09:18:42.271Z error missing required env var DATABASE_URL
-```
+That habit will carry through the rest of the module.
 
-Kubernetes can restart that container many times, but every restart uses the same missing environment variable. The fix is not "restart harder." The fix is to correct the desired state so the Pod receives the configuration it needs.
+## What's Next
 
-The two failures look similar to users because the API is unavailable either way. They are different operationally:
-
-| Symptom | What already worked | Next useful evidence |
-|---------|---------------------|----------------------|
-| `ImagePullBackOff` | Scheduling happened | Pod events and registry tag |
-| `CrashLoopBackOff` | Image pulled and process started | Container logs, especially `--previous` |
-| `Pending` | Object was accepted by the API | Scheduler events and node capacity |
-| Service returns 503 | Some Service path exists | Endpoints and readiness status |
-
-This is why Kubernetes beginners should avoid changing several things at once. A changed image tag, a changed Secret name, and a changed resource request can all create different failure shapes. Make one intended change, read the status, then follow the evidence.
-
-## What to Practice First
-
-The first Kubernetes skill is not writing perfect YAML. It is learning to ask clear questions of the cluster. What object did I create? What status did Kubernetes report? Which component is currently blocked? What event or log line proves that?
-
-For `devpolaris-orders-api`, practice following the chain from Deployment to ReplicaSet to Pod to container logs. You do not need to know every field yet. You need to know that Kubernetes resources form relationships, and status usually lives on the object closest to the failure.
-
-```bash
-$ kubectl get deployment devpolaris-orders-api -n orders-prod
-$ kubectl get rs -n orders-prod -l app=devpolaris-orders-api
-$ kubectl get pods -n orders-prod -l app=devpolaris-orders-api
-$ kubectl describe pod <pod-name> -n orders-prod
-$ kubectl logs <pod-name> -n orders-prod
-```
-
-That sequence is a beginner-friendly diagnostic path. It starts with the desired application object, then moves toward the actual running container. Later articles will add Services, ConfigMaps, Secrets, probes, rollout history, and resource requests. Keep the first habit simple: look at desired state, current state, events, then logs.
-
-You can record that habit as a short checklist in a pull request or incident note:
-
-```text
-Target:
-  Cluster: devpolaris-prod
-  Namespace: orders-prod
-  Workload: deployment/devpolaris-orders-api
-
-Expected:
-  3 ready replicas
-  image ghcr.io/devpolaris/orders-api:1.4.2
-  Service has ready endpoints
-
-Verified:
-  Deployment READY is 3/3
-  Pods are spread across worker-01, worker-02, worker-03
-  /healthz is passing through readiness probe
-```
-
-That level of evidence is more useful than saying "Kubernetes looks fine." It names the target, the expected state, and the checks that support the claim. It also gives the next teammate a starting point if the service fails again.
-
-One final practice is to compare what Kubernetes says with what users experience. A Deployment can show `3/3` ready while an upstream gateway, DNS record, or application dependency is still broken. Kubernetes is responsible for the cluster objects you described, not every outside dependency your service uses.
-
-```text
-Cluster evidence:
-  Deployment READY is 3/3
-  Service has endpoints
-  Pod logs show the server started
-
-User evidence:
-  GET https://orders.devpolaris.example/healthz returns 502
-
-Next boundary:
-  Inspect ingress, gateway, or external load balancer routing
-```
-
-That boundary keeps the platform in proportion. Kubernetes can tell you whether the Pods and Services look healthy inside the cluster. You still need normal HTTP, DNS, database, and application diagnostics around it.
-
-That mix of cluster evidence and ordinary service evidence is the real work.
+The next article builds the cluster mental model in more detail. It explains how nodes, Pods, Services, labels, and capacity fit together when a real application runs inside a Kubernetes cluster.
 
 ---
 
 **References**
 
-- [Kubernetes Overview](https://kubernetes.io/docs/concepts/overview/) - Official overview of what Kubernetes is, why it exists, and which platform capabilities it provides.
-- [Kubernetes Components](https://kubernetes.io/docs/concepts/overview/components/) - Official component map for the control plane, nodes, kubelet, scheduler, and related pieces.
-- [Controllers](https://kubernetes.io/docs/concepts/architecture/controller/) - Official explanation of control loops and desired state in Kubernetes.
-- [Deployments](https://kubernetes.io/docs/concepts/workloads/controllers/deployment/) - Official guide to the workload object used for stateless application rollout and replacement.
+- [Kubernetes overview](https://kubernetes.io/docs/concepts/overview/) - Official introduction to the Kubernetes system model and core concepts.
+- [Kubernetes Components](https://kubernetes.io/docs/concepts/overview/components/) - Official description of control plane and node components.
+- [Objects in Kubernetes](https://kubernetes.io/docs/concepts/overview/working-with-objects/) - Official explanation of Kubernetes objects, specs, status, and manifests.
+- [Controllers](https://kubernetes.io/docs/concepts/architecture/controller/) - Official explanation of reconciliation loops and controller behavior.
+- [Nodes](https://kubernetes.io/docs/concepts/architecture/nodes/) - Official description of worker nodes and the components that run Pods.

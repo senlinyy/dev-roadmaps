@@ -35,13 +35,13 @@ Then two uncomfortable questions arrive at the same time:
 
 This module is about pairing money with recovery promises. Cost and resilience are not separate concerns. A cheaper design often accepts a bigger failure shape. A stronger recovery design usually costs more in resources, storage, traffic routing, testing, and human attention.
 
-The goal is not to make everything cheap. The goal is not to make everything bulletproof. The goal is to make honest promises: what the service costs, what it protects, what it can lose, and how it comes back.
+The goal is to make honest promises: what the service costs, what it protects, what it can lose, and how it comes back.
 
 ## What Is Cost
 
 Cost is the money and attention spent to keep a system useful. In Azure, the money follows resources and meters: App Service plans, Container Apps usage, Azure SQL compute, storage capacity, storage operations, logs, backups, network traffic, support plans, reserved capacity, and more.
 
-Cost is not only the monthly invoice. It is also a delayed report of architecture behavior. If logs grow quickly, the bill says something about telemetry volume. If backups cost more after repeated test databases are deleted, the bill says something about retention. If a database tier is oversized, the bill says the service is reserving capacity it may not need.
+Cost is the monthly invoice and a delayed report of architecture behavior. If logs grow quickly, the bill says something about telemetry volume. If backups cost more after repeated test databases are deleted, the bill says something about retention. If a database tier is oversized, the bill says the service is reserving capacity it may not need.
 
 For the orders service, cost questions sound like this:
 

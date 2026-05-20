@@ -145,7 +145,7 @@ For the Orders API, a small first resource map might look like this:
 | Workload identity | Service account `orders-api-prod@devpolaris-orders-prod.iam.gserviceaccount.com` |
 | Evidence | Cloud Logging logs and Cloud Monitoring metrics |
 
-The map is not just documentation. It is the first debugging tool.
+The map is the first debugging tool.
 
 ## Callers
 
@@ -233,7 +233,7 @@ Return to the opener.
 - The mystery bucket bill became a project and billing account question.
 - The app access problem became a caller and service account question.
 
-GCP is not just a product list. It is a project-centered control plane where app jobs become enabled APIs, resources, identities, locations, logs, quotas, and billing usage.
+GCP is a project-centered control plane where app jobs become enabled APIs, resources, identities, locations, logs, quotas, and billing usage.
 
 ## What's Next
 

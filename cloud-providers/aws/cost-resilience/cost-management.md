@@ -119,7 +119,7 @@ group by: Service tag, AWS service
 filter: Environment = prod
 ```
 
-The point is not the exact screen. The point is the reading habit:
+The exact screen matters less than the reading habit:
 
 | Cost Explorer move | What it reveals |
 | --- | --- |

@@ -1,7 +1,7 @@
 ---
 title: "Desired State and Reconciliation"
 description: "Understand how Kubernetes uses specs, status, controllers, and events to move the cluster toward declared intent."
-overview: "Kubernetes works through desired state and reconciliation. You describe what should exist, controllers compare that intent with reality, and the cluster keeps taking small corrective actions."
+overview: "Kubernetes works by comparing what you requested with what the cluster reports. This article explains that loop through Deployments, Pods, events, and rollouts."
 tags: ["kubernetes", "desired-state", "controllers", "reconciliation"]
 order: 4
 id: article-containers-orchestration-kubernetes-fundamentals-desired-state-and-reconciliation
@@ -10,119 +10,165 @@ id: article-containers-orchestration-kubernetes-fundamentals-desired-state-and-r
 ## Table of Contents
 
 1. [The Cluster Keeps Comparing](#the-cluster-keeps-comparing)
-2. [Spec Is the Request, Status Is the Report](#spec-is-the-request-status-is-the-report)
-3. [Reconciliation Is a Loop](#reconciliation-is-a-loop)
-4. [A Deployment as Desired State](#a-deployment-as-desired-state)
-5. [Events Tell the Story Between Spec and Status](#events-tell-the-story-between-spec-and-status)
-6. [Rollouts Are Reconciliation in Motion](#rollouts-are-reconciliation-in-motion)
-7. [Drift and Manual Changes](#drift-and-manual-changes)
-8. [Failure Mode: Reconciliation Repeats a Bad Request](#failure-mode-reconciliation-repeats-a-bad-request)
-9. [How to Read the Loop During Incidents](#how-to-read-the-loop-during-incidents)
+2. [The Request and the Report](#the-request-and-the-report)
+3. [Spec and Status](#spec-and-status)
+4. [Controllers](#controllers)
+5. [A Deployment as Desired State](#a-deployment-as-desired-state)
+6. [Events](#events)
+7. [Rollouts](#rollouts)
+8. [Manual Changes](#manual-changes)
+9. [Bad Desired State](#bad-desired-state)
+10. [Putting It All Together](#putting-it-all-together)
+11. [What's Next](#whats-next)
 
 ## The Cluster Keeps Comparing
 
-Most command-line tools do one thing and stop. You run `npm test`, it passes or fails, and the command exits. Kubernetes works differently. You submit desired state, and the cluster keeps comparing that desired state with current state while the system runs.
+Most command-line tools run once and exit. You run a command, it succeeds or fails, and then it is done. Kubernetes behaves differently. You submit a request, and the cluster keeps comparing that request with what is currently happening while the system runs.
 
-Desired state means the condition you want Kubernetes to maintain. For `devpolaris-orders-api`, desired state might be "run three ready Pods from image `ghcr.io/devpolaris/orders-api:1.4.2` in the `orders-prod` namespace." Current state is what the cluster can observe right now: maybe three Pods are ready, maybe one is crashing, maybe none can be scheduled.
+Kubernetes calls the request **desired state**. For `devpolaris-api`, desired state might say:
 
-Reconciliation is the process of moving current state closer to desired state. A controller watches objects, notices differences, and takes the next useful action. It may create a Pod, delete an old ReplicaSet, update status, or ask another system to do work.
+- The production namespace should have one Deployment named `devpolaris-api`.
+- The Deployment should maintain three ready Pods.
+- Each Pod should run `ghcr.io/devpolaris/api:1.4.2`.
+- Each Pod should expose port `3000`.
+- Only ready Pods should receive traffic.
+
+Current state is what the cluster can observe right now. Maybe three Pods are ready. Maybe one Pod is crash-looping. Maybe no node has enough memory. Maybe the new image tag does not exist in the registry.
+
+Reconciliation is the loop that compares those two views and takes the next useful action.
 
 ```mermaid
 flowchart TD
-    A["Desired state<br/>spec"] --> B["Controller compares"]
-    C["Current state<br/>status and objects"] --> B
-    B --> D{"Different?"}
+    A["Desired state<br/>(spec)"] --> B["Controller compares"]
+    C["Current state<br/>(status and objects)"] --> B
+    B --> D{"Gap?"}
     D -->|"No"| E["Keep watching"]
-    D -->|"Yes"| F["Take corrective action"]
+    D -->|"Yes"| F["Take action"]
     F --> C
 ```
 
-This loop is the heart of Kubernetes. It is also the source of many beginner surprises. If your desired state is wrong, Kubernetes will faithfully keep trying to make the wrong thing happen.
+This loop explains both the strength and the sharp edges of Kubernetes. If a Pod disappears, Kubernetes can create a replacement. If the desired state points at a broken image tag, Kubernetes can keep trying the broken request until you change it.
 
-## Spec Is the Request, Status Is the Report
+## The Request and the Report
 
-Most Kubernetes objects have a `spec` field and a `status` field. The `spec` field is the request. It describes what you want. The `status` field is the report. It describes what Kubernetes observed after trying to act on the request.
+The easiest way to read Kubernetes is to separate the request from the report.
 
-For a Deployment, `spec.replicas` says how many Pods the Deployment should maintain. `status.readyReplicas` says how many are currently ready. These two fields should usually move toward the same number, but they are not the same kind of truth.
+The request is what the team asked Kubernetes to maintain. It usually lives in the object's `spec`. The report is what Kubernetes observed after trying to act on that request. It usually lives in the object's `status`, and it is also visible through events, logs, and related objects.
 
-```bash
-$ kubectl get deployment devpolaris-orders-api -n orders-prod -o yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: devpolaris-orders-api
-spec:
-  replicas: 3
-status:
-  availableReplicas: 3
-  readyReplicas: 3
-  updatedReplicas: 3
-```
+For `devpolaris-api`, the request might be "three ready Pods." The report might be "two ready Pods, one Pod waiting because the image tag does not exist." Those are different kinds of truth. The request tells you what Kubernetes is trying to do. The report tells you how far it got.
 
-The YAML above is shortened. It shows the shape that matters first: the spec is what the team requested, and the status is what the cluster reports. When troubleshooting, do not only ask "what does the YAML say?" Ask "what does status say happened after Kubernetes tried?"
+| Word | Plain meaning | Who usually changes it |
+| --- | --- | --- |
+| Desired state | The condition you want Kubernetes to maintain | Humans or automation |
+| Current state | The condition Kubernetes can observe right now | Kubernetes components report it |
+| `spec` | The object field that holds the request | Humans or automation |
+| `status` | The object field that holds the report | Kubernetes components |
+| Reconciliation | The loop that compares request and report | Controllers |
 
-The distinction is similar to a pull request. The PR title says what the author intends. The CI check status says what the system observed. You need both before deciding whether the change is safe.
+This distinction prevents a common beginner mistake. Seeing a Deployment object in the cluster does not prove the application is healthy. It proves the API server accepted an object. You still need status to know whether the cluster reached the requested state.
 
-You can make that split visible with a compact command:
+## Spec and Status
 
-```bash
-$ kubectl get deployment devpolaris-orders-api -n orders-prod \
-  -o custom-columns=NAME:.metadata.name,DESIRED:.spec.replicas,READY:.status.readyReplicas,AVAILABLE:.status.availableReplicas
-NAME                    DESIRED   READY   AVAILABLE
-devpolaris-orders-api   3         3       3
-```
+Most Kubernetes objects separate the request from the report.
 
-This output is useful because it avoids reading a long YAML document when the first question is simple. Did the status catch up with the request?
+The `spec` field describes what you want. The `status` field describes what Kubernetes observed after trying to make it happen. You write or update the spec. Kubernetes components update status.
 
-## Reconciliation Is a Loop
-
-A reconciliation loop does not need perfect global knowledge. It needs a current observation, a desired target, and a next action. The Deployment controller does not run containers itself. It creates or updates ReplicaSets. ReplicaSets create or delete Pods. The scheduler assigns Pods to nodes. Kubelets start containers and report status.
-
-That chain lets Kubernetes split a large operating problem into smaller loops. Each loop owns part of the work and reports back through the API. The result is a system where several controllers can cooperate without one giant coordinator knowing every detail.
-
-```text
-Deployment controller:
-  Watches Deployment
-  Creates or updates ReplicaSet
-
-ReplicaSet controller:
-  Watches ReplicaSet
-  Creates or deletes Pods
-
-Scheduler:
-  Watches unscheduled Pods
-  Assigns each Pod to a node
-
-Kubelet:
-  Watches Pods assigned to its node
-  Starts containers and reports status
-```
-
-The tradeoff is that a failure may be several steps away from the object you edited. You might apply a Deployment successfully, but the scheduler cannot place the Pods. You might schedule Pods successfully, but the kubelet cannot mount a Secret. Reconciliation helps repair the system, but diagnosis still requires following the handoff.
-
-## A Deployment as Desired State
-
-Here is a small Deployment for `devpolaris-orders-api`. Later workload articles will cover every field more carefully. For now, focus on what the object asks Kubernetes to maintain.
+A shortened Deployment object makes the split visible:
 
 ```yaml
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: devpolaris-orders-api
-  namespace: orders-prod
+  name: devpolaris-api
+  namespace: devpolaris-prod
+spec:
+  replicas: 3
+status:
+  readyReplicas: 2
+  availableReplicas: 2
+  updatedReplicas: 3
+```
+
+The object above says the team wants three replicas, but only two are ready and available. That mismatch is the first useful signal. The Deployment object exists, and the requested image may even be updated, but the application has not reached the requested availability.
+
+You can ask for the same split in a compact form:
+
+```bash
+$ kubectl get deployment devpolaris-api -n devpolaris-prod \
+  -o custom-columns=NAME:.metadata.name,DESIRED:.spec.replicas,READY:.status.readyReplicas,AVAILABLE:.status.availableReplicas
+NAME             DESIRED   READY   AVAILABLE
+devpolaris-api   3         2       2
+```
+
+This command is not required for day-one learning. It shows the habit that matters: compare request and report before changing anything.
+
+The split appears across Kubernetes objects. A Pod spec says which containers, volumes, probes, and resource requests should exist. Pod status reports whether those containers are waiting, running, terminated, ready, or failing. A Service spec says which selector and ports to use. Endpoint data reports which ready Pod addresses are actually behind it.
+
+## Controllers
+
+A controller is a loop that watches one or more object types and acts when current state differs from desired state. Kubernetes includes many controllers. Deployments, ReplicaSets, Jobs, Nodes, Services, and namespaces all have controllers behind their behavior.
+
+The word "controller" can sound abstract, but the job is practical. A controller keeps checking a part of the cluster and makes small changes when the report does not match the request. For a Deployment, the controller checks whether the requested number of Pods exists through ReplicaSets. For a Job, the controller checks whether the requested work has completed. For nodes, a controller checks node health and reacts when nodes stop reporting correctly.
+
+For a Deployment, the loop does not start containers directly. It works through other objects.
+
+```mermaid
+flowchart TD
+    A["Deployment spec"] --> B["Deployment controller"]
+    B --> C["ReplicaSet"]
+    C --> D["ReplicaSet controller"]
+    D --> E["Pod objects"]
+    E --> F["Scheduler"]
+    F --> G["Kubelet"]
+    G --> H["Running containers"]
+```
+
+This handoff is why Kubernetes can feel indirect at first. You edit a Deployment, but the running container is several steps away. The benefit is that each component owns a smaller job and reports status back through the API.
+
+When a controller takes action, you often see it in events:
+
+```bash
+$ kubectl describe deployment devpolaris-api -n devpolaris-prod
+Events:
+  Type    Reason             From                   Message
+  ----    ------             ----                   -------
+  Normal  ScalingReplicaSet  deployment-controller  Scaled up replica set devpolaris-api-75c9444bd7 to 3
+```
+
+The event tells you that the Deployment controller acted. The next question is whether the ReplicaSet created Pods and whether those Pods became ready.
+
+## A Deployment as Desired State
+
+Here is a small Deployment for `devpolaris-api`. Later workload articles will explain every field in more detail. In this article, focus on how the object expresses intent.
+
+The important parts before reading the YAML are:
+
+| Field area | Question it answers |
+| --- | --- |
+| `replicas` | How many copies should Kubernetes try to keep ready? |
+| `selector` | Which Pods belong to this Deployment? |
+| `template` | What should each new Pod look like? |
+| `readinessProbe` | How should Kubernetes decide whether a Pod should receive traffic? |
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: devpolaris-api
+  namespace: devpolaris-prod
 spec:
   replicas: 3
   selector:
     matchLabels:
-      app: devpolaris-orders-api
+      app: devpolaris-api
   template:
     metadata:
       labels:
-        app: devpolaris-orders-api
+        app: devpolaris-api
     spec:
       containers:
         - name: api
-          image: ghcr.io/devpolaris/orders-api:1.4.2
+          image: ghcr.io/devpolaris/api:1.4.2
           ports:
             - containerPort: 3000
           readinessProbe:
@@ -131,182 +177,176 @@ spec:
               port: 3000
 ```
 
-This object asks for three Pods from the given template. The template is the pattern used to create Pods. The readiness probe tells Kubernetes how to decide whether a Pod should receive traffic. A Pod can be running but not ready, which is common when the process has started but cannot serve requests yet.
+This object asks Kubernetes to maintain three Pods created from the template. The selector connects the Deployment to Pods with the label `app=devpolaris-api`. The readiness probe tells Kubernetes how to decide whether a Pod should receive traffic.
 
-After applying the object, the useful question is not "did apply succeed?" It is "did the cluster converge on the desired state?"
+After applying it, the useful question is whether the cluster converged on the desired state:
 
 ```bash
-$ kubectl get deployment devpolaris-orders-api -n orders-prod
-NAME                    READY   UP-TO-DATE   AVAILABLE   AGE
-devpolaris-orders-api   3/3     3            3           22m
+$ kubectl get deployment devpolaris-api -n devpolaris-prod
+NAME             READY   UP-TO-DATE   AVAILABLE   AGE
+devpolaris-api   3/3     3            3           22m
 ```
 
-`READY 3/3` means three desired replicas and three ready replicas. That is a compact sign that the reconciliation loop reached the state you asked for.
+`READY 3/3` means the Deployment wants three replicas and three are ready. `UP-TO-DATE 3` means three replicas match the current Pod template. `AVAILABLE 3` means three replicas have been available according to the Deployment's availability rules.
 
-## Events Tell the Story Between Spec and Status
+That single row is dense. It tells you whether reconciliation reached the state requested by the spec.
 
-Events are short records that Kubernetes attaches to objects when something meaningful happens. They are not full logs, but they often explain why status is stuck. When a Pod cannot be scheduled, cannot pull an image, or cannot mount a volume, events are usually the fastest clue.
+## Events
+
+Events are short records that Kubernetes attaches to objects when something meaningful happens. They often explain the space between spec and status.
+
+Think of status as the summary and events as the recent story. Status might say a Pod is `Pending`. Events can say the scheduler could not place it because no node had enough CPU. Status might say a container is waiting. Events can say the kubelet could not pull the image.
+
+A healthy Pod might show this event chain:
 
 ```bash
-$ kubectl describe pod devpolaris-orders-api-6d8f7d9f8c-xr4mf -n orders-prod
+$ kubectl describe pod devpolaris-api-6d8f7d9f8c-xr4mf -n devpolaris-prod
 Events:
   Type    Reason     Age   From               Message
   ----    ------     ----  ----               -------
-  Normal  Scheduled  4m    default-scheduler  Successfully assigned orders-prod/devpolaris-orders-api-6d8f7d9f8c-xr4mf to worker-03
-  Normal  Pulling    4m    kubelet            Pulling image "ghcr.io/devpolaris/orders-api:1.4.2"
+  Normal  Scheduled  4m    default-scheduler  Successfully assigned devpolaris-prod/devpolaris-api-6d8f7d9f8c-xr4mf to worker-03
+  Normal  Pulling    4m    kubelet            Pulling image "ghcr.io/devpolaris/api:1.4.2"
   Normal  Pulled     3m    kubelet            Successfully pulled image
   Normal  Created    3m    kubelet            Created container api
   Normal  Started    3m    kubelet            Started container api
 ```
 
-This healthy event chain shows several components doing their part. The scheduler assigned the Pod. The kubelet pulled the image. The container was created and started. If the Pod still is not ready after these events, the next thing to inspect is usually the readiness probe or application logs.
+Read the `From` column. `default-scheduler` means the scheduler reported placement. `kubelet` means the node agent reported image or container work. Controller names point to control plane loops.
 
-Events are especially useful because they point to the component that reported the issue. `default-scheduler` points at placement. `kubelet` points at node-side startup. A controller name points at a higher-level reconciliation step.
+Events are useful because the same final symptom can have different causes. An unavailable API might be caused by failed scheduling, image pull failure, missing configuration, a crashing process, or a failed readiness check. Events tell you which part of the reconciliation path reported trouble.
 
-## Rollouts Are Reconciliation in Motion
+For example:
 
-A rollout is what happens when you change the Pod template of a Deployment. Updating the image from `1.4.2` to `1.4.3` changes desired state. The Deployment controller creates a new ReplicaSet for the new template and gradually shifts replicas from the old ReplicaSet to the new one.
-
-```bash
-$ kubectl set image deployment/devpolaris-orders-api api=ghcr.io/devpolaris/orders-api:1.4.3 -n orders-prod
-deployment.apps/devpolaris-orders-api image updated
-
-$ kubectl rollout status deployment/devpolaris-orders-api -n orders-prod
-Waiting for deployment "devpolaris-orders-api" rollout to finish: 1 of 3 updated replicas are available...
-deployment "devpolaris-orders-api" successfully rolled out
+```text
+Warning  FailedScheduling  default-scheduler  0/3 nodes are available: 3 Insufficient cpu.
+Warning  Failed            kubelet            Failed to pull image "ghcr.io/devpolaris/api:1.4.3": not found
+Warning  Unhealthy         kubelet            Readiness probe failed: HTTP probe failed with statuscode: 500
 ```
 
-The command is a shortcut for changing the Deployment spec. The deeper idea is that Kubernetes does not replace every Pod at once by default. It reconciles toward the new template while trying to keep enough available replicas.
+Those lines point to different fixes. The first is capacity or scheduling constraints. The second is registry or image tag. The third is application readiness.
 
-You can see the old and new ReplicaSets during a rollout:
+## Rollouts
+
+A rollout happens when the Pod template of a Deployment changes. Updating the image from `1.4.2` to `1.4.3` changes desired state. The Deployment controller creates a new ReplicaSet and gradually moves replicas from the old template to the new template.
 
 ```bash
-$ kubectl get rs -n orders-prod -l app=devpolaris-orders-api
-NAME                               DESIRED   CURRENT   READY   AGE
-devpolaris-orders-api-6d8f7d9f8c   0         0         0       18d
-devpolaris-orders-api-75c9444bd7   3         3         3       4m
+$ kubectl set image deployment/devpolaris-api api=ghcr.io/devpolaris/api:1.4.3 -n devpolaris-prod
+deployment.apps/devpolaris-api image updated
+
+$ kubectl rollout status deployment/devpolaris-api -n devpolaris-prod
+Waiting for deployment "devpolaris-api" rollout to finish: 1 of 3 updated replicas are available...
+deployment "devpolaris-api" successfully rolled out
 ```
 
-This output is useful during diagnosis because it tells you whether Kubernetes is stuck on old Pods, new Pods, or readiness for the new version.
+The command is a shortcut for changing the Deployment spec. The deeper behavior is the reconciliation loop. Kubernetes sees a new template, creates new Pods, waits for readiness, and scales down old Pods according to the rollout strategy.
 
-## Drift and Manual Changes
-
-Drift means current reality differs from the desired state. In Kubernetes, drift can happen when someone manually deletes a Pod, scales a Deployment with a direct command, or changes an object outside the usual Git workflow. Some drift is repaired automatically. Some drift becomes the new desired state because the API object itself was changed.
-
-If someone deletes one Pod from the `devpolaris-orders-api` Deployment, the ReplicaSet controller creates another Pod because the desired replica count still says three.
+You can see the ReplicaSets during or after the rollout:
 
 ```bash
-$ kubectl delete pod devpolaris-orders-api-75c9444bd7-p8x2m -n orders-prod
-pod "devpolaris-orders-api-75c9444bd7-p8x2m" deleted
-
-$ kubectl get pods -n orders-prod -l app=devpolaris-orders-api
-NAME                                     READY   STATUS              AGE
-devpolaris-orders-api-75c9444bd7-4sjkg   1/1     Running             18m
-devpolaris-orders-api-75c9444bd7-h6p8d   1/1     Running             18m
-devpolaris-orders-api-75c9444bd7-vc2mb   0/1     ContainerCreating   9s
+$ kubectl get rs -n devpolaris-prod -l app=devpolaris-api
+NAME                        DESIRED   CURRENT   READY   AGE
+devpolaris-api-6d8f7d9f8c   0         0         0       18d
+devpolaris-api-75c9444bd7   3         3         3       4m
 ```
 
-That is repair. But if someone runs `kubectl scale deployment devpolaris-orders-api --replicas=1`, they changed the Deployment spec. Kubernetes now believes desired state is one replica. A GitOps or CI system may later change it back, but Kubernetes itself will follow the latest accepted spec.
+The older ReplicaSet remains in history for rollback. The newer ReplicaSet owns the current ready Pods. If the new version gets stuck, this output helps you see whether the problem is old Pods, new Pods, or readiness for the new template.
 
-This is why teams usually connect production clusters to reviewed manifests. The cluster reconciles whatever desired state it receives. Human process and automation decide whether that desired state is trustworthy.
+## Manual Changes
 
-You can see the difference between repair and a changed request by checking the live spec after a manual scale:
+Manual changes interact with reconciliation in two different ways. Some changes create drift that controllers repair. Other changes update desired state, and Kubernetes follows the new request.
+
+Deleting one Pod from a Deployment creates drift. The desired replica count still says three, so the ReplicaSet controller creates a replacement:
 
 ```bash
-$ kubectl scale deployment devpolaris-orders-api --replicas=1 -n orders-prod
-deployment.apps/devpolaris-orders-api scaled
+$ kubectl delete pod devpolaris-api-75c9444bd7-p8x2m -n devpolaris-prod
+pod "devpolaris-api-75c9444bd7-p8x2m" deleted
 
-$ kubectl get deployment devpolaris-orders-api -n orders-prod -o jsonpath='{.spec.replicas}{"\n"}'
+$ kubectl get pods -n devpolaris-prod -l app=devpolaris-api
+NAME                              READY   STATUS              AGE
+devpolaris-api-75c9444bd7-4sjkg   1/1     Running             18m
+devpolaris-api-75c9444bd7-h6p8d   1/1     Running             18m
+devpolaris-api-75c9444bd7-vc2mb   0/1     ContainerCreating   9s
+```
+
+Scaling the Deployment changes desired state:
+
+```bash
+$ kubectl scale deployment devpolaris-api --replicas=1 -n devpolaris-prod
+deployment.apps/devpolaris-api scaled
+
+$ kubectl get deployment devpolaris-api -n devpolaris-prod -o jsonpath='{.spec.replicas}{"\n"}'
 1
 ```
 
-The cluster is not drifting from desired state here. The desired state was changed. That is why production teams care about who can update objects and which automation is allowed to restore the reviewed version.
+Kubernetes now believes one replica is the requested state. A GitOps controller or CI pipeline might later restore the reviewed manifest, but Kubernetes itself follows the live spec accepted by the API server.
 
-## Failure Mode: Reconciliation Repeats a Bad Request
+This is why teams care about who can update production objects. The cluster reconciles toward the desired state it receives. Human process and automation decide which desired state should be trusted.
 
-Reconciliation is useful only when the desired state is correct. If the Deployment references an image tag that does not exist, Kubernetes keeps creating Pods that cannot pull the image. The repeated attempt is not a bug. It is the system trying to satisfy an impossible request.
+## Bad Desired State
 
-```bash
-$ kubectl get deployment devpolaris-orders-api -n orders-prod
-NAME                    READY   UP-TO-DATE   AVAILABLE   AGE
-devpolaris-orders-api   2/3     1            2           18d
+Reconciliation repeats the request you gave it. If the request is impossible, the cluster keeps reporting failure while trying again.
 
-$ kubectl get pods -n orders-prod -l app=devpolaris-orders-api
-NAME                                     READY   STATUS             AGE
-devpolaris-orders-api-6d8f7d9f8c-2k9sl   1/1     Running            3h
-devpolaris-orders-api-6d8f7d9f8c-h6p8d   1/1     Running            3h
-devpolaris-orders-api-75c9444bd7-j9vhw   0/1     ImagePullBackOff   7m
-```
-
-The Deployment is partly available because old Pods are still serving. The new desired image is blocked. `describe pod` gives the reason:
+Imagine a rollout changes the image tag to `1.4.30`, but CI never pushed that image:
 
 ```bash
-$ kubectl describe pod devpolaris-orders-api-75c9444bd7-j9vhw -n orders-prod
-Events:
-  Type     Reason   From     Message
-  ----     ------   ----     -------
-  Warning  Failed   kubelet  Failed to pull image "ghcr.io/devpolaris/orders-api:1.4.30": not found
-  Warning  BackOff  kubelet  Back-off pulling image "ghcr.io/devpolaris/orders-api:1.4.30"
+$ kubectl get deployment devpolaris-api -n devpolaris-prod
+NAME             READY   UP-TO-DATE   AVAILABLE   AGE
+devpolaris-api   2/3     1            2           18d
+
+$ kubectl get pods -n devpolaris-prod -l app=devpolaris-api
+NAME                              READY   STATUS             AGE
+devpolaris-api-6d8f7d9f8c-2k9sl   1/1     Running            3h
+devpolaris-api-6d8f7d9f8c-h6p8d   1/1     Running            3h
+devpolaris-api-75c9444bd7-j9vhw   0/1     ImagePullBackOff   7m
 ```
 
-The fix direction is to correct the image reference or push the missing image. If production should stay on the previous version, roll back the Deployment. If `1.4.30` was intended, inspect the CI job that should have published it and verify the registry tag exists.
-
-```bash
-$ kubectl rollout undo deployment/devpolaris-orders-api -n orders-prod
-deployment.apps/devpolaris-orders-api rolled back
-```
-
-The lesson is not that rollbacks are always the answer. The lesson is that reconciliation will keep pressing on the desired state you gave it. During an incident, fix the desired state first, then let the loop work.
-
-## How to Read the Loop During Incidents
-
-During an incident, separate the question into three parts. What did we ask Kubernetes to maintain? What does Kubernetes report right now? Which event or log line explains the gap?
-
-```bash
-$ kubectl get deployment devpolaris-orders-api -n orders-prod
-$ kubectl describe deployment devpolaris-orders-api -n orders-prod
-$ kubectl get pods -n orders-prod -l app=devpolaris-orders-api
-$ kubectl describe pod <pod-name> -n orders-prod
-$ kubectl logs <pod-name> -n orders-prod --previous
-```
-
-This path avoids random changes. If the Deployment spec is wrong, correct the spec. If the spec is right but scheduling fails, inspect capacity or constraints. If the Pod starts but readiness fails, inspect the readiness endpoint and application logs. If the Service has no endpoints, check labels and readiness.
-
-For `devpolaris-orders-api`, a useful incident note might read like this:
+The Deployment is partly available because two old Pods still serve traffic. The new desired image is blocked. The Pod event gives the reason:
 
 ```text
-Intent:
-  Deployment should run 3 replicas of ghcr.io/devpolaris/orders-api:1.4.3.
-
-Current status:
-  2 old Pods ready, 1 new Pod in ImagePullBackOff.
-
-Evidence:
-  Pod event says image tag 1.4.3 was not found in GHCR.
-
-Decision:
-  Roll back to 1.4.2, then fix CI image publishing before retrying.
+Warning  Failed   kubelet  Failed to pull image "ghcr.io/devpolaris/api:1.4.30": not found
+Warning  BackOff  kubelet  Back-off pulling image "ghcr.io/devpolaris/api:1.4.30"
 ```
 
-That note connects spec, status, evidence, and decision. It is the operating shape Kubernetes wants you to learn.
-
-One final habit helps during longer incidents: write down the rollout revision you inspected. Kubernetes objects can change while you are debugging. If a teammate applies another manifest, your earlier status snapshot may describe an older desired state.
+The fix is to correct desired state. If `1.4.30` was a typo, roll back or apply the right tag. If `1.4.30` was intended, fix the CI or registry problem so the requested image exists.
 
 ```bash
-$ kubectl rollout history deployment/devpolaris-orders-api -n orders-prod
-deployment.apps/devpolaris-orders-api
-REVISION  CHANGE-CAUSE
-12        image orders-api:1.4.2
-13        image orders-api:1.4.3
+$ kubectl rollout undo deployment/devpolaris-api -n devpolaris-prod
+deployment.apps/devpolaris-api rolled back
 ```
 
-Rollout history does not replace Git history or CI records, but it gives you a cluster-side clue about which Deployment revisions Kubernetes knows about. During a rollback discussion, that clue can keep the team from guessing which version is currently being reconciled.
+The important habit is to change the request that the loop is following. Restarting the same failing Pod may create another failing Pod with the same bad image reference.
+
+## Putting It All Together
+
+Desired state is the request. Status is the report. Reconciliation is the loop that keeps comparing them. Controllers act through the Kubernetes API, and events show important steps along the way.
+
+For `devpolaris-api`, you can now read a Deployment row with more confidence:
+
+```text
+READY 2/3:
+  The request asks for three ready replicas, but only two are ready.
+
+UP-TO-DATE 1:
+  Only one replica matches the current Pod template.
+
+AVAILABLE 2:
+  Two replicas currently satisfy availability rules.
+```
+
+Those fields tell you where to look next. Move from the Deployment to ReplicaSets, from ReplicaSets to Pods, from Pod status to events, and from events to logs when the container has actually started.
+
+Kubernetes rewards this habit. Start with the object you requested. Compare spec with status. Follow the event trail to the component that reported the gap.
+
+## What's Next
+
+The next article covers namespaces and `kubectl`. You have seen the API model and reconciliation loop. Now you need the daily command-line habits that keep you in the right cluster and namespace while you inspect those objects.
 
 ---
 
 **References**
 
-- [Controllers](https://kubernetes.io/docs/concepts/architecture/controller/) - Official explanation of control loops, desired state, and current state.
-- [Deployments](https://kubernetes.io/docs/concepts/workloads/controllers/deployment/) - Official documentation for Deployment desired state, rollout behavior, and status.
-- [Kubernetes Objects](https://kubernetes.io/docs/concepts/abstractions/overview/) - Official object model overview, including specs and Kubernetes resources.
-- [kubectl Reference](https://kubernetes.io/docs/reference/kubectl/generated/) - Official command reference for inspecting, applying, rolling out, and diagnosing Kubernetes objects.
+- [Objects in Kubernetes](https://kubernetes.io/docs/concepts/overview/working-with-objects/) - Official explanation of object specs, status, and manifests.
+- [Controllers](https://kubernetes.io/docs/concepts/architecture/controller/) - Official explanation of reconciliation loops and controller behavior.
+- [Deployments](https://kubernetes.io/docs/concepts/workloads/controllers/deployment/) - Official documentation for Deployment behavior, rollout, status, and rollback.
+- [ReplicaSet](https://kubernetes.io/docs/concepts/workloads/controllers/replicaset/) - Official documentation for the controller that maintains a stable set of replica Pods.
+- [Kubernetes Object Management](https://kubernetes.io/docs/concepts/overview/working-with-objects/object-management/) - Official overview of imperative and declarative object management.

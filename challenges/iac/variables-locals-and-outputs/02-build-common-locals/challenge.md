@@ -1,6 +1,6 @@
 ---
 title: "Build Common Locals"
-sectionSlug: locals-name-decisions-inside-the-module
+sectionSlug: locals
 order: 2
 ---
 

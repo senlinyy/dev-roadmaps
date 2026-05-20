@@ -172,7 +172,7 @@ A managed identity failure usually hides in one of four places:
 | App uses the wrong identity | Did the SDK choose the intended user-assigned identity? |
 | Recreated app lost access | Was a system-assigned identity replaced with a new principal ID? |
 
-Good evidence names the runtime principal, not just the app:
+Good evidence names the runtime principal and the app:
 
 ```text
 Workload: app-orders-prod

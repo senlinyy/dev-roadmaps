@@ -126,7 +126,7 @@ Microsoft Entra ID is the identity system behind Azure sign-in. It stores and is
 
 For the orders API, Microsoft Entra is where the app's managed identity exists. When the app asks Azure for a token, Azure issues a token that represents that identity. Key Vault sees the token, identifies the principal, and checks whether that principal has permission to read the requested secret.
 
-This is why "the app is deployed in the right subscription" is not enough. Resource placement and caller identity are different facts. The Key Vault may be in the same resource group as the app, but the app still needs an identity and that identity still needs a role assignment that covers the vault operation.
+This is why "the app is deployed in the right subscription" gives incomplete evidence. Resource placement and caller identity are different facts. The Key Vault may be in the same resource group as the app, but the app still needs an identity and that identity still needs a role assignment that covers the vault operation.
 
 Human access has the same separation. A developer can sign in to Azure and still be denied when reading a resource. Sign-in proves who they are. It does not automatically grant permission to every subscription, resource group, vault, database, or storage account they can name.
 

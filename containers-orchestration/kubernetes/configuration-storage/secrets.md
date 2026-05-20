@@ -175,7 +175,7 @@ The `DATA` column says there is one key, but the Deployment expects two. Add the
 
 ## RBAC and Namespace Risk
 
-The most important security detail is easy to miss: anyone who can create a Pod in a namespace may be able to mount Secrets in that namespace, depending on admission controls and policies. Secret access is not only about who can run `kubectl get secret`. It is also about who can schedule a workload that asks Kubernetes to inject the Secret.
+The most important security detail is easy to miss: anyone who can create a Pod in a namespace may be able to mount Secrets in that namespace, depending on admission controls and policies. Secret access includes direct reads such as `kubectl get secret` and workload scheduling that asks Kubernetes to inject the Secret.
 
 For `devpolaris-orders-api`, the service account that deploys staging should not automatically control production. The namespace split helps, but RBAC must match it.
 
@@ -198,7 +198,7 @@ Review RBAC with a concrete question: who can cause this Secret to be delivered 
 
 ## Rotation Without Guesswork
 
-Secret rotation means replacing a credential before it is abused, expires, or blocks an incident response. Rotation is not only changing the Kubernetes object. The backing database, API provider, or signing system must accept the new value, and the application Pods must use it.
+Secret rotation means replacing a credential before it is abused, expires, or blocks an incident response. The backing database, API provider, or signing system must accept the new value, the Kubernetes object must change, and the application Pods must use it.
 
 A safe rotation for `DATABASE_URL` usually has two phases. First, create a new database user or password while the old one still works. Update the Secret and roll the Deployment. Verify new Pods connect successfully. Then revoke the old credential after traffic has moved.
 
@@ -237,7 +237,7 @@ For `devpolaris-orders-api`, a Kubernetes Secret is enough to learn the mechanic
 
 ## Preventing Secret Values from Escaping
 
-The Secret object is only one part of the secret's life. After Kubernetes injects the value, the application can still leak it through logs, errors, metrics labels, crash dumps, or support bundles. A safe Secret pattern includes application behavior, not only YAML.
+The Secret object is one part of the secret's life. After Kubernetes injects the value, the application can still leak it through logs, errors, metrics labels, crash dumps, or support bundles. A safe Secret pattern includes Kubernetes YAML and application behavior.
 
 For `devpolaris-orders-api`, a startup summary should say whether a secret is present, never what the secret is. That is enough for diagnostics and safe for logs.
 
@@ -252,7 +252,7 @@ A bad log line includes the value or a long prefix of the value.
 2026-05-07T11:45:19.118Z ERROR database failed url=postgresql://orders_app:ProdPassword2026@postgres:5432/orders
 ```
 
-If that appears in logs, rotate the credential and fix the logging code. Do not only delete the log line. Logs may have been forwarded to other systems, stored in search indexes, or copied into incident notes.
+If that appears in logs, rotate the credential and fix the logging code. Deleting the log line is incomplete because logs may have been forwarded to other systems, stored in search indexes, or copied into incident notes.
 
 The same caution applies to `kubectl` commands. Use `kubectl describe secret` to inspect metadata and key count. Avoid `kubectl get secret -o yaml` in shared terminals unless you have a clear reason and a safe output path.
 

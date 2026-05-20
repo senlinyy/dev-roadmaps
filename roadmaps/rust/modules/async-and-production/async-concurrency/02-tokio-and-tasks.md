@@ -215,12 +215,12 @@ async fn main() {
 }
 ```
 
-A timeout does not make the remote service faster. It protects the caller from waiting forever. That is an API design choice, not just an async trick.
+A timeout does not make the remote service faster. It protects the caller from waiting forever. That makes it an API design choice.
 
 :::expand[What timeout cancellation really drops]{kind="pitfall"}
 `timeout(duration, future).await` waits for a future for a limited amount of time. If the duration expires, Tokio returns an error and drops the future it was waiting on.
 
-Dropping the future cancels that Rust async work, but it does not magically undo everything outside the process. A request may already have reached a server. A database may already be doing work. A file write may have partially completed depending on the API.
+Dropping the future cancels that Rust async work, but outside effects may already be in motion. A request may already have reached a server. A database may already be doing work. A file write may have partially completed depending on the API.
 
 Use timeouts as caller protection, then design the operation behind them with cancellation in mind:
 
@@ -231,7 +231,7 @@ Use timeouts as caller protection, then design the operation behind them with ca
 | Database update | Is the transaction rolled back or still running server-side? |
 | Background task | Who observes that the task stopped early? |
 
-The simple rule is: a timeout stops waiting in your Rust task. It is not automatically a business-level undo button.
+The simple rule is: a timeout stops waiting in your Rust task. Design the underlying operation separately if the business action needs rollback or cancellation.
 :::
 
 ## Putting It All Together

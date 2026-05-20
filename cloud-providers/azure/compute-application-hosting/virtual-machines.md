@@ -68,7 +68,7 @@ For long-lived systems, the better habit is to make the image and bootstrap path
 
 The VM size defines the CPU, memory, temporary storage, network bandwidth characteristics, and sometimes special hardware such as GPUs. Choosing a size is more than choosing "small" or "large." It is choosing the capacity envelope for the process.
 
-A CPU-bound batch worker may need a compute-optimized size. A memory-heavy service may need more RAM before it needs more cores. A disk-heavy workload may need attention to disk throughput and IOPS, not just VM vCPU count.
+A CPU-bound batch worker may need a compute-optimized size. A memory-heavy service may need more RAM before it needs more cores. A disk-heavy workload may need attention to disk throughput, IOPS, and VM vCPU count together.
 
 The size also shapes cost. A VM costs while it is allocated, even if the process inside is idle. If the workload only runs for short windows and does not require a server shape, a job-oriented service may be cheaper. If the workload must stay warm and needs OS control, the VM cost is the price of that control.
 
@@ -92,7 +92,7 @@ For most application VMs, start private. Put the VM in an application subnet, co
 
 Startup is everything that happens between "Azure created the VM" and "the workload is ready." It can include cloud-init, custom script extensions, package installation, configuration management, service registration, secrets retrieval, and application start.
 
-This is where a VM often feels easy in development and fragile in production. If the startup sequence depends on a human SSH session, the machine is not reproducible. If package installation sometimes fails because a repository is unavailable, the VM can exist but the app can be missing. If secrets are copied by hand, recovery becomes memory work.
+This is where a VM often feels easy in development and fragile in production. If the startup sequence depends on a human SSH session, the machine cannot be reproduced reliably. If package installation sometimes fails because a repository is unavailable, the VM can exist but the app can be missing. If secrets are copied by hand, recovery becomes memory work.
 
 A production VM should have a written, automated startup path. It should also have a clear health signal after startup, because "the VM is running" only means the hypervisor started the guest. It does not prove the application process is healthy.
 

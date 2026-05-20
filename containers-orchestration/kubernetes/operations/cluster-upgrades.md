@@ -24,7 +24,7 @@ aliases:
 
 Application deploys change one workload. Cluster upgrades change the platform every workload stands on. The Kubernetes API server, controller manager, scheduler, kubelets, container runtime, CNI plugin, CSI driver, ingress controller, and cloud controller may all be part of the upgrade path depending on the cluster.
 
-That wider blast radius is why cluster upgrades need a plan. The goal is not to avoid change. Kubernetes must be upgraded for security patches, support windows, new features, and ecosystem compatibility. The goal is to make the change observable and reversible where possible.
+That wider blast radius is why cluster upgrades need a plan. Kubernetes must be upgraded for security patches, support windows, new features, and ecosystem compatibility. A good upgrade plan makes the change observable and reversible where possible.
 
 For `devpolaris-orders-api`, the practical questions are concrete. Will its Deployment still use supported API versions? Can its three replicas stay available while nodes drain? Do probes and PodDisruptionBudgets behave correctly? Does the ingress controller still route traffic after nodes roll?
 
@@ -94,7 +94,7 @@ service/devpolaris-orders-api serverside-applied (server dry run)
 ingress.networking.k8s.io/devpolaris-orders-api serverside-applied (server dry run)
 ```
 
-Dry run is not a full production rehearsal, but it proves the API server accepts the object shapes.
+A dry run proves the API server accepts the object shapes. Production rehearsal still needs environment-specific checks such as controllers, admission policy, and runtime behavior.
 
 ## Prepare Workloads for Node Drains
 

@@ -1,302 +1,219 @@
 ---
-id: article-devsecops-security-foundations-threat-modeling-devops-workflows
-title: "Threat Modeling for DevOps Workflows"
-description: "Learn how to find realistic threats in CI/CD workflows before they become production incidents."
-overview: "Threat modeling is a practical conversation about what can go wrong, who can do it, and which control would change the outcome. This article applies that habit to GitHub Actions and production delivery."
-tags: ["threat-modeling", "pipelines", "risk"]
+title: "Threat Modeling"
+description: "Find realistic ways a delivery workflow can be abused, then choose controls that change the outcome."
+overview: "Threat modeling turns the delivery trust model into a practical review conversation. This article follows a GitHub Actions workflow, uses the TanStack npm compromise as a case study, and shows how to move from vague worry to specific controls."
+tags: ["threat-modeling", "pipelines", "risk", "supply-chain"]
 order: 2
+id: article-devsecops-security-foundations-threat-modeling-devops-workflows
+aliases:
+  - threat-modeling-for-devops-workflows
+  - article-devsecops-security-foundations-threat-modeling-devops-workflows
+  - devsecops/security-foundations/threat-modeling-for-devops-workflows.md
 ---
 
 ## Table of Contents
 
-1. [What Threat Modeling for DevOps Workflows Means in Delivery Work](#what-threat-modeling-for-devops-workflows-means-in-delivery-work)
-2. [The Operating Context](#the-operating-context)
-3. [A Useful Baseline Workflow](#a-useful-baseline-workflow)
-4. [Artifacts That Make the Risk Concrete](#artifacts-that-make-the-risk-concrete)
-5. [Diagnostic Path](#diagnostic-path)
-6. [Failure Modes and Fix Directions](#failure-modes-and-fix-directions)
-7. [Engineering Tradeoffs](#engineering-tradeoffs)
-8. [Production Access Review Practice](#production-access-review-practice)
+1. [What Is Threat Modeling?](#what-is-threat-modeling)
+2. [Start With One Path](#start-with-one-path)
+3. [Name the Boundary](#name-the-boundary)
+4. [Turn Worry Into Scenarios](#turn-worry-into-scenarios)
+5. [Case Study: TanStack](#case-study-tanstack)
+6. [Controls That Change the Story](#controls-that-change-the-story)
+7. [Review Evidence](#review-evidence)
+8. [Putting It All Together](#putting-it-all-together)
+9. [What's Next](#whats-next)
 
-## What Threat Modeling for DevOps Workflows Means in Delivery Work
+## What Is Threat Modeling?
 
-Threat modeling means drawing the workflow, naming misuse
-stories, and deciding which
-risks need controls. It exists because vague worry does
-not help a team choose what to
-fix.
+Threat modeling is a structured way to ask what can go wrong before the wrong thing happens. In DevSecOps work, the object under review is usually a delivery path: a pull request, workflow, package publish, container image, Terraform plan, Kubernetes deployment, or production access path.
 
-The running example is devpolaris-orders-api, a Node.js
-service stored in GitHub,
-tested and deployed with GitHub Actions, and hosted in a
-small cloud account. The team
-uses a production GitHub environment, a package registry
-image, a cloud deploy role,
-and a monthly production access review. That example is
-small enough to inspect by
-hand, but it contains the same trust questions that appear
-in larger delivery systems.
+The output should be plain. A good threat model does not need a long template before it is useful. It needs a path, a boundary, a realistic attacker action, and a control that would change the result.
 
-A delivery system is not only a build script. It is a set
-of identities, artifacts,
-approvals, and logs that can change production. When you
-look at security through that
-lens, the useful question is not "is this secure" in a
-vague way. The useful question
-is which identity can perform which action, at which
-boundary, with which evidence
-left behind.
+For `devpolaris-orders-api`, the starting question is simple:
 
-For a junior engineer, this framing is helpful because it
-turns security from a
-separate language into normal debugging. If a deploy
-failed, you inspect the actor,
-the permission, and the target. If a deploy succeeded when
-it should not have, you
-inspect the same things and then tighten the boundary that
-allowed it.
-
-## The Operating Context
-
-The service path is intentionally ordinary. A developer
-opens a pull request, GitHub
-Actions runs tests, the merge to main builds an image, and
-the deploy job updates
-production after environment approval. The cloud account
-contains the production app,
-a database, a log workspace, a secret store, and a few IAM
-or RBAC roles.
-
-```mermaid
-flowchart TD
-    A["Pull request"] --> B["GitHub Actions test job"]
-    B --> C["Merge to main"]
-    C --> D["Image digest in registry"]
-    D --> E["Production environment approval"]
-    E --> F["Cloud deploy role"]
-    F --> G["devpolaris-orders-api"]
-    H["Audit logs"] -. records .-> E
-    H -. records .-> F
+```text
+Can untrusted code or an unexpected identity reach a production-changing step?
 ```
 
-The diagram is the first artifact. It gives the team a
-shared object to point at
-during review. If someone says the pipeline is safe, ask
-which arrow they mean. If
-someone says a risk is accepted, ask which box owns that
-risk and which log proves the
-action later.
+That question is useful because it names both sides of the problem. "Untrusted code" includes code from forks, generated files, package install scripts, cached dependencies, and third-party actions. "Production-changing step" includes publishing a package, pushing an image, deploying to a cloud service, changing an IAM role, or writing a Kubernetes manifest into the cluster.
 
-## A Useful Baseline Workflow
+Threat modeling makes security practical because it keeps review connected to a concrete path. Instead of asking whether the whole pipeline is secure, ask which step accepts input, which step receives power, and whether those two steps can touch each other.
 
-A baseline workflow should separate untrusted validation
-from trusted deployment. Pull
-request code can run tests, but it should not receive
-production secrets or broad
-write permissions. Deployment should happen from the
-protected branch and should use
-an environment that records approval.
+## Start With One Path
+
+Start with the normal path before inventing attacker paths. The normal path for the orders service looks like this:
+
+```text
+pull request
+  -> test workflow
+  -> merge to main
+  -> build image
+  -> publish image
+  -> approve production
+  -> deploy service
+```
+
+Each arrow is a handoff. The pull request hands source code to the test workflow. The merge hands reviewed code to the build workflow. The build hands an image digest to the registry. The deployment hands that digest to production.
+
+Now add the trust level beside each step.
+
+| Step | Trust level | Reason |
+|-----------|-------------|--------|
+| Pull request from fork | Untrusted | The author controls the code and scripts in the branch. |
+| Test workflow | Low power | It should read code and report results. |
+| Merge to `main` | Trusted source | Branch protection and review have accepted the change. |
+| Build workflow | Trusted builder | It creates the artifact the team may deploy. |
+| Publish image | Registry write | It changes what later deployments can pull. |
+| Production approval | Human gate | It allows the deploy job to continue. |
+| Deploy service | Production write | It changes the running system. |
+
+This table is small, but it changes the conversation. A low-power test job can run untrusted code if it has no secrets, no write token, no shared trusted cache, and no path to publishing. A trusted builder can publish artifacts if it only consumes reviewed source and controlled dependencies. The threat model asks whether those assumptions hold.
+
+## Name the Boundary
+
+A boundary is where one trust level meets another. The most important boundaries in CI/CD are usually:
+
+- Fork code enters a base repository workflow.
+- A job receives a token.
+- A cache or artifact is reused by a later job.
+- A third-party action runs inside the workflow.
+- A package install script runs during dependency installation.
+- A publish or deploy step receives registry or cloud authority.
+
+The boundary is where the reviewer should slow down. Here is a risky workflow shape:
 
 ```yaml
-name: orders-api-delivery
 on:
-  pull_request:
-    branches: ["main"]
-  push:
+  pull_request_target:
     branches: ["main"]
 
 permissions:
-  contents: read
+  contents: write
+  id-token: write
 
 jobs:
-  test:
+  benchmark:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
         with:
-          node-version: "20"
-          cache: "npm"
+          ref: refs/pull/${{ github.event.pull_request.number }}/merge
       - run: npm ci
-      - run: npm test
-
-  deploy-prod:
-    needs: test
-    if: github.ref == 'refs/heads/main'
-    environment: production
-    permissions:
-      contents: read
-      id-token: write
-      packages: read
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - run: ./scripts/login-cloud-oidc.sh
-      - run: ./scripts/deploy-prod.sh
+      - run: npm run benchmark
 ```
 
-This workflow is not perfect, but the shape is healthy.
-The top-level token is
-read-only. The deploy job asks for the extra permissions
-it needs. The deploy job runs
-only from main and uses a named production environment. A
-reviewer can now inspect one
-job and understand why it has more power than the test
-job.
+The first boundary is `pull_request_target`. That event runs with the base repository context. The second boundary is the checkout ref, which pulls pull request code into that context. The third boundary is `id-token: write`, which allows a job to request an OIDC token. The fourth boundary is `npm ci`, because dependency lifecycle scripts can execute code during installation.
 
-If a failure appears, avoid broadening everything at once.
-A denied package read needs
-a package read permission. A denied cloud action needs the
-exact cloud action on the
-exact resource. A missing approval needs an environment
-rule, not a larger token.
-
-## Artifacts That Make the Risk Concrete
-
-Security reviews improve when they use real artifacts
-instead of opinions. A workflow
-file, role policy, audit event, access review note, or
-deployment record lets the team
-discuss the same facts.
+None of these fields is automatically bad in every workflow. The problem is their combination. The threat model should describe that combination in one sentence:
 
 ```text
-Service: devpolaris-orders-api
-Commit: 8f2a91d4c0b8
-Workflow run: orders-api-delivery #1842
-Image: ghcr.io/devpolaris/orders-api@sha256:4e1b9f...c71a
-Cloud principal: orders-api-prod-deployer
-Environment approver: maya-dev
-Target: rg-devpolaris-orders-prod/orders-api
-Health check: GET /health returned 200
+Untrusted pull request code can run in a base repository workflow that can request an OIDC token.
 ```
 
-This record gives the team a path backward from production
-to source. If the running
-image does not match the workflow output, investigate the
-deploy script or a manual
-production change. If the cloud principal is a human admin
-instead of the deploy role,
-investigate why the normal path was bypassed.
+That sentence is specific enough to fix.
 
-The tradeoff is that evidence takes storage and design.
-The fix is to automate facts
-where possible and keep human notes for judgment,
-exceptions, and decisions.
+## Turn Worry Into Scenarios
 
-## Diagnostic Path
+A threat scenario should sound like something a reviewer can test. Avoid broad statements such as "attackers may compromise CI." Write a short path instead.
 
-A good security habit should help when something breaks.
-The diagnostic path below
-works for most delivery security questions because it
-follows the change from code to
-production.
+| Vague worry | Useful scenario | First evidence to inspect |
+|-------------|-----------------|---------------------------|
+| CI could be abused | Fork code runs in `pull_request_target` and receives a writable token | Event, checkout ref, permissions |
+| Dependencies are risky | A package install script reads environment variables during `npm ci` | Lockfile, lifecycle scripts, workflow env |
+| Caches are dangerous | A pull request job writes a cache later restored by a release job | Cache key, event scope, restore path |
+| Third-party actions are risky | A mutable action tag changes after review | Action ref and commit SHA |
+| Publishing could be hijacked | Any code path in the release job can reach registry credentials | Publish identity, token scope, step isolation |
+
+The useful scenario contains a verb. Fork code runs. A package script reads. A cache is restored. A tag changes. A code path reaches. Verbs make the review concrete.
+
+For beginner teams, three questions are enough for a first pass:
 
 ```text
-Diagnostic path
-1. Start with the pull request, commit SHA, actor, and changed files.
-2. Open the workflow run and record event, ref, job permissions, and approval.
-3. Compare the artifact digest with the digest running in production.
-4. Check the cloud activity log for principal, action, resource, and result.
-5. Match the finding to a fix: narrow a permission, rotate a secret, add review, or improve evidence.
+What input enters this step?
+What power does this step receive?
+What could connect the input to the power?
 ```
 
-The important detail is order. Starting in the cloud
-console can show what changed,
-but it may not show why the change was allowed. Starting
-in the pull request can show
-intent, but it may not show the acting identity. Walking
-the whole chain keeps the
-team from fixing the first symptom and missing the broken
-boundary.
+If those questions are hard to answer, the workflow is too hard to review.
 
-For devpolaris-orders-api, the most useful fields are
-commit SHA, workflow event, job
-permissions, image digest, cloud principal, and target
-resource. If one field is
-missing, add it to the workflow output or release
-evidence.
+## Case Study: TanStack
 
-## Failure Modes and Fix Directions
+In May 2026, TanStack published a postmortem for an npm supply-chain compromise affecting TanStack Router and Start packages. The postmortem described 84 malicious versions across 42 packages. The attack combined a `pull_request_target` workflow pattern, cache poisoning across a fork and base repository boundary, and extraction of an OIDC token from the GitHub Actions runner process. The compromised versions were deprecated quickly, and TanStack later published hardening follow-up work.
 
-Most delivery security failures repeat familiar shapes.
-Learn to recognize the shape,
-then choose the narrow fix.
-
-| Failure mode | What it looks like | Fix direction |
-| :--- | :--- | :--- |
-| Trust boundary is missing | PR job can deploy or publish | Split jobs and restrict events |
-| Permission is too broad | One role can change every service | Scope role to one service and environment |
-| Secret is long-lived | Static cloud key sits in GitHub secrets | Replace with OIDC or rotate and restrict |
-| Evidence is weak | Production changed with no visible approver | Add environment approvals and audit retention |
-| Ownership is unclear | Nobody knows who reviews workflow changes | Add CODEOWNERS and a review checklist |
-
-A fix direction is not the same as a command. The command
-depends on the provider and
-repository. The engineering decision is stable: reduce
-blast radius, make the boundary
-explicit, and keep enough evidence to prove the next
-change.
-
-## Engineering Tradeoffs
-
-Security controls have costs. Narrow roles take longer to
-write than admin roles.
-Environment approval slows an urgent release. Secret
-rotation can break old processes
-if the team does not plan the handoff. Audit retention
-costs money and needs a
-retrieval path.
-
-The answer is not to remove friction everywhere. Put
-friction where the risk changes.
-A normal application code change can move with peer review
-and tests. A workflow
-permission change, deploy role change, or production
-secret change should receive a
-more careful review because it changes what the delivery
-system can do.
-
-For the orders API team, the practical target is
-explainable security. If a junior
-engineer can trace who approved a change, which identity
-deployed it, which artifact
-ran, and which permission allowed it, the system is much
-easier to operate and
-improve.
-
-## Production Access Review Practice
-
-Monthly production access reviews are where the mental
-model meets people. The review
-should compare current access with current responsibility.
-It should remove old users,
-confirm service identities, and record any exception with
-an owner and date.
+The useful lesson for this article is the chain. A single weak boundary was not the whole story. The attacker needed a sequence:
 
 ```text
-Review: devpolaris-orders-api production access
-Date: 2026-05-08
-Human admins: maya-dev, oren-platform
-Log readers: orders-oncall-group
-Deploy role: orders-api-prod-deployer
-Removed: old-ci-service-user, sam-contractor
-Exception: shared log reader remains until workspace split, owner oren-platform
-Next review: 2026-06-05
+fork pull request code
+  -> base repository workflow context
+  -> poisoned dependency cache
+  -> release workflow restore
+  -> code execution on trusted runner
+  -> OIDC token usable for npm publishing
+  -> malicious package versions
 ```
 
-This artifact is small, but it answers important
-questions. Who still has access?
-Which temporary exception remains? Who owns the cleanup?
-If the review finds an
-account nobody recognizes, disable it or remove access
-first, then investigate why it
-was still present.
+Read that chain like a filesystem path. Each segment exists because the previous segment handed something to the next one. Fork code reached a workflow context. The workflow wrote a cache. The release workflow trusted the cache. The trusted runner had publishing identity available. The registry accepted that identity.
+
+This is why threat modeling works best as a path exercise. If the review only asked whether OIDC was enabled, it would miss the cache. If it only asked whether the package publish step ran, it would miss code running elsewhere in the same trusted workflow. If it only asked whether npm tokens were stored as secrets, it would miss trusted publishing through OIDC.
+
+The case also gives a healthy response pattern. The useful hardening was structural: remove or restrict dangerous workflow events, separate untrusted work from trusted publishing, pin third-party actions, reduce cache trust across boundaries, add ownership around sensitive workflow paths, and monitor publishes.
+
+## Controls That Change the Story
+
+A control is useful when it changes the scenario. It should break the chain, reduce the blast radius, or produce evidence early enough to matter.
+
+| Scenario | Control that changes it | New result |
+|----------|--------------------------|------------|
+| Fork code runs in trusted context | Use `pull_request` for untrusted validation and avoid checking out fork code in `pull_request_target` | Fork code gets a lower-trust context. |
+| Untrusted job writes cache for release | Separate cache scopes or disable cache writes across trust boundaries | Release job does not restore attacker-controlled cache. |
+| Third-party action tag moves | Pin actions to full commit SHAs and review updates | Reviewed action content stays stable. |
+| Any release code path can publish | Isolate publish identity to the narrow publish job and verify provenance | Unexpected code paths are easier to detect. |
+| Workflow changes merge casually | CODEOWNERS and branch rules require platform/security review | Boundary changes get the right reviewers. |
+
+Notice that several controls are boring. They are not new tools. They are careful boundaries, scoped identity, immutable references, and ownership. The point of the threat model is to place those controls where the delivery path actually needs them.
+
+## Review Evidence
+
+The best threat model leaves a small review artifact behind. It should be short enough that a future engineer will read it.
+
+```text
+Workflow: .github/workflows/release.yml
+Reviewed path: fork PR -> release publish
+Boundary: untrusted code must not reach publish identity
+Scenario: PR code writes a dependency cache restored by release
+Control: release job uses separate cache key and no PR-written cache scope
+Evidence: cache restore key includes event name and trusted ref
+Owner: platform-team
+Next review: before changing release workflow permissions
+```
+
+The `Workflow` line names the file. `Reviewed path` names the normal path under review. `Boundary` names the rule the team wants to preserve. `Scenario` explains what could go wrong. `Control` explains what changes the outcome. `Evidence` tells the next reviewer where to check. `Owner` says who maintains the boundary.
+
+This artifact is much more useful than a generic "CI reviewed" note. It lets a future reviewer ask whether the control still exists after the workflow changes.
+
+## Putting It All Together
+
+Threat modeling starts with the delivery path from the previous article. Draw one path, label the trust level at each step, and slow down wherever trust crosses a boundary. Then write scenarios with verbs: untrusted code runs, a cache is restored, a token is requested, an action tag changes, a package is published.
+
+The TanStack case shows why this matters. The compromise moved across several handoffs before the malicious versions appeared in npm. Each handoff looked like an implementation detail until the whole chain was visible.
+
+For `devpolaris-orders-api`, the practical habit is:
+
+- Start with one delivery path.
+- Name the boundary where trust changes.
+- Write the attacker path as a short sequence.
+- Choose controls that break the sequence.
+- Leave evidence that future reviewers can read.
+
+## What's Next
+
+The next article focuses on the permission side of the same model. Once a threat model names which actor might reach which target, least privilege decides how narrow that actor's real access should be.
 
 ---
 
 **References**
 
-- [GitHub Actions security hardening](https://docs.github.com/actions/security-guides/security-hardening-for-github-actions) - GitHub explains token scope, secret handling, and safer workflow patterns.
-- [NIST Secure Software Development Framework](https://csrc.nist.gov/Projects/ssdf) - NIST describes secure software practices that map well to delivery systems.
-- [OWASP Threat Modeling Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Threat_Modeling_Cheat_Sheet.html) - OWASP gives a practical structure for finding and discussing threats.
-- [GitHub Actions OpenID Connect](https://docs.github.com/actions/deployment/security-hardening-your-deployments/about-security-hardening-with-openid-connect) - GitHub describes replacing long-lived cloud secrets with short-lived federation.
+- [TanStack npm supply-chain compromise postmortem](https://tanstack.com/blog/npm-supply-chain-compromise-postmortem) - TanStack documents the May 2026 attack chain involving `pull_request_target`, cache poisoning, OIDC token extraction, and malicious npm publishes.
+- [Hardening TanStack after the npm compromise](https://tanstack.com/blog/incident-followup) - TanStack describes follow-up hardening work after the compromise.
+- [GitHub Actions secure use reference](https://docs.github.com/en/actions/how-tos/security-for-github-actions/security-guides/using-githubs-security-features-to-secure-your-use-of-github-actions) - GitHub explains third-party action risk, token scope, and action pinning.
+- [OWASP Threat Modeling Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Threat_Modeling_Cheat_Sheet.html) - OWASP provides a practical structure for threat modeling conversations.

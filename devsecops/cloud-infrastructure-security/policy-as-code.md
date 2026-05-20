@@ -1,316 +1,113 @@
 ---
-id: article-devsecops-cloud-infrastructure-security-policy-as-code
 title: "Policy as Code"
-description: "Write and review policy checks that make cloud infrastructure rules testable in CI."
-overview: "Policy as code lets a team express security rules as reviewed tests instead of repeated comments. This article follows devpolaris-orders-api as an OPA rule blocks unapproved public ingress in a Terraform plan."
+description: "Turn repeated infrastructure review rules into tests that run in CI."
+overview: "Policy as code makes security rules explicit and reviewable. This article explains plain-language rules, deny and warn behavior, policy tests, and how policies fit beside IaC scanners."
 tags: ["policy", "opa", "review"]
 order: 4
+id: article-devsecops-cloud-infrastructure-security-policy-as-code
 ---
 
 ## Table of Contents
 
-1. [The Change You Are Really Reviewing](#the-change-you-are-really-reviewing)
-2. [The devpolaris-orders-api Baseline](#the-devpolaris-orders-api-baseline)
-3. [Turn Repeated Review Comments Into Tests](#turn-repeated-review-comments-into-tests)
-4. [Keep Policies Close to Plain Language](#keep-policies-close-to-plain-language)
-5. [Choose Deny, Warn, or Require Review](#choose-deny-warn-or-require-review)
-6. [Test the Policy Like Application Code](#test-the-policy-like-application-code)
-7. [Failure Modes and Fix Directions](#failure-modes-and-fix-directions)
-8. [A Reviewer Checklist](#a-reviewer-checklist)
+1. [What Policy as Code Does](#what-policy-as-code-does)
+2. [Start With Plain Language](#start-with-plain-language)
+3. [Deny, Warn, or Require Review](#deny-warn-or-require-review)
+4. [Testing Policy](#testing-policy)
+5. [Policy Evidence](#policy-evidence)
+6. [Putting It All Together](#putting-it-all-together)
+7. [What's Next](#whats-next)
 
-## The Change You Are Really Reviewing
+## What Policy as Code Does
 
-Cloud infrastructure security work often arrives as an ordinary pull request. For
-devpolaris-orders-api, the change might be a Terraform edit that adds storage access, opens
-a listener, changes a policy rule, or updates an emergency role. The review is not separate
-from delivery work. It is the part of delivery where you prove that the cloud control plane
-will receive the change you intended.
+Policy as code turns rules into code that can run during review. Instead of asking every reviewer to remember "admin ports must not be public," the team writes a policy that checks the Terraform plan.
 
-In this article, policy as code means the practical habit of reading cloud configuration,
-plan output, account state, and audit evidence together. The running example uses
-Terraform-managed AWS resources for devpolaris-orders-api. The same mental model also works
-in Azure: a role assignment, a network security group rule, or a policy exemption still
-needs a caller, a target, a scope, and evidence.
-
-The service accepts order requests, writes invoice files, emits logs, and calls a small set
-of cloud APIs. That shape gives us enough reality to make security decisions without
-inventing a large platform. You will see Terraform snippets, plan excerpts, CLI output, and
-failure evidence that a reviewer can use before merge or during an incident.
-
-```mermaid
-graph TD
-    A["Pull request"] --> B["Terraform plan"]
-    B --> C["Cloud control plane"]
-    C --> D["Runtime service"]
-    B --> E["Security review"]
-    E --> F["Merge, fix, or ask for evidence"]
-```
-
-The important point is sequence. A reviewer should catch broad access, exposed paths, weak
-policy decisions, and drift before the apply changes production. When the change has already
-happened, the same evidence becomes the diagnostic trail for cleanup.
-
-## The devpolaris-orders-api Baseline
-
-A useful security review starts with a baseline. The baseline is the normal shape of the
-service: which identity runs it, which network paths should reach it, which storage it owns,
-and which teams are allowed to change it. Without that baseline, every finding looks
-isolated, and you cannot tell whether a change is intentional or accidental.
-
-For this module, the production stack is small. Terraform manages an ECS service or Azure
-Container App equivalent, an application role, a private database endpoint, an invoice
-bucket or storage account, a log destination, and network rules for HTTPS traffic. The exact
-provider matters less than the review habit: name the resource, name the scope, and compare
-it with the service story.
-
-| Baseline item | Expected shape | Why it matters |
-|---|---|---|
-| Runtime identity | `orders-api-prod` role or managed identity | Limits what the app can do |
-| Public entry | HTTPS through approved edge only | Keeps direct service ports private |
-| Storage | Invoice objects under service-owned bucket path | Prevents cross-service data access |
-| State owner | Terraform workspace for production | Gives changes a reviewed path |
-| Audit owner | Platform security channel and ticket | Lets incidents reconstruct actions |
-
-A baseline should be boring enough to remember. If a reviewer cannot say what identity the
-app uses or which ports should be public, the team will approve changes by reading line
-syntax instead of reading risk. That is how a small edit becomes a surprise after apply.
-
-The baseline also gives you a fair way to review exceptions. A temporary public rule, a
-broad permission, or an emergency role activation may be justified during a migration or
-incident. The review question is whether the exception is named, time-limited, logged, and
-connected to a real operational need.
-
-## Turn Repeated Review Comments Into Tests
-
-Policy as code is useful when reviewers keep writing the same comment. If every
-infrastructure pull request needs someone to ask whether a security group is public, the
-rule is ready to become a test. The policy does not remove human judgment. It protects the
-review from forgetting a known rule.
-
-```bash
-$ terraform show -json tfplan.binary > tfplan.json
-$ conftest test tfplan.json --policy policy/terraform
-
-FAIL - tfplan.json - main - aws_security_group_rule.orders_api_ingress exposes 443 to 0.0.0.0/0 without an approved exception
-
-1 test, 0 passed, 0 warnings, 1 failure
-```
-
-This failure is clear because it names the resource and the denied condition. The author can
-inspect the Terraform plan and either narrow the source, move the rule to the approved edge,
-or add an explicit exception path if the team allows one.
-
-## Keep Policies Close to Plain Language
-
-A good policy starts as a sentence before it becomes Rego. For devpolaris-orders-api, the
-sentence is: internal service security groups must not allow inbound traffic from the whole
-internet unless the resource is tagged as an approved edge. The sentence gives you the
-inputs and the exception model.
+For `devpolaris-orders-api`, a policy might say:
 
 ```text
-package main
-
-deny[msg] {
-  resource := input.resource_changes[_]
-  resource.type == "aws_security_group_rule"
-  resource.change.after.type == "ingress"
-  resource.change.after.cidr_blocks[_] == "0.0.0.0/0"
-  not approved_edge(resource)
-  msg := sprintf("%s exposes ingress to 0.0.0.0/0 without an approved exception", [resource.address])
-}
-
-approved_edge(resource) {
-  resource.change.after.tags.exposure == "public-edge"
-}
+Production admin listeners must not allow source 0.0.0.0/0.
 ```
 
-The policy reads Terraform plan JSON. It loops through changed resources, finds ingress
-rules, checks for the public CIDR, and asks whether the rule is an approved edge. The
-message is as important as the logic because it is what the author sees under time pressure.
+That sentence is the real policy. The code exists to make the sentence testable.
 
-## Choose Deny, Warn, or Require Review
+Policy as code is useful when the same review comment repeats. If a rule is important, stable, and checkable from available evidence, automate it.
 
-Not every policy should block the pipeline. Some rules catch definite mistakes, such as
-public SSH on a production service. Others need human context, such as a new public HTTPS
-listener. The team should decide which findings deny merge, which warn, and which require a
-named approval.
+## Start With Plain Language
 
-| Policy result | Use when | Example |
-|---|---|---|
-| Deny | The configuration is almost always unsafe | Public admin port in production |
-| Warn | The risk depends on context | Missing optional tag during migration |
-| Require review | A specialist should approve | New cross-account trust |
-| Record only | The team is collecting data | Legacy resources before cleanup |
-
-For devpolaris-orders-api, a public ingress rule on the internal service should deny. A
-public ingress rule on the approved edge may pass if the tag and owner are present. A
-cross-account role trust might require security review because the risk depends on the
-external account and condition keys.
-
-## Test the Policy Like Application Code
-
-Policy code can have bugs. A missing field check can fail every pull request. A loose
-exception can allow the risky case. Treat policy tests like application unit tests: give the
-policy small input documents and assert the expected decision.
+Write the policy in plain language first.
 
 ```text
-test_public_ingress_is_denied {
-  result := deny with input as {
-    "resource_changes": [{
-      "address": "aws_security_group_rule.orders_api_ingress",
-      "type": "aws_security_group_rule",
-      "change": {"after": {"type": "ingress", "cidr_blocks": ["0.0.0.0/0"], "tags": {}}}
-    }]
-  }
-  count(result) == 1
-}
+Rule: production databases must not be publicly reachable.
+Evidence needed: resource type, environment tag, public route or public ingress.
+Allowed exception: temporary migration window with owner and expiry.
 ```
 
-The test input is small on purpose. It proves one rule without requiring a full Terraform
-plan fixture. Larger tests can use real plan JSON from a safe sample, but small tests make
-policy behavior easier to read during review.
+This step prevents clever policy code from hiding a vague rule. If the team cannot explain the rule plainly, it should not be automated yet.
 
-## Failure Modes and Fix Directions
+The policy code can then check plan data, resource tags, network rules, or metadata.
 
-Most cloud security failures are visible if you know which layer to inspect. A bad IAM
-change appears as an access denied error, a suspicious allow statement, or an unexpected
-audit event. A network exposure appears as a wide CIDR range, a public IP, an open listener,
-or traffic from places the service should never see. A policy failure appears as a denied CI
-job or, worse, a missing denial where one should have happened.
+```text
+Input: Terraform plan JSON
+Check: security group rule has environment=production and cidr=0.0.0.0/0
+Output: deny with resource address and reason
+```
 
-| Symptom | Likely cause | First fix direction |
-|---|---|---|
-| `AccessDenied` after deploy | Required action missing from role | Add the smallest action and resource scope |
-| Plan opens `0.0.0.0/0` | Rule copied from test or console | Restrict to edge, VPN, or private CIDR |
-| Scanner fails on generated module | Module default is too broad | Override input or patch module upstream |
-| Drift keeps returning | Console edits bypass Terraform | Import, revert, or move ownership clearly |
-| Emergency role remains active | No expiry or closure step | Disable session path and file review ticket |
+## Deny, Warn, or Require Review
 
-The fix direction should be specific enough that another engineer can start. Make it secure
-is not a fix. Replace the public CIDR with the ALB security group source is a fix direction.
-Attach s3:PutObject only to arn:aws:s3:::dp-orders-invoices-prod/* is a fix direction. The
-reader should leave the review knowing the next safe edit.
+Not every policy should block.
 
-Some failures need a product conversation rather than only a Terraform patch. If support
-engineers need production invoice access, the answer may be a read-only support tool with
-audit logging, not a wider S3 policy. If a partner needs inbound traffic, the answer may be
-PrivateLink, IP allowlisting, or a separate edge path, not a public service port.
+| Mode | Use when | Example |
+|------|----------|---------|
+| Deny | The risk is clear and the false-positive rate is low | Public admin port in production |
+| Warn | The pattern needs human context | Large private CIDR range |
+| Require review | The change may be valid but sensitive | IAM role can assume another role |
 
-## A Reviewer Checklist
+The mode is part of the policy design. A noisy deny rule teaches teams to bypass the system. A weak warn rule may let serious changes pass unnoticed. Start with the risk and choose the behavior that fits.
 
-A checklist helps when the pull request is large or the release is busy. It should not
-replace thinking. It gives the reviewer a stable order so they do not skip identity,
-network, policy, drift, or emergency access evidence just because the Terraform diff is
-noisy.
+## Testing Policy
 
-| Check | Evidence | Decision |
-|---|---|---|
-| Scope | Resource ARN, Azure scope, or module path | Is the target narrow enough? |
-| Caller | Role, user, managed identity, or workflow identity | Is the caller expected? |
-| Action | API action, port, or policy rule | Is the action needed by the service? |
-| Time | Expiry, ticket, or lifecycle note | Should this access end later? |
-| Detection | Log, alert, scan, or drift check | Will the team notice misuse or change? |
+Policy code should have tests. A broken policy can block safe work or allow unsafe work.
 
-For devpolaris-orders-api, the final review note should be short and concrete. A good note
-says what changed, what evidence was checked, and what remains intentionally accepted. That
-note becomes useful later when someone asks why a role has a permission or why a network
-rule exists.
+```text
+Test: deny public admin ingress
+Input: security group rule port 9000 source 0.0.0.0/0 env production
+Expected: deny
 
-> Good cloud security review is not a search for perfect infrastructure. It is a search for accurate intent, narrow scope, and usable evidence.
+Test: allow VPN admin ingress
+Input: security group rule port 9000 source 10.40.20.0/24 env production
+Expected: allow
+```
+
+Tests keep the policy tied to the intended behavior. They also help reviewers understand the rule without reading every line of policy code.
+
+## Policy Evidence
+
+CI output should explain policy decisions.
+
+```text
+Policy check: failed
+Policy: no-public-admin-ingress
+Resource: module.orders.aws_security_group_rule.admin
+Reason: production admin port 9000 allows 0.0.0.0/0
+Mode: deny
+Fix: restrict source to VPN range or request exception
+```
+
+This is the message a developer needs. It names the policy, resource, reason, mode, and fix direction.
+
+## Putting It All Together
+
+Policy as code turns repeated review rules into tests. The strongest policies start as plain-language rules, use available evidence, choose the right mode, and produce output a developer can act on.
+
+For `devpolaris-orders-api`, policy should cover high-confidence production risks: public admin ingress, broad IAM, missing encryption, missing audit logs, and production resources without owners. Sensitive but contextual changes can require review instead of automatic denial.
+
+## What's Next
+
+Policy checks review planned changes. Drift detection compares the desired infrastructure record with real cloud state after changes happen.
 
 ---
-For Policy as Code, connect each finding to one named resource, one owner, and one next
-action. A finding without an owner becomes background noise during a release review, even
-when the risk is real.
-
-A finding with a clear resource path, evidence, and fix direction can move through normal
-delivery work. That difference matters because security work succeeds when engineers can see
-exactly what changed and why.
-
-For Policy as Code, connect each finding to one named resource, one owner, and one next
-action. A finding without an owner becomes background noise during a release review, even
-when the risk is real.
-
-A finding with a clear resource path, evidence, and fix direction can move through normal
-delivery work. That difference matters because security work succeeds when engineers can see
-exactly what changed and why.
-
-For Policy as Code, connect each finding to one named resource, one owner, and one next
-action. A finding without an owner becomes background noise during a release review, even
-when the risk is real.
-
-A finding with a clear resource path, evidence, and fix direction can move through normal
-delivery work. That difference matters because security work succeeds when engineers can see
-exactly what changed and why.
-
-For Policy as Code, connect each finding to one named resource, one owner, and one next
-action. A finding without an owner becomes background noise during a release review, even
-when the risk is real.
-
-A finding with a clear resource path, evidence, and fix direction can move through normal
-delivery work. That difference matters because security work succeeds when engineers can see
-exactly what changed and why.
-
-For Policy as Code, connect each finding to one named resource, one owner, and one next
-action. A finding without an owner becomes background noise during a release review, even
-when the risk is real.
-
-A finding with a clear resource path, evidence, and fix direction can move through normal
-delivery work. That difference matters because security work succeeds when engineers can see
-exactly what changed and why.
-
-For Policy as Code, connect each finding to one named resource, one owner, and one next
-action. A finding without an owner becomes background noise during a release review, even
-when the risk is real.
-
-A finding with a clear resource path, evidence, and fix direction can move through normal
-delivery work. That difference matters because security work succeeds when engineers can see
-exactly what changed and why.
-
-For Policy as Code, connect each finding to one named resource, one owner, and one next
-action. A finding without an owner becomes background noise during a release review, even
-when the risk is real.
-
-A finding with a clear resource path, evidence, and fix direction can move through normal
-delivery work. That difference matters because security work succeeds when engineers can see
-exactly what changed and why.
-
-For Policy as Code, connect each finding to one named resource, one owner, and one next
-action. A finding without an owner becomes background noise during a release review, even
-when the risk is real.
-
-A finding with a clear resource path, evidence, and fix direction can move through normal
-delivery work. That difference matters because security work succeeds when engineers can see
-exactly what changed and why.
-
-For Policy as Code, connect each finding to one named resource, one owner, and one next
-action. A finding without an owner becomes background noise during a release review, even
-when the risk is real.
-
-A finding with a clear resource path, evidence, and fix direction can move through normal
-delivery work. That difference matters because security work succeeds when engineers can see
-exactly what changed and why.
-
-For Policy as Code, connect each finding to one named resource, one owner, and one next
-action. A finding without an owner becomes background noise during a release review, even
-when the risk is real.
-
-A finding with a clear resource path, evidence, and fix direction can move through normal
-delivery work. That difference matters because security work succeeds when engineers can see
-exactly what changed and why.
-
-For Policy as Code, connect each finding to one named resource, one owner, and one next
-action. A finding without an owner becomes background noise during a release review, even
-when the risk is real.
-
-A finding with a clear resource path, evidence, and fix direction can move through normal
-delivery work. That difference matters because security work succeeds when engineers can see
-exactly what changed and why.
-
 
 **References**
 
-- [Open Policy Agent Documentation](https://www.openpolicyagent.org/docs/latest/) - Canonical OPA documentation for policy decisions and Rego language basics.
-- [Conftest Documentation](https://www.conftest.dev/) - Canonical documentation for testing configuration files with OPA policies.
-- [Terraform Plan Command](https://developer.hashicorp.com/terraform/cli/commands/plan) - Official command reference for reading proposed infrastructure changes before apply.
-- [AWS VPC Security Groups](https://docs.aws.amazon.com/vpc/latest/userguide/vpc-security-groups.html) - Official behavior for instance-level firewall rules in AWS.
+- [Open Policy Agent documentation](https://www.openpolicyagent.org/docs/latest/) - OPA documents policy as code and policy evaluation.
+- [Conftest documentation](https://www.conftest.dev/) - Conftest documents testing configuration files with OPA policies.
+- [Terraform plan JSON output](https://developer.hashicorp.com/terraform/internals/json-format) - HashiCorp documents machine-readable Terraform plan output.

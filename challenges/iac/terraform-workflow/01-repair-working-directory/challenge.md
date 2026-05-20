@@ -1,6 +1,6 @@
 ---
 title: "Repair the Working Directory"
-sectionSlug: the-smallest-useful-working-directory
+sectionSlug: the-working-directory
 order: 1
 ---
 

@@ -49,7 +49,7 @@ If AWS taught you to copy the ARN before changing a role, bucket, service, or po
 
 Names are for humans first. A name like `app-orders-prod` helps a teammate search, scan the portal, read a dashboard, and recognize a diagram. Good names carry intent.
 
-Azure names are not one universal system. Some names must be globally unique because they become public endpoints. Some only need to be unique inside a resource group. Some resource types have parent resources. Some services expose display names that are helpful but not strong enough for automation.
+Azure names vary by service and scope. Some names must be globally unique because they become public endpoints. Some only need to be unique inside a resource group. Some resource types have parent resources. Some services expose display names that are helpful but not strong enough for automation.
 
 That means a name can start an investigation, but it should not end one.
 
@@ -90,7 +90,7 @@ Read it from left to right:
 | `/providers/Microsoft.Web` | Which resource provider supplies the resource type |
 | `/sites/app-orders-prod` | Which type and name identify this resource under that provider |
 
-This is the Azure equivalent of the AWS habit: copy the strong identifier, not only the friendly name. An ARN and an Azure resource ID are not formatted the same way, but both answer the same operational need: "this exact resource, in this exact boundary."
+This is the Azure equivalent of the AWS habit: copy the strong identifier alongside the friendly name. An ARN and an Azure resource ID are formatted differently, but both answer the same operational need: "this exact resource, in this exact boundary."
 
 ## Resource Types
 
@@ -125,7 +125,7 @@ If an alert points at:
 
 then a vault with a similar name in `rg-orders-dev-uksouth` is not the same management resource. The friendly name may look close. The resource group path says otherwise.
 
-Resource groups are not only folders. They are lifecycle and management containers. Deleting a resource group can delete its resources. Assigning a role at resource group scope can affect resources inside it. Applying a lock at resource group scope can affect delete and update operations under it.
+Resource groups are lifecycle and management containers. Deleting a resource group can delete its resources. Assigning a role at resource group scope can affect resources inside it. Applying a lock at resource group scope can affect delete and update operations under it.
 
 The gotcha is that resource group names can lie by accident. A group called `rg-orders-prod` inside a development subscription is still in the development subscription. Automation should trust the full resource ID and subscription context first, then use names and tags as supporting evidence.
 

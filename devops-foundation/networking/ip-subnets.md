@@ -23,7 +23,7 @@ You just created an AWS VPC, and the console asks you for a "CIDR block." The pl
 
 This is the kind of problem subnetting solves. Every device on a network needs an address, and those addresses need to be organized so that traffic can be routed efficiently and networks can be segmented for security. Think of it like postal addresses: street names and house numbers exist so a letter does not have to visit every house in the country to find the right one. Without structure, routing would be chaos.
 
-If you have used npm, you already understand naming and namespaces. An npm package has a unique name so the registry can find it. An IP address works the same way: it is a unique identifier for a device on a network. But addresses go further. They encode *where* a device lives on the network, not just *who* it is. A subnet is the neighborhood; the address is the house. Learning to read and plan these neighborhoods is one of the first skills you need when working with cloud infrastructure.
+If you have used npm, you already understand naming and namespaces. An npm package has a unique name so the registry can find it. An IP address works the same way: it is a unique identifier for a device on a network. Addresses also encode *where* a device lives on the network. A subnet is the neighborhood; the address is the house. Learning to read and plan these neighborhoods is one of the first skills you need when working with cloud infrastructure.
 
 ## IPv4 Addresses: The Parts You Need to Know
 

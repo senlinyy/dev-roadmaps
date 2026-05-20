@@ -44,7 +44,7 @@ Observability is the answer to that distance. It is the habit of leaving useful 
 
 ## What Is Observability
 
-Observability is the practice of collecting and connecting signals from a running system so engineers can answer operational questions. It is not just "turn on CloudWatch" and it is not collecting every possible event forever.
+Observability is the practice of collecting and connecting signals from a running system so engineers can answer operational questions. It uses CloudWatch and other signals deliberately instead of collecting every possible event forever.
 
 The useful beginner question is simple: if this system behaves differently in production, what evidence will tell us what happened?
 
@@ -138,7 +138,7 @@ A useful checkout log does not need to be huge:
 
 Notice the searchable fields. The next engineer can search by `requestId`, `orderId`, `route`, `dependency`, or `level`. The log names the failing dependency without exposing secrets or payment details.
 
-The gotcha is that logs are not free storage and not a safe place for private data. More logs can help, but logs with no structure become a pile. Logs with secrets become a security problem. Logs with no retention plan become a cost and compliance problem.
+The gotcha is that logs create storage cost and can leak private data. More logs can help, but logs with no structure become a pile. Logs with secrets become a security problem. Logs with no retention plan become a cost and compliance problem.
 
 ## Metrics
 
@@ -228,7 +228,7 @@ Then use traces or correlated logs to connect steps. Did the request spend time 
 
 Finally, check audit evidence when the shape suggests a recent change. CloudTrail can show whether a role, security group, Lambda configuration, or route changed around the failure window.
 
-The goal is not to follow a memorized runbook. The goal is to let each signal answer the next useful question.
+The goal is to let each signal answer the next useful question.
 
 ## Tradeoffs And Signal Quality
 

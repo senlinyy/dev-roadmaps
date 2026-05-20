@@ -75,7 +75,7 @@ The third surprise is that serverless services do not behave like VMs. A Compute
 | Serverless private egress | VPC connector or service-specific integration | Direct VPC egress or Serverless VPC Access |
 | Public entry | Load balancer, DNS, certificate | Cloud Run URL or load balancer with DNS and certificate |
 
-The point is not that one provider is simpler. The point is to avoid importing the wrong scope into your design review.
+The point is to avoid importing the wrong scope into your design review.
 
 ## Global Network
 
@@ -128,7 +128,7 @@ For a teaching example, use a readable plan:
 | `10.30.20.0/24` | Data-facing private subnet in `us-central1` |
 | `10.30.110.0/24` | Worker subnet in `europe-west2` |
 
-The exact numbers are not magic. The habit matters: reserve space by system, region, and tier before the network becomes a pile of one-off ranges.
+The exact numbers matter less than the habit: reserve space by system, region, and tier before the network becomes a pile of one-off ranges.
 
 ## Routes
 
@@ -204,9 +204,9 @@ When the answer is "the app is in the VPC," ask for this evidence. It turns a va
 
 Return to the opening problems.
 
-The Cloud SQL private IP is not just a checkbox. It needs a VPC path and, usually, a private access pattern that makes the managed database reachable from the right network. The next articles will unpack that path.
+The Cloud SQL private IP needs a VPC path and, usually, a private access pattern that makes the managed database reachable from the right network. The next articles will unpack that path.
 
-Cloud Run is not "inside a subnet" in the same way a VM is. It has ingress settings for callers and egress settings for outbound traffic. The VPC still matters, but the attachment mechanism is service-specific.
+Cloud Run uses a service-specific network attachment model instead of sitting inside a subnet like a VM. It has ingress settings for callers and egress settings for outbound traffic. The VPC still matters, but the attachment mechanism is service-specific.
 
 The worker in another region does not automatically need a second VPC. In GCP, a single VPC network can contain regional subnets in multiple regions. The team should add a regional subnet deliberately and review latency, data, and cost.
 

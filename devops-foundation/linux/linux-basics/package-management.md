@@ -165,7 +165,7 @@ The trust model is important to understand. Each repository signs its Release fi
 
 ## Adding Third-Party Repositories
 
-The default repositories cover a vast amount of software, but sometimes you need a newer version than your distribution ships, or software that is not included at all. This is where third-party repositories come in.
+The default repositories cover a vast amount of software, but sometimes you need a newer version than your distribution ships, or software that the distribution does not package. This is where third-party repositories come in.
 
 Modern Ubuntu systems use the `add-apt-repository` shortcut for PPAs (Personal Package Archives, which are community-maintained repositories hosted on Launchpad where developers publish their own builds of software):
 

@@ -93,7 +93,7 @@ A stage is a deployed lifecycle view of an API, such as `dev`, `staging`, `prod`
 
 Stages matter because APIs change. A team may test a new route in a staging stage before exposing it to production callers. A production stage may have different throttling, logging, variables, or backend integration settings.
 
-The common mistake is treating a stage like a casual suffix in a URL and forgetting that it is part of release management. If a private integration receives the stage name in the backend path, the backend may see a path such as `/prod/orders` unless mappings remove or account for it. That is an API-to-backend contract detail, not just cosmetic URL shape.
+The common mistake is treating a stage like a casual suffix in a URL and forgetting that it is part of release management. If a private integration receives the stage name in the backend path, the backend may see a path such as `/prod/orders` unless mappings remove or account for it. That is an API-to-backend contract detail that affects more than cosmetic URL shape.
 
 Stages should make deployment state visible. They should not become a hiding place for mystery behavior that only one person remembers.
 
@@ -101,7 +101,7 @@ Stages should make deployment state visible. They should not become a hiding pla
 
 An integration is where API Gateway sends the request after it has matched the route and applied the API-layer behavior. The integration can be a Lambda function, an HTTP endpoint, an AWS service action, or a private backend reached through a VPC link.
 
-This is the handoff point. API Gateway can validate, authorize, transform, throttle, and route. The backend still owns the business work. If checkout creates an invalid order, that is not fixed by moving the route into API Gateway.
+This is the handoff point. API Gateway can validate, authorize, transform, throttle, and route. The backend still owns the business work. Moving the route into API Gateway leaves checkout's order validation problem in the backend.
 
 Integrations also let a stable API evolve. A route can start with Lambda while the team learns the domain, then move to a private ECS service when the workload needs a long-running container. Callers do not need to learn that migration if the API contract stays steady.
 
@@ -131,7 +131,7 @@ Throttling limits how quickly API Gateway accepts requests. This protects the ba
 
 API Gateway throttling can apply at several levels, including account, stage, method, and usage-plan settings depending on API type. When a limit is exceeded, callers can receive `429 Too Many Requests` instead of pushing unlimited traffic into Lambda, ECS, or a database.
 
-Throttling is not a substitute for backend scaling or abuse protection. It is the front-door pressure valve. The backend should still have capacity limits, queues where appropriate, and useful error handling. But throttling lets the API reject excess traffic before every downstream system pays the cost.
+Throttling is the front-door pressure valve alongside backend scaling and abuse protection. The backend should still have capacity limits, queues where appropriate, and useful error handling. Throttling lets the API reject excess traffic before every downstream system pays the cost.
 
 The practical habit is to set limits around the caller and route. A partner export route may need stricter limits than normal customer reads. A webhook route may need burst tolerance but careful retry behavior.
 

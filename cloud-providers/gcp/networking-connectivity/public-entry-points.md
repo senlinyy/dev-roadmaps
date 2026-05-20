@@ -25,7 +25,7 @@ aliases:
 
 ## The Problem
 
-The Orders API is deployed and healthy from the team's point of view. It responds when someone calls the generated service URL. That is not enough for production users.
+The Orders API is deployed and healthy from the team's point of view. It responds when someone calls the generated service URL. Production users need a deliberate public entry path.
 
 - Customers need a stable name such as `orders.devpolaris.com`, not a platform-generated URL.
 - The browser needs a valid HTTPS certificate for that name.
@@ -95,7 +95,7 @@ A load balancer receives traffic before the backend does. In GCP, an external Ap
 
 For an Orders API, the load balancer might route `orders.devpolaris.com/api/*` to Cloud Run and another path to a static frontend or a different service. The user sees one domain. The backend design can evolve behind it.
 
-A load balancer is not only about spreading traffic. It is also an entry policy boundary. It can centralize TLS, URL routing, logging, and security controls that would otherwise be scattered across services.
+A load balancer spreads traffic and acts as an entry policy boundary. It can centralize TLS, URL routing, logging, and security controls that would otherwise be scattered across services.
 
 | Without a load balancer | With a load balancer |
 | --- | --- |
@@ -127,7 +127,7 @@ The backend is still a real backend. It is just not a group of machines you mana
 
 Public entry needs health evidence. A request can fail because DNS points to the wrong place, the certificate is invalid, the load balancer route is wrong, the backend service is unhealthy, or the Cloud Run revision is not ready.
 
-Health checks are straightforward for many VM or container backends. Serverless backends have service-specific health behavior and logging. The practical lesson is that public entry review should include the frontend and the backend, not just one of them.
+Health checks are straightforward for many VM or container backends. Serverless backends have service-specific health behavior and logging. The practical lesson is that public entry review should include the frontend and the backend together.
 
 Ask:
 
@@ -163,7 +163,7 @@ Return to the opening problems.
 
 Customers need a stable name. DNS supplies the answer for `orders.devpolaris.com`, and the answer should point to the intended public entry.
 
-Browsers need a valid certificate. HTTPS is served at the entry point the user reaches, so certificate review belongs with DNS and load balancer review, not only inside the backend code.
+Browsers need a valid certificate. HTTPS is served at the entry point the user reaches, so certificate review belongs with DNS, load balancer review, and backend code.
 
 Traffic should reach the intended backend. A load balancer with a serverless NEG can route to Cloud Run while keeping the public entry stable.
 

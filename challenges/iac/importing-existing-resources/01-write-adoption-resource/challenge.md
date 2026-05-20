@@ -1,6 +1,6 @@
 ---
 title: "Write the Adoption Resource"
-sectionSlug: write-the-resource-block-first
+sectionSlug: resource-block-first
 order: 1
 ---
 

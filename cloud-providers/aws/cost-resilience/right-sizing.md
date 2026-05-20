@@ -36,7 +36,7 @@ That can go wrong quickly:
 - Logs are costly, but cutting them may remove the evidence needed for incidents.
 - Worker cost rises, but the queue is growing because jobs are failing and retrying.
 
-Right-sizing is the discipline of changing resource shape from evidence. The goal is not "smaller." The goal is the smallest shape that still protects the workload's latency, recovery, observability, and expected traffic.
+Right-sizing is the discipline of changing resource shape from evidence. The goal is the smallest shape that still protects the workload's latency, recovery, observability, and expected traffic.
 
 ## What Is Right-Sizing
 

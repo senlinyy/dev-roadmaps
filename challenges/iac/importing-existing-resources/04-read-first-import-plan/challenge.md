@@ -1,6 +1,6 @@
 ---
 title: "Read the First Import Plan"
-sectionSlug: reading-the-first-plan-after-import
+sectionSlug: first-plan
 order: 4
 ---
 

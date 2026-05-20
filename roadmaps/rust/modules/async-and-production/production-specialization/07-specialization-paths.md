@@ -65,7 +65,7 @@ You will likely study:
 
 A good proof project is a small API service with typed routes, a database table, structured errors, request tracing, tests, and a release build.
 
-The main design pressure is operational clarity. Backend Rust is not only about fast request handling. It is about knowing what failed, bounding concurrency, keeping state safe, and making deployment behavior boring.
+The main design pressure is operational clarity. Backend Rust needs fast request handling, clear failure evidence, bounded concurrency, safe state, and boring deployment behavior.
 
 ## CLI And Tooling
 

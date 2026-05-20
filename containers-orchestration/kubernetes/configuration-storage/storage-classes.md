@@ -175,7 +175,7 @@ Events:
   Normal  FileSystemResizeSuccessful  2m  kubelet                    Mount volume resize succeeded
 ```
 
-Expansion is not a backup. It solves capacity pressure, not accidental deletion or corruption. Reclaim policy is also not a backup. `Retain` may keep a volume around, but you still need a documented restore path and ownership cleanup.
+Expansion solves capacity pressure. Backups and restore procedures handle accidental deletion or corruption. Reclaim policy has the same boundary: `Retain` may keep a volume around, but you still need a documented restore path and ownership cleanup.
 
 ## Failure Mode: The Wrong Class Name
 

@@ -17,7 +17,7 @@
     {
       "id": "q2",
       "type": "single",
-      "scenario": "A developer created `dp-orders-scratch-senlin` in a sandbox account for a one-day experiment. It has no objects, no application depends on it, and the team wants a clean development bucket pattern. What is usually the better choice?",
+      "scenario": "A developer created `dp-devpolaris-orders-scratch` in a sandbox account for a one-day experiment. It has no objects, no application depends on it, and the team wants a clean development bucket pattern. What is usually the better choice?",
       "options": [
         { "id": "a", "text": "Recreate the disposable resource through Terraform and delete the old manual bucket after checking there are no dependencies." },
         { "id": "b", "text": "Import the bucket because every manual object must be adopted." },

@@ -248,7 +248,7 @@ Here are the most common failure modes when dealing with composite actions and r
 
 1. **The Unrecognized Input Error**: 
    You added `node-version: '18'` to your caller workflow, but you forgot to declare `node-version` under the `inputs:` block in `action.yml`. GitHub will instantly fail the workflow with a message complaining about unexpected inputs. 
-   *Diagnosis*: Always check the `action.yml` interface. You cannot pass an argument that is not explicitly defined in the action's manifest.
+   *Diagnosis*: Always check the `action.yml` interface. Every argument you pass must be explicitly defined in the action's manifest.
 
 2. **The Missing Bash Shell Error**:
    You converted a normal step into a composite action step, but the workflow fails with a cryptic message about missing required parameters.

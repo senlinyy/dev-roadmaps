@@ -55,7 +55,7 @@ That contract is still real:
 | Release safety | Deployment slots and swap behavior |
 | Evidence | Logs, health checks, metrics, and diagnostics |
 
-The main habit is to read App Service as a managed runtime, not just a URL. A URL can respond while the wrong code is running. A deployment can succeed while required settings are missing. A healthy platform can host an unhealthy app. The runtime evidence matters.
+The main habit is to read App Service as a managed runtime with a URL attached. A URL can respond while the wrong code is running. A deployment can succeed while required settings are missing. A healthy platform can host an unhealthy app. The runtime evidence matters.
 
 ## App Service Plan
 
@@ -92,7 +92,7 @@ This small record makes the app easier to reason about than a resource name alon
 
 ## Runtime Settings
 
-App settings are environment variables presented to the running app. They are the normal place to put runtime configuration such as feature flags, endpoint names, queue names, and references to protected secret sources. They are not a substitute for application design, but they keep deployment artifacts from hardcoding environment-specific values.
+App settings are environment variables presented to the running app. They are the normal place to put runtime configuration such as feature flags, endpoint names, queue names, and references to protected secret sources. They keep deployment artifacts from hardcoding environment-specific values while the application still owns its configuration design.
 
 The gotcha is that settings belong to the app or slot, not to a developer's shell. A backend that works locally because `.env` contains `DATABASE_URL` can fail in App Service if that setting was never configured. A deployment artifact can be perfect and still crash on boot because the runtime settings are incomplete.
 

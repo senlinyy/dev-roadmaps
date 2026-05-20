@@ -28,7 +28,7 @@ The parser has ordinary product behavior:
 - A file with no title should return `None`.
 - Bad config should return the right error.
 
-Those are not type-system questions. They are behavior questions. Rust's built-in test framework gives you a place to record them.
+Those are behavior questions. Rust's built-in test framework gives you a place to record them.
 
 ## How Cargo Finds Tests
 

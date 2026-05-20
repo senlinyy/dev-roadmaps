@@ -1,6 +1,6 @@
 ---
 title: "Ansible"
-description: "Configure servers and operating systems with inventories, playbooks, roles, and idempotent tasks."
-tags: ["Ansible", "Playbooks", "Config"]
-order: 3
+description: "Learn how Ansible turns inventories, variables, roles, Vault, rollouts, and CI boundaries into repeatable infrastructure changes."
+tags: ["ansible", "playbooks", "automation"]
+order: 2
 ---

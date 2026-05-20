@@ -1,318 +1,123 @@
 ---
-id: article-devsecops-container-image-security-registry-security
 title: "Registry Security"
-description: "Protect container registries with scoped access, immutable references, retention rules, and useful audit evidence."
-overview: "A container registry is both a package store and a release boundary. You will learn how to control who can push images, how to review tags and digests, and how registry settings affect incident response."
+description: "Control who can push images, which references can move, and what registry evidence proves during response."
+overview: "A container registry is both a package store and a release boundary. This article explains push access, tag immutability, retention, scanning, audit logs, and incident response evidence."
 tags: ["registry", "access", "images"]
 order: 5
+id: article-devsecops-container-image-security-registry-security
 ---
 
 ## Table of Contents
 
-1. [The First Boundary To Understand](#the-first-boundary-to-understand)
-2. [The devpolaris-orders-api Thread](#the-devpolaris-orders-api-thread)
-3. [The Smallest Useful Artifact](#the-smallest-useful-artifact)
-4. [Reading The Evidence](#reading-the-evidence)
-5. [Diagnostic Path Before Changes](#diagnostic-path-before-changes)
-6. [Failure Modes And Fix Directions](#failure-modes-and-fix-directions)
-7. [Review Questions For Pull Requests](#review-questions-for-pull-requests)
-8. [Operational Tradeoffs](#operational-tradeoffs)
-
-## The First Boundary To Understand
-
-Registry Security matters when the team can connect a security idea to a specific image that will run somewhere. In this section, the image is `devpolaris-orders-api`, built with Docker, published to GHCR for review, and promoted to ECR for production. The service listens on port `3000`, exposes `GET /health`, and is deployed by digest after the release workflow records evidence.
-
-The concept in focus here is release boundary. In plain terms, it is the part of the container workflow that helps you answer one operational question before the image reaches production. The question may be what files are present, which known vulnerabilities are reported, who produced the digest, who can replace it in the registry, or what Linux privileges the process receives after startup.
-
-You should read the examples as review evidence, not as commands to paste blindly. A senior reviewer is not looking for perfect-looking YAML. They are looking for a chain of proof: this image was built from this source, contains these components, passed these checks, and runs with these limits.
-
-```dockerfile
-FROM node:22-slim AS build
-WORKDIR /workspace
-COPY package*.json ./
-RUN npm ci
-COPY src ./src
-RUN npm run build && npm prune --omit=dev
-
-FROM node:22-slim AS runtime
-WORKDIR /app
-COPY --from=build /workspace/node_modules ./node_modules
-COPY --from=build /workspace/dist ./dist
-USER node
-CMD ["node", "dist/server.js"]
-```
-
-The first diagnostic step is to anchor the discussion to a digest. A tag can help humans find an image, but the digest identifies the immutable content. When a report mentions `ghcr.io/devpolaris/orders-api@sha256:2f4a1234`, everyone can inspect the same artifact instead of arguing about where `latest` pointed yesterday.
-
-For release boundary, the useful evidence is small and specific. Capture the command output that proves the claim, the file or policy that controls the behavior, and the failure text that appears when the behavior is wrong. A long terminal transcript is weaker than five lines that show the image, actor, package, setting, or denied operation.
-
-A realistic failure path starts with one mismatch. The Dockerfile says the process runs as `node`, but inspection shows an empty user field. The scanner report says a package is vulnerable, but the base image has a vendor backport. The signature verifies, but the certificate identity belongs to a pull request workflow instead of the release workflow. Each mismatch points to a different fix direction.
-
-Do not fix these problems by adding broad permissions or copying more files into the image. Fix the durable boundary. Update the Dockerfile, dependency lockfile, registry policy, signing workflow, deployment manifest, or exception record. Then rebuild or republish the image so the new evidence belongs to a new digest.
-
-For pull request review, ask three questions. What exact artifact will run? Which command proves the claim in this section? What would fail if this control were removed? If the answer depends on a person remembering a manual step, move that step into CI or a checked-in policy.
-
-The tradeoff is worth naming in the pull request. Tighter images reduce scan noise but can remove shell diagnostics. Strict scan gates catch known risks but can block urgent changes. Signatures prove producer identity but need verification policy. Registry separation improves access control but adds promotion work. Runtime hardening reduces blast radius but exposes hidden write and permission assumptions.
-
-Keep the orders API thread visible as you learn the topic. The service is ordinary, and that is the point. Container security work becomes repeatable when the team can apply the same evidence pattern to every normal API, worker, and scheduled job it ships.
-
-## The devpolaris-orders-api Thread
-
-Registry Security matters when the team can connect a security idea to a specific image that will run somewhere. In this section, the image is `devpolaris-orders-api`, built with Docker, published to GHCR for review, and promoted to ECR for production. The service listens on port `3000`, exposes `GET /health`, and is deployed by digest after the release workflow records evidence.
-
-The concept in focus here is names and digests. In plain terms, it is the part of the container workflow that helps you answer one operational question before the image reaches production. The question may be what files are present, which known vulnerabilities are reported, who produced the digest, who can replace it in the registry, or what Linux privileges the process receives after startup.
-
-You should read the examples as review evidence, not as commands to paste blindly. A senior reviewer is not looking for perfect-looking YAML. They are looking for a chain of proof: this image was built from this source, contains these components, passed these checks, and runs with these limits.
-
-```dockerfile
-FROM node:22-slim AS build
-WORKDIR /workspace
-COPY package*.json ./
-RUN npm ci
-COPY src ./src
-RUN npm run build && npm prune --omit=dev
-
-FROM node:22-slim AS runtime
-WORKDIR /app
-COPY --from=build /workspace/node_modules ./node_modules
-COPY --from=build /workspace/dist ./dist
-USER node
-CMD ["node", "dist/server.js"]
-```
-
-The first diagnostic step is to anchor the discussion to a digest. A tag can help humans find an image, but the digest identifies the immutable content. When a report mentions `ghcr.io/devpolaris/orders-api@sha256:2f4a1234`, everyone can inspect the same artifact instead of arguing about where `latest` pointed yesterday.
-
-For names and digests, the useful evidence is small and specific. Capture the command output that proves the claim, the file or policy that controls the behavior, and the failure text that appears when the behavior is wrong. A long terminal transcript is weaker than five lines that show the image, actor, package, setting, or denied operation.
-
-A realistic failure path starts with one mismatch. The Dockerfile says the process runs as `node`, but inspection shows an empty user field. The scanner report says a package is vulnerable, but the base image has a vendor backport. The signature verifies, but the certificate identity belongs to a pull request workflow instead of the release workflow. Each mismatch points to a different fix direction.
-
-Do not fix these problems by adding broad permissions or copying more files into the image. Fix the durable boundary. Update the Dockerfile, dependency lockfile, registry policy, signing workflow, deployment manifest, or exception record. Then rebuild or republish the image so the new evidence belongs to a new digest.
-
-For pull request review, ask three questions. What exact artifact will run? Which command proves the claim in this section? What would fail if this control were removed? If the answer depends on a person remembering a manual step, move that step into CI or a checked-in policy.
-
-The tradeoff is worth naming in the pull request. Tighter images reduce scan noise but can remove shell diagnostics. Strict scan gates catch known risks but can block urgent changes. Signatures prove producer identity but need verification policy. Registry separation improves access control but adds promotion work. Runtime hardening reduces blast radius but exposes hidden write and permission assumptions.
-
-Keep the orders API thread visible as you learn the topic. The service is ordinary, and that is the point. Container security work becomes repeatable when the team can apply the same evidence pattern to every normal API, worker, and scheduled job it ships.
-
-## The Smallest Useful Artifact
-
-Registry Security matters when the team can connect a security idea to a specific image that will run somewhere. In this section, the image is `devpolaris-orders-api`, built with Docker, published to GHCR for review, and promoted to ECR for production. The service listens on port `3000`, exposes `GET /health`, and is deployed by digest after the release workflow records evidence.
-
-The concept in focus here is access control. In plain terms, it is the part of the container workflow that helps you answer one operational question before the image reaches production. The question may be what files are present, which known vulnerabilities are reported, who produced the digest, who can replace it in the registry, or what Linux privileges the process receives after startup.
-
-You should read the examples as review evidence, not as commands to paste blindly. A senior reviewer is not looking for perfect-looking YAML. They are looking for a chain of proof: this image was built from this source, contains these components, passed these checks, and runs with these limits.
-
-```dockerfile
-FROM node:22-slim AS build
-WORKDIR /workspace
-COPY package*.json ./
-RUN npm ci
-COPY src ./src
-RUN npm run build && npm prune --omit=dev
-
-FROM node:22-slim AS runtime
-WORKDIR /app
-COPY --from=build /workspace/node_modules ./node_modules
-COPY --from=build /workspace/dist ./dist
-USER node
-CMD ["node", "dist/server.js"]
-```
-
-The first diagnostic step is to anchor the discussion to a digest. A tag can help humans find an image, but the digest identifies the immutable content. When a report mentions `ghcr.io/devpolaris/orders-api@sha256:2f4a1234`, everyone can inspect the same artifact instead of arguing about where `latest` pointed yesterday.
-
-For access control, the useful evidence is small and specific. Capture the command output that proves the claim, the file or policy that controls the behavior, and the failure text that appears when the behavior is wrong. A long terminal transcript is weaker than five lines that show the image, actor, package, setting, or denied operation.
-
-A realistic failure path starts with one mismatch. The Dockerfile says the process runs as `node`, but inspection shows an empty user field. The scanner report says a package is vulnerable, but the base image has a vendor backport. The signature verifies, but the certificate identity belongs to a pull request workflow instead of the release workflow. Each mismatch points to a different fix direction.
-
-Do not fix these problems by adding broad permissions or copying more files into the image. Fix the durable boundary. Update the Dockerfile, dependency lockfile, registry policy, signing workflow, deployment manifest, or exception record. Then rebuild or republish the image so the new evidence belongs to a new digest.
-
-For pull request review, ask three questions. What exact artifact will run? Which command proves the claim in this section? What would fail if this control were removed? If the answer depends on a person remembering a manual step, move that step into CI or a checked-in policy.
-
-The tradeoff is worth naming in the pull request. Tighter images reduce scan noise but can remove shell diagnostics. Strict scan gates catch known risks but can block urgent changes. Signatures prove producer identity but need verification policy. Registry separation improves access control but adds promotion work. Runtime hardening reduces blast radius but exposes hidden write and permission assumptions.
-
-Keep the orders API thread visible as you learn the topic. The service is ordinary, and that is the point. Container security work becomes repeatable when the team can apply the same evidence pattern to every normal API, worker, and scheduled job it ships.
-
-## Reading The Evidence
-
-Registry Security matters when the team can connect a security idea to a specific image that will run somewhere. In this section, the image is `devpolaris-orders-api`, built with Docker, published to GHCR for review, and promoted to ECR for production. The service listens on port `3000`, exposes `GET /health`, and is deployed by digest after the release workflow records evidence.
-
-The concept in focus here is tag immutability. In plain terms, it is the part of the container workflow that helps you answer one operational question before the image reaches production. The question may be what files are present, which known vulnerabilities are reported, who produced the digest, who can replace it in the registry, or what Linux privileges the process receives after startup.
-
-You should read the examples as review evidence, not as commands to paste blindly. A senior reviewer is not looking for perfect-looking YAML. They are looking for a chain of proof: this image was built from this source, contains these components, passed these checks, and runs with these limits.
-
-```dockerfile
-FROM node:22-slim AS build
-WORKDIR /workspace
-COPY package*.json ./
-RUN npm ci
-COPY src ./src
-RUN npm run build && npm prune --omit=dev
-
-FROM node:22-slim AS runtime
-WORKDIR /app
-COPY --from=build /workspace/node_modules ./node_modules
-COPY --from=build /workspace/dist ./dist
-USER node
-CMD ["node", "dist/server.js"]
-```
-
-The first diagnostic step is to anchor the discussion to a digest. A tag can help humans find an image, but the digest identifies the immutable content. When a report mentions `ghcr.io/devpolaris/orders-api@sha256:2f4a1234`, everyone can inspect the same artifact instead of arguing about where `latest` pointed yesterday.
-
-For tag immutability, the useful evidence is small and specific. Capture the command output that proves the claim, the file or policy that controls the behavior, and the failure text that appears when the behavior is wrong. A long terminal transcript is weaker than five lines that show the image, actor, package, setting, or denied operation.
-
-A realistic failure path starts with one mismatch. The Dockerfile says the process runs as `node`, but inspection shows an empty user field. The scanner report says a package is vulnerable, but the base image has a vendor backport. The signature verifies, but the certificate identity belongs to a pull request workflow instead of the release workflow. Each mismatch points to a different fix direction.
-
-Do not fix these problems by adding broad permissions or copying more files into the image. Fix the durable boundary. Update the Dockerfile, dependency lockfile, registry policy, signing workflow, deployment manifest, or exception record. Then rebuild or republish the image so the new evidence belongs to a new digest.
-
-For pull request review, ask three questions. What exact artifact will run? Which command proves the claim in this section? What would fail if this control were removed? If the answer depends on a person remembering a manual step, move that step into CI or a checked-in policy.
-
-The tradeoff is worth naming in the pull request. Tighter images reduce scan noise but can remove shell diagnostics. Strict scan gates catch known risks but can block urgent changes. Signatures prove producer identity but need verification policy. Registry separation improves access control but adds promotion work. Runtime hardening reduces blast radius but exposes hidden write and permission assumptions.
-
-Keep the orders API thread visible as you learn the topic. The service is ordinary, and that is the point. Container security work becomes repeatable when the team can apply the same evidence pattern to every normal API, worker, and scheduled job it ships.
-
-## Diagnostic Path Before Changes
-
-Registry Security matters when the team can connect a security idea to a specific image that will run somewhere. In this section, the image is `devpolaris-orders-api`, built with Docker, published to GHCR for review, and promoted to ECR for production. The service listens on port `3000`, exposes `GET /health`, and is deployed by digest after the release workflow records evidence.
-
-The concept in focus here is retention. In plain terms, it is the part of the container workflow that helps you answer one operational question before the image reaches production. The question may be what files are present, which known vulnerabilities are reported, who produced the digest, who can replace it in the registry, or what Linux privileges the process receives after startup.
-
-You should read the examples as review evidence, not as commands to paste blindly. A senior reviewer is not looking for perfect-looking YAML. They are looking for a chain of proof: this image was built from this source, contains these components, passed these checks, and runs with these limits.
-
-```dockerfile
-FROM node:22-slim AS build
-WORKDIR /workspace
-COPY package*.json ./
-RUN npm ci
-COPY src ./src
-RUN npm run build && npm prune --omit=dev
-
-FROM node:22-slim AS runtime
-WORKDIR /app
-COPY --from=build /workspace/node_modules ./node_modules
-COPY --from=build /workspace/dist ./dist
-USER node
-CMD ["node", "dist/server.js"]
-```
-
-The first diagnostic step is to anchor the discussion to a digest. A tag can help humans find an image, but the digest identifies the immutable content. When a report mentions `ghcr.io/devpolaris/orders-api@sha256:2f4a1234`, everyone can inspect the same artifact instead of arguing about where `latest` pointed yesterday.
-
-For retention, the useful evidence is small and specific. Capture the command output that proves the claim, the file or policy that controls the behavior, and the failure text that appears when the behavior is wrong. A long terminal transcript is weaker than five lines that show the image, actor, package, setting, or denied operation.
-
-A realistic failure path starts with one mismatch. The Dockerfile says the process runs as `node`, but inspection shows an empty user field. The scanner report says a package is vulnerable, but the base image has a vendor backport. The signature verifies, but the certificate identity belongs to a pull request workflow instead of the release workflow. Each mismatch points to a different fix direction.
-
-Do not fix these problems by adding broad permissions or copying more files into the image. Fix the durable boundary. Update the Dockerfile, dependency lockfile, registry policy, signing workflow, deployment manifest, or exception record. Then rebuild or republish the image so the new evidence belongs to a new digest.
-
-For pull request review, ask three questions. What exact artifact will run? Which command proves the claim in this section? What would fail if this control were removed? If the answer depends on a person remembering a manual step, move that step into CI or a checked-in policy.
-
-The tradeoff is worth naming in the pull request. Tighter images reduce scan noise but can remove shell diagnostics. Strict scan gates catch known risks but can block urgent changes. Signatures prove producer identity but need verification policy. Registry separation improves access control but adds promotion work. Runtime hardening reduces blast radius but exposes hidden write and permission assumptions.
-
-Keep the orders API thread visible as you learn the topic. The service is ordinary, and that is the point. Container security work becomes repeatable when the team can apply the same evidence pattern to every normal API, worker, and scheduled job it ships.
-
-## Failure Modes And Fix Directions
-
-Registry Security matters when the team can connect a security idea to a specific image that will run somewhere. In this section, the image is `devpolaris-orders-api`, built with Docker, published to GHCR for review, and promoted to ECR for production. The service listens on port `3000`, exposes `GET /health`, and is deployed by digest after the release workflow records evidence.
-
-The concept in focus here is audit logs. In plain terms, it is the part of the container workflow that helps you answer one operational question before the image reaches production. The question may be what files are present, which known vulnerabilities are reported, who produced the digest, who can replace it in the registry, or what Linux privileges the process receives after startup.
-
-You should read the examples as review evidence, not as commands to paste blindly. A senior reviewer is not looking for perfect-looking YAML. They are looking for a chain of proof: this image was built from this source, contains these components, passed these checks, and runs with these limits.
-
-```dockerfile
-FROM node:22-slim AS build
-WORKDIR /workspace
-COPY package*.json ./
-RUN npm ci
-COPY src ./src
-RUN npm run build && npm prune --omit=dev
-
-FROM node:22-slim AS runtime
-WORKDIR /app
-COPY --from=build /workspace/node_modules ./node_modules
-COPY --from=build /workspace/dist ./dist
-USER node
-CMD ["node", "dist/server.js"]
-```
-
-The first diagnostic step is to anchor the discussion to a digest. A tag can help humans find an image, but the digest identifies the immutable content. When a report mentions `ghcr.io/devpolaris/orders-api@sha256:2f4a1234`, everyone can inspect the same artifact instead of arguing about where `latest` pointed yesterday.
-
-For audit logs, the useful evidence is small and specific. Capture the command output that proves the claim, the file or policy that controls the behavior, and the failure text that appears when the behavior is wrong. A long terminal transcript is weaker than five lines that show the image, actor, package, setting, or denied operation.
-
-A realistic failure path starts with one mismatch. The Dockerfile says the process runs as `node`, but inspection shows an empty user field. The scanner report says a package is vulnerable, but the base image has a vendor backport. The signature verifies, but the certificate identity belongs to a pull request workflow instead of the release workflow. Each mismatch points to a different fix direction.
-
-Do not fix these problems by adding broad permissions or copying more files into the image. Fix the durable boundary. Update the Dockerfile, dependency lockfile, registry policy, signing workflow, deployment manifest, or exception record. Then rebuild or republish the image so the new evidence belongs to a new digest.
-
-For pull request review, ask three questions. What exact artifact will run? Which command proves the claim in this section? What would fail if this control were removed? If the answer depends on a person remembering a manual step, move that step into CI or a checked-in policy.
-
-The tradeoff is worth naming in the pull request. Tighter images reduce scan noise but can remove shell diagnostics. Strict scan gates catch known risks but can block urgent changes. Signatures prove producer identity but need verification policy. Registry separation improves access control but adds promotion work. Runtime hardening reduces blast radius but exposes hidden write and permission assumptions.
-
-Keep the orders API thread visible as you learn the topic. The service is ordinary, and that is the point. Container security work becomes repeatable when the team can apply the same evidence pattern to every normal API, worker, and scheduled job it ships.
-
-## Review Questions For Pull Requests
-
-Registry Security matters when the team can connect a security idea to a specific image that will run somewhere. In this section, the image is `devpolaris-orders-api`, built with Docker, published to GHCR for review, and promoted to ECR for production. The service listens on port `3000`, exposes `GET /health`, and is deployed by digest after the release workflow records evidence.
-
-The concept in focus here is registry failures. In plain terms, it is the part of the container workflow that helps you answer one operational question before the image reaches production. The question may be what files are present, which known vulnerabilities are reported, who produced the digest, who can replace it in the registry, or what Linux privileges the process receives after startup.
-
-You should read the examples as review evidence, not as commands to paste blindly. A senior reviewer is not looking for perfect-looking YAML. They are looking for a chain of proof: this image was built from this source, contains these components, passed these checks, and runs with these limits.
+1. [What a Registry Does](#what-a-registry-does)
+2. [Push and Pull Access](#push-and-pull-access)
+3. [Tags and Immutability](#tags-and-immutability)
+4. [Retention](#retention)
+5. [Registry Evidence](#registry-evidence)
+6. [Putting It All Together](#putting-it-all-together)
+7. [What's Next](#whats-next)
+
+## What a Registry Does
+
+A container registry stores image manifests, layers, tags, signatures, SBOMs, and sometimes scan results. It is the place where the build system hands artifacts to deployment.
+
+For the orders service, the registry path is:
 
 ```text
-repository: ghcr.io/devpolaris/orders-api
-tag: release-candidate
-digest: sha256:2f4a1234
-actor: github-actions release-image.yml
-action: package.push
-result: success
+build workflow
+  -> push image digest
+  -> attach tag
+  -> attach SBOM and signature
+  -> deployment pulls digest
 ```
 
-The first diagnostic step is to anchor the discussion to a digest. A tag can help humans find an image, but the digest identifies the immutable content. When a report mentions `ghcr.io/devpolaris/orders-api@sha256:2f4a1234`, everyone can inspect the same artifact instead of arguing about where `latest` pointed yesterday.
+The registry is a release boundary because whoever can push or move references can influence what deployment pulls. Registry security is about narrowing that power and keeping evidence when it is used.
 
-For registry failures, the useful evidence is small and specific. Capture the command output that proves the claim, the file or policy that controls the behavior, and the failure text that appears when the behavior is wrong. A long terminal transcript is weaker than five lines that show the image, actor, package, setting, or denied operation.
+## Push and Pull Access
 
-A realistic failure path starts with one mismatch. The Dockerfile says the process runs as `node`, but inspection shows an empty user field. The scanner report says a package is vulnerable, but the base image has a vendor backport. The signature verifies, but the certificate identity belongs to a pull request workflow instead of the release workflow. Each mismatch points to a different fix direction.
+Push access should be narrower than pull access. Many systems may need to pull an image. Very few should be able to push one.
 
-Do not fix these problems by adding broad permissions or copying more files into the image. Fix the durable boundary. Update the Dockerfile, dependency lockfile, registry policy, signing workflow, deployment manifest, or exception record. Then rebuild or republish the image so the new evidence belongs to a new digest.
+| Actor | Access | Reason |
+|-------|--------|--------|
+| Release workflow | Push orders image | Trusted build output |
+| Production cluster | Pull orders image | Deployment needs to run it |
+| Developer laptop | Pull development image | Local debugging |
+| Pull request workflow | No push | Untrusted code should not publish |
 
-For pull request review, ask three questions. What exact artifact will run? Which command proves the claim in this section? What would fail if this control were removed? If the answer depends on a person remembering a manual step, move that step into CI or a checked-in policy.
+The release workflow identity should be the normal pusher. A human maintainer may need emergency access, but that path should be visible and rare.
 
-The tradeoff is worth naming in the pull request. Tighter images reduce scan noise but can remove shell diagnostics. Strict scan gates catch known risks but can block urgent changes. Signatures prove producer identity but need verification policy. Registry separation improves access control but adds promotion work. Runtime hardening reduces blast radius but exposes hidden write and permission assumptions.
+Registry tokens should also be scoped. A token that can push every package in an organization has larger blast radius than a token scoped to one repository or package namespace.
 
-Keep the orders API thread visible as you learn the topic. The service is ordinary, and that is the point. Container security work becomes repeatable when the team can apply the same evidence pattern to every normal API, worker, and scheduled job it ships.
+## Tags and Immutability
 
-## Operational Tradeoffs
-
-Registry Security matters when the team can connect a security idea to a specific image that will run somewhere. In this section, the image is `devpolaris-orders-api`, built with Docker, published to GHCR for review, and promoted to ECR for production. The service listens on port `3000`, exposes `GET /health`, and is deployed by digest after the release workflow records evidence.
-
-The concept in focus here is registry tradeoffs. In plain terms, it is the part of the container workflow that helps you answer one operational question before the image reaches production. The question may be what files are present, which known vulnerabilities are reported, who produced the digest, who can replace it in the registry, or what Linux privileges the process receives after startup.
-
-You should read the examples as review evidence, not as commands to paste blindly. A senior reviewer is not looking for perfect-looking YAML. They are looking for a chain of proof: this image was built from this source, contains these components, passed these checks, and runs with these limits.
+Tags are names. Digests are content. If a tag is mutable, it can be moved to another digest.
 
 ```text
-repository: ghcr.io/devpolaris/orders-api
-tag: release-candidate
-digest: sha256:2f4a1234
-actor: github-actions release-image.yml
-action: package.push
-result: success
+orders-api:prod -> sha256:1111...
+orders-api:prod -> sha256:2222...
 ```
 
-The first diagnostic step is to anchor the discussion to a digest. A tag can help humans find an image, but the digest identifies the immutable content. When a report mentions `ghcr.io/devpolaris/orders-api@sha256:2f4a1234`, everyone can inspect the same artifact instead of arguing about where `latest` pointed yesterday.
+That movement may be normal during release, but it should be controlled and recorded. Some registries support immutable tags, where a tag cannot be changed after it is written. Another pattern is to use release tags that are never reused, such as `2026.05.19.1`, and deploy by digest.
 
-For registry tradeoffs, the useful evidence is small and specific. Capture the command output that proves the claim, the file or policy that controls the behavior, and the failure text that appears when the behavior is wrong. A long terminal transcript is weaker than five lines that show the image, actor, package, setting, or denied operation.
+The production deployment should record the digest even when humans use a tag for readability.
 
-A realistic failure path starts with one mismatch. The Dockerfile says the process runs as `node`, but inspection shows an empty user field. The scanner report says a package is vulnerable, but the base image has a vendor backport. The signature verifies, but the certificate identity belongs to a pull request workflow instead of the release workflow. Each mismatch points to a different fix direction.
+```text
+Human release: orders-api:2026.05.19.1
+Deployment reference: ghcr.io/devpolaris/orders-api@sha256:4e1b9f30...
+```
 
-Do not fix these problems by adding broad permissions or copying more files into the image. Fix the durable boundary. Update the Dockerfile, dependency lockfile, registry policy, signing workflow, deployment manifest, or exception record. Then rebuild or republish the image so the new evidence belongs to a new digest.
+If an incident asks "what ran?", the digest gives the answer.
 
-For pull request review, ask three questions. What exact artifact will run? Which command proves the claim in this section? What would fail if this control were removed? If the answer depends on a person remembering a manual step, move that step into CI or a checked-in policy.
+## Retention
 
-The tradeoff is worth naming in the pull request. Tighter images reduce scan noise but can remove shell diagnostics. Strict scan gates catch known risks but can block urgent changes. Signatures prove producer identity but need verification policy. Registry separation improves access control but adds promotion work. Runtime hardening reduces blast radius but exposes hidden write and permission assumptions.
+Retention decides how long old images, tags, SBOMs, signatures, and scan results stay available.
 
-Keep the orders API thread visible as you learn the topic. The service is ordinary, and that is the point. Container security work becomes repeatable when the team can apply the same evidence pattern to every normal API, worker, and scheduled job it ships.
+Deleting everything quickly saves storage, but it can harm incident response. If a vulnerability is announced three months later, the team may need the SBOM and digest for an old release.
+
+```text
+Registry retention
+- production image digests: 18 months
+- release SBOMs and signatures: 18 months
+- pull request images: 14 days
+- untagged failed builds: 7 days
+```
+
+Different artifacts need different retention. Pull request images are short-lived. Production releases need enough history for audits, rollback, and incident investigation.
+
+## Registry Evidence
+
+A registry event should say who pushed what and when.
+
+```json
+{
+  "time": "2026-05-19T10:21:14Z",
+  "actor": "orders-api-release-workflow",
+  "action": "image.push",
+  "image": "ghcr.io/devpolaris/orders-api",
+  "digest": "sha256:4e1b9f30...",
+  "tag": "2026.05.19.1",
+  "source": "github-actions/orders-api-delivery/1842"
+}
+```
+
+The `actor` tells you which identity pushed. The `digest` identifies content. The `tag` tells you the human release label. The `source` connects the registry event to the workflow.
+
+If a malicious package or image is published, registry evidence lets responders answer which identity pushed it, which tags point to it, whether production pulled it, and which credentials or workflow need rotation.
+
+## Putting It All Together
+
+A registry is not passive storage. It is the handoff between build and deployment. Push access, tag movement, retention, signatures, SBOMs, and audit logs all affect whether the team can trust and explain images.
+
+For `devpolaris-orders-api`, the release workflow pushes images, production pulls digests, tags are controlled, production release evidence is retained, and registry events connect pushes back to workflow runs.
+
+## What's Next
+
+The image is now built, scanned, documented, signed, and stored. The last question in this module is what the container can do after it starts. Runtime hardening narrows that behavior.
 
 ---
 
 **References**
 
-- [GitHub Container Registry](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry) - Official or canonical reference for the behavior described in this article.
-- [Amazon ECR user guide](https://docs.aws.amazon.com/AmazonECR/latest/userguide/what-is-ecr.html) - Official or canonical reference for the behavior described in this article.
-- [Docker image pull reference](https://docs.docker.com/reference/cli/docker/image/pull/) - Official or canonical reference for the behavior described in this article.
-- [OCI distribution spec](https://github.com/opencontainers/distribution-spec) - Official or canonical reference for the behavior described in this article.
+- [OCI Image Specification](https://github.com/opencontainers/image-spec) - OCI defines image manifests, layers, tags, and digests used by registries.
+- [GitHub Packages container registry](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry) - GitHub documents container registry permissions and image publishing.
+- [Docker image tags and digests](https://docs.docker.com/reference/cli/docker/image/pull/) - Docker documents pulling by tag or digest.

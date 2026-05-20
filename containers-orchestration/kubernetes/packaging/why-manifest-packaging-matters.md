@@ -187,7 +187,7 @@ NAME                                      READY   STATUS    LABELS
 devpolaris-orders-api-6cc9db6f78-n72p9    1/1     Running   app.kubernetes.io/name=devpolaris-orders-api
 ```
 
-The fix is not "use a package" by itself. The fix is to make the selector and Pod labels come from one shared source, then render production and verify that the Service selector matches the labels before apply.
+Packaging helps when the selector and Pod labels come from one shared source. Render production and verify that the Service selector matches the labels before apply.
 
 ## Choosing the Smallest Useful Package
 
@@ -280,7 +280,7 @@ Ingress/devpolaris-orders-api
   host: unchanged
 ```
 
-This is not ceremony. It is the same habit you use when reading a Terraform plan or a database migration. The source change tells you what the author edited. The rendered summary tells you what the system will receive.
+This is the same habit you use when reading a Terraform plan or a database migration. The source change tells you what the author edited. The rendered summary tells you what the system will receive.
 
 ## A Practical Migration Path
 

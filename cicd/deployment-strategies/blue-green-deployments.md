@@ -345,10 +345,8 @@ The cost is that you need two production-ready targets for a while.
 
 For `devpolaris-orders-api`, that means:
 
-Blue is not just an old copy.
-It is a living rollback path.
-Green is not just a new copy.
-It is a production-shaped rehearsal space.
+Blue stays ready as a living rollback path.
+Green gives the team a production-shaped rehearsal space.
 
 That extra target costs money and attention.
 Green needs production config, secrets, logs, health checks, and enough capacity to handle traffic after the switch.

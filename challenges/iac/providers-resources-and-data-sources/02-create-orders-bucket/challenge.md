@@ -1,6 +1,6 @@
 ---
 title: "Create the Orders Bucket"
-sectionSlug: resources-are-the-objects-terraform-owns
+sectionSlug: resources
 order: 2
 ---
 

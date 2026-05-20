@@ -1,319 +1,156 @@
 ---
-id: article-devsecops-pipeline-security-protected-branches-and-environments
 title: "Protected Branches and Environments"
-description: "Learn how branch protections and GitHub environments control what can merge, what can deploy, and how to diagnose blocked releases."
-overview: "Protected branches guard the source path, while environments guard the deployment path. This article follows devpolaris-orders-api as the team combines reviews, required checks, environment approvals, and branch limits."
-tags: ["branches", "environments", "approvals"]
+description: "Use source and deployment gates to control what can merge, what can deploy, and who must approve risky changes."
+overview: "Protected branches guard source changes. Deployment environments guard production changes. This article follows one delivery path and explains how checks, reviews, approvals, and branch rules work together."
+tags: ["branches", "environments", "approvals", "github-actions"]
 order: 5
+id: article-devsecops-pipeline-security-protected-branches-and-environments
 ---
 
 ## Table of Contents
 
-1. [Two Gates in the Same Delivery Path](#two-gates-in-the-same-delivery-path)
-2. [The Operating Model for devpolaris-orders-api](#the-operating-model-for-devpolaris-orders-api)
-3. [Trust Boundaries in the Workflow](#trust-boundaries-in-the-workflow)
-4. [Evidence Review During a Pull Request](#evidence-review-during-a-pull-request)
-5. [Diagnostic Path When the Check Fails](#diagnostic-path-when-the-check-fails)
-6. [Common Failure Modes](#common-failure-modes)
-7. [Engineering Tradeoffs](#engineering-tradeoffs)
-8. [Operational Checklist](#operational-checklist)
+1. [Two Gates](#two-gates)
+2. [Branch Protection](#branch-protection)
+3. [Required Checks](#required-checks)
+4. [Code Owners](#code-owners)
+5. [Deployment Environments](#deployment-environments)
+6. [Blocked Release Evidence](#blocked-release-evidence)
+7. [Putting It All Together](#putting-it-all-together)
+8. [What's Next](#whats-next)
 
-## Two Gates in the Same Delivery Path
+## Two Gates
 
-A production release begins before the deploy job, because code first has to enter the branch the pipeline trusts. The repository is a Node.js orders service with pull request checks, a main branch release workflow, and production deployment through GitHub Actions. The security control only matters when it changes that path in a way a reviewer can see.
+A delivery path usually needs two different gates. The source gate controls what can merge. The deployment gate controls what can reach an environment.
 
-The concept fits between source control and production. It does not replace code review, tests, or runtime monitoring. It gives the team evidence before a risky change gets merged, packaged, or deployed. In this article the same service appears in every example so the checks stay connected to real work instead of floating as separate rules.
-
-```yaml
-name: pipeline-security
-
-on:
-  pull_request:
-  push:
-    branches: [main]
-
-permissions:
-  contents: read
-
-jobs:
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version-file: .nvmrc
-          cache: npm
-      - run: npm ci
-      - run: npm test
+```text
+pull request
+  -> source gate
+  -> main branch
+  -> build
+  -> deployment gate
+  -> production
 ```
 
-## The Operating Model for devpolaris-orders-api
+The source gate is branch protection. It can require reviews, status checks, signed commits, linear history, or restrictions on who can push. The deployment gate is an environment rule. It can require reviewers, wait timers, branch restrictions, and environment-specific secrets.
 
-The team treats the pipeline as a small production system. It has inputs, permissions, logs, artifacts, and failure states. A workflow file is reviewed like application code because it decides which commands run, which tokens are available, and which output becomes trusted.
+These gates answer different questions. Branch protection asks whether the code change is accepted. The production environment asks whether this accepted change should deploy now.
 
-The useful mental model is a chain of custody. Source code enters from a branch, checks run on a runner, evidence is uploaded, and a deploy job changes an environment. If one link is too broad or too quiet, the team loses the ability to explain what happened later.
+## Branch Protection
+
+Branch protection gives the main branch rules.
 
 ```text
 Branch: main
 Required pull request reviews: 1
-Dismiss stale approvals: enabled
-Required checks: unit-test, npm-audit, codeql
-Require branches to be up to date: enabled
-Allow force pushes: disabled
+Required status checks: test, dependency-review, codeql
+Require branches to be up to date: yes
+Restrict direct pushes: yes
+Require CODEOWNERS review: yes
 ```
 
-## Trust Boundaries in the Workflow
+Read this record like a policy. A change cannot merge until one review is present, the required checks pass, the branch is current, direct pushes are blocked, and owned paths receive the right reviewers.
 
-A trust boundary is the line between work the team has reviewed and work it has not reviewed yet. Pull request code is lower trust than code merged to main. A production deployment job is higher impact than a unit test job. Good pipeline security keeps those differences visible in YAML and repository settings.
+The risk of an unprotected branch is simple: the branch becomes a direct path to trusted workflows. If publishing and deployment run from `main`, then `main` must be protected.
 
-For this service, pull request jobs should not receive production secrets, write package releases, or run on production network runners. Release jobs can receive more access, but only after the earlier evidence exists. The boundary is not about distrusting developers. It is about limiting what a mistake or compromised dependency can do.
+## Required Checks
+
+Required checks turn automated evidence into a merge gate. For the orders service, useful checks include tests, dependency review, CodeQL, secret scanning, and build validation.
 
 ```text
-Pull request #533
-Merge blocked
-Required status check "unit-test" was not reported.
-Recent checks reported:
-  test-node: success
-  npm-audit: success
-  codeql: success
+Required checks for main
+- test
+- dependency-review
+- codeql
+- secret-scan
+- build-image
 ```
 
-## Evidence Review During a Pull Request
+Each check should have a clear job. `test` proves basic behavior. `dependency-review` explains package changes. `codeql` scans code paths. `secret-scan` checks for credentials. `build-image` proves the artifact can be built.
 
-A security check is only useful if humans know how to read its output. Reviewers should look for the field that proves the claim: a package path, an alert rule, a runner label, a token scope, an environment name, a checksum, or a digest. Without that field, the result becomes a red or green badge with little teaching value.
+A check should not be required if nobody knows what it proves or who owns failures. Required checks become production gates. Give them owners.
 
-The devpolaris-orders-api team keeps the review question concrete: does this change increase what untrusted code can touch, and does the evidence show the exact file, job, or artifact involved? That question works for most pipeline controls in this module.
+## Code Owners
+
+`CODEOWNERS` maps sensitive paths to reviewers.
+
+```text
+.github/workflows/        @platform-team @security-team
+infra/production/         @platform-team @cloud-security
+src/payments/             @orders-team @security-team
+deploy/kubernetes/prod/   @platform-team @orders-team
+```
+
+This file makes ownership show up during review. A workflow permission change reaches platform and security reviewers. Production infrastructure reaches cloud security. Payment code reaches application and security reviewers.
+
+The map should be specific enough to catch sensitive changes and small enough that review remains useful. If every file requires every team, reviewers stop treating requests as meaningful.
+
+## Deployment Environments
+
+GitHub environments protect deployment targets. A workflow job can name an environment:
 
 ```yaml
 jobs:
-  deploy-production:
-    needs: deploy-staging
-    runs-on: ubuntu-latest
+  deploy-prod:
     environment: production
+    permissions:
+      contents: read
+      id-token: write
     steps:
-      - run: ./scripts/deploy.sh production
+      - run: ./scripts/deploy-prod.sh
 ```
 
-## Diagnostic Path When the Check Fails
-
-Start diagnosis with the smallest artifact that names the failure. In GitHub Actions that is often the failed job, step, exit code, and first meaningful log line. After that, move to the source file or repository setting that controls the behavior. Reading every log line first wastes time because pipeline failures usually point to one missing permission, one changed path, or one blocked gate.
-
-The fix direction should change the system, not only silence the symptom. If a scanner reports a real issue, update the dependency or code path. If a deployment waits for approval, review the environment rule. If a checksum fails, stop the deployment and rebuild from trusted source.
+The environment can require approval before the job proceeds. It can also hold environment-specific secrets and restrict which branches can deploy.
 
 ```text
-Deployment review: production
-Workflow: release.yml
-Commit: 4fd19ab
 Environment: production
-Status: waiting
 Required reviewers: platform-oncall
-Staging smoke test: passed
+Allowed branches: main
+Secrets: none, uses OIDC
+Wait timer: 0 minutes
 ```
 
-## Common Failure Modes
+The `Allowed branches` line is important. A production deploy environment should not accept a random feature branch unless the team has a deliberate emergency path. The `Secrets` line is also important. If the environment holds long-lived secrets, any job that reaches the environment may receive them.
 
-Failure modes are patterns that repeat across teams. A job can run with a broader token than it needs. A pull request can trigger work on a trusted runner. A scanner can fail closed and block a merge, or fail open because nobody made it required. An artifact can be rebuilt in deploy instead of verified from build output.
+## Blocked Release Evidence
 
-The right response is specific to the failure. Broad permissions need a narrower `permissions:` block. Missing evidence needs a workflow change. Noisy alerts need triage rules, not deletion. A bypass needs an owner and a record because future reviewers need to know why the normal path was not used.
+A blocked release should explain which gate stopped it.
 
-| Symptom | Gate | Inspect | Fix direction |
-| :--- | :--- | :--- | :--- |
-| Merge button disabled | Branch protection | PR checks and rule | Fix check or rule name |
-| Job says waiting | Environment | Deployment review panel | Approve or reject |
-| Secret missing | Environment | Job environment value | Use correct scope |
-
-## Engineering Tradeoffs
-
-Every control has a cost. Hosted runners reduce operational burden, but may not reach private networks. Self-hosted runners can deploy inside a network, but they need isolation and cleanup. Strict scan thresholds catch risk earlier, but they can slow urgent fixes. Protected environments create a useful pause, but they require reviewers who understand the evidence.
-
-Good teams make those tradeoffs explicit. For devpolaris-orders-api, the default is strict on production paths and practical on development paths. Pull requests get fast checks with no secrets. Main branch builds create durable evidence. Production deployment waits for a reviewer only after staging has passed.
-
-```mermaid
-flowchart TD
-    A[Feature branch] --> B[Pull request]
-    B --> C[Required checks]
-    C --> D[Review approval]
-    D --> E[Merge to main]
-    E --> F[Deploy staging]
-    F --> G[Production review]
-    G --> H[Deploy production]
+```text
+Release: orders-api 2026.05.19.1
+Blocked at: production environment
+Reason: required reviewer missing
+Workflow: orders-api-delivery #1842
+Ref: refs/heads/main
+Artifact: ghcr.io/devpolaris/orders-api@sha256:4e1b9f30...
+Next action: platform-oncall review
 ```
 
-## Operational Checklist
+This record prevents guesswork. The source branch was accepted. The artifact exists. The production gate is waiting for a required reviewer. The next action is not "rerun everything"; it is "get the environment review."
 
-The checklist at the end of a pipeline-security article should not be a substitute for thought. It is a memory aid for review and incident response. When the pipeline changes, each item asks whether the trusted path is still clear.
+When a branch protection rule blocks a merge, the evidence should be equally specific:
 
-Use the checklist while reading workflow diffs. If the answer is not obvious from YAML, repository settings, or a log artifact, add the missing evidence before production depends on it.
+```text
+Blocked at: branch protection
+Reason: CodeQL check failed
+Pull request: #421
+Owner: orders-team
+Next action: fix query construction in src/routes/orders.ts
+```
 
-- Protect `main` from direct pushes.
-- Keep required check names stable.
-- Scope production secrets to the production environment.
-- Require evidence review before production approval.
+## Putting It All Together
 
-- Review note: source protection and deployment protection should produce reviewable evidence before production changes.
+Protected branches and environments create two gates in the delivery path. Branch protection keeps unreviewed or failing code out of trusted source. Deployment environments keep production changes behind environment-specific approval and branch rules.
 
-- Review note: source protection and deployment protection should produce reviewable evidence before production changes.
+For `devpolaris-orders-api`, the source gate requires review, code owner approval, and checks. The production gate requires an approved workflow from `main` and a narrow deploy identity. When a release blocks, the evidence should say which gate blocked it and what action is next.
 
-- Review note: source protection and deployment protection should produce reviewable evidence before production changes.
+## What's Next
 
-- Review note: source protection and deployment protection should produce reviewable evidence before production changes.
-
-- Review note: source protection and deployment protection should produce reviewable evidence before production changes.
-
-- Review note: source protection and deployment protection should produce reviewable evidence before production changes.
-
-- Review note: source protection and deployment protection should produce reviewable evidence before production changes.
-
-- Review note: source protection and deployment protection should produce reviewable evidence before production changes.
-
-- Review note: source protection and deployment protection should produce reviewable evidence before production changes.
-
-- Review note: source protection and deployment protection should produce reviewable evidence before production changes.
-
-- Review note: source protection and deployment protection should produce reviewable evidence before production changes.
-
-- Review note: source protection and deployment protection should produce reviewable evidence before production changes.
-
-- Review note: source protection and deployment protection should produce reviewable evidence before production changes.
-
-- Review note: source protection and deployment protection should produce reviewable evidence before production changes.
-
-- Review note: source protection and deployment protection should produce reviewable evidence before production changes.
-
-- Review note: source protection and deployment protection should produce reviewable evidence before production changes.
-
-- Review note: source protection and deployment protection should produce reviewable evidence before production changes.
-
-- Review note: source protection and deployment protection should produce reviewable evidence before production changes.
-
-- Review note: source protection and deployment protection should produce reviewable evidence before production changes.
-
-- Review note: source protection and deployment protection should produce reviewable evidence before production changes.
-
-- Review note: source protection and deployment protection should produce reviewable evidence before production changes.
-
-- Review note: source protection and deployment protection should produce reviewable evidence before production changes.
-
-- Review note: source protection and deployment protection should produce reviewable evidence before production changes.
-
-- Review note: source protection and deployment protection should produce reviewable evidence before production changes.
-
-- Review note: source protection and deployment protection should produce reviewable evidence before production changes.
-
-- Review note: source protection and deployment protection should produce reviewable evidence before production changes.
-
-- Review note: source protection and deployment protection should produce reviewable evidence before production changes.
-
-- Review note: source protection and deployment protection should produce reviewable evidence before production changes.
-
-- Review note: source protection and deployment protection should produce reviewable evidence before production changes.
-
-- Review note: source protection and deployment protection should produce reviewable evidence before production changes.
-
-- Review note: source protection and deployment protection should produce reviewable evidence before production changes.
-
-- Review note: source protection and deployment protection should produce reviewable evidence before production changes.
-
-- Review note: source protection and deployment protection should produce reviewable evidence before production changes.
-
-- Review note: source protection and deployment protection should produce reviewable evidence before production changes.
-
-- Review note: source protection and deployment protection should produce reviewable evidence before production changes.
-
-- Review note: source protection and deployment protection should produce reviewable evidence before production changes.
-
-- Review note: source protection and deployment protection should produce reviewable evidence before production changes.
-
-- Review note: source protection and deployment protection should produce reviewable evidence before production changes.
-
-- Review note: source protection and deployment protection should produce reviewable evidence before production changes.
-
-- Review note: source protection and deployment protection should produce reviewable evidence before production changes.
-
-- Review note: source protection and deployment protection should produce reviewable evidence before production changes.
-
-- Review note: source protection and deployment protection should produce reviewable evidence before production changes.
-
-- Review note: source protection and deployment protection should produce reviewable evidence before production changes.
-
-- Review note: source protection and deployment protection should produce reviewable evidence before production changes.
-
-- Review note: source protection and deployment protection should produce reviewable evidence before production changes.
-
-- Review note: source protection and deployment protection should produce reviewable evidence before production changes.
-
-- Review note: source protection and deployment protection should produce reviewable evidence before production changes.
-
-- Review note: source protection and deployment protection should produce reviewable evidence before production changes.
-
-- Review note: source protection and deployment protection should produce reviewable evidence before production changes.
-
-- Review note: source protection and deployment protection should produce reviewable evidence before production changes.
-
-- Review note: source protection and deployment protection should produce reviewable evidence before production changes.
-
-- Review note: source protection and deployment protection should produce reviewable evidence before production changes.
-
-- Review note: source protection and deployment protection should produce reviewable evidence before production changes.
-
-- Review note: source protection and deployment protection should produce reviewable evidence before production changes.
-
-- Review note: source protection and deployment protection should produce reviewable evidence before production changes.
-
-- Review note: source protection and deployment protection should produce reviewable evidence before production changes.
-
-- Review note: source protection and deployment protection should produce reviewable evidence before production changes.
-
-- Review note: source protection and deployment protection should produce reviewable evidence before production changes.
-
-- Review note: source protection and deployment protection should produce reviewable evidence before production changes.
-
-- Review note: source protection and deployment protection should produce reviewable evidence before production changes.
-
-- Review note: source protection and deployment protection should produce reviewable evidence before production changes.
-
-- Review note: source protection and deployment protection should produce reviewable evidence before production changes.
-
-- Review note: source protection and deployment protection should produce reviewable evidence before production changes.
-
-- Review note: source protection and deployment protection should produce reviewable evidence before production changes.
-
-- Review note: source protection and deployment protection should produce reviewable evidence before production changes.
-
-- Review note: source protection and deployment protection should produce reviewable evidence before production changes.
-
-- Review note: source protection and deployment protection should produce reviewable evidence before production changes.
-
-- Review note: source protection and deployment protection should produce reviewable evidence before production changes.
-
-- Review note: source protection and deployment protection should produce reviewable evidence before production changes.
-
-- Review note: source protection and deployment protection should produce reviewable evidence before production changes.
-
-- Review note: source protection and deployment protection should produce reviewable evidence before production changes.
-
-- Review note: source protection and deployment protection should produce reviewable evidence before production changes.
-
-- Review note: source protection and deployment protection should produce reviewable evidence before production changes.
-
-- Review note: source protection and deployment protection should produce reviewable evidence before production changes.
-
-- Review note: source protection and deployment protection should produce reviewable evidence before production changes.
-
-- Review note: source protection and deployment protection should produce reviewable evidence before production changes.
-
-- Review note: source protection and deployment protection should produce reviewable evidence before production changes.
-
-- Review note: source protection and deployment protection should produce reviewable evidence before production changes.
-
-- Review note: source protection and deployment protection should produce reviewable evidence before production changes.
+After a change passes the source and deployment gates, the team still needs to prove that the artifact deployed is the artifact the trusted build produced. That is artifact integrity.
 
 ---
 
 **References**
 
-- [GitHub protected branches](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/about-protected-branches) - Official documentation for branch protection behavior and limits.
-- [GitHub environments](https://docs.github.com/en/actions/deployment/targeting-different-environments/using-environments-for-deployment) - Official documentation for deployment environments, reviewers, and secrets.
-- [GitHub Actions security hardening](https://docs.github.com/en/actions/security-guides/security-hardening-for-github-actions) - Official guidance for permissions, environments, and secure workflow design.
-- [OpenSSF Scorecard](https://github.com/ossf/scorecard) - Canonical project that evaluates repository branch protection practices.
+- [GitHub protected branches](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/about-protected-branches) - GitHub documents branch protection rules, required reviews, and required status checks.
+- [GitHub CODEOWNERS](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners) - GitHub documents code owners and automatic review requests.
+- [GitHub deployments and environments](https://docs.github.com/en/actions/reference/deployments-and-environments) - GitHub documents environment protection rules, required reviewers, secrets, and deployment branch restrictions.

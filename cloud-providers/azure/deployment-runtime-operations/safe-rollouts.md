@@ -29,11 +29,11 @@ The previous article described a release as more than a deploy. Now the team wan
 
 The risky question is simple: where can the new version run before every production user depends on it?
 
-If the first real test is "send all production traffic to the new version," the blast radius is large. A missing app setting, broken dependency call, slow startup, or bad checkout path can affect everyone at once. Azure gives different rollout handles depending on runtime. App Service uses deployment slots. Container Apps uses revisions. They are not the same feature, but they answer the same release question: how do we run, test, and route a candidate version deliberately?
+If the first real test is "send all production traffic to the new version," the blast radius is large. A missing app setting, broken dependency call, slow startup, or bad checkout path can affect everyone at once. Azure gives different rollout handles depending on runtime. App Service uses deployment slots. Container Apps uses revisions. They are different features that answer the same release question: how do we run, test, and route a candidate version deliberately?
 
 ## Candidate Version
 
-A candidate version is the version that may become production. It is not trusted yet. It has passed earlier checks, but it still needs runtime evidence.
+A candidate version is the version that may become production. It has passed earlier checks and still needs runtime evidence before trust.
 
 For the orders API, the candidate might be:
 
@@ -95,7 +95,7 @@ The gotcha is that a slot swap can be technically successful while configuration
 
 Azure Container Apps uses revisions to represent versions of an app. A revision is created when revision-scope properties change, such as the container image or certain runtime template settings. Revisions let Container Apps keep more than one version around, depending on revision mode and app configuration.
 
-For a beginner, read a revision as a named version of the running container app. It is not just a build artifact. It includes the image and revision-scope runtime shape that Azure uses for that version.
+For a beginner, read a revision as a named version of the running container app. It includes the image and revision-scope runtime shape that Azure uses for that version.
 
 For the orders API:
 
@@ -114,7 +114,7 @@ The gotcha is configuration scope. Some Container Apps changes create a new revi
 
 Traffic splitting sends percentages of traffic to different versions. In Container Apps, a team can split ingress traffic between revisions. That makes canary-style rollouts possible: 0 percent, then 10 percent, then 50 percent, then 100 percent if evidence is healthy.
 
-Traffic splitting is not a guarantee that every user experience is safe. Ten percent of traffic can still include important customers. A bug may only appear for a specific account, region, feature flag, or data shape. But traffic splitting reduces blast radius compared with moving everything at once.
+Traffic splitting reduces blast radius compared with moving everything at once, while ten percent of traffic can still include important customers. A bug may only appear for a specific account, region, feature flag, or data shape.
 
 | Traffic state | What the team learns |
 | --- | --- |

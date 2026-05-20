@@ -134,7 +134,7 @@ Waiting for 1 pods to be ready...
 partitioned roll out complete: 2 new pods have been updated
 ```
 
-When an update pauses, inspect the lowest or current ordinal that is not ready. Later Pods may simply be waiting for that one.
+When an update pauses, inspect the lowest or current unready ordinal. Later Pods may simply be waiting for that one.
 
 ## Failure Mode: Pending Volume Claims
 
@@ -282,7 +282,7 @@ Stateful review questions:
 2. Can this volume be rebuilt from another source?
 3. What happens if one ordinal is lost?
 4. What happens if all ordinals are lost?
-5. Has restore been tested, not only backup creation?
+5. Has the team tested restore as well as backup creation?
 ```
 
 These questions keep StatefulSet work grounded in data recovery. Kubernetes can keep identities stable, but your system design still owns the meaning and safety of the data.

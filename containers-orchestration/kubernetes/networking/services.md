@@ -127,7 +127,7 @@ Selector:          app.kubernetes.io/name=devpolaris-order-api
 Endpoints:         <none>
 ```
 
-The selector has `order-api`, singular, while the Pods are labeled `orders-api`, plural. The fix is not to restart the cluster or change DNS. Fix the label contract so the Service and Pods agree.
+The selector has `order-api`, singular, while the Pods are labeled `orders-api`, plural. Fix the label contract so the Service and Pods agree.
 
 ## Ports Need Two Names
 

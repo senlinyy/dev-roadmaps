@@ -40,7 +40,7 @@ Moving that app to AWS turns "save the data" into several different questions:
 - A legacy vendor tool expects a mounted directory, not an object API.
 - The team needs recovery copies for mistakes, bad releases, and accidental deletion.
 
-Those are not one storage problem. They are different data shapes. The quickest way to make a bad AWS data decision is to start with service names before you can describe the shape.
+Those are different data shapes. The quickest way to make a bad AWS data decision is to start with service names before you can describe the shape.
 
 The working mental model is simple: describe what the data is doing, then choose the AWS storage service whose behavior matches that shape.
 
@@ -78,7 +78,7 @@ Ask four questions before naming a service:
 | How does it change? | Replace whole object, update row, conditional write, append file, snapshot |
 | What must recovery prove? | Previous version, consistent database point, restorable disk, retained backup |
 
-This prevents a common beginner mistake: treating storage services as interchangeable because they all "hold data." S3 can hold a JSON file, but it will not give you SQL joins. RDS can hold metadata about a file, but it is not where you want to stream large PDFs. DynamoDB can protect an idempotency key, but it will make you design around known access patterns instead of casual ad hoc queries.
+This prevents a common beginner mistake: treating storage services as interchangeable because they all "hold data." S3 can hold a JSON file, but it will not give you SQL joins. RDS can hold metadata about a file, but large PDFs belong in object storage. DynamoDB can protect an idempotency key, but it will make you design around known access patterns instead of casual ad hoc queries.
 
 The shape is the contract. The service is the implementation.
 
@@ -110,7 +110,7 @@ DynamoDB is the AWS service to consider for that key-shaped work. It stores item
 
 The main DynamoDB habit is to design from access patterns. A relational database lets you discover many query shapes later. DynamoDB rewards knowing the important questions early: "Get order by id," "claim idempotency key if missing," "list events for this order," or "find active cart by user id."
 
-The non-obvious win is conditional writes. If checkout retries the same request, the app can attempt to create an idempotency record only if it does not already exist. That makes DynamoDB useful not just for storing state, but for protecting side effects.
+The non-obvious win is conditional writes. If checkout retries the same request, the app can attempt to create an idempotency record only if it does not already exist. That makes DynamoDB useful for storing state and protecting side effects.
 
 ## Attached Storage
 
@@ -126,7 +126,7 @@ Attached storage has a gotcha: it can make compute and data lifecycles feel tang
 
 ## Recovery Copies
 
-Storage design is incomplete until recovery is visible. The question is not only "Where does the data live?" It is also "What copy lets us recover when the data is changed, corrupted, or deleted?"
+Storage design is incomplete until recovery is visible. The key questions are "Where does the data live?" and "What copy lets us recover when the data is changed, corrupted, or deleted?"
 
 Different storage shapes create different recovery tools. S3 can use versioning and lifecycle rules. RDS can use automated backups, snapshots, and point-in-time recovery within its retention window. EBS can use snapshots. AWS Backup can help centralize backup plans and retention for supported resources.
 
@@ -140,7 +140,7 @@ Recovery copies should be planned around risk:
 | Old data kept too long | Exports retained forever | Lifecycle and retention rules |
 | Unsafe delete | Bucket or database removed too quickly | Review, retention, and deletion controls |
 
-Backups are not magic if nobody has restored from them. A useful recovery design says what copy exists, how long it is retained, who can delete it, and how the team proves restore works.
+A backup becomes useful when the team has restored from it. A useful recovery design says what copy exists, how long it is retained, who can delete it, and how the team proves restore works.
 
 ## Sample Data Map
 

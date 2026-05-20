@@ -1,6 +1,6 @@
 ---
 title: "Recognize Drift in a Plan"
-sectionSlug: drift-in-a-normal-plan
+sectionSlug: drift
 order: 4
 ---
 

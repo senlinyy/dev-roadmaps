@@ -1,6 +1,6 @@
 ---
 title: "Plan Terraform in GitHub Actions"
-sectionSlug: a-beginner-safe-github-actions-workflow
+sectionSlug: github-actions-workflow
 order: 2
 ---
 

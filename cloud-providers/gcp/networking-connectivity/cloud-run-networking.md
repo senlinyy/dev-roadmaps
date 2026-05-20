@@ -39,7 +39,7 @@ Cloud Run networking is easier when you split the directions. Ingress is about w
 
 Ingress controls which network paths can reach a Cloud Run service. A service can be reachable from the public internet, only through internal paths, or through selected load balancer and internal patterns depending on the chosen setting.
 
-This is not the same as deciding who is allowed to invoke the service. Ingress is the reachability gate. If the path is not allowed by ingress, the request should not get to the service as an invocable request. If the path is allowed, IAM may still require an authenticated principal.
+Ingress and invocation permission answer different questions. Ingress is the reachability gate. If the path is blocked by ingress, the request should not get to the service as an invocable request. If the path is allowed, IAM may still require an authenticated principal.
 
 For the Orders API, a common production shape is:
 
@@ -137,7 +137,7 @@ All traffic gives more central control. It also makes the VPC egress design resp
 
 ## Startup Checks
 
-Cloud Run scales instances as traffic arrives. Network mistakes can show up during startup, not only during a long-running request. A service may fail to become ready because it tries to connect to a private database, fetch a secret, or call a dependency before serving requests.
+Cloud Run scales instances as traffic arrives. Network mistakes can show up during startup and during long-running requests. A service may fail to become ready because it tries to connect to a private database, fetch a secret, or call a dependency before serving requests.
 
 That does not mean every dependency should be called at startup. It means startup behavior should be intentional. If startup requires a private connection, the egress path, route, firewall, DNS, and IAM need to be correct before the revision receives traffic.
 
@@ -170,7 +170,7 @@ public dependency: payment API over HTTPS
 logs: request logs and startup logs reviewed
 ```
 
-That note is not just documentation. It gives incident responders a starting point. If public requests fail, start with DNS, load balancer, ingress, IAM, and revision traffic. If private database calls fail, start with egress, VPC path, private access, DNS, firewall, and database permission.
+That note gives incident responders a starting point. If public requests fail, start with DNS, load balancer, ingress, IAM, and revision traffic. If private database calls fail, start with egress, VPC path, private access, DNS, firewall, and database permission.
 
 ## Putting It All Together
 
@@ -180,7 +180,7 @@ Users reaching the service are an ingress question. Decide whether callers can u
 
 The service calling Cloud SQL is an egress question. If the database uses a private IP, Cloud Run needs a VPC egress path and the managed service private access design must exist.
 
-IAM authentication is not the same as ingress. Requiring an authenticated invoker can reject callers, but it does not by itself decide which network paths are allowed.
+IAM authentication and ingress are separate gates. Requiring an authenticated invoker can reject callers, but it does not by itself decide which network paths are allowed.
 
 Private egress is not the same as hiding the public URL. Egress controls outbound traffic. Ingress controls inbound reachability. Keeping those directions separate makes Cloud Run feel much less mysterious.
 

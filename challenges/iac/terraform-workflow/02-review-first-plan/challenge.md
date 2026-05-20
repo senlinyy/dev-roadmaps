@@ -1,6 +1,6 @@
 ---
 title: "Review the First Plan"
-sectionSlug: plan-reading-the-proposed-change
+sectionSlug: plan
 order: 2
 ---
 

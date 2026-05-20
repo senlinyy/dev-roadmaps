@@ -250,7 +250,7 @@ let titles: Vec<String> = notes
 println!("{}", notes.len());
 ```
 
-The final line cannot compile because `notes` was moved by `into_iter()`. That is not Rust being picky. The chain took each `Note` out of the vector, then moved each `title` out of each note.
+The final line cannot compile because `notes` was moved by `into_iter()`. The chain took each `Note` out of the vector, then moved each `title` out of each note.
 
 If you only need to display titles, borrow:
 

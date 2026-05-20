@@ -26,7 +26,7 @@ A Helm chart is a directory that contains Kubernetes manifest templates, default
 
 The reason charts exist is repetition. If every service in a platform needs a Deployment, Service, resource requests, probes, labels, and optional ingress, copying full YAML into every repository creates drift. A chart lets the platform team define the repeatable shape once while each service supplies values.
 
-For `devpolaris-orders-api`, the first chart will package a Deployment and a Service. Later, values will control the image tag, replica count, port, and resource requests. The goal is not to hide Kubernetes. The goal is to make the common shape consistent while preserving a clear rendered manifest.
+For `devpolaris-orders-api`, the first chart will package a Deployment and a Service. Later, values will control the image tag, replica count, port, and resource requests. The goal is to make the common shape consistent while preserving a clear rendered manifest.
 
 ## The Smallest Useful Chart Directory
 
@@ -118,7 +118,7 @@ service:
   port: 8080
 ```
 
-The important review habit is to read the rendered Deployment, not only the template. Template source explains how the package works. Rendered YAML proves what Kubernetes will receive.
+The important review habit is to read both the template and the rendered Deployment. Template source explains how the package works. Rendered YAML proves what Kubernetes will receive.
 
 When you are learning a chart, render one object at a time mentally. Start with the `metadata.name`, then labels, then selectors, then the Pod template. If those pieces make sense, the rest of the workload is easier to inspect.
 
@@ -179,7 +179,7 @@ metadata:
   name: orders-devpolaris-orders-api
 ```
 
-`helm lint` checks chart structure and common template issues. It is not a full Kubernetes admission test, but it is a useful mechanical check for pull requests.
+`helm lint` checks chart structure and common template issues. It gives pull requests a useful mechanical check before Kubernetes admission testing.
 
 ```bash
 $ helm lint ./charts/orders-api

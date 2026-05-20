@@ -1,7 +1,7 @@
 ---
 title: "Unsafe Rust"
 description: "Understand unsafe blocks, raw pointers, unsafe functions, invariants, and safe wrappers without treating unsafe as a shortcut."
-overview: "Unsafe Rust exists for boundaries the compiler cannot fully verify. The goal is not to write more unsafe code, but to keep unsafe code small, justified, and wrapped in safe APIs."
+overview: "Unsafe Rust exists for boundaries the compiler cannot fully verify. Use it in small, justified sections wrapped in safe APIs."
 tags: ["unsafe", "raw-pointers", "invariants", "safety"]
 order: 2
 id: article-rust-advanced-rust-unsafe-rust
@@ -23,7 +23,7 @@ id: article-rust-advanced-rust-unsafe-rust
 
 The notes indexer is fast enough for small folders, but a hot parser path is now measurable. A teammate suggests raw pointers to avoid bounds checks.
 
-That may or may not be reasonable. The important point is that `unsafe` is not a performance mode. It is a way to perform a small set of operations where Rust cannot enforce all safety rules for you.
+That may or may not be reasonable. The important point is that `unsafe` performs a small set of operations where Rust cannot enforce all safety rules for you.
 
 Unsafe Rust asks a serious question: what invariant are you promising the compiler that it cannot prove?
 

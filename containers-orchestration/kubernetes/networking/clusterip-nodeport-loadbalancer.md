@@ -164,7 +164,7 @@ That message points to infrastructure capacity, not the Service selector. If the
 
 ## Failure Mode: NodePort Opens More Than Intended
 
-NodePort can surprise teams because it opens the port on every node, not only on nodes currently running the backend Pods. That is part of the design. Traffic reaches any node and is then forwarded to an endpoint.
+NodePort can surprise teams because it opens the port on every node, including nodes without backend Pods. That is part of the design. Traffic reaches any node and is then forwarded to an endpoint.
 
 ```bash
 $ kubectl get nodes -o wide
@@ -184,7 +184,7 @@ Risk check before NodePort:
 - Who owns DNS and health checks?
 ```
 
-These are not paperwork questions. They decide whether a debugging shortcut becomes a public production path.
+These questions decide whether a debugging shortcut becomes a public production path.
 
 ## A Safe Exposure Progression
 
@@ -230,7 +230,7 @@ $ kubectl -n web run netcheck --rm -it --restart=Never --image=curlimages/curl -
   curl -i http://devpolaris-orders-api.orders/healthz
 ```
 
-The point is not to archive a large command transcript. The point is to leave enough proof that another engineer can see which network layers were healthy at the time of the check.
+Leave enough proof that another engineer can see which network layers were healthy at the time of the check.
 
 A fuller evidence packet for Service type changes should prove both reachability and exposure. For a ClusterIP backend, the evidence stays inside the cluster.
 

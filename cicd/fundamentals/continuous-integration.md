@@ -105,7 +105,7 @@ If the tests pass, the interface shows a green checkmark next to your Pull Reque
 
 ## Anatomy of a CI Pipeline Configuration
 
-A CI pipeline is not magic. It is just a declarative configuration file, usually written in YAML, that tells the CI server exactly what commands to execute. 
+A CI pipeline is a declarative configuration file, usually written in YAML, that tells the CI server exactly what commands to execute.
 
 Here is what a real GitHub Actions workflow looks like (`.github/workflows/ci.yml`):
 

@@ -31,7 +31,7 @@ The error usually appears in ordinary-looking code:
 - You put a note into a collection, then try to use the old variable.
 - You assign one `String` variable to another and expect both names to keep working.
 
-Rust is not being fussy about style. It is protecting a memory rule: each value has one owner, and the owner is responsible for the value until ownership moves somewhere else or the value is dropped.
+Rust is protecting a memory rule: each value has one owner, and the owner is responsible for the value until ownership moves somewhere else or the value is dropped.
 
 That rule is the foundation for Rust's reliability story. Rust does not need a garbage collector to find unused values later, and it does not ask you to manually free memory. Instead, the compiler checks ownership before the program runs.
 
@@ -70,7 +70,7 @@ Valid means the name is still inside the region of code where it was created. Th
 
 When execution reaches the closing brace, `title` goes out of scope. That means the name is no longer usable after that point. Because `title` was the owner, Rust cleans up the string there.
 
-That sounds simple, but it matters because `String` owns memory that can grow at runtime. The title text is not just a small fixed value. A `String` needs heap storage for its bytes, and Rust needs one clear place where that storage will be cleaned up.
+That sounds simple, but it matters because `String` owns memory that can grow at runtime. A `String` needs heap storage for its bytes, and Rust needs one clear place where that storage will be cleaned up.
 
 The ownership rule gives Rust that place. The owner is the cleanup handle: the one valid path Rust will use later to drop the value and release any resources it owns.
 
@@ -101,7 +101,7 @@ This explains why Rust treats different values differently. A small number such 
 | `String` | Stack handle plus heap bytes | Move |
 | `Vec<T>` | Stack handle plus heap elements | Move |
 
-The table is not a complete type system. It is the practical intuition: if a value owns runtime allocation or another resource, Rust will usually move it instead of silently duplicating it.
+The table gives the practical intuition: if a value owns runtime allocation or another resource, Rust will usually move it instead of silently duplicating it.
 
 :::expand[Why String moves but i32 copies]{kind="design"}
 Rust's assignment behavior is easiest to understand if you ask what would have to be duplicated.
@@ -163,7 +163,7 @@ flowchart LR
 The word "moved" means ownership changed hands. The data did not necessarily travel to a new address. The permission to use and clean up the value moved.
 
 :::expand[A move changes permission, not necessarily location]{kind="pattern"}
-The word "move" can sound like Rust physically picks up all the bytes and carries them somewhere else. For a `String`, that is not usually the useful mental model.
+The word "move" can sound like Rust physically picks up all the bytes and carries them somewhere else. For a `String`, the useful mental model is that ownership of the handle changes.
 
 Start here:
 
@@ -180,7 +180,7 @@ That distinction explains why this is rejected:
 println!("{title}");
 ```
 
-Rust is not saying the text vanished. It is saying `title` no longer has permission to access or clean up that text. There is still exactly one owner: `saved_title`.
+Rust is saying `title` no longer has permission to access or clean up that text. There is still exactly one owner: `saved_title`.
 
 This is a good reading habit:
 
@@ -191,7 +191,7 @@ This is a good reading habit:
 | Which name cleans it up later? | `saved_title` |
 | Can the old name be used? | No |
 
-When a compiler error says a value was moved, look for the line where ownership changed hands. The fix is not always `clone`. Sometimes the function should borrow. Sometimes the old name should simply stop being used.
+When a compiler error says a value was moved, look for the line where ownership changed hands. Sometimes the function should borrow. Sometimes the old name should simply stop being used. Clone only when the program really needs two owned values.
 :::
 
 This comes up often with functions because passing a value into a function can also move it.
@@ -253,7 +253,7 @@ That is the practical tradeoff:
 | Make a second owned value | Clone it |
 | Let code inspect without owning | Borrow it |
 
-Ownership is not about avoiding every clone. It is about making ownership and allocation choices visible.
+Ownership makes ownership and allocation choices visible.
 
 :::expand[Clone is a design choice, not a compiler escape hatch]{kind="pitfall"}
 A common beginner reaction is to add `.clone()` until the compiler stops complaining.

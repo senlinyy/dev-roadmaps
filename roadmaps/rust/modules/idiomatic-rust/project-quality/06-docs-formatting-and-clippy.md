@@ -68,7 +68,7 @@ Use docs most carefully on public functions, public structs, public enums, and p
 
 `rustdoc` is Rust's documentation tool. It reads public items, documentation comments, examples, and type signatures, then builds browsable API documentation.
 
-That matters because Rust docs are not only prose. They show the function signature beside the explanation, link types to their definitions, and can run examples as tests. For a library, docs are often the first interface another developer uses.
+That matters because Rust docs combine prose, signatures, links, and runnable examples. They show the function signature beside the explanation, link types to their definitions, and can run examples as tests. For a library, docs are often the first interface another developer uses.
 
 You can build local docs with:
 
@@ -82,7 +82,7 @@ cargo doc --no-deps --open
 
 Rust can run examples in documentation as tests.
 
-A doctest is not only rendered documentation. `rustdoc` extracts the Rust code block, compiles it like an outside user, and runs the assertions.
+A doctest is rendered documentation plus a compiled example. `rustdoc` extracts the Rust code block, compiles it like an outside user, and runs the assertions.
 
 ````rust
 /// Finds the default notebook name in a config file.
@@ -101,7 +101,7 @@ pub fn default_notebook(config: &str) -> Option<&str> {
 }
 ````
 
-When you run `cargo test`, Cargo also runs documentation tests for library examples. That is a powerful maintenance feature. The docs do not merely look plausible. The examples compile and run.
+When you run `cargo test`, Cargo also runs documentation tests for library examples. That is a powerful maintenance feature. The examples compile and run, so the docs stay tied to real API behavior.
 
 Doctests work best for small public examples. If an example needs a lot of setup, hide setup lines with `#` or move the complex scenario into a normal test.
 
@@ -129,7 +129,7 @@ Use hidden lines sparingly. They are best for imports, tiny setup values, or mak
 :::expand[Docs are executable promises]{kind="design"}
 Documentation examples often rot in other ecosystems because they are separate from the test workflow. Rust's doctests reduce that drift.
 
-This example is not just text:
+This example is executable documentation:
 
 ````rust
 /// ```
@@ -160,7 +160,7 @@ Use normal tests for heavy setup. Use doctests to keep the public examples hones
 cargo fmt
 ```
 
-The point is not that one formatting style is sacred. The point is that formatting should not be a debate in every review.
+The practical value is consistency. Formatting should not be a debate in every review.
 
 Before committing or opening a pull request, use the check form:
 

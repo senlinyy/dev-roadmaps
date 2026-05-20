@@ -144,7 +144,7 @@ enum Outline {
 
 Now the `Section` variant stores a fixed-size box handle. The child outline lives on the heap. The type has a finite size because the field is a handle, not an inline copy of another full `Outline`.
 
-This is the real reason `Box` appears in recursive examples. It is not about making code "more advanced." It gives recursive data a fixed-size edge.
+This is the real reason `Box` appears in recursive examples. It gives recursive data a fixed-size edge.
 :::
 
 ## Rc

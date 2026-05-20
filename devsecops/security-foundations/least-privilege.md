@@ -1,302 +1,215 @@
 ---
-id: article-devsecops-security-foundations-least-privilege
 title: "Least Privilege"
-description: "Learn how to give users, workflows, and services only the access they need and how to debug permission failures."
-overview: "Least privilege is the practice of making access narrow enough to limit damage while still allowing work to happen. This article follows production deploy roles and access reviews for devpolaris-orders-api."
-tags: ["iam", "permissions", "least-privilege"]
+description: "Give people, workflows, and services only the access they need, with enough evidence to review and repair mistakes."
+overview: "Least privilege is the access model behind safe delivery. This article walks through actors, permissions, targets, role scope, and a cloud breach case study so access feels concrete instead of theoretical."
+tags: ["iam", "permissions", "least-privilege", "cloud"]
 order: 3
+id: article-devsecops-security-foundations-least-privilege
 ---
 
 ## Table of Contents
 
-1. [What Least Privilege Means in Delivery Work](#what-least-privilege-means-in-delivery-work)
-2. [The Operating Context](#the-operating-context)
-3. [A Useful Baseline Workflow](#a-useful-baseline-workflow)
-4. [Artifacts That Make the Risk Concrete](#artifacts-that-make-the-risk-concrete)
-5. [Diagnostic Path](#diagnostic-path)
-6. [Failure Modes and Fix Directions](#failure-modes-and-fix-directions)
-7. [Engineering Tradeoffs](#engineering-tradeoffs)
-8. [Production Access Review Practice](#production-access-review-practice)
+1. [What Is Least Privilege?](#what-is-least-privilege)
+2. [Read Access as a Sentence](#read-access-as-a-sentence)
+3. [Human Access](#human-access)
+4. [Workflow Access](#workflow-access)
+5. [Service Access](#service-access)
+6. [Case Study: Capital One](#case-study-capital-one)
+7. [When Access Fails](#when-access-fails)
+8. [Review Evidence](#review-evidence)
+9. [Putting It All Together](#putting-it-all-together)
+10. [What's Next](#whats-next)
 
-## What Least Privilege Means in Delivery Work
+## What Is Least Privilege?
 
-Least privilege means each person, workflow, and service
-gets only the access needed
-for its current job. It exists because credentials fail in
-ordinary ways and broad
-access turns small mistakes into large incidents.
+Least privilege means an actor receives the smallest useful access for the job it is doing. The actor can be a person, a CI job, a deploy role, a running service, a Kubernetes service account, or a break glass administrator. The job might be reading logs, publishing an image, deploying one service, or reading one secret.
 
-The running example is devpolaris-orders-api, a Node.js
-service stored in GitHub,
-tested and deployed with GitHub Actions, and hosted in a
-small cloud account. The team
-uses a production GitHub environment, a package registry
-image, a cloud deploy role,
-and a monthly production access review. That example is
-small enough to inspect by
-hand, but it contains the same trust questions that appear
-in larger delivery systems.
+The phrase is common enough that it can lose meaning. Make it concrete by asking four questions:
 
-A delivery system is not only a build script. It is a set
-of identities, artifacts,
-approvals, and logs that can change production. When you
-look at security through that
-lens, the useful question is not "is this secure" in a
-vague way. The useful question
-is which identity can perform which action, at which
-boundary, with which evidence
-left behind.
-
-For a junior engineer, this framing is helpful because it
-turns security from a
-separate language into normal debugging. If a deploy
-failed, you inspect the actor,
-the permission, and the target. If a deploy succeeded when
-it should not have, you
-inspect the same things and then tighten the boundary that
-allowed it.
-
-## The Operating Context
-
-The service path is intentionally ordinary. A developer
-opens a pull request, GitHub
-Actions runs tests, the merge to main builds an image, and
-the deploy job updates
-production after environment approval. The cloud account
-contains the production app,
-a database, a log workspace, a secret store, and a few IAM
-or RBAC roles.
-
-```mermaid
-flowchart TD
-    A["Pull request"] --> B["GitHub Actions test job"]
-    B --> C["Merge to main"]
-    C --> D["Image digest in registry"]
-    D --> E["Production environment approval"]
-    E --> F["Cloud deploy role"]
-    F --> G["devpolaris-orders-api"]
-    H["Audit logs"] -. records .-> E
-    H -. records .-> F
+```text
+Who is acting?
+What action are they allowed to take?
+Which resource can they touch?
+How long should that access last?
 ```
 
-The diagram is the first artifact. It gives the team a
-shared object to point at
-during review. If someone says the pipeline is safe, ask
-which arrow they mean. If
-someone says a risk is accepted, ask which box owns that
-risk and which log proves the
-action later.
+If one of those answers is broad, the privilege is broad. "The deploy role can update the orders service for one hour" is narrow. "The CI user is admin in production" is broad. "Developers can read production logs during on-call shifts" is narrower than "all engineers can read everything forever."
 
-## A Useful Baseline Workflow
+Least privilege keeps the normal path clear and makes unusual power visible. If an engineer needs emergency access, the team should design an emergency path with approval, time limits, and audit evidence instead of hiding an admin key in a wiki.
 
-A baseline workflow should separate untrusted validation
-from trusted deployment. Pull
-request code can run tests, but it should not receive
-production secrets or broad
-write permissions. Deployment should happen from the
-protected branch and should use
-an environment that records approval.
+## Read Access as a Sentence
+
+Access policies are easier to review when you turn them into sentences. A cloud IAM policy, GitHub permission, or Kubernetes role may have provider-specific syntax, but the sentence underneath is the same.
+
+```text
+orders-api-prod-deployer can update service orders-api-prod in production.
+```
+
+That sentence has an actor, permission, target, and environment. Now compare it with a broad sentence:
+
+```text
+ci-admin can do anything in the production account.
+```
+
+The broad sentence is easy to write as a policy because most platforms have an administrator role. It is hard to defend because any compromise of that one identity becomes a compromise of many resources.
+
+Here is a review table for the orders service.
+
+| Actor | Useful permission | Target | Why it is enough |
+|-------|-------------------|--------|------------------|
+| `orders-api-prod-deployer` | Update service | `orders-api-prod` | Deployment should change the service, not the whole account. |
+| `orders-api-log-reader` | Read logs | Orders log group | On-call needs evidence, not write access. |
+| `orders-api-runtime` | Read secret | Orders database credential | The app needs its own credential, not every secret. |
+| `platform-admin` | Manage deployment roles | Platform account only | Platform maintains access boundaries. |
+| `break-glass-admin` | Emergency admin | Time-limited production session | Rare response path with explicit evidence. |
+
+The `Why it is enough` column matters. A least privilege review should explain how work still happens after broad access is removed.
+
+## Human Access
+
+Human access follows responsibility. A developer reviewing normal application code may need repository write access. An on-call engineer may need production log access. A platform engineer may need to change deployment roles. Those are different jobs, so they should not all receive the same production admin role.
+
+The simplest access review artifact looks like this:
+
+```text
+Review: devpolaris-orders-api production access
+Date: 2026-05-19
+Application maintainers: orders-team
+Production log readers: orders-oncall
+Deploy approvers: maya-dev, oren-platform
+Cloud admins: platform-admins
+Removed: sam-contractor
+Exception: temporary database read access for incident INC-418 until 2026-05-21
+Owner: maya-dev
+```
+
+Read it line by line. The review names the service and date. It separates maintainers from log readers, deploy approvers, and cloud admins. It records a removal. It records a temporary exception with an owner and expiry date.
+
+The expiry date is not paperwork. It is the control that keeps temporary access from becoming permanent access. Many production environments become risky because old access is never removed. The review should compare current access with current work, then remove access that no longer has a job.
+
+## Workflow Access
+
+CI/CD workflows need their own least privilege review because machines can act faster than people. A job that runs on every pull request should have less power than a job that deploys after approval.
 
 ```yaml
-name: orders-api-delivery
-on:
-  pull_request:
-    branches: ["main"]
-  push:
-    branches: ["main"]
-
 permissions:
   contents: read
 
 jobs:
   test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-          cache: "npm"
-      - run: npm ci
-      - run: npm test
+    permissions:
+      contents: read
 
   deploy-prod:
-    needs: test
     if: github.ref == 'refs/heads/main'
     environment: production
     permissions:
       contents: read
       id-token: write
       packages: read
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - run: ./scripts/login-cloud-oidc.sh
-      - run: ./scripts/deploy-prod.sh
 ```
 
-This workflow is not perfect, but the shape is healthy.
-The top-level token is
-read-only. The deploy job asks for the extra permissions
-it needs. The deploy job runs
-only from main and uses a named production environment. A
-reviewer can now inspect one
-job and understand why it has more power than the test
-job.
+The top-level `contents: read` creates a safe default. The test job repeats that read-only shape. The deploy job asks for `id-token: write` because it needs short-lived cloud identity, and it sits behind a production environment boundary.
 
-If a failure appears, avoid broadening everything at once.
-A denied package read needs
-a package read permission. A denied cloud action needs the
-exact cloud action on the
-exact resource. A missing approval needs an environment
-rule, not a larger token.
+The common mistake is to start with `write-all` because one step failed. That hides the real problem. If package download failed, add package read access. If cloud deployment failed, check the exact cloud action and resource. If approval blocked the run, fix the environment rule. Broadening the whole workflow makes the next incident harder to contain.
 
-## Artifacts That Make the Risk Concrete
+## Service Access
 
-Security reviews improve when they use real artifacts
-instead of opinions. A workflow
-file, role policy, audit event, access review note, or
-deployment record lets the team
-discuss the same facts.
+Runtime services also need narrow access. The orders service may need to read its database password, write application logs, and call one payment API. It should not be able to list every secret, change IAM roles, or read unrelated databases.
+
+Here is a small service access map.
+
+| Runtime action | Resource | Access shape |
+|----------------|----------|--------------|
+| Read database credential | `orders/prod/database-url` | Read one secret version |
+| Write logs | Orders log stream | Create log event |
+| Read feature flags | Orders config path | Read-only config access |
+| Call payment API | Payment endpoint | Scoped API token |
+
+Runtime access should also be tied to the workload identity. In Kubernetes, that may be a service account. In a cloud service, it may be a managed identity or role. The important idea is the same: production code should not depend on a human's personal credential.
+
+## Case Study: Capital One
+
+In 2019, Capital One disclosed a cloud data incident. Public information from Capital One and the U.S. Department of Justice describes unauthorized access to data connected to a cloud-hosted application and misconfigured infrastructure. The case is often discussed because it connected application exposure, cloud access paths, and the permissions available to the role reached through that path.
+
+For this article, the lesson is the blast radius of an identity. A vulnerable or misconfigured entry point is serious. It becomes much worse when the identity reachable from that entry point can access broad data. Least privilege cannot make every application bug disappear, but it can reduce what one compromised path can reach.
+
+Read the case as a path:
 
 ```text
-Service: devpolaris-orders-api
-Commit: 8f2a91d4c0b8
-Workflow run: orders-api-delivery #1842
-Image: ghcr.io/devpolaris/orders-api@sha256:4e1b9f...c71a
-Cloud principal: orders-api-prod-deployer
-Environment approver: maya-dev
-Target: rg-devpolaris-orders-prod/orders-api
-Health check: GET /health returned 200
+external request
+  -> application or edge misconfiguration
+  -> cloud metadata or role path
+  -> temporary credentials
+  -> storage data
 ```
 
-This record gives the team a path backward from production
-to source. If the running
-image does not match the workflow output, investigate the
-deploy script or a manual
-production change. If the cloud principal is a human admin
-instead of the deploy role,
-investigate why the normal path was bypassed.
+The least privilege review has two questions: how the request got in, and what the reached identity could read afterward. Both questions matter. Network exposure and IAM scope work together.
 
-The tradeoff is that evidence takes storage and design.
-The fix is to automate facts
-where possible and keep human notes for judgment,
-exceptions, and decisions.
+Map that back to `devpolaris-orders-api`. If the service has a server-side request bug, the runtime identity should still be narrow. It may need one database credential and one log path. It should not be able to read every object bucket, list all secrets, or assume deployment roles.
 
-## Diagnostic Path
+## When Access Fails
 
-A good security habit should help when something breaks.
-The diagnostic path below
-works for most delivery security questions because it
-follows the change from code to
-production.
+Least privilege creates permission errors. That is normal. The fix is to read the denied action carefully, then add the narrow permission that matches the intended job.
 
 ```text
-Diagnostic path
-1. Start with the pull request, commit SHA, actor, and changed files.
-2. Open the workflow run and record event, ref, job permissions, and approval.
-3. Compare the artifact digest with the digest running in production.
-4. Check the cloud activity log for principal, action, resource, and result.
-5. Match the finding to a fix: narrow a permission, rotate a secret, add review, or improve evidence.
+AccessDenied
+Actor: orders-api-prod-deployer
+Action: service.update
+Resource: orders-api-prod
+Reason: role policy does not allow service.update on this resource
 ```
 
-The important detail is order. Starting in the cloud
-console can show what changed,
-but it may not show why the change was allowed. Starting
-in the pull request can show
-intent, but it may not show the acting identity. Walking
-the whole chain keeps the
-team from fixing the first symptom and missing the broken
-boundary.
+The useful fields are `Actor`, `Action`, `Resource`, and `Reason`. If the actor is wrong, the workflow is using the wrong identity. If the action is wrong, the policy is missing the needed operation. If the resource is wrong, the workflow is targeting the wrong service or environment.
 
-For devpolaris-orders-api, the most useful fields are
-commit SHA, workflow event, job
-permissions, image digest, cloud principal, and target
-resource. If one field is
-missing, add it to the workflow output or release
-evidence.
-
-## Failure Modes and Fix Directions
-
-Most delivery security failures repeat familiar shapes.
-Learn to recognize the shape,
-then choose the narrow fix.
-
-| Failure mode | What it looks like | Fix direction |
-| :--- | :--- | :--- |
-| Trust boundary is missing | PR job can deploy or publish | Split jobs and restrict events |
-| Permission is too broad | One role can change every service | Scope role to one service and environment |
-| Secret is long-lived | Static cloud key sits in GitHub secrets | Replace with OIDC or rotate and restrict |
-| Evidence is weak | Production changed with no visible approver | Add environment approvals and audit retention |
-| Ownership is unclear | Nobody knows who reviews workflow changes | Add CODEOWNERS and a review checklist |
-
-A fix direction is not the same as a command. The command
-depends on the provider and
-repository. The engineering decision is stable: reduce
-blast radius, make the boundary
-explicit, and keep enough evidence to prove the next
-change.
-
-## Engineering Tradeoffs
-
-Security controls have costs. Narrow roles take longer to
-write than admin roles.
-Environment approval slows an urgent release. Secret
-rotation can break old processes
-if the team does not plan the handoff. Audit retention
-costs money and needs a
-retrieval path.
-
-The answer is not to remove friction everywhere. Put
-friction where the risk changes.
-A normal application code change can move with peer review
-and tests. A workflow
-permission change, deploy role change, or production
-secret change should receive a
-more careful review because it changes what the delivery
-system can do.
-
-For the orders API team, the practical target is
-explainable security. If a junior
-engineer can trace who approved a change, which identity
-deployed it, which artifact
-ran, and which permission allowed it, the system is much
-easier to operate and
-improve.
-
-## Production Access Review Practice
-
-Monthly production access reviews are where the mental
-model meets people. The review
-should compare current access with current responsibility.
-It should remove old users,
-confirm service identities, and record any exception with
-an owner and date.
+The unsafe fix is:
 
 ```text
-Review: devpolaris-orders-api production access
-Date: 2026-05-08
-Human admins: maya-dev, oren-platform
-Log readers: orders-oncall-group
-Deploy role: orders-api-prod-deployer
-Removed: old-ci-service-user, sam-contractor
-Exception: shared log reader remains until workspace split, owner oren-platform
-Next review: 2026-06-05
+Grant production admin to orders-api-prod-deployer.
 ```
 
-This artifact is small, but it answers important
-questions. Who still has access?
-Which temporary exception remains? Who owns the cleanup?
-If the review finds an
-account nobody recognizes, disable it or remove access
-first, then investigate why it
-was still present.
+The safer fix is:
+
+```text
+Allow service.update on orders-api-prod for the deploy workflow identity.
+```
+
+That second fix matches the original sentence. It gives the actor the action on the target it needs.
+
+## Review Evidence
+
+A least privilege review should leave behind enough evidence to answer why access exists.
+
+```text
+Access decision: orders-api-prod-deployer
+Allowed action: service.update
+Allowed target: orders-api-prod
+Denied targets: databases, IAM roles, unrelated services
+Reason: production deployment from approved workflow
+Expiry: none, normal deployment path
+Reviewer: platform-team
+Last tested: workflow run #1842
+```
+
+This record does not replace the provider policy. It explains the intent behind it. When someone later asks for broader access, the team can compare the request with the intent.
+
+## Putting It All Together
+
+Least privilege is the permission layer of the delivery trust model. Start by writing access as a sentence: actor, action, target, duration. Then check whether the real policy matches the sentence.
+
+For the orders service, people, workflows, and runtime services each get different access because they do different jobs. Human access follows responsibility. Workflow access follows the delivery step. Service access follows what the running app must read or write.
+
+The Capital One case shows why this matters during real incidents. When an entry point fails, the permissions behind that entry point decide how far the incident can spread. Narrow roles give the team fewer places to check and fewer secrets or data stores to rotate afterward.
+
+## What's Next
+
+Least privilege narrows who can act. The next article covers secrets, the sensitive values that let actors prove who they are. Secrets need storage, delivery, rotation, and removal paths that match the same trust model.
 
 ---
 
 **References**
 
-- [AWS IAM best practices](https://docs.aws.amazon.com/IAM/latest/UserGuide/best-practices.html) - AWS documents practical least privilege and credential guidance.
-- [Azure role-based access control documentation](https://learn.microsoft.com/azure/role-based-access-control/overview) - Microsoft explains how Azure permissions are assigned and evaluated.
-- [GitHub Actions security hardening](https://docs.github.com/actions/security-guides/security-hardening-for-github-actions) - GitHub explains token scope, secret handling, and safer workflow patterns.
-- [GitHub Actions OpenID Connect](https://docs.github.com/actions/deployment/security-hardening-your-deployments/about-security-hardening-with-openid-connect) - GitHub describes replacing long-lived cloud secrets with short-lived federation.
+- [Capital One 2019 cyber incident facts](https://www.capitalone.com/digital/facts2019/) - Capital One summarizes the 2019 incident, affected data categories, and response.
+- [U.S. Department of Justice announcement on the Capital One data theft case](https://www.justice.gov/usao-wdwa/pr/seattle-tech-worker-arrested-data-theft-involving-large-financial-services-company) - DOJ describes the arrest and alleged unauthorized access path.
+- [GitHub Actions OpenID Connect](https://docs.github.com/en/actions/deployment/security-hardening-your-deployments/about-security-hardening-with-openid-connect) - GitHub documents how workflows can use short-lived federated identity instead of long-lived cloud secrets.
+- [NIST SP 800-218 Secure Software Development Framework](https://csrc.nist.gov/pubs/sp/800/218/final) - NIST includes access control and secure development practices that support least privilege.

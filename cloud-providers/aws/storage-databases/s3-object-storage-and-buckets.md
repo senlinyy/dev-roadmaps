@@ -47,7 +47,7 @@ That is the S3-shaped problem.
 
 Amazon Simple Storage Service, usually called S3, is AWS object storage. It stores objects in buckets. Each object has bytes, a key, metadata, and access controls around it. You retrieve the object by naming the bucket and key.
 
-S3 is not a mounted drive. It does not give the app a normal POSIX filesystem with open file handles, renames, and directory locks. The app uses S3 APIs to put, get, list, copy, tag, and delete objects. That difference is why S3 is excellent for files, exports, uploads, static assets, and artifacts, but awkward for software that expects a shared mounted directory.
+S3 is object storage accessed through APIs. The app uses S3 APIs to put, get, list, copy, tag, and delete objects instead of a normal POSIX filesystem with open file handles, renames, and directory locks. That difference is why S3 is excellent for files, exports, uploads, static assets, and artifacts, but awkward for software that expects a shared mounted directory.
 
 The useful mental model is a durable object address:
 

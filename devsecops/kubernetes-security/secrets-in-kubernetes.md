@@ -1,301 +1,128 @@
 ---
-id: article-devsecops-kubernetes-security-secrets-in-kubernetes
-title: Secrets in Kubernetes
-description: Store, mount, rotate, and audit Kubernetes Secrets without treating base64 as real protection.
-overview: Kubernetes Secrets are API objects for sensitive values, not a complete secret-management system by themselves. You will trace how devpolaris-orders receives database credentials and how teams reduce exposure.
+title: "Secrets in Kubernetes"
+description: "Store, mount, rotate, and audit Kubernetes Secrets without treating base64 as encryption."
+overview: "Kubernetes Secrets are API objects for sensitive values. This article explains base64 encoding, etcd encryption, RBAC, mounts, environment variables, and rotation evidence."
 tags: ["secrets", "kubernetes", "encryption"]
 order: 4
+id: article-devsecops-kubernetes-security-secrets-in-kubernetes
 ---
 
 ## Table of Contents
 
-1. [The Control Works After You Name the Risk](#the-control-works-after-you-name-the-risk)
-2. [The Orders Workload as the Anchor](#the-orders-workload-as-the-anchor)
-3. [The First Useful Policy](#the-first-useful-policy)
-4. [How to Prove the Rule Is Active](#how-to-prove-the-rule-is-active)
-5. [A Realistic Failure Shape](#a-realistic-failure-shape)
-6. [Common Misreadings](#common-misreadings)
-7. [Failure Modes and Fix Directions](#failure-modes-and-fix-directions)
-8. [Engineering Tradeoffs](#engineering-tradeoffs)
-9. [Operational Review Checklist](#operational-review-checklist)
+1. [What a Kubernetes Secret Is](#what-a-kubernetes-secret-is)
+2. [Base64 Is Encoding](#base64-is-encoding)
+3. [Access to Secrets](#access-to-secrets)
+4. [Mounts and Environment Variables](#mounts-and-environment-variables)
+5. [Rotation](#rotation)
+6. [Putting It All Together](#putting-it-all-together)
+7. [What's Next](#whats-next)
 
-## The Control Works After You Name the Risk
+## What a Kubernetes Secret Is
 
-A Kubernetes Secret is an API object for sensitive configuration such as passwords, tokens, and certificates. It is not encryption by itself, and base64 is only encoding. The devpolaris-orders API receives a database password through a Secret, while the platform team controls storage, RBAC, mounting, and rotation.
+A Kubernetes Secret is an API object for storing sensitive values such as tokens, passwords, keys, and certificates. Pods can consume Secrets as mounted files or environment variables.
 
-The running example stays inside the devpolaris-orders namespace. That matters because security controls become easier to review when they are attached to a real service, a real namespace, and a real operational question. You are not trying to make Kubernetes abstractly secure. You are trying to keep one orders API from receiving or sending traffic, data, or behavior it does not need.
-
-The first decision is scope. A control that is too wide blocks normal platform work. A control that is too narrow only looks good in a diagram. The useful middle is a rule that protects the service and still gives operators enough evidence to debug.
-
-## The Orders Workload as the Anchor
-
-The deployment below is the shared anchor for this article. It gives the API a stable label, a service account, and a normal HTTP port. Later checks refer back to these labels because Kubernetes policy objects usually select pods by labels rather than by deployment names.
-
-Labels are important because they are the join keys of Kubernetes operations. A policy that selects app=orders will not protect a pod labeled app=devpolaris-orders-api. When a control seems ignored, selectors are one of the first things to inspect.
-
-Here is the small workload the team is protecting.
-
-```yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: devpolaris-orders-api
-  namespace: devpolaris-orders
-spec:
-  replicas: 2
-  selector:
-    matchLabels:
-      app: devpolaris-orders-api
-  template:
-    metadata:
-      labels:
-        app: devpolaris-orders-api
-        tier: api
-    spec:
-      serviceAccountName: orders-api
-      containers:
-        - name: api
-          image: ghcr.io/devpolaris/orders-api:2026-05-08.1
-          ports:
-            - containerPort: 8080
-```
-
-## The First Useful Policy
-
-A first useful policy should be small enough to explain in a review. It should name the selected pods, the direction it controls, and the allowed peer or condition. If the rule cannot be explained as one or two sentences, split it or add a table to the pull request.
-
-For this topic, the policy is deliberately practical rather than complete. It shows the shape you would put in Git for devpolaris-orders and the fields you would inspect when it fails.
-
-The exact API object depends on the control, but the habit is the same: select the workload, state the allowed behavior, then test both allowed and denied paths.
+For `devpolaris-orders`, the database URL may live in a Secret:
 
 ```yaml
 apiVersion: v1
 kind: Secret
 metadata:
-  name: orders-db-credentials
-  namespace: devpolaris-orders
+  name: orders-db
+  namespace: orders-prod
 type: Opaque
-stringData:
-  username: orders_app
-  password: replace-me-through-secret-manager
----
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: devpolaris-orders-api
-  namespace: devpolaris-orders
-spec:
-  template:
-    spec:
-      containers:
-        - name: api
-          env:
-            - name: ORDERS_DB_USERNAME
-              valueFrom:
-                secretKeyRef:
-                  name: orders-db-credentials
-                  key: username
-            - name: ORDERS_DB_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: orders-db-credentials
-                  key: password
+data:
+  database-url: cG9zdGdyZXM6Ly9leGFtcGxl
 ```
 
-## How to Prove the Rule Is Active
+The value under `data` is base64-encoded. That makes it safe for YAML formatting. It does not make it secret from anyone who can read the object.
 
-Do not trust that a YAML file in a repository is active in the cluster. The diagnostic path starts by asking the API server what object exists, then checking events, selected pods, or logs depending on the control. Kubernetes is declarative, so the live object is the evidence that matters.
+## Base64 Is Encoding
 
-The following commands are intentionally small. They show the kind of proof a reviewer or on-call engineer can collect without opening a dashboard. Save the longer investigation for runbooks and challenges.
-
-Use the command output to check selectors, status, and the namespace.
+Base64 is reversible encoding.
 
 ```bash
-$ kubectl get secret orders-db-credentials -n devpolaris-orders
-NAME                    TYPE     DATA   AGE
-orders-db-credentials   Opaque   2      4m
+$ echo cG9zdGdyZXM6Ly9leGFtcGxl | base64 --decode
+postgres://example
+```
 
-$ kubectl auth can-i get secrets   --as=system:serviceaccount:devpolaris-orders:orders-release   -n devpolaris-orders
+Anyone with permission to read the Secret can decode the value. Secret security comes from API access control, encryption at rest, runtime delivery boundaries, and audit logs.
+
+The first review question is who can read Secrets in the namespace.
+
+```bash
+$ kubectl auth can-i get secrets \
+  --as=system:serviceaccount:orders-prod:orders-deployer \
+  -n orders-prod
 no
 ```
 
-## A Realistic Failure Shape
+A deployer may need to update deployments without reading secret values. The runtime service account may need the mounted secret, but broad human access should be limited.
 
-Failure output teaches faster than a perfect manifest because it shows what a learner will actually see. The important move is to connect the symptom to the Kubernetes object that made the decision. A timeout, Forbidden error, admission denial, or suspicious runtime event each points to a different layer.
+## Access to Secrets
 
-For devpolaris-orders, the first failure is usually not mysterious if you preserve the namespace, pod labels, and timestamp in the evidence. Those fields let you compare the failure to the control that should have allowed or denied the behavior.
-
-The snapshot below is the kind of artifact you would paste into an incident note.
+RBAC controls who can read Secret objects. Reading a Secret is usually more sensitive than reading a ConfigMap because it reveals credential values.
 
 ```text
-2026-05-08T19:31:18Z level=error service=orders-api
-missing required environment variable ORDERS_DB_PASSWORD
-
-kubectl describe pod shows:
-Warning  Failed  Error: secret "orders-db-credentials" not found
-fix direction: create the Secret in devpolaris-orders or correct the secretKeyRef name
+Subject: orders-oncall
+Allowed: get pods, get logs
+Denied: get secrets
+Reason: on-call can debug behavior without reading raw credentials
 ```
 
-## Common Misreadings
+Sometimes an operator does need secret access. Make that path explicit and audited. Avoid giving `get secrets` to broad groups because it is convenient during debugging.
 
-One common misreading is to treat the control as a replacement for every other layer. Kubernetes controls are layered. RBAC does not replace admission. Admission does not replace runtime detection. NetworkPolicy does not replace authentication between services. Secrets do not replace an external secret manager or careful rotation.
+Clusters can also encrypt Secrets at rest in etcd. That protects stored data if etcd storage is exposed. It does not prevent an authorized API user from reading the Secret.
 
-Another misreading is to assume a quiet cluster means a safe cluster. A control may be missing, unsupported by the cluster plugin, scoped to the wrong namespace, or bypassed by a privileged workload. The diagnostic path has to prove the control is both configured and effective.
+## Mounts and Environment Variables
 
-The useful question is always concrete: which pod, which namespace, which API object, which caller, which traffic direction, or which event? Vague security reviews miss mistakes that a small selector check would catch.
+A pod can receive a Secret as a file:
 
-## Failure Modes and Fix Directions
+```yaml
+volumeMounts:
+  - name: db-secret
+    mountPath: /var/run/secrets/orders
+    readOnly: true
+volumes:
+  - name: db-secret
+    secret:
+      secretName: orders-db
+```
 
-If the control blocks normal work, first confirm the selector and namespace. A rule in the wrong namespace is invisible to the workload. A selector that matches zero pods creates a false sense of safety. A selector that matches too many pods can break unrelated services.
+It can also receive a Secret as an environment variable. Files are often easier to rotate because mounted Secret volumes can update when the Secret changes, while environment variables are fixed when the process starts. The application may still need a restart or reload to use the new value.
 
-If the control allows too much, reduce the scope before adding a new tool. Tighten the service account, peer selector, mounted secret, admission expression, or runtime rule. Smaller controls are easier to test and easier to explain during an incident.
+Know which method your service uses. Rotation depends on it.
 
-If a release is urgent, document the temporary exception next to the resource that owns it. Name the owner, the reason, and the removal condition. Temporary exceptions without owners become permanent configuration.
+## Rotation
 
-## Engineering Tradeoffs
-
-The tradeoff is between safety, operability, and maintenance. A strict rule catches mistakes early, but it can block releases when the service changes. A loose rule reduces interruptions, but it leaves more behavior unexplained during an incident. The right answer usually changes as the service matures.
-
-For devpolaris-orders, start with the smallest rule that protects the clear risk. Add tests that prove the expected allow and deny paths. When the team needs an exception, make it visible rather than hiding it inside a broad policy.
-
-This is also where platform and application teams need a shared language. The platform team owns cluster-wide mechanisms. The app team owns service intent. The best policy review joins those two views instead of making one team guess what the other meant.
-
-## Operational Review Checklist
-
-Review begins with the live object, not the file name. Check metadata.namespace, selectors, referenced service accounts or labels, and the fields that define the allowed behavior. Then check one positive path and one negative path so the policy is not only syntactically valid but operationally meaningful.
-
-For devpolaris-orders, a useful review record includes the deployment label, the policy object name, the command used to prove it, and the failure that should happen when the rule denies behavior. That record makes later troubleshooting faster.
-
-End the review by asking what signal will appear if the rule stops working. If nobody knows where the denial, timeout, warning, or alert appears, the team does not yet operate the control.
-
-### Diagnostic Worksheet
-
-Use this worksheet when a pull request or incident touches Secrets for devpolaris-orders. It keeps the review tied to evidence from the cluster instead of opinions about whether a setting looks strict enough.
-
-| Check | Command or evidence | Expected result |
-|-------|---------------------|-----------------|
-| Secret exists in the same namespace | `kubectl get secret orders-db-credentials -n devpolaris-orders` | DATA 2 |
-| Release identity cannot read it | `kubectl auth can-i get secret/orders-db-credentials --as=system:serviceaccount:devpolaris-orders:orders-release -n devpolaris-orders` | no |
-| Pod references the expected keys | `kubectl get deploy devpolaris-orders-api -n devpolaris-orders -o yaml` | username and password secretKeyRef |
-| Secret is not printed in logs | `kubectl logs deploy/devpolaris-orders-api -n devpolaris-orders | grep ORDERS_DB_PASSWORD` | no output |
-| Rotation has a restart plan | `kubectl rollout status deploy/devpolaris-orders-api -n devpolaris-orders` | deployment successfully rolled out |
-
-The point of the worksheet is not to make every review long. It gives the reviewer a repeatable path when the change is risky, when the service has recently failed, or when a broad exception is being requested. A small amount of evidence prevents a lot of guessing.
-
-### Failure Matrix
-
-| Symptom | Likely place to inspect | Fix direction |
-|---------|-------------------------|---------------|
-| The release fails before a pod changes | API server response, server dry run, or authorization check | Read the exact denied verb, field, or policy message before widening access. |
-| The pod starts but the app fails | Container logs, pod events, mounted files, selected labels | Fix the workload assumption or the narrow selector that does not match reality. |
-| The control appears inactive | Namespace, selector, controller support, live object | Prove the object selects the pod and that the cluster component enforces it. |
-| An emergency exception was added | Git history, admission or RBAC object, incident ticket | Add an owner, a removal date, and the narrow replacement rule. |
-
-A base64 value in a Secret is not protected from anyone who can read the Secret. The fix is RBAC, encryption at rest, careful mounting, external rotation, and log hygiene, not a different base64 command.
-
-### Pull Request Evidence
-
-A useful pull request for this topic should include the intent, the live check, and the expected failure. For example, an orders API change might say that the service can still receive traffic from devpolaris-web, cannot receive traffic from devpolaris-tools, and still rolls out with the pinned image digest. Those statements are easy to test after merge.
-
-Keep the evidence close to the changed object. If the pull request changes a Role, include a can-i check. If it changes a pod security setting, include one live pod field or a server dry run. If it changes a network rule, include the selected pod labels and one allowed or denied connection.
-
-### Runbook Handoff
-
-The last review question is who will notice when this control breaks. A developer may see a failed rollout. A platform engineer may see an admission denial. A security engineer may see a runtime alert. Write the handoff in plain service language so the next person knows whether to inspect Kubernetes events, controller logs, application logs, or the policy object itself.
-
-For devpolaris-orders, the handoff should name the namespace, deployment, service account, and policy object. It should also name the safe rollback. Sometimes the rollback is to restore a previous manifest. Sometimes it is to add one missing label. Sometimes it is to create a short exception while the image or application is fixed.
-
-### Operator Notes
-
-- Keep the namespace name in every command so evidence is not accidentally collected from another environment.
-- Prefer server-side dry runs before applying policy changes that can block releases.
-- Keep one allowed test and one denied test for every protective rule.
-- Record temporary exceptions with an owner and a removal condition.
-- Recheck selectors after label changes because many Kubernetes controls depend on labels.
-- Treat missing evidence as a reason to inspect, not as proof that the system is safe.
-
-### Scenario Drill
-
-Use this drill to turn Secrets from a file review into an operating habit. The scenario starts with missing database password during rollout in the devpolaris-orders namespace. The goal is to collect enough evidence to decide whether to fix the workload, fix the policy, or open a short exception.
-
-1. Name the affected object: orders-db-credentials Secret.
-2. Name the protecting artifact: secretKeyRef, RBAC, and rotation record.
-3. Capture the namespace and labels before changing anything.
-4. Run one command that proves the allowed path.
-5. Run one command that proves the denied or detected path.
-6. Write the smallest fix direction in the incident note.
-
-A short incident note might look like this.
+A rotation record should connect the Secret version, workload restart, and validation.
 
 ```text
-Service: devpolaris-orders-api
-Namespace: devpolaris-orders
-Symptom: missing database password during rollout
-Primary object: orders-db-credentials Secret
-Security artifact: secretKeyRef, RBAC, and rotation record
-Allowed path checked: expected service operation still works
-Denied path checked: risky behavior is blocked or detected
-Next action: narrow fix, not a broad exception
+Secret: orders-db
+Namespace: orders-prod
+Changed: database-url
+New version applied: 2026-05-19T12:00Z
+Workload restarted: orders-api rollout restart
+Validation: app opened new database connections
+Old credential disabled: 2026-05-19T12:30Z
+Owner: orders-team
 ```
 
-The note is intentionally plain. During a release problem, people need the object names and the next check more than they need a long theory of Kubernetes. The theory belongs in the article and the runbook. The incident note should help the next engineer continue the investigation.
+The `Old credential disabled` line matters. Updating the Kubernetes Secret does not automatically disable the old credential in the database or external system. Rotation finishes when the old value stops working.
 
-### Evidence Record
+## Putting It All Together
 
-| Evidence field | Why it matters | Example value |
-|----------------|----------------|---------------|
-| Namespace | Confirms the control and workload live in the same place | devpolaris-orders |
-| Workload label | Proves selectors can match the pod | app=devpolaris-orders-api |
-| Service account | Connects runtime behavior to Kubernetes identity | orders-api |
-| Release identity | Separates deploy permissions from app permissions | orders-release |
-| Image reference | Connects the running container to a build record | ghcr.io/devpolaris/orders-api@sha256:... |
-| Policy object | Names the Kubernetes object that made or should make the decision | secretKeyRef, RBAC, and rotation record |
-| Expected denial | Shows the rule has a protective edge | risky action fails |
-| Expected allow | Shows the rule does not break normal service work | normal request succeeds |
+Kubernetes Secrets store sensitive values as API objects. Base64 encoding is formatting, not protection. Real protection comes from RBAC, encryption at rest, narrow runtime delivery, audit logs, and complete rotation.
 
-When one of these fields is missing, pause before widening the rule. Missing labels, wrong namespaces, and stale image references cause many false conclusions. They are cheaper to fix than a broad policy change.
+For `devpolaris-orders`, secret review asks who can read Secret objects, how the pod receives the value, whether etcd encryption is enabled, how rotation restarts or reloads the app, and how the old credential is disabled.
 
-### Narrow Fix Examples
+## What's Next
 
-| Problem shape | Broad fix to avoid | Narrower fix direction |
-|---------------|--------------------|------------------------|
-| Selector matches zero pods | Disable the control | Correct the label on the workload or policy. |
-| Release is blocked | Grant administrator access | Add the exact missing verb, field, peer, key, or exception. |
-| Application crashes | Remove all hardening | Identify the file, port, key, or call that changed. |
-| Alert has little context | Ignore future alerts | Add namespace, pod, image, and service account fields to the signal. |
-| Exception has no owner | Leave it until later | Add owner, reason, and removal condition in the same pull request. |
-
-A narrow fix is not always a small diff. Sometimes the correct fix is an image rebuild, a label migration, or a new secret rotation path. The important part is that the fix follows the evidence instead of making the security boundary disappear.
-
-### What to Teach a New Teammate
-
-When someone joins the team, do not start by listing every Kubernetes field. Start with the path of one request or one release. Show how the request enters the cluster, which pod receives it, which identity the pod uses, and which control would stop an unsafe change. Then show the command that proves the control exists.
-
-For devpolaris-orders, the teaching path is short enough to repeat during onboarding. The namespace is devpolaris-orders. The deployment is devpolaris-orders-api. The runtime service account is orders-api. The release service account is orders-release. The protective artifacts live beside that service instead of in a hidden spreadsheet.
-
-### Review Questions
-
-- Which object makes the decision?
-- Which workload does it select?
-- Which identity receives permission or restriction?
-- What normal path must still work after the change?
-- What unsafe path must fail, warn, or alert after the change?
-- Where will the next engineer see the failure signal?
-- Is there a short exception, and who owns removing it?
-
-These questions keep the review concrete. If the team cannot answer them, the pull request is not ready for production even if the YAML parses successfully.
-
-### Practice Prompt
-
-Take the current manifest for devpolaris-orders-api and mark the lines that control identity, selection, and allowed behavior. Then write two test statements: one that should succeed and one that should fail. If either statement cannot be tested with kubectl output, logs, or a server-side dry run, add the missing evidence step before merging.
-
-This practice is small, but it builds the habit that matters most in Kubernetes security. Every control should have an object, a reason, a positive test, a negative test, and a place where failures become visible.
+Secrets, pod settings, and network policies all depend on valid Kubernetes objects entering the cluster. Admission control checks those objects before they are stored.
 
 ---
 
 **References**
 
-- [Kubernetes Secrets](https://kubernetes.io/docs/concepts/configuration/secret/) - Use this as the canonical reference for the Kubernetes behavior described in this article.
-- [Encrypt Secret Data at Rest](https://kubernetes.io/docs/tasks/administer-cluster/encrypt-data/) - Use this as the canonical reference for the Kubernetes behavior described in this article.
-- [Good Practices for Kubernetes Secrets](https://kubernetes.io/docs/concepts/security/secrets-good-practices/) - Use this as the canonical reference for the Kubernetes behavior described in this article.
-- [Kubernetes Security Checklist](https://kubernetes.io/docs/concepts/security/security-checklist/) - Use this as the canonical reference for the Kubernetes behavior described in this article.
+- [Kubernetes Secrets](https://kubernetes.io/docs/concepts/configuration/secret/) - Kubernetes documents Secret objects, use cases, and risks.
+- [Kubernetes encrypting secret data at rest](https://kubernetes.io/docs/tasks/administer-cluster/encrypt-data/) - Kubernetes documents encryption configuration for Secret data in etcd.
+- [Kubernetes RBAC authorization](https://kubernetes.io/docs/reference/access-authn-authz/rbac/) - Kubernetes documents controlling Secret access with RBAC.

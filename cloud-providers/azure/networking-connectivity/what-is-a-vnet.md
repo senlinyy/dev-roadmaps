@@ -85,7 +85,7 @@ The practical habit is to record why the range was chosen. A neat-looking range 
 
 A subnet is a smaller address range inside the VNet. It is also a placement boundary. Many Azure resources land in or integrate with a subnet, and the subnet can carry route tables, network security groups, delegations, and service endpoint settings.
 
-For beginners, the subnet's job is not just "a smaller network." It is the place where a workload inherits network behavior.
+For beginners, the subnet is the place where a workload inherits network behavior.
 
 | Subnet | What belongs there | Network behavior to review |
 | --- | --- | --- |
@@ -122,7 +122,7 @@ The table is not a complete production design. It is a way to read intent. For e
 
 Azure creates system routes automatically. You do not need to add a route for basic communication between subnets in the same VNet. Azure already knows how to route within the VNet address space.
 
-Azure also has default routes for internet-bound traffic and for private address ranges that are not part of your VNet. The important beginner habit is to inspect the effective route, not only the route table you created. Effective routes combine system routes, custom routes, peering routes, gateway routes, service endpoint routes, and other platform-added routes.
+Azure also has default routes for internet-bound traffic and for private address ranges that are not part of your VNet. The important beginner habit is to inspect the effective route alongside the route table you created. Effective routes combine system routes, custom routes, peering routes, gateway routes, service endpoint routes, and other platform-added routes.
 
 This is where Azure differs from a simple whiteboard. A subnet can have routes you did not type into the route table. VNet peering can add routes. A gateway can propagate routes. Service endpoints can add service routes. A custom route can override some defaults.
 
@@ -144,7 +144,7 @@ A user-defined route, often called a UDR, is a custom route you add to a route t
 
 The power is useful and dangerous. A single `0.0.0.0/0` UDR can move most outbound traffic from a subnet through a new next hop. If that next hop is wrong, unhealthy, missing IP forwarding, or unable to return traffic, many unrelated app symptoms can appear at once.
 
-The route is not only a line in a table. It creates an operational dependency:
+The route creates an operational dependency:
 
 ```text
 Route: 0.0.0.0/0 -> 10.30.0.4

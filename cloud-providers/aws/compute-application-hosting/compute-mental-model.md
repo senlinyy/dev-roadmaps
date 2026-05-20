@@ -37,7 +37,7 @@ Then the one decision splits into several real questions:
 - Receipt emails, finance exports, and stale-cart cleanup should run only when an event or schedule asks for them.
 - The team wants to know who patches the machine, who restarts failed code, where logs appear, and what scales during a traffic spike.
 
-Those are compute questions. Compute is not just "CPU in the cloud." It is the operating shape around your code: the machine or runtime it gets, how it starts, how traffic reaches it, how scaling happens, and what the team must own when it fails.
+Those are compute questions. Compute is the operating shape around your code: the machine or runtime it gets, how it starts, how traffic reaches it, how scaling happens, and what the team must own when it fails.
 
 The practical mental model is simple: choose compute per workload. A long-running web service, a host-specific worker, and an event job do not need the same answer just because they belong to the same product.
 
@@ -145,7 +145,7 @@ Traffic is where the compute choice meets the rest of the AWS architecture. The 
 
 For EC2, traffic often reaches an Application Load Balancer first, then the load balancer forwards to an instance and port. The instance security group, process listener, target group, and health path all have to agree. If the app binds only to `127.0.0.1`, the server may look fine locally while the load balancer cannot reach it.
 
-For ECS with Fargate, traffic often reaches an Application Load Balancer first, then the load balancer forwards to task IPs. Each task has VPC networking, a security group, and a container port. A target can be unhealthy even while the ECS task is running, because the load balancer judges the health check response, not only whether the process exists.
+For ECS with Fargate, traffic often reaches an Application Load Balancer first, then the load balancer forwards to task IPs. Each task has VPC networking, a security group, and a container port. A target can be unhealthy even while the ECS task is running, because the load balancer judges the health check response and the process state.
 
 For Lambda, an event source usually comes first. An API service, function URL, queue, stream, schedule, S3 event, or direct invoke asks Lambda to run the function. There is no long-running listener port unless you deliberately place Lambda behind a service that translates requests into invocations.
 
@@ -159,7 +159,7 @@ The non-obvious habit is to debug the entry shape first. A `503` from a load bal
 
 ## Scaling And Failures
 
-Scaling is not only a happy-path feature. It decides what breaks first when pressure rises.
+Scaling decides what breaks first when pressure rises.
 
 On EC2, scaling usually means changing server capacity. You might use larger instances, more instances, or an Auto Scaling group. Failures often look like server failures: full disks, failed services, unhealthy instances, missing packages, stale images, or load balancer targets that cannot connect to the process.
 

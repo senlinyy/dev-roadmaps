@@ -78,7 +78,7 @@ Node pools are where Kubernetes meets Azure compute cost and capacity. A pod ask
 
 Many clusters use at least two kinds of pools. A system node pool hosts critical system pods. User node pools host application workloads. More advanced clusters add specialized pools for GPU jobs, memory-heavy services, Windows containers, or isolated workloads.
 
-The practical question is not just "how many pods do we need?" It is "which kind of worker machines should these pods be allowed to use, and who pays for idle capacity?"
+The practical question asks which kind of worker machines the pods should use and who pays for idle capacity.
 
 ## Pods
 

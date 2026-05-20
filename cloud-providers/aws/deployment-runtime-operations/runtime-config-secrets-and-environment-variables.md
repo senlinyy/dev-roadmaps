@@ -160,7 +160,7 @@ For `devpolaris-orders-api`, startup validation might check:
 | required AWS region exists | Log the region |
 | feature flags are known | Log enabled flag names |
 
-The health check should depend on readiness. If a task says it is healthy before startup validation completes, the load balancer can send traffic to a process that is not ready.
+The health check should depend on readiness. If a task says it is healthy before startup validation completes, the load balancer can send traffic to an unready process.
 
 The gotcha is over-validating. A startup check that calls every downstream dependency can turn a temporary dependency issue into a deployment failure loop. Keep startup validation focused on the contract needed to boot, and use separate metrics or alarms for deeper dependency health.
 

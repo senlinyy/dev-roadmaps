@@ -111,7 +111,7 @@ For the Orders system, a function might send a receipt after checkout or process
 
 Google Kubernetes Engine, or GKE, is managed Kubernetes on GCP. It is the runtime to consider when Kubernetes itself is the operating layer your team needs.
 
-GKE is not simply "containers but stronger." Cloud Run already runs containers with much less platform surface. GKE belongs when the team needs Kubernetes APIs, Pods, Deployments, Services, Ingress, operators, policy controllers, service mesh patterns, or a shared cluster platform across many workloads.
+GKE is a Kubernetes platform, while Cloud Run already runs containers with much less platform surface. GKE belongs when the team needs Kubernetes APIs, Pods, Deployments, Services, Ingress, operators, policy controllers, service mesh patterns, or a shared cluster platform across many workloads.
 
 The tradeoff is that Kubernetes becomes part of the system. Even with GKE managing the control plane, the team must understand manifests, scheduling, workload identity, cluster mode, network exposure, upgrades, and observability. Autopilot reduces node management for many workloads. Standard gives more infrastructure control. Both are Kubernetes-shaped choices.
 
@@ -136,7 +136,7 @@ This is why compute choice matters during incidents. It tells you where the firs
 
 ## Scaling And Failures
 
-Scaling is not just "more copies." It changes how the app behaves.
+Scaling changes how the app behaves.
 
 Cloud Run can scale container instances up and down around request load. That is useful for traffic that changes over time, but it means instances can appear and disappear. Store durable state outside the container, and make startup reliable.
 
@@ -171,7 +171,7 @@ The receipt email should run after checkout without slowing the customer request
 
 The legacy worker needs host-level control. Compute Engine is honest about that server-shaped requirement, but it keeps OS and process responsibility with the team.
 
-The platform team needs Kubernetes. GKE is the right conversation when Kubernetes APIs and platform patterns are the requirement, not just because the app is containerized.
+The platform team needs Kubernetes. GKE is the right conversation when Kubernetes APIs and platform patterns are the requirement.
 
 ## What's Next
 

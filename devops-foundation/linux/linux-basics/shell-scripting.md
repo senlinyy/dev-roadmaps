@@ -23,7 +23,7 @@ id: article-devops-foundation-linux-linux-basics-shell-scripting
 
 A shell script is a plain text file containing a sequence of commands that the shell executes one after another. Anything you can type into your terminal, you can put into a script and run it repeatedly. If you find yourself running the same five commands every time you deploy, rotate logs, or check disk space across a fleet of servers, a shell script turns that repetitive work into a single command.
 
-Shell scripting is not a replacement for Python or Go. It has no type system, its error handling model is unusual, and complex data structures are painful. But for orchestrating system-level tasks (moving files, calling other programs, reading environment variables, reacting to exit codes) Bash is the right tool. Every Linux server has it. Every CI pipeline can run it. Every container has a shell. You do not need to install anything.
+Shell scripting is strongest at orchestrating system-level tasks: moving files, calling other programs, reading environment variables, and reacting to exit codes. Bash has no type system, its error handling model is unusual, and complex data structures are painful, so larger application logic usually belongs in languages like Python or Go. Every Linux server has Bash. Every CI pipeline can run it. Every container has a shell. You do not need to install anything.
 
 Let's start with the simplest possible script. Open your editor, create a file called `hello.sh`, and write this:
 
@@ -117,7 +117,7 @@ Always prefer `$(...)` over backticks for command substitution. Backticks are ha
 
 ## Simple Control Flow: if/else and for Loops
 
-Now that you can store values in variables, you need ways to make decisions and repeat actions. The `if` statement in Bash tests the exit code of a command. An exit code is a number that every command returns when it finishes: 0 means success, and any non-zero value means something went wrong. Think of it like `process.exit(0)` in Node or `sys.exit(0)` in Python, except every command (not just your scripts) reports one.
+Now that you can store values in variables, you need ways to make decisions and repeat actions. The `if` statement in Bash tests the exit code of a command. An exit code is a number that every command returns when it finishes: 0 means success, and any non-zero value means something went wrong. Think of it like `process.exit(0)` in Node or `sys.exit(0)` in Python, except every command reports one.
 
 The reason the convention is "0 means success" rather than "1 means success" comes from a simple insight: there is exactly one way to succeed, but there are many distinct ways to fail. A command either did what was asked or it did not, so success collapses cleanly into a single value. Failure, on the other hand, has shades: file not found, permission denied, invalid argument, network unreachable, out of memory. Reserving zero for success leaves every other number free to encode a specific failure mode, which is why exit code 1 typically means "generic error", 2 means "misuse of shell builtins", 126 means "command found but not executable", 127 means "command not found", and 130 means "killed by Ctrl+C". A return-code system designed the other way around (1 for success) would have wasted the cleanest integer on the case that needs the least information.
 

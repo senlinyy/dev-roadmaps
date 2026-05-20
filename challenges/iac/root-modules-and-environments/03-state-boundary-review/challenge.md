@@ -1,6 +1,6 @@
 ---
 title: "Review State Boundaries"
-sectionSlug: separate-state-before-you-separate-names
+sectionSlug: separate-state
 order: 3
 ---
 

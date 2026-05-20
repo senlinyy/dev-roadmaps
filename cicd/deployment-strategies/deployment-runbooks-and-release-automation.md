@@ -50,7 +50,6 @@ The runbook will take one tested image digest and move it through production usi
 - release records
 - post-release checks
 
-The goal is not to create a giant document.
 The goal is to make the safe path easy to follow.
 
 > A good runbook lets a careful junior engineer run a normal release without guessing.
@@ -190,7 +189,7 @@ The first production change creates a replacement task set without sending publi
 
 The first command creates a CodeDeploy deployment and returns an ID such as `d-7A4Q9B2KD`.
 That ID becomes the release handle for the rest of the run.
-The person reading the runbook should understand why the ID matters, not just copy it.
+The person reading the runbook should understand why the ID matters before copying it.
 
 The test listener URL is useful because it lets you test the new task set directly.
 You do not need to send public traffic to find a broken startup.
@@ -289,8 +288,7 @@ The owner handoff gives the room one decision point.
 
 > The person who owns the next decision should be obvious before the release starts.
 
-That is not bureaucracy.
-That is kindness to the team when the release gets tense.
+That handoff helps the team when the release gets tense.
 
 ## Rollback Target: Name the Safe Place
 
@@ -442,7 +440,7 @@ It shows the important runbook ideas:
 - the rollback target is an input
 - scripts hold repeatable command details
 
-The scripts should print evidence, not just run silently.
+The scripts should print evidence as they run.
 A release log should show what changed.
 
 ```text
@@ -559,7 +557,6 @@ It tells the release lead what normal looks like for this service.
 A runbook adds discipline.
 It can also add friction.
 
-The goal is not to slow every release.
 The goal is to remove avoidable thinking from the parts that should be repeatable, so the team has more attention for the parts that require judgment.
 
 | Runbook Choice | What You Gain | What You Give Up |

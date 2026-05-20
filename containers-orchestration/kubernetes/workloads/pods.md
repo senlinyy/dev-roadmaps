@@ -184,7 +184,7 @@ Events:
   Normal   BackOff    90s    kubelet  Back-off pulling image
 ```
 
-`manifest unknown` usually means the tag does not exist in the registry. The fix is not to restart the Pod. Check the tag produced by CI, correct the manifest, and apply it again. If the message says `unauthorized`, inspect `imagePullSecrets` and registry permissions instead.
+`manifest unknown` usually means the tag does not exist in the registry. Check the tag produced by CI, correct the manifest, and apply it again. If the message says `unauthorized`, inspect `imagePullSecrets` and registry permissions instead.
 
 ## When to Use a Pod Directly
 
@@ -216,7 +216,7 @@ $ kubectl logs -l app=devpolaris-orders-api --tail=50
 
 The first command finds the affected Pods by label. The second command shows Kubernetes-level reasons. The third command reads application output. That order keeps you from chasing code bugs when the image never pulled, and from chasing cluster bugs when the app is returning `503` by design.
 
-There is one more useful layer when the Pod is running but the service still does not work: check from inside the Pod. This is not the first step because a Pod that never starts cannot run your debug command. Once the container is alive, though, `kubectl exec` lets you test what the application sees.
+There is one more useful layer when the Pod is running but the service still does not work: check from inside the Pod. Start with Pod startup evidence, because a Pod that never starts cannot run your debug command. Once the container is alive, `kubectl exec` lets you test what the application sees.
 
 ```bash
 $ kubectl exec devpolaris-orders-api -c api -- printenv ORDERS_DB_HOST
@@ -248,7 +248,7 @@ LAST SEEN   TYPE      REASON      OBJECT                         MESSAGE
 2m          Warning   Unhealthy   pod/devpolaris-orders-api       Readiness probe failed: HTTP probe failed with statuscode: 503
 ```
 
-Read this as a timeline. The scheduler did its job, the image pulled, and the container started. The unresolved problem is readiness. That means the next evidence should come from the application health endpoint and dependency checks.
+The events form a timeline: the scheduler did its job, the image pulled, and the container started. The unresolved problem is readiness. That means the next evidence should come from the application health endpoint and dependency checks.
 
 The same diagnostic shape works for multi-container Pods, but you must name the container. If you omit `-c`, `kubectl logs` may choose the wrong container or ask you to choose one.
 

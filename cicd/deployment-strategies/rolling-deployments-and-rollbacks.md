@@ -141,8 +141,7 @@ For example, the JVM and Spring application context may need time before readine
 
 Before showing a command, let us name the risk.
 If the service stops too many old tasks before new tasks are healthy, users can hit empty capacity or unhealthy targets.
-That is not a code problem.
-It is a rollout problem.
+That failure belongs to the rollout design.
 
 The safer ECS pattern is:
 register a new task definition, then let the ECS service scheduler replace tasks while preserving a minimum number of healthy tasks.
@@ -247,7 +246,7 @@ task definition orders-api:42 version 1.8.4:
 
 `5xx` means server errors such as `500`, `502`, or `503`.
 `p95 latency` means 95 percent of requests were faster than that number.
-Those two signals are not everything, but they are good first signals for a backend API.
+Those two signals give a backend API a useful first health check.
 
 When the rollout finishes, ECS should show only the new task definition as primary:
 
@@ -314,7 +313,6 @@ Now the app log gives the human reason:
 2026-04-30T18:23:15Z readiness failed reason="missing ORDERS_TOPIC"
 ```
 
-The fix is not to push traffic anyway.
 Let the ECS deployment circuit breaker stop the bad deployment, fix the missing configuration, and deploy a new task definition.
 
 For a Spring Boot service, the failure may look like a profile problem:
@@ -383,8 +381,7 @@ After rollback, old tasks may fail when they read orders touched by the new task
 2026-04-30T18:41:11Z checkout failed order_id=ord_9134 reason="unknown discountRulesV2"
 ```
 
-The fix is not a better traffic command.
-The fix is a compatible data change:
+The repair is a compatible data change:
 old and new code must be able to read the data during the rollout.
 
 ## Rolling Back to the Previous Task Definition
@@ -448,8 +445,7 @@ Here is the simple decision table:
 | Blue-green | Full replacement test | Fast traffic switch | More setup |
 | Canary | Long observation on small slice | Real-user signal | More metrics discipline |
 
-A rolling deployment is not about being fancy.
-It is about being able to stop.
+A rolling deployment gives the team a controlled stopping point.
 Change a small part, check the result, keep a rollback target, and stop when the signals are bad.
 
 ---

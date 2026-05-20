@@ -91,7 +91,7 @@ If several tasks need to share the same large data, send an ID, clone an `Arc`, 
 
 ## Bounded Channels
 
-The `32` in `mpsc::channel(32)` is not random decoration. It is the channel capacity.
+The `32` in `mpsc::channel(32)` is the channel capacity.
 
 If producers send faster than the receiver can process, the channel stores messages up to that bound. Once the channel is full, `send(...).await` waits until space is available.
 

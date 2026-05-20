@@ -1,6 +1,6 @@
 ---
 title: "Read the Plan Summary"
-sectionSlug: start-with-the-summary
+sectionSlug: the-summary-line
 order: 1
 ---
 

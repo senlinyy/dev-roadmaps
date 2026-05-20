@@ -74,7 +74,7 @@ For the orders API, a readable rule looks like this:
 | Access | Allow |
 | Priority | `100` |
 
-The rule is about a network flow, not about app permission. It lets the gateway open a TCP connection to the API. It does not prove the user is signed in. It does not prove the API is healthy. It does not grant the API permission to read Key Vault.
+The rule controls a network flow instead of app permission. It lets the gateway open a TCP connection to the API. User sign-in, API health, and Key Vault permissions are separate checks.
 
 That separation is useful. When a request fails, you can ask whether the packet passed the network rule before you debug identity, secrets, routes, or app code.
 

@@ -1,318 +1,154 @@
 ---
-id: article-devsecops-pipeline-security-artifact-integrity
 title: "Artifact Integrity"
-description: "Learn how checksums, provenance, signatures, and artifact handling protect build outputs from tampering between CI and deployment."
-overview: "Artifact integrity is the practice of proving that the file you deploy is the file the trusted build produced. This article follows devpolaris-orders-api from build artifact to checksum, provenance, verification, and deployment evidence."
-tags: ["artifacts", "checksums", "provenance"]
+description: "Prove that the package, image, or bundle you deploy is the one produced by the trusted build."
+overview: "Artifact integrity connects source, build, registry, and deployment. This article explains digests, checksums, provenance, signatures, and the Codecov and SolarWinds cases as real lessons in trusting build outputs."
+tags: ["artifacts", "checksums", "provenance", "signing"]
 order: 6
+id: article-devsecops-pipeline-security-artifact-integrity
 ---
 
 ## Table of Contents
 
-1. [The File Between Build and Production](#the-file-between-build-and-production)
-2. [The Operating Model for devpolaris-orders-api](#the-operating-model-for-devpolaris-orders-api)
-3. [Trust Boundaries in the Workflow](#trust-boundaries-in-the-workflow)
-4. [Evidence Review During a Pull Request](#evidence-review-during-a-pull-request)
-5. [Diagnostic Path When the Check Fails](#diagnostic-path-when-the-check-fails)
-6. [Common Failure Modes](#common-failure-modes)
-7. [Engineering Tradeoffs](#engineering-tradeoffs)
-8. [Operational Checklist](#operational-checklist)
+1. [What Is an Artifact?](#what-is-an-artifact)
+2. [Names, Tags, and Digests](#names-tags-and-digests)
+3. [Checksums](#checksums)
+4. [Provenance](#provenance)
+5. [Signatures](#signatures)
+6. [Case Study: Codecov](#case-study-codecov)
+7. [Deployment Evidence](#deployment-evidence)
+8. [Putting It All Together](#putting-it-all-together)
 
-## The File Between Build and Production
+## What Is an Artifact?
 
-A green build can still deploy the wrong file if the artifact changes between build and production. The repository is a Node.js orders service with pull request checks, a main branch release workflow, and production deployment through GitHub Actions. The security control only matters when it changes that path in a way a reviewer can see.
+An artifact is the thing a build produces and another system consumes. It may be a package, container image, binary, deployment bundle, Terraform plan, SBOM, provenance file, or rendered manifest. Source code starts the path, but the artifact is usually what moves toward production.
 
-The concept fits between source control and production. It does not replace code review, tests, or runtime monitoring. It gives the team evidence before a risky change gets merged, packaged, or deployed. In this article the same service appears in every example so the checks stay connected to real work instead of floating as separate rules.
-
-```yaml
-name: pipeline-security
-
-on:
-  pull_request:
-  push:
-    branches: [main]
-
-permissions:
-  contents: read
-
-jobs:
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version-file: .nvmrc
-          cache: npm
-      - run: npm ci
-      - run: npm test
-```
-
-## The Operating Model for devpolaris-orders-api
-
-The team treats the pipeline as a small production system. It has inputs, permissions, logs, artifacts, and failure states. A workflow file is reviewed like application code because it decides which commands run, which tokens are available, and which output becomes trusted.
-
-The useful mental model is a chain of custody. Source code enters from a branch, checks run on a runner, evidence is uploaded, and a deploy job changes an environment. If one link is too broad or too quiet, the team loses the ability to explain what happened later.
-
-```bash
-$ sha256sum dist/orders-api-release.tgz
-b3a8d8f3c6a7c83d3e4ddbd7c8d6d55e9c2ad6e2f5a7c9b6611a292a9e6d1349  dist/orders-api-release.tgz
-```
-
-## Trust Boundaries in the Workflow
-
-A trust boundary is the line between work the team has reviewed and work it has not reviewed yet. Pull request code is lower trust than code merged to main. A production deployment job is higher impact than a unit test job. Good pipeline security keeps those differences visible in YAML and repository settings.
-
-For this service, pull request jobs should not receive production secrets, write package releases, or run on production network runners. Release jobs can receive more access, but only after the earlier evidence exists. The boundary is not about distrusting developers. It is about limiting what a mistake or compromised dependency can do.
+For `devpolaris-orders-api`, the main artifact is a container image.
 
 ```text
-Image pushed
-registry: ghcr.io/devpolaris/orders-api
-tag: main
-digest: sha256:4bbd2b94d4a3f9f3d8289e22b8b661cf8076e1798b3c1d3df342a77dbab4a6c1
-source commit: 4fd19ab
-workflow run: 8459021331
+source commit
+  -> build workflow
+  -> container image
+  -> registry
+  -> deployment
+  -> running service
 ```
 
-## Evidence Review During a Pull Request
+Artifact integrity asks whether the artifact that reached deployment is the artifact the trusted build produced. If someone can replace the artifact between build and deploy, source review no longer tells the whole story.
 
-A security check is only useful if humans know how to read its output. Reviewers should look for the field that proves the claim: a package path, an alert rule, a runner label, a token scope, an environment name, a checksum, or a digest. Without that field, the result becomes a red or green badge with little teaching value.
+## Names, Tags, and Digests
 
-The devpolaris-orders-api team keeps the review question concrete: does this change increase what untrusted code can touch, and does the evidence show the exact file, job, or artifact involved? That question works for most pipeline controls in this module.
-
-```json
-{
-  "subject": [{
-    "name": "ghcr.io/devpolaris/orders-api",
-    "digest": {"sha256": "4bbd2b94d4a3f9f3d8289e22b8b661cf8076e1798b3c1d3df342a77dbab4a6c1"}
-  }],
-  "predicate": {
-    "builder": {"id": "https://github.com/devpolaris/orders-api/.github/workflows/release.yml"},
-    "invocation": {"configSource": {"digest": {"sha1": "4fd19ab"}}}
-  }
-}
-```
-
-## Diagnostic Path When the Check Fails
-
-Start diagnosis with the smallest artifact that names the failure. In GitHub Actions that is often the failed job, step, exit code, and first meaningful log line. After that, move to the source file or repository setting that controls the behavior. Reading every log line first wastes time because pipeline failures usually point to one missing permission, one changed path, or one blocked gate.
-
-The fix direction should change the system, not only silence the symptom. If a scanner reports a real issue, update the dependency or code path. If a deployment waits for approval, review the environment rule. If a checksum fails, stop the deployment and rebuild from trusted source.
+Container images have names, tags, and digests.
 
 ```text
-Deployment stopped
-Reason: checksum mismatch
-Expected: b3a8d8f3c6a7c83d3e4ddbd7c8d6d55e9c2ad6e2f5a7c9b6611a292a9e6d1349
-Actual:   0b99c1f64e261bcb81f4f8fbe3d17ef2b9d46c2715f1be0f9cf1e5d82055ef12
-Artifact: orders-api-release.tgz
+Name:   ghcr.io/devpolaris/orders-api
+Tag:    2026.05.19.1
+Digest: sha256:4e1b9f30d4a97a7f5c3f4c7f1f3a0f2c9e86b4d4a4e4d0a9a3f0e1c2b7c8d9a0
 ```
 
-## Common Failure Modes
+The name tells you where the artifact lives. The tag is a human-friendly label. The digest identifies the content. Tags can move. Digests are content-addressed.
 
-Failure modes are patterns that repeat across teams. A job can run with a broader token than it needs. A pull request can trigger work on a trusted runner. A scanner can fail closed and block a merge, or fail open because nobody made it required. An artifact can be rebuilt in deploy instead of verified from build output.
-
-The right response is specific to the failure. Broad permissions need a narrower `permissions:` block. Missing evidence needs a workflow change. Noisy alerts need triage rules, not deletion. A bypass needs an owner and a record because future reviewers need to know why the normal path was not used.
-
-| Failure mode | What to inspect | Fix direction |
-| :--- | :--- | :--- |
-| Checksum mismatch | Artifact store and build log | Stop and rebuild trusted artifact |
-| Tag moved | Registry digest history | Deploy by digest |
-| Wrong builder | Provenance builder ID | Restrict trusted workflows |
-
-## Engineering Tradeoffs
-
-Every control has a cost. Hosted runners reduce operational burden, but may not reach private networks. Self-hosted runners can deploy inside a network, but they need isolation and cleanup. Strict scan thresholds catch risk earlier, but they can slow urgent fixes. Protected environments create a useful pause, but they require reviewers who understand the evidence.
-
-Good teams make those tradeoffs explicit. For devpolaris-orders-api, the default is strict on production paths and practical on development paths. Pull requests get fast checks with no secrets. Main branch builds create durable evidence. Production deployment waits for a reviewer only after staging has passed.
+Deploying by tag is convenient:
 
 ```yaml
-jobs:
-  build:
-    permissions:
-      contents: read
-      packages: write
-      id-token: write
-      attestations: write
-    steps:
-      - uses: actions/checkout@v4
-      - run: npm ci
-      - run: npm test
-      - run: ./scripts/build-image.sh
-      - run: sha256sum dist/orders-api-release.tgz > dist/orders-api-release.tgz.sha256
+image: ghcr.io/devpolaris/orders-api:latest
 ```
 
-## Operational Checklist
+Deploying by digest is more reviewable:
 
-The checklist at the end of a pipeline-security article should not be a substitute for thought. It is a memory aid for review and incident response. When the pipeline changes, each item asks whether the trusted path is still clear.
+```yaml
+image: ghcr.io/devpolaris/orders-api@sha256:4e1b9f30d4a97a7f5c3f4c7f1f3a0f2c9e86b4d4a4e4d0a9a3f0e1c2b7c8d9a0
+```
 
-Use the checklist while reading workflow diffs. If the answer is not obvious from YAML, repository settings, or a log artifact, add the missing evidence before production depends on it.
+The digest lets the team compare the build output, registry record, and running service.
 
-- Record the source commit, workflow run, image digest, and checksum.
-- Deploy by digest when the platform supports it.
-- Verify before changing production.
-- Stop when evidence does not match.
+## Checksums
 
-- Review note: artifact verification should bind source commit, build workflow, digest, and deployment target.
+A checksum is a short value calculated from file content. If the content changes, the checksum changes. Checksums are useful for detecting accidental or malicious changes to files during transfer or storage.
 
-- Review note: artifact verification should bind source commit, build workflow, digest, and deployment target.
+```text
+orders-api.tar.gz
+sha256: 89f2b2d14c3a0ad4f7b3b66d3a4f15b11a6c3c57c8e2d9e1a6e7f7d4c4b2a100
+```
 
-- Review note: artifact verification should bind source commit, build workflow, digest, and deployment target.
+The checksum proves content equality, not trust by itself. If an attacker can change both the file and the checksum published beside it, the checksum no longer helps. This is why checksums are often paired with signatures, protected release pages, or provenance.
 
-- Review note: artifact verification should bind source commit, build workflow, digest, and deployment target.
+## Provenance
 
-- Review note: artifact verification should bind source commit, build workflow, digest, and deployment target.
+Provenance records how an artifact was built.
 
-- Review note: artifact verification should bind source commit, build workflow, digest, and deployment target.
+```text
+Artifact: ghcr.io/devpolaris/orders-api@sha256:4e1b9f30...
+Source: github.com/devpolaris/orders-api
+Commit: 8f2a91d4c0b8
+Workflow: orders-api-delivery
+Run: #1842
+Builder: GitHub Actions hosted runner
+```
 
-- Review note: artifact verification should bind source commit, build workflow, digest, and deployment target.
+The source tells you where the build came from. The commit tells you the exact source version. The workflow and run identify the automation. The builder identifies the environment that produced the artifact.
 
-- Review note: artifact verification should bind source commit, build workflow, digest, and deployment target.
+Provenance is useful when deployment asks, "Where did this artifact come from?" It is also useful when incident response asks, "Which builds included the affected dependency?"
 
-- Review note: artifact verification should bind source commit, build workflow, digest, and deployment target.
+## Signatures
 
-- Review note: artifact verification should bind source commit, build workflow, digest, and deployment target.
+A signature lets a verifier check that a trusted identity signed an artifact or provenance statement. Signing does not make bad code good. It proves which identity endorsed the artifact.
 
-- Review note: artifact verification should bind source commit, build workflow, digest, and deployment target.
+```text
+Artifact digest: sha256:4e1b9f30...
+Signed by: orders-release-identity
+Verified for: production deployment
+```
 
-- Review note: artifact verification should bind source commit, build workflow, digest, and deployment target.
+The verifier should check the signature identity and the artifact digest. A valid signature from the wrong identity should fail. A valid signature over a different digest should fail. A deployment policy can then require signatures from approved release identities before production accepts an image.
 
-- Review note: artifact verification should bind source commit, build workflow, digest, and deployment target.
+## Case Study: Codecov
 
-- Review note: artifact verification should bind source commit, build workflow, digest, and deployment target.
+Codecov's April 2021 postmortem described a compromise of its Bash Uploader. Many users ran that uploader inside CI. The modified uploader could collect credentials from CI environments. The case matters for artifact integrity because a script or binary downloaded during CI can become part of the trusted build path.
 
-- Review note: artifact verification should bind source commit, build workflow, digest, and deployment target.
+Read the path:
 
-- Review note: artifact verification should bind source commit, build workflow, digest, and deployment target.
+```text
+CI job
+  -> downloads uploader
+  -> executes uploader
+  -> uploader can read CI environment
+  -> credentials leave the job
+```
 
-- Review note: artifact verification should bind source commit, build workflow, digest, and deployment target.
+The integrity question is whether the thing downloaded and executed is the thing the team intended to trust. A checksum, signature, pinned version, package-manager source, or vendor-provided action can help. The stronger control is to reduce what the downloaded tool can read. If a coverage upload job does not need production secrets, keep those secrets out of the job.
 
-- Review note: artifact verification should bind source commit, build workflow, digest, and deployment target.
+SolarWinds gives a different artifact lesson. The SUNBURST compromise involved malicious code entering signed software updates. That shows the limit of signature thinking: a signature proves an artifact came through a signing path, but the signing path itself also needs protection.
 
-- Review note: artifact verification should bind source commit, build workflow, digest, and deployment target.
+## Deployment Evidence
 
-- Review note: artifact verification should bind source commit, build workflow, digest, and deployment target.
+A deployment record should connect artifact identity to production.
 
-- Review note: artifact verification should bind source commit, build workflow, digest, and deployment target.
+```text
+Service: devpolaris-orders-api
+Commit: 8f2a91d4c0b8
+Built artifact: ghcr.io/devpolaris/orders-api@sha256:4e1b9f30...
+Provenance: verified
+Signature: orders-release-identity verified
+Deployed artifact: ghcr.io/devpolaris/orders-api@sha256:4e1b9f30...
+Environment: production
+Result: healthy
+```
 
-- Review note: artifact verification should bind source commit, build workflow, digest, and deployment target.
+The `Built artifact` and `Deployed artifact` lines should match. The provenance and signature lines explain why the deployment accepted the artifact. The result shows whether production came back healthy.
 
-- Review note: artifact verification should bind source commit, build workflow, digest, and deployment target.
+If the deployed digest differs from the built digest, stop and explain the gap. It may be a manual deployment, tag movement, rebuild, or registry issue. The evidence should make that visible.
 
-- Review note: artifact verification should bind source commit, build workflow, digest, and deployment target.
+## Putting It All Together
 
-- Review note: artifact verification should bind source commit, build workflow, digest, and deployment target.
+Artifact integrity is the bridge between trusted build and trusted deployment. Names and tags help humans. Digests identify content. Checksums detect changes. Provenance explains how an artifact was built. Signatures let deployment verify an identity.
 
-- Review note: artifact verification should bind source commit, build workflow, digest, and deployment target.
-
-- Review note: artifact verification should bind source commit, build workflow, digest, and deployment target.
-
-- Review note: artifact verification should bind source commit, build workflow, digest, and deployment target.
-
-- Review note: artifact verification should bind source commit, build workflow, digest, and deployment target.
-
-- Review note: artifact verification should bind source commit, build workflow, digest, and deployment target.
-
-- Review note: artifact verification should bind source commit, build workflow, digest, and deployment target.
-
-- Review note: artifact verification should bind source commit, build workflow, digest, and deployment target.
-
-- Review note: artifact verification should bind source commit, build workflow, digest, and deployment target.
-
-- Review note: artifact verification should bind source commit, build workflow, digest, and deployment target.
-
-- Review note: artifact verification should bind source commit, build workflow, digest, and deployment target.
-
-- Review note: artifact verification should bind source commit, build workflow, digest, and deployment target.
-
-- Review note: artifact verification should bind source commit, build workflow, digest, and deployment target.
-
-- Review note: artifact verification should bind source commit, build workflow, digest, and deployment target.
-
-- Review note: artifact verification should bind source commit, build workflow, digest, and deployment target.
-
-- Review note: artifact verification should bind source commit, build workflow, digest, and deployment target.
-
-- Review note: artifact verification should bind source commit, build workflow, digest, and deployment target.
-
-- Review note: artifact verification should bind source commit, build workflow, digest, and deployment target.
-
-- Review note: artifact verification should bind source commit, build workflow, digest, and deployment target.
-
-- Review note: artifact verification should bind source commit, build workflow, digest, and deployment target.
-
-- Review note: artifact verification should bind source commit, build workflow, digest, and deployment target.
-
-- Review note: artifact verification should bind source commit, build workflow, digest, and deployment target.
-
-- Review note: artifact verification should bind source commit, build workflow, digest, and deployment target.
-
-- Review note: artifact verification should bind source commit, build workflow, digest, and deployment target.
-
-- Review note: artifact verification should bind source commit, build workflow, digest, and deployment target.
-
-- Review note: artifact verification should bind source commit, build workflow, digest, and deployment target.
-
-- Review note: artifact verification should bind source commit, build workflow, digest, and deployment target.
-
-- Review note: artifact verification should bind source commit, build workflow, digest, and deployment target.
-
-- Review note: artifact verification should bind source commit, build workflow, digest, and deployment target.
-
-- Review note: artifact verification should bind source commit, build workflow, digest, and deployment target.
-
-- Review note: artifact verification should bind source commit, build workflow, digest, and deployment target.
-
-- Review note: artifact verification should bind source commit, build workflow, digest, and deployment target.
-
-- Review note: artifact verification should bind source commit, build workflow, digest, and deployment target.
-
-- Review note: artifact verification should bind source commit, build workflow, digest, and deployment target.
-
-- Review note: artifact verification should bind source commit, build workflow, digest, and deployment target.
-
-- Review note: artifact verification should bind source commit, build workflow, digest, and deployment target.
-
-- Review note: artifact verification should bind source commit, build workflow, digest, and deployment target.
-
-- Review note: artifact verification should bind source commit, build workflow, digest, and deployment target.
-
-- Review note: artifact verification should bind source commit, build workflow, digest, and deployment target.
-
-- Review note: artifact verification should bind source commit, build workflow, digest, and deployment target.
-
-- Review note: artifact verification should bind source commit, build workflow, digest, and deployment target.
-
-- Review note: artifact verification should bind source commit, build workflow, digest, and deployment target.
-
-- Review note: artifact verification should bind source commit, build workflow, digest, and deployment target.
-
-- Review note: artifact verification should bind source commit, build workflow, digest, and deployment target.
-
-- Review note: artifact verification should bind source commit, build workflow, digest, and deployment target.
-
-- Review note: artifact verification should bind source commit, build workflow, digest, and deployment target.
-
-- Review note: artifact verification should bind source commit, build workflow, digest, and deployment target.
-
-- Review note: artifact verification should bind source commit, build workflow, digest, and deployment target.
-
-- Review note: artifact verification should bind source commit, build workflow, digest, and deployment target.
-
-- Review note: artifact verification should bind source commit, build workflow, digest, and deployment target.
-
-- Review note: artifact verification should bind source commit, build workflow, digest, and deployment target.
-
-- Review note: artifact verification should bind source commit, build workflow, digest, and deployment target.
-
-- Review note: artifact verification should bind source commit, build workflow, digest, and deployment target.
-
-- Review note: artifact verification should bind source commit, build workflow, digest, and deployment target.
+Codecov shows why downloaded tooling and CI environment boundaries matter. SolarWinds shows why a signed artifact still depends on the security of the build and signing path. For `devpolaris-orders-api`, the practical habit is to deploy immutable digests, preserve provenance, verify release identity, and keep deployment evidence that compares build output with running production.
 
 ---
 
 **References**
 
-- [GitHub artifact attestations](https://docs.github.com/en/actions/security-guides/using-artifact-attestations-to-establish-provenance-for-builds) - Official documentation for build provenance and artifact attestations in GitHub Actions.
-- [SLSA specification](https://slsa.dev/spec/latest/) - Canonical supply chain specification for source, build, provenance, and dependency integrity.
-- [OpenSSF Supply Chain Integrity](https://best.openssf.org/SCM-BestPractices/controls) - Canonical OpenSSF guidance for source control and build integrity controls.
-- [Sigstore Cosign](https://docs.sigstore.dev/cosign/overview/) - Canonical documentation for signing and verifying software artifacts.
+- [Codecov April 2021 postmortem](https://about.codecov.io/apr-2021-post-mortem/) - Codecov documents the Bash Uploader compromise and customer guidance.
+- [Microsoft analysis of Solorigate/SUNBURST](https://www.microsoft.com/en-us/security/blog/2020/12/18/analyzing-solorigate-the-compromised-dll-file-that-started-a-sophisticated-cyberattack-and-how-microsoft-defender-helps-protect/) - Microsoft analyzes the compromised signed DLL used in the SolarWinds attack.
+- [SLSA provenance specification](https://slsa.dev/spec/v1.0/provenance) - SLSA defines provenance fields for build inputs, builder, and artifact outputs.
+- [Sigstore Cosign documentation](https://docs.sigstore.dev/cosign/overview/) - Sigstore documents signing and verifying container images and other artifacts.

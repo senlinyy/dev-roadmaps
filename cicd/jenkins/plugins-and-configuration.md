@@ -76,7 +76,7 @@ If your controller is in a high-availability or compliance environment, treat th
 
 Every plugin declares two kinds of dependencies in its manifest: required and optional. A required dependency means the plugin will refuse to load if the named plugin is missing. An optional dependency means "I will use this if it is installed, but I work without it."
 
-The trouble is that required dependencies also pin a minimum version. If `git` 5.4.0 declares `git-client >= 4.7.0`, then `git-client` 4.6.x is not enough. When you install the `git` plugin, Jenkins also fetches `git-client` 4.7.0 (or newer) automatically. This is helpful most of the time. It becomes painful when you have multiple plugins with overlapping but conflicting version requirements.
+The trouble is that required dependencies also pin a minimum version. If `git` 5.4.0 declares `git-client >= 4.7.0`, then `git-client` 4.6.x is too old. When you install the `git` plugin, Jenkins also fetches `git-client` 4.7.0 (or newer) automatically. This is helpful most of the time. It becomes painful when you have multiple plugins with overlapping but conflicting version requirements.
 
 Imagine two plugins on a controller:
 
@@ -99,7 +99,7 @@ The following plugins have warnings about their compatibility:
 
 The first warning is benign: an automatic transitive bump. The second is the dangerous one. It is telling you that the upgrade compiles fine but fails at runtime in any plugin that has not yet adopted the new API. If you have a third-party plugin that depends on `git-client` and has not been updated for a year, this is the upgrade that breaks it.
 
-The fix is not to ignore the warnings. The fix is to mirror the upgrade on a non-production controller first, run a representative job that exercises the affected paths, and only promote the new plugin set to production after a green run. That discipline is the entire point of the rest of this article.
+Treat the warnings as the review plan. Mirror the upgrade on a non-production controller first, run a representative job that exercises the affected paths, and only promote the new plugin set to production after a green run. That discipline is the entire point of the rest of this article.
 
 ## Version Pinning with plugins.txt
 

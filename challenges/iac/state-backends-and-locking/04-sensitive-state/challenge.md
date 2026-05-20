@@ -1,6 +1,6 @@
 ---
 title: "Protect Sensitive State"
-sectionSlug: sensitive-data-in-state
+sectionSlug: protecting-the-state-bucket
 order: 4
 ---
 

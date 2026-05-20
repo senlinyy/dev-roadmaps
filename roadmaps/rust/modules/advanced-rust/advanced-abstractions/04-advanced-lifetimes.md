@@ -34,7 +34,7 @@ struct ParsedNote<'a> {
 
 But it creates a real constraint. The parsed note cannot outlive the source text. If the source string is dropped, the slices would point at invalid memory. Rust uses lifetimes to express that relationship.
 
-Advanced lifetime work is not about sprinkling annotations until the compiler stops complaining. It is about deciding which values borrow from which sources, and whether that borrowing is worth the API constraint.
+Advanced lifetime work means deciding which values borrow from which sources, and whether that borrowing is worth the API constraint.
 
 ## Views vs Owned Data
 
@@ -51,7 +51,7 @@ let title: &str = source.lines().next().unwrap();
 let owned_title: String = title.to_string();
 ```
 
-Lifetimes are how Rust tracks those view relationships. The question is not only "can this compile?" It is "should this value be a temporary view, or should it own what it needs?"
+Lifetimes are how Rust tracks those view relationships. The useful design question is: should this value be a temporary view, or should it own what it needs?
 
 ## Lifetimes Name Relationships
 
@@ -157,7 +157,7 @@ Decision table:
 | Send parsed value to another thread | Usually owned struct |
 | Avoid allocation in parser hot path | Borrowed struct |
 
-The advanced part is not the syntax. It is choosing the coupling intentionally.
+The advanced part is choosing the coupling intentionally.
 :::
 
 ## Returned References

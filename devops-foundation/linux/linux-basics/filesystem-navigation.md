@@ -75,7 +75,7 @@ cron.d    fstab     hosts     network   os-release  sysctl.d     systemd
 
 That sequence moves you to the `/etc` directory, confirms the move, and lists its contents. Paths can be absolute (starting from `/`, like `/var/log`) or relative (starting from where you are, like `../` to go up one level). The shortcut `cd ~` takes you back to your home directory, and `cd -` takes you to whatever directory you were in previously, which is handy for bouncing between two locations.
 
-You may notice something odd if you go looking: there is no `/usr/bin/cd` executable on your system. That is not an oversight. `cd` has to be a shell builtin because of how processes work. When the shell runs an external program, it forks a child process, and that child runs the program. Anything the child changes (environment variables, current directory) lives only inside the child and disappears when the child exits. If `cd` were an external binary, it would change its own current directory, then exit, and your shell would still be where it started. The only way to change the shell's own working directory is to have the shell do it itself, which is why `cd` lives inside the shell process rather than in `/usr/bin`. The same reasoning applies to `export`, `umask`, and `exec`.
+You may notice something odd if you go looking: there is no `/usr/bin/cd` executable on your system. `cd` has to be a shell builtin because of how processes work. When the shell runs an external program, it forks a child process, and that child runs the program. Anything the child changes (environment variables, current directory) lives only inside the child and disappears when the child exits. If `cd` were an external binary, it would change its own current directory, then exit, and your shell would still be where it started. The only way to change the shell's own working directory is to have the shell do it itself, which is why `cd` lives inside the shell process rather than in `/usr/bin`. The same reasoning applies to `export`, `umask`, and `exec`.
 
 ## The Filesystem Hierarchy Standard
 
@@ -316,7 +316,7 @@ UUID=f9e8d7c6-b5a4-3210-fedc-ba9876543210  /data    ext4    defaults          0 
 tmpfs                                      /tmp     tmpfs   defaults,nodev    0      0
 ```
 
-One subtlety of mount points that surprises newcomers: if the mount point directory already contains files, those files become invisible (but not deleted) while the mount is active. Unmounting reveals them again. This is not a bug. It is simply how overlaying works. The mounted filesystem takes precedence at that directory path, and the original contents are hidden underneath until the mount is removed.
+One subtlety of mount points that surprises newcomers: if the mount point directory already contains files, those files become invisible (but not deleted) while the mount is active. Unmounting reveals them again. That is how overlaying works. The mounted filesystem takes precedence at that directory path, and the original contents are hidden underneath until the mount is removed.
 
 ---
 

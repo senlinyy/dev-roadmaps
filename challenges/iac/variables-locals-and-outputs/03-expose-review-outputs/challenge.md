@@ -1,6 +1,6 @@
 ---
 title: "Expose Review Outputs"
-sectionSlug: outputs-expose-selected-results
+sectionSlug: outputs
 order: 3
 ---
 

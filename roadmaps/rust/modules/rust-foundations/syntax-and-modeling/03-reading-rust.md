@@ -1,408 +1,424 @@
 ---
 title: "Reading Rust"
-description: "Read the shape of ordinary Rust code: main, bindings, mutability, expressions, functions, control flow, strings, vectors, and printing."
-overview: "Before ownership and borrowing become the main lesson, you need to recognize normal Rust syntax. This article walks through a tiny program and explains the code shapes you will see constantly."
-tags: ["syntax", "functions", "control-flow", "strings"]
-order: 1
+description: "Read small Rust programs by understanding main, functions, bindings, mutability, expressions, strings, vectors, borrowing signs, and macros."
+overview: "Rust syntax carries a lot of information. This article reads small programs slowly so the basic signs are familiar before ownership, structs, enums, and modules become the center of the story."
+tags: ["syntax", "functions", "bindings", "borrowing"]
+order: 3
 id: article-rust-rust-foundations-reading-rust
 ---
 
 ## Table of Contents
 
-1. [The Problem](#the-problem)
-2. [The Main Function](#the-main-function)
-3. [A Small Reading Key](#a-small-reading-key)
-4. [Bindings](#bindings)
-5. [Expressions](#expressions)
-6. [Functions](#functions)
-7. [Control Flow](#control-flow)
-8. [Strings And Vectors](#strings-and-vectors)
-9. [A Small Program](#a-small-program)
-10. [Putting It All Together](#putting-it-all-together)
-11. [What's Next](#whats-next)
-
-## The Problem
-
-A beginner opens `src/main.rs` and expects Rust to look like a stricter version of a language they already know. Some pieces do feel familiar: functions, variables, strings, loops, and conditionals. Other pieces create friction:
-
-- Variables do not change unless they are marked mutable.
-- Some lines end with semicolons and some important lines do not.
-- `String` and string literals are not the same thing.
-- `println!` has an exclamation mark.
-- A loop over a vector already hints at ownership, even before ownership is explained.
-
-This article does not try to teach all of Rust. It teaches how to read the surface of small Rust programs so the next lessons have somewhere to land.
+1. [The Main Function](#the-main-function)
+2. [Bindings](#bindings)
+3. [Functions](#functions)
+4. [Expressions](#expressions)
+5. [Strings And Vectors](#strings-and-vectors)
+6. [Borrowing Signs](#borrowing-signs)
+7. [Macros](#macros)
+8. [Reading a Small Program](#reading-a-small-program)
+9. [Putting It All Together](#putting-it-all-together)
+10. [What's Next](#whats-next)
 
 ## The Main Function
 
-A binary Rust program starts in `main`:
+If you open the project Cargo created in the previous article, the first Rust file is usually `src/main.rs`. It starts small:
 
 ```rust
 fn main() {
-    println!("Hello, Rust");
+    println!("Hello, world!");
 }
 ```
 
-`fn` defines a function. `main` is the entry point Cargo uses for a binary crate. The braces hold the function body.
+The word `fn` starts a function definition. The name `main` is special for a binary crate because it is where the executable starts. The empty parentheses mean this function takes no parameters. The braces hold the body of the function.
 
-`println!` prints a line. The `!` tells you this is a macro call, not an ordinary function call. You do not need to understand macros deeply yet. For now, read `println!` as Rust's common print-line tool.
+The body contains one line:
 
-The string literal `"Hello, Rust"` is text built into the program. Later, the difference between a literal, `&str`, and `String` will matter. At this stage, it is enough to know that string literals are borrowed views of text stored with the program, while `String` is an owned, growable string value.
+```rust
+println!("Hello, world!");
+```
 
-The `&` in `&str` is the first Rust symbol worth slowing down for. It means code is looking at data it does not own. A `String` owns growable text. A `&str` views text that already lives somewhere else.
+`println!` prints text and a newline. The exclamation point means this is a macro call, not an ordinary function call. Macros can expand into code before the compiler finishes checking the program. You do not need to write macros yet, but you do need to recognize calls such as `println!`, `format!`, `vec!`, `assert!`, and `assert_eq!`.
 
-## A Small Reading Key
+The semicolon at the end of the line says "run this statement for its effect." Printing is an effect. The program does not need the printed line as a value inside Rust; it sends text to standard output.
 
-Rust type syntax carries more information than many beginner examples in JavaScript, TypeScript, or Python. You do not need every rule yet, but you do need a small decoding key.
+Running the project prints:
 
-| Shape | How to read it |
-| --- | --- |
-| `String` | Owned, growable UTF-8 text |
-| `&str` | Borrowed view of UTF-8 text |
-| `&T` | Borrowed access to a value of type `T` |
-| `[T]` | A sequence of `T` values with no fixed compile-time length by itself |
-| `&[T]` | Borrowed view of a sequence of `T` values |
-| `Vec<T>` | Owned, growable list of `T` values |
-| `usize` | Rust's standard integer type for counts, lengths, and indexes |
-| `T<U>` | A generic type `T` filled with another type `U`, such as `Vec<String>` |
+```bash
+$ cargo run
+   Compiling hello-rust v0.1.0 (/home/you/hello-rust)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.28s
+     Running `target/debug/hello-rust`
+Hello, world!
+```
 
-Read nested types from the inside out. In `&[&str]`, start with `str`, then `&str` as a borrowed string view, then `[&str]` as a sequence of those views, and finally `&[&str]` as a borrowed view of that sequence.
+The first lines are Cargo's build messages. The final line is the program's output. Separating tool output from program output is a useful habit because later compiler messages, test output, and application logs can appear in the same terminal.
 
 ## Bindings
 
-Rust uses `let` to bind a name to a value:
+Rust uses `let` to bind a name to a value.
 
 ```rust
 fn main() {
-    let title = "Rust notes";
-    let count = 3;
+    let language = "Rust";
+    let version = 2024;
 
-    println!("{title}: {count}");
+    println!("{language} edition {version}");
 }
 ```
 
-Rust variables are immutable by default. That means this does not compile:
+The binding `language` refers to the text value `"Rust"`. The binding `version` refers to the integer value `2024`. Rust can infer both types here from the values, so you do not have to write them.
+
+The output is:
+
+```text
+Rust edition 2024
+```
+
+Bindings are immutable by default. That means this code is rejected:
 
 ```rust
 fn main() {
-    let count = 3;
-    count = 4;
+    let count = 1;
+    count = count + 1;
 }
 ```
 
-If a value should change, say so:
+The compiler complains because `count` was not declared mutable. If a binding needs to change, write `mut`:
 
 ```rust
 fn main() {
-    let mut count = 3;
+    let mut count = 1;
     count = count + 1;
 
     println!("{count}");
 }
 ```
 
-This is one of Rust's early signals. Mutation is allowed, but it is marked. When you read Rust, `mut` is a small warning label: this value changes after it is created.
-
-Rust can often infer types, but you can write them when they clarify intent:
-
-```rust
-let count: u32 = 3;
-let title: &str = "Rust notes";
-```
-
-Do not annotate every type just to prove you can. Add annotations when the compiler needs them or when a reader benefits from seeing the exact shape.
-
-:::expand[Why Rust makes mutation visible]{kind="design"}
-Rust does not make bindings immutable by default because mutation is bad. It makes mutation visible because change is one of the first things a maintainer has to trust.
-
-In a small function, that signal is easy to see:
-
-```rust
-fn summarize(words: &[&str]) -> String {
-    let title = "notes";
-    let mut count = 0;
-
-    for word in words {
-        if !word.is_empty() {
-            count += 1;
-        }
-    }
-
-    format!("{title}: {count} words")
-}
-```
-
-Only `count` is marked `mut`, so the reader knows where to look for changing state. `title` does not change. `words` is borrowed as a slice and read through the loop. That makes the function easier to scan before you understand every detail of borrowing.
-
-The same habit scales into larger Rust code. When you enter a block, look for these signals:
-
-| Signal | Reading habit |
-| --- | --- |
-| `let name = ...` | The binding will not be reassigned |
-| `let mut name = ...` | This binding may change later |
-| `&value` | The function is borrowing for read-style access |
-| `&mut value` | The function needs exclusive mutable access |
-
-`mut` is not only about assignment. It prepares you for Rust's later rule that shared reads and exclusive mutation are different modes. When code marks mutation explicitly, both the compiler and the reader get a clearer map of where change can happen.
-:::
-
-## Expressions
-
-Rust is expression-oriented. An expression produces a value. A statement does some work and does not produce a value you can bind.
-
-This block is an expression because its last line has no semicolon:
-
-```rust
-fn main() {
-    let score = {
-        let base = 10;
-        base + 5
-    };
-
-    println!("{score}");
-}
-```
-
-If you add a semicolon after `base + 5`, the block no longer returns that value. This small rule explains many beginner errors. In Rust, the absence of a semicolon can be meaningful.
-
-Functions use the same idea. The last expression can become the return value:
-
-```rust
-fn double(value: i32) -> i32 {
-    value * 2
-}
-```
-
-The arrow says the function returns `i32`. The body returns `value * 2` because that expression has no semicolon.
-
-:::expand[The semicolon changes the type]{kind="pitfall"}
-The common mistake is adding a semicolon because the line "looks unfinished" without one.
-
-This function returns an integer:
-
-```rust
-fn score() -> i32 {
-    let base = 10;
-    base + 5
-}
-```
-
-This version looks almost the same, but it no longer returns the integer:
-
-```rust
-fn score() -> i32 {
-    let base = 10;
-    base + 5;
-}
-```
-
-The second version still evaluates `base + 5`, but the semicolon turns that expression into a statement. A statement does work and then produces Rust's unit value, written `()`.
-
-The compiler will complain in that direction:
+The output is:
 
 ```text
-expected `i32`, found `()`
+2
 ```
 
-You will see the same shape inside blocks:
+The word `mut` belongs to the binding, not to the value forever. It says this name may be assigned a new value while it is in scope. Later, when borrowing enters the picture, Rust will distinguish a mutable binding from a mutable reference. For now, read `let mut count` as "this local name is allowed to change."
+
+You can also write the type explicitly:
 
 ```rust
-let score = {
-    let base = 10;
-    base + 5
-};
+let count: usize = 2;
 ```
 
-The block hands `15` back to `score`. If `base + 5` becomes `base + 5;`, the block hands back `()` instead.
-
-The rule of thumb is: when the last line of a block or function is meant to be the value, leave off the semicolon. If you see an unexpected `()` type error, inspect the final expression first.
-:::
+The colon introduces a type annotation. `usize` is Rust's standard type for sizes and counts, such as vector lengths and indexes.
 
 ## Functions
 
-Functions name a piece of behavior:
+Function signatures are one of the best places to start reading Rust. A signature tells you the function name, input types, and return type.
 
 ```rust
-fn word_count(text: &str) -> usize {
+fn count_words(text: &str) -> usize {
     text.split_whitespace().count()
 }
+```
 
+Read this from left to right:
+
+| Piece | Meaning |
+| --- | --- |
+| `fn` | A function is being defined. |
+| `count_words` | The function name. |
+| `text: &str` | One parameter named `text`, with type `&str`. |
+| `-> usize` | The function returns a `usize`. |
+| `{ ... }` | The function body. |
+
+The type `&str` means a borrowed view of text. You will learn the full borrowing rules later. At this level, it is enough to see that the function can inspect text without taking ownership of a `String`.
+
+The body has no semicolon:
+
+```rust
+text.split_whitespace().count()
+```
+
+That matters. In Rust, the final expression in a function body becomes the return value when it has no semicolon. `split_whitespace()` creates an iterator over words, and `count()` counts them. The result is the `usize` promised by the signature.
+
+Calling the function looks like this:
+
+```rust
 fn main() {
-    let count = word_count("rust makes systems work visible");
-    println!("words: {count}");
+    let body = "Rust rewards careful reading";
+    let count = count_words(body);
+
+    println!("{count}");
 }
 ```
 
-The parameter `text: &str` says this function reads borrowed text. The return type `usize` is Rust's standard count and index type. Its size matches the platform, so it is large enough to index memory on the machine Rust is compiling for, but as a beginner you can read it as "the type Rust normally uses for lengths."
+The output is:
 
-The body uses method calls chained together. `split_whitespace()` creates an iterator over words. `count()` consumes that iterator and returns how many items it saw.
+```text
+4
+```
 
-You do not need to master iterators yet. Read the chain left to right: split the text into words, then count them.
+The call `count_words(body)` passes the value bound to `body` into the function. Because `body` is already a string slice, no `&` is needed in this exact example.
 
-## Control Flow
+## Expressions
 
-Rust has familiar control flow, with a few Rust-shaped details.
+Rust makes heavy use of expressions. An expression produces a value. A statement does something but does not produce a useful value for the surrounding code.
 
-An `if` expression can choose a value:
+The difference is easiest to see with `if`:
 
 ```rust
-fn label(count: usize) -> &'static str {
-    if count == 0 {
-        "empty"
-    } else if count == 1 {
-        "one word"
+fn label_for(count: usize) -> String {
+    let label = if count == 1 {
+        "word"
     } else {
-        "many words"
-    }
+        "words"
+    };
+
+    format!("{count} {label}")
 }
 ```
 
-Each branch returns the same kind of value. The `&'static str` return type means the function returns borrowed text that is built into the program and lives for the whole run. The last expression in each branch has no semicolon because the `if` expression is producing a value.
+The `if` expression produces either `"word"` or `"words"`, and that produced value is bound to `label`. Both branches must produce the same type. In this case, both branches produce `&str`.
 
-A `for` loop reads naturally:
+The final line uses `format!`:
 
 ```rust
-fn main() {
-    let words = vec!["rust", "cargo", "compiler"];
-
-    for word in words {
-        println!("{word}");
-    }
-}
+format!("{count} {label}")
 ```
 
-This example consumes the vector as it loops. Later, ownership will explain exactly what that means. For now, notice the loop shape and the `vec!` macro, which creates a vector with initial values.
+`format!` builds a new `String` instead of printing. There is no semicolon because the function returns that `String`.
 
-:::expand[Read loops by asking what happens to the collection]{kind="pattern"}
-When you see a `for` loop, ask whether the loop consumes the collection, borrows it, or mutably borrows it.
+If you add a semicolon to the final line, the meaning changes:
 
 ```rust
-for word in words.into_iter() {
-    println!("{word}");
-}
+format!("{count} {label}");
 ```
 
-This takes each value out of `words`. For a vector of owned values, the vector cannot be used afterward as the same collection.
+Now the expression has been turned into a statement. The `String` is created and then ignored. The function promised to return `String`, so the compiler rejects the program.
+
+Blocks can also produce values:
 
 ```rust
-for word in words.iter() {
-    println!("{word}");
-}
+let doubled = {
+    let base = 21;
+    base * 2
+};
 ```
 
-This borrows each value. The vector stays available after the loop.
-
-```rust
-for word in words.iter_mut() {
-    word.push('!');
-}
-```
-
-This mutably borrows each value so the loop can change it. You do not need the full ownership model yet, but this reading habit will make the next module much easier.
-
-| Loop shape | What the loop receives | Can the collection be used after? | Typical use |
-| --- | --- | --- | --- |
-| `for item in values` | Owned items for many collections | Usually no, because the collection is consumed | Transform or print values when you are done with the collection |
-| `for item in values.iter()` | Shared references | Yes | Read every item |
-| `for item in values.iter_mut()` | Mutable references | Yes, after the loop ends | Update items in place |
-
-The important part is not memorizing every trait yet. The useful reading question is: "after this loop, does the code still need the collection?" If yes, expect `iter()` or `iter_mut()`. If no, consuming the collection may be simpler.
-:::
+The block creates `base`, computes `base * 2`, and returns `42` into `doubled`. The local binding `base` exists only inside the block. This is one reason Rust code can keep temporary names close to the calculation that needs them.
 
 ## Strings And Vectors
 
-Two types show up constantly in beginner Rust: `String` and `Vec<T>`.
+Rust has more than one text type. Beginners usually see `&str` and `String` first.
 
-`String` is owned, growable UTF-8 text:
+`&str` is a borrowed view of text. String literals such as `"Rust"` have type `&str`. A `String` is owned, growable text stored on the heap.
+
+```rust
+let borrowed: &str = "Rust";
+let owned: String = String::from("Cargo");
+```
+
+The borrowed string literal is built into the program. The owned `String` can grow, move, and be returned from functions.
+
+Vectors are growable lists. A vector is written as `Vec<T>`, where `T` is the type of each element. The `vec!` macro creates one conveniently:
+
+```rust
+let names = vec!["rust", "cargo", "clippy"];
+println!("{}", names.len());
+```
+
+The output is:
+
+```text
+3
+```
+
+Here `names` is a `Vec<&str>`, a vector of borrowed string slices. Rust inferred that type from the string literals.
+
+If you need to build a vector step by step, make the binding mutable:
 
 ```rust
 fn main() {
-    let mut note = String::from("learn");
-    note.push_str(" Rust");
+    let raw_titles = vec![" Rust ", "Cargo", " borrowing "];
+    let mut clean_titles = Vec::new();
 
-    println!("{note}");
+    for title in &raw_titles {
+        clean_titles.push(title.trim().to_lowercase());
+    }
+
+    println!("{clean_titles:?}");
 }
 ```
 
-`Vec<T>` is a growable list of values of one type:
+The output is:
+
+```text
+["rust", "cargo", "borrowing"]
+```
+
+The loop uses `&raw_titles`, which borrows the vector so the loop can inspect its elements. `trim()` returns a borrowed view without leading or trailing whitespace. `to_lowercase()` creates a new owned `String`, and `push` stores that `String` in `clean_titles`.
+
+The `:?` inside the print string asks Rust to use debug formatting. Debug output is meant for developers. It is useful when you want to inspect a vector, struct, or enum while learning.
+
+## Borrowing Signs
+
+Rust code uses a few symbols that are easy to skim past. They matter because they show how data is being used.
+
+The ampersand `&` usually means a reference. A reference lets code borrow a value without taking ownership.
 
 ```rust
-fn main() {
-    let mut scores = Vec::new();
-    scores.push(10);
-    scores.push(20);
+fn shout(text: &str) {
+    println!("{}", text.to_uppercase());
+}
 
-    println!("{scores:?}");
+fn main() {
+    let title = String::from("rust");
+    shout(&title);
+
+    println!("{title}");
 }
 ```
 
-The `:?` formatter asks Rust to print a debug representation. Many beginner examples use it because it lets you inspect values while learning.
+The call `shout(&title)` borrows `title` as text. After the call, `main` can still print `title` because `shout` did not become the owner of the `String`.
 
-The angle brackets in `Vec<T>` mean "a vector of T." `Vec<i32>` is a vector of 32-bit integers. `Vec<String>` is a vector of owned strings. You will see this generic type shape everywhere.
+Mutable references use `&mut`:
 
-## A Small Program
+```rust
+fn add_suffix(text: &mut String) {
+    text.push_str("!");
+}
 
-Here is a tiny program that combines the pieces:
+fn main() {
+    let mut title = String::from("Rust");
+    add_suffix(&mut title);
+
+    println!("{title}");
+}
+```
+
+The output is:
+
+```text
+Rust!
+```
+
+There are two `mut` markers here. `let mut title` says the local binding may change. `&mut title` says the function receives a mutable reference to the string. Rust checks mutable references carefully because changing shared data is where many bugs begin.
+
+The asterisk `*` appears less often in beginner code, but it means dereference: follow a reference to the value behind it. You will see it more in ownership, borrowing, and smart pointer articles.
+
+For now, use this quick reading table:
+
+| Sign | First reading |
+| --- | --- |
+| `&value` | Borrow this value by reference. |
+| `&mut value` | Borrow this value through a mutable reference. |
+| `*reference` | Use the value behind a reference. |
+| `-> Type` | This function returns `Type`. |
+| `name: Type` | This parameter or binding has type `Type`. |
+| `!` after a name | This is a macro call. |
+
+The table is not the full language. It is enough to keep reading without freezing every time a symbol appears.
+
+## Macros
+
+Macros are code generators that run during compilation. They look like function calls with an exclamation point.
+
+The most common beginner macros are:
+
+| Macro | What it does |
+| --- | --- |
+| `println!` | Prints formatted text and a newline. |
+| `format!` | Builds a formatted `String`. |
+| `vec!` | Builds a vector. |
+| `assert!` | Fails a test or program if a condition is false. |
+| `assert_eq!` | Fails if two values are not equal. |
+
+Here is a small test:
 
 ```rust
 fn count_words(text: &str) -> usize {
     text.split_whitespace().count()
 }
 
-fn describe(text: &str) -> String {
-    let count = count_words(text);
-
-    if count == 0 {
-        String::from("No words")
-    } else {
-        format!("{count} words")
-    }
-}
-
-fn main() {
-    let notes = vec![
-        "learn cargo",
-        "read compiler errors",
-        "",
-    ];
-
-    for note in notes {
-        println!("{}", describe(note));
-    }
+#[test]
+fn counts_words() {
+    assert_eq!(count_words("hello rust"), 2);
 }
 ```
 
-Read it in layers. `main` creates a vector of string literals. The loop passes each note into `describe`. `describe` counts the words and returns an owned `String`. `count_words` borrows text through `&str` and returns a count.
+The attribute `#[test]` marks the function as a test. The macro `assert_eq!` compares the left and right values. If they differ, the test fails and Cargo prints the mismatch.
 
-There are ownership details hiding here, especially around `String`, `&str`, and the loop. That is fine. The goal of this article is not to explain all of them yet. The goal is to make the program readable enough that ownership has concrete examples later.
+Macros can accept patterns that ordinary functions cannot, which is why `println!("{count}")` can understand formatting placeholders. You do not need macro-writing skills for Rust Foundations. You only need to recognize when a call is a macro and read the surrounding code normally.
+
+## Reading a Small Program
+
+Now put the pieces together. This program normalizes a list of titles and prints the result:
+
+```rust
+fn normalize_title(title: &str) -> String {
+    title.trim().to_lowercase()
+}
+
+fn main() {
+    let raw_titles = vec![" Rust ", "Cargo", " borrowing "];
+    let mut clean_titles = Vec::new();
+
+    for title in &raw_titles {
+        let clean = normalize_title(title);
+        clean_titles.push(clean);
+    }
+
+    println!("{clean_titles:?}");
+}
+```
+
+Start with the function signature. `normalize_title` takes `title: &str`, a borrowed view of text, and returns `String`, an owned text value. The body trims whitespace and lowercases the text. Lowercasing creates a new owned string because the result may need new storage.
+
+Then read `main`. `raw_titles` is a vector of string slices. `clean_titles` starts as an empty vector and becomes mutable because the loop pushes new values into it.
+
+The loop is:
+
+```rust
+for title in &raw_titles {
+    let clean = normalize_title(title);
+    clean_titles.push(clean);
+}
+```
+
+The `&raw_titles` part borrows the vector for iteration. Each `title` is passed to `normalize_title`, which returns an owned `String`. That returned `String` is pushed into `clean_titles`.
+
+The output is:
+
+```text
+["rust", "cargo", "borrowing"]
+```
+
+This is the basic reading habit to practice. Start with function signatures. Find the bindings. Notice which names are mutable. Look for the final expression in functions and blocks. Treat `&` as a borrowing sign. Treat `!` as a macro sign. Then read the program as data moving from one value to the next.
 
 ## Putting It All Together
 
-The opening problem was that ordinary Rust syntax can look familiar and strange at the same time. The first reading habits are now in place:
+Small Rust programs are dense because the syntax carries a lot of information:
 
-- `fn main` is the binary entry point.
-- `let` binds names to values.
-- `mut` marks values that can change.
-- Missing semicolons often mean an expression is returning a value.
-- Functions declare parameter and return types.
-- `if`, `for`, and blocks can produce values.
-- `String` owns growable text.
-- `Vec<T>` stores a growable list of one element type.
-- Macros such as `println!`, `format!`, and `vec!` use `!`.
+- `fn main()` tells you where a binary starts.
+- `let` creates a binding, and `let mut` creates a binding that can change.
+- Function signatures show input and output types.
+- Final expressions return values when they have no semicolon.
+- `String`, `&str`, and `Vec<T>` are everyday data shapes.
+- `&` and `&mut` show borrowed access.
+- Macro calls end in `!`.
 
-You can now read a small Rust program without understanding every deeper rule. That is enough for the next step: using Rust's data types to model real states more clearly.
+The point of this article is not to memorize every rule. The useful beginner skill is to slow down and read the visible signs. Rust code is trying to tell you what values exist, which function receives them, which names can change, and what value comes back.
 
 ## What's Next
 
-The next article focuses on structs, enums, and `match`. These are the tools Rust uses to represent application data and program states before error handling and ownership become the main story.
+Now that small Rust code is readable, the next step is choosing better shapes for the data itself. Structs group fields that belong together. Enums model a value that can be in one of several states. `match` makes the program handle those states explicitly.
 
 ---
 
 **References**
 
-- [Common Programming Concepts](https://doc.rust-lang.org/stable/book/ch03-00-common-programming-concepts.html). Supports the article's focus on variables, basic types, functions, and control flow.
-- [Variables and Mutability](https://doc.rust-lang.org/book/ch03-01-variables-and-mutability.html). Supports immutable-by-default bindings and the role of `mut`.
-- [Functions](https://doc.rust-lang.org/book/ch03-03-how-functions-work.html). Supports function syntax and the distinction between statements and expressions.
-- [Control Flow](https://doc.rust-lang.org/book/ch03-05-control-flow.html). Supports `if` expressions and loop basics.
-- [Storing UTF-8 Encoded Text with Strings](https://doc.rust-lang.org/book/ch08-02-strings.html). Supports `String` as an owned, growable UTF-8 string type.
-- [Storing Lists of Values with Vectors](https://doc.rust-lang.org/stable/book/ch08-01-vectors.html). Supports `Vec<T>` as a growable list type.
+- [The Rust Programming Language: Variables and Mutability](https://doc.rust-lang.org/book/ch03-01-variables-and-mutability.html) - Official guide to `let`, immutability, and `mut`.
+- [The Rust Programming Language: Data Types](https://doc.rust-lang.org/book/ch03-02-data-types.html) - Official guide to Rust's scalar and compound types.
+- [The Rust Programming Language: Functions](https://doc.rust-lang.org/book/ch03-03-how-functions-work.html) - Official explanation of functions, parameters, statements, and expressions.
+- [The Rust Programming Language: References and Borrowing](https://doc.rust-lang.org/book/ch04-02-references-and-borrowing.html) - Official explanation of references and borrowing rules.
+- [Rust by Example: Macros](https://doc.rust-lang.org/rust-by-example/macros.html) - Official examples for macro syntax and usage.

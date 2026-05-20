@@ -39,7 +39,7 @@ One checkout creates an order, line items, a payment record, a shipping address,
 - A support query may need to join customers, orders, payments, and refunds.
 - The database must be reachable from the app but not casually reachable from the internet.
 
-This is relational data. The problem is not just storing bytes. The problem is preserving relationships, constraints, transactions, and query behavior while AWS manages the database infrastructure around it.
+This is relational data. The problem is preserving relationships, constraints, transactions, and query behavior while AWS manages the database infrastructure around it.
 
 ## What Is RDS
 
@@ -57,7 +57,7 @@ The useful beginner split is this:
 | Multi-AZ failover options | Connection behavior |
 | VPC placement and endpoints | Credentials and app permissions |
 
-RDS is the right starting point when the application's correctness depends on relational database behavior, not just on a place to put data.
+RDS is the right starting point when the application's correctness depends on relational database behavior and durable data storage.
 
 ## Relational Shape
 
@@ -82,7 +82,7 @@ An RDS DB instance is the managed database environment your app connects to. You
 
 That endpoint is not the same as making the database public. The endpoint is the name clients use. Reachability still depends on VPC placement, subnets, route paths, security groups, and whether the DB is publicly accessible.
 
-The instance class and storage shape matter because a relational database is a running service, not just a bucket of rows. CPU, memory, storage throughput, connection count, and query shape all affect behavior. A tiny database can pass a demo and collapse under production checkout because slow queries and too many connections compete for the same resources.
+The instance class and storage shape matter because a relational database is a running service. CPU, memory, storage throughput, connection count, and query shape all affect behavior. A tiny database can pass a demo and collapse under production checkout because slow queries and too many connections compete for the same resources.
 
 The practical habit is to treat the DB instance as the runtime home for relational state. It needs sizing, maintenance, and observability the same way compute does.
 
@@ -183,7 +183,7 @@ flowchart TB
 
 The app reaches the database through security groups, not a public shortcut. The database lives in data subnets. Tables preserve relationships. Backups create recovery points. Metrics show pressure from connections, CPU, storage, and query behavior.
 
-This is the RDS story in one picture: relational state needs a managed database runtime, not just a durable object store.
+This is the RDS story in one picture: relational state needs a managed database runtime and durable storage.
 
 ## Putting It All Together
 

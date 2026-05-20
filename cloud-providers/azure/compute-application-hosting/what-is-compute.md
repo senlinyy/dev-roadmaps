@@ -42,9 +42,9 @@ The first Azure compute choice looks simple until the workload splits:
 - One legacy worker needs a custom Linux package and a process manager the team already understands.
 - A platform team asks whether the service should join a Kubernetes cluster with shared ingress, policies, and deployment tooling.
 
-All of these are "compute" problems, but they do not want the same hosting shape. Compute is not just CPU. It is the operating contract around your code: who starts it, where configuration lives, how traffic reaches it, what wakes it up, how it scales, how it logs, and who owns the runtime when it misbehaves.
+All of these are "compute" problems, but they do not want the same hosting shape. Compute is the operating contract around your code: who starts it, where configuration lives, how traffic reaches it, what wakes it up, how it scales, how it logs, and who owns the runtime when it misbehaves.
 
-This article builds the first mental model for Azure compute. The goal is not to memorize every service. The goal is to look at a workload and say, "this is a web app, this is a containerized service, this is event work, this is a server, and this is Kubernetes-shaped platform work."
+This article builds the first mental model for Azure compute. The goal is to look at a workload and say, "this is a web app, this is a containerized service, this is event work, this is a server, and this is Kubernetes-shaped platform work."
 
 ## What Is Compute
 
@@ -74,7 +74,7 @@ The public API is request-shaped. It listens for HTTP traffic, returns responses
 
 The receipt sender is event-shaped. It does not need to listen on a public port all day. It needs to wake up when a queue message arrives, process one unit of work, and leave a clear retry trail when something fails. Azure Functions fits this kind of work because the trigger is part of the runtime contract.
 
-The legacy worker is machine-shaped. If the team needs SSH, a specific operating system layout, custom agents, long-lived local processes, or direct package installation, a virtual machine may be honest. It is not the most managed option, but it gives the team the most familiar server boundary.
+The legacy worker is machine-shaped. If the team needs SSH, a specific operating system layout, custom agents, long-lived local processes, or direct package installation, a virtual machine may be honest. It gives the team a familiar server boundary with more runtime ownership than the managed application platforms.
 
 The platform cluster is orchestration-shaped. If many services already use Kubernetes concepts such as pods, deployments, services, ingress controllers, Helm charts, admission policies, and node pools, AKS can give Azure-managed Kubernetes control plane support while the team keeps Kubernetes as the operating layer.
 
@@ -137,7 +137,7 @@ This is where "use a VM because it is simple" can mislead. A VM is simple to und
 
 Azure Kubernetes Service, or AKS, is Azure's managed Kubernetes service. Azure manages much of the Kubernetes control plane for you. Your team still operates Kubernetes as the application platform: node pools, pods, deployments, services, ingress, upgrades, policies, identities, logs, and the application manifests that describe desired state.
 
-AKS is not simply "Container Apps with more buttons." It is a different operating layer. Container Apps lets a team run containers through Azure-native container app resources. AKS gives a team Kubernetes primitives and expects the team to understand them. That can be exactly right when the organization already standardizes on Kubernetes or needs portable Kubernetes tooling across many services.
+AKS is a different operating layer from Container Apps. Container Apps lets a team run containers through Azure-native container app resources. AKS gives a team Kubernetes primitives and expects the team to understand them. That can be exactly right when the organization already standardizes on Kubernetes or needs portable Kubernetes tooling across many services.
 
 The first Kubernetes nouns matter:
 
@@ -173,7 +173,7 @@ The first safe choice is usually the smallest managed runtime that honestly fits
 
 The opener had five pieces of work, and now each one has a clearer home.
 
-The public API is not just "code in Azure." It is a request-shaped runtime with traffic, health, settings, identity, logs, and scale. That points first to App Service or Container Apps, depending on whether the team is bringing app code or a container image.
+The public API is a request-shaped runtime with traffic, health, settings, identity, logs, and scale. That points first to App Service or Container Apps, depending on whether the team is bringing app code or a container image.
 
 The receipt sender is not a smaller API. It is event-shaped work. Functions makes the trigger part of the runtime and keeps the unit of retry close to the unit of work.
 

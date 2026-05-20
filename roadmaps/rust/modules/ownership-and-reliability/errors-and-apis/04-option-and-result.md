@@ -46,7 +46,7 @@ That does not mean Rust never panics. It means Rust prefers return types for sta
 | `throw` or `raise` for recoverable work | `Result<T, E>` | The caller sees success and failure in the signature |
 | Crash for impossible internal state | `panic!` | The program cannot continue normally |
 
-This is why `Option` and `Result` appear so early in Rust. They are not advanced error-handling libraries. They are everyday data shapes for uncertainty.
+This is why `Option` and `Result` appear so early in Rust. They are everyday data shapes for uncertainty.
 
 ## Enums Carry States
 
@@ -99,7 +99,7 @@ The compiler will not let you treat an `Option<String>` as a plain `String`. It 
 
 Use `Option<T>` when absence is expected and ordinary.
 
-A default notebook is a good example. A user might not have configured one yet. That is not a crashed program or a broken file. The answer is simply: there is a default notebook, or there is not.
+A default notebook is a good example. A user might not have configured one yet. The answer is simply: there is a default notebook, or there is not.
 
 ```rust
 fn default_notebook(config: &str) -> Option<&str> {
@@ -166,7 +166,7 @@ Use this decision table:
 
 Use `Result<T, E>` when an operation can fail and the caller needs the reason.
 
-Reading a file is the classic case. A path might be wrong. A permission might be missing. The disk might be unavailable. Those are not just empty answers. They are failures the program may want to report, retry, log, or convert into a user-friendly message.
+Reading a file is the classic case. A path might be wrong. A permission might be missing. The disk might be unavailable. Those failures carry reasons the program may want to report, retry, log, or convert into a user-friendly message.
 
 ```rust
 use std::fs;
@@ -344,7 +344,7 @@ Use this rule of thumb:
 | Proved invariant with no recovery path | Sometimes acceptable with `expect` |
 | User input, files, network, config | Avoid it |
 
-`unwrap()` is not evil. It is just loud. In code that handles the outside world, prefer returning or handling the missing state instead of surprising the user at runtime.
+`unwrap()` is loud. In code that handles the outside world, prefer returning or handling the missing state instead of surprising the user at runtime.
 :::
 
 ## Putting It All Together
@@ -381,7 +381,7 @@ Count back to the opener:
 - File could not be read: `Result`.
 - Empty file after a successful read: `Option`.
 
-The important shift is not memorizing names. It is learning to ask what state the caller needs to see.
+The important shift is learning to ask what state the caller needs to see.
 
 ## What's Next
 

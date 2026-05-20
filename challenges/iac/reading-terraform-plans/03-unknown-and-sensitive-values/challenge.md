@@ -1,6 +1,6 @@
 ---
 title: "Review Unknown and Sensitive Values"
-sectionSlug: unknown-values-and-sensitive-values
+sectionSlug: unknown-and-sensitive-values
 order: 3
 ---
 

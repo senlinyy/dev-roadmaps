@@ -1,6 +1,6 @@
 ---
 title: "Review Sensitive Values"
-sectionSlug: sensitive-values-still-need-care
+sectionSlug: sensitive-values
 order: 4
 ---
 

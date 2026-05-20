@@ -1,6 +1,6 @@
 ---
 title: "Fix the Dev Root Module"
-sectionSlug: a-devpolaris-orders-environment-layout
+sectionSlug: environment-layout
 order: 1
 ---
 

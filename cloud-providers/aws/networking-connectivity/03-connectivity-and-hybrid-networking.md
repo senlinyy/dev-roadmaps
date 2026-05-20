@@ -51,7 +51,7 @@ The first skill is to stop asking, "Which AWS networking service should I use?" 
 > What exactly needs to talk to what, and should the destination look like a service, a VPC, a network hub, or a remote site?
 
 This article follows that question.
-The goal is not to memorize every AWS networking product.
+The goal is to understand the connection shape each product creates.
 The goal is to recognize the job in front of you, choose the smallest private path that fits it, and know which hidden details usually break it: overlapping CIDR ranges, missing routes, route propagation, and DNS names that resolve to the wrong place.
 
 ## Connectivity Jobs
@@ -250,11 +250,11 @@ Instead of building a mesh of peering links, VPCs, VPNs, and Direct Connect gate
 Traffic moves through the hub according to transit gateway route tables.
 
 That phrase "route tables" matters.
-Transit Gateway is not magic shared reachability.
+Transit Gateway creates shared reachability through explicit routing choices.
 Each attachment is associated with one transit gateway route table.
 Attachments can propagate their routes into one or more route tables.
 Static routes can be added too.
-The design is a routing policy, not just a diagram with a hub in the middle.
+The design is a routing policy with a hub in the middle.
 
 ```mermaid
 flowchart TB

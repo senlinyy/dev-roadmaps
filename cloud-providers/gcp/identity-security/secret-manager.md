@@ -123,7 +123,7 @@ If the app fails, each part is evidence. Which service account did Cloud Run use
 
 ## Rotation
 
-Rotation means changing a secret value safely. It is not only "upload a new value." The app, dependency, rollout, and rollback path all matter.
+Rotation means changing a secret value safely. The app, dependency, rollout, and rollback path all matter.
 
 For a database URL, a rotation might look like this:
 

@@ -106,7 +106,7 @@ The recovery card should separate source of truth from derived data. Derived dat
 
 Azure SQL Database creates automated backups for point-in-time restore. Microsoft documents full, differential, and transaction log backup behavior for most service tiers, with transaction log backups approximately every 10 minutes. Short-term retention allows point-in-time restore within the configured window, and long-term retention can keep full backups for compliance needs.
 
-The important beginner gotcha: restore creates a database target. It does not magically replace application behavior.
+The important beginner gotcha: restore creates a database target. Application behavior still has to be pointed at the restored target deliberately.
 
 If a bad release corrupts order statuses at 10:24, a point-in-time restore might create:
 
@@ -202,7 +202,7 @@ Return to the bad release and deleted receipts.
 - Recovery strategies connected cost to readiness: backup and restore, pilot light, warm standby, or active-active.
 - Restore drills turned the plan into evidence.
 
-This closes the Azure module sequence. A mature Azure service is not only deployed, observable, and secure. It is understandable when it costs money and honest about how it comes back when something fails.
+This closes the Azure module sequence. A mature Azure service is deployed, observable, secure, understandable when it costs money, and honest about how it comes back when something fails.
 
 ---
 

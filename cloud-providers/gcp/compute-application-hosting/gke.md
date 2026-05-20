@@ -136,7 +136,7 @@ That is a lot of moving parts. It is worth it when the team needs Kubernetes-man
 
 Kubernetes has service accounts. GCP has IAM service accounts. Workload Identity Federation for GKE helps Kubernetes workloads access Google Cloud APIs without storing service account keys in Pods.
 
-This is another reason GKE is a platform, not just a container runner. The team must map workload identity carefully. A Pod that reads a secret or writes to Cloud Storage should have only the permissions that workload needs.
+This is another reason GKE is a platform. The team must map workload identity carefully. A Pod that reads a secret or writes to Cloud Storage should have only the permissions that workload needs.
 
 The identity sentence should be explicit:
 

@@ -140,7 +140,7 @@ That difference creates real failure modes:
 | Keep a pointer after the Rust owner drops | Use-after-free |
 | Assume C returns UTF-8 | Rust conversion may fail |
 
-`CString` and `CStr` are not ceremony. They are boundary types that make the contract visible.
+`CString` and `CStr` are boundary types that make the contract visible.
 :::
 
 ## Safe Wrappers

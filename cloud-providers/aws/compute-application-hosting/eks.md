@@ -40,7 +40,7 @@ Then the platform grows:
 
 This is where Amazon Elastic Kubernetes Service, or EKS, enters the compute conversation. EKS is not "more managed ECS." It is the AWS way to run Kubernetes when Kubernetes itself is the operating layer the team wants.
 
-The working mental model is simple: use EKS when the useful unit is not just a container service, but a Kubernetes cluster with many workloads, controllers, policies, and platform conventions around those workloads.
+The working mental model is simple: use EKS when the useful unit is a Kubernetes cluster with many workloads, controllers, policies, and platform conventions around those workloads.
 
 ## What Is EKS
 
@@ -138,7 +138,7 @@ A Kubernetes Service gives a stable way to reach a changing set of pods. The Ser
 
 This is where earlier compute lessons carry forward. An ECS service keeps tasks behind a load balancer target group. In EKS, a Kubernetes Service selects pods, and AWS load balancing can be provisioned to send traffic toward the selected workload. The nouns change, but the reason is familiar: traffic needs a stable front door while compute units are replaced behind it.
 
-The gotcha is label truth. A service is not attached to pods because their names look related. It is attached because selectors match labels. If a Deployment creates pods with `app: orders-api` but a Service selects `app: order-api`, traffic has no matching backends even though pods may be running.
+The gotcha is label truth. A service attaches to pods through matching selectors and labels. If a Deployment creates pods with `app: orders-api` but a Service selects `app: order-api`, traffic has no matching backends even though pods may be running.
 
 ## Networking
 
@@ -215,7 +215,7 @@ That is the article's core idea: EKS is not one resource replacing ECS. It is a 
 
 ## Putting It All Together
 
-The opening team had a container platform problem, not just a container runtime problem.
+The opening team had a container platform problem, which included much more than a container runtime.
 
 They wanted multiple teams to use Kubernetes manifests and shared deployment conventions. EKS answers that by giving them a managed Kubernetes control plane. They needed application containers to run somewhere. Worker capacity answers that through managed node groups, Fargate profiles, Auto Mode, or another supported capacity pattern. They needed stable traffic to replaceable pods. Kubernetes Services and AWS load balancing answer that together. They needed access to AWS services without sharing broad node permissions. Pod-level identity patterns answer that boundary.
 

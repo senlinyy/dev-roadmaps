@@ -122,7 +122,7 @@ Blob Storage is the right first Azure home for file-like data. Keep business rel
 
 ## What's Next
 
-Next we will look at Azure SQL Database, where the data is not a file but a set of connected business records that need transactions, relationships, and queries.
+Next we will look at Azure SQL Database, where the data is a set of connected business records that need transactions, relationships, and queries.
 
 ---
 

@@ -1,326 +1,160 @@
 ---
-id: article-devsecops-container-image-security-runtime-container-hardening
 title: "Runtime Container Hardening"
-description: "Run containers with fewer Linux privileges, clearer resource limits, and safer runtime defaults."
-overview: "Runtime hardening controls what a container can do after it starts. You will learn how Linux users, capabilities, filesystems, seccomp, and Kubernetes security settings reduce the damage from application compromise."
+description: "Run containers with fewer Linux privileges, safer filesystems, and clearer runtime limits."
+overview: "Runtime hardening controls what a container can do after it starts. This article explains users, capabilities, read-only filesystems, seccomp, resource limits, and the evidence reviewers should expect."
 tags: ["runtime", "linux", "containers"]
 order: 6
+id: article-devsecops-container-image-security-runtime-container-hardening
 ---
 
 ## Table of Contents
 
-1. [The First Boundary To Understand](#the-first-boundary-to-understand)
-2. [The devpolaris-orders-api Thread](#the-devpolaris-orders-api-thread)
-3. [The Smallest Useful Artifact](#the-smallest-useful-artifact)
-4. [Reading The Evidence](#reading-the-evidence)
-5. [Diagnostic Path Before Changes](#diagnostic-path-before-changes)
-6. [Failure Modes And Fix Directions](#failure-modes-and-fix-directions)
-7. [Review Questions For Pull Requests](#review-questions-for-pull-requests)
-8. [Operational Tradeoffs](#operational-tradeoffs)
+1. [What Runtime Hardening Changes](#what-runtime-hardening-changes)
+2. [Users](#users)
+3. [Capabilities](#capabilities)
+4. [Filesystems](#filesystems)
+5. [Seccomp and Privilege Flags](#seccomp-and-privilege-flags)
+6. [Resource Limits](#resource-limits)
+7. [Review Evidence](#review-evidence)
+8. [Putting It All Together](#putting-it-all-together)
 
-## The First Boundary To Understand
+## What Runtime Hardening Changes
 
-Runtime Container Hardening matters when the team can connect a security idea to a specific image that will run somewhere. In this section, the image is `devpolaris-orders-api`, built with Docker, published to GHCR for review, and promoted to ECR for production. The service listens on port `3000`, exposes `GET /health`, and is deployed by digest after the release workflow records evidence.
+Image security asks what ships. Runtime hardening asks what the running container can do. If the application is compromised, runtime settings decide whether the process can write to the filesystem, run as root, add Linux capabilities, access host paths, or consume unlimited resources.
 
-The concept in focus here is runtime boundary. In plain terms, it is the part of the container workflow that helps you answer one operational question before the image reaches production. The question may be what files are present, which known vulnerabilities are reported, who produced the digest, who can replace it in the registry, or what Linux privileges the process receives after startup.
+For `devpolaris-orders-api`, the hardening question is:
 
-You should read the examples as review evidence, not as commands to paste blindly. A senior reviewer is not looking for perfect-looking YAML. They are looking for a chain of proof: this image was built from this source, contains these components, passed these checks, and runs with these limits.
+```text
+If the Node process is exploited, what can that process do next?
+```
+
+The goal is to reduce the next move. A compromised web process should not automatically become root on the host, write arbitrary files into the image filesystem, load kernel features, or starve neighboring workloads.
+
+## Users
+
+Containers often start as root unless the image or runtime configuration changes the user. Root inside a container is constrained by namespaces, but it is still a poor default when the app does not need it.
+
+In a Dockerfile:
+
+```Dockerfile
+FROM node:22-slim
+WORKDIR /app
+COPY --chown=node:node . .
+USER node
+CMD ["node", "dist/server.js"]
+```
+
+The `USER node` line starts the process as a non-root user. The `--chown=node:node` part makes copied files readable by that user. Without matching file ownership, the container may fail at startup.
+
+In Kubernetes, the same intent can be enforced in a pod security context.
 
 ```yaml
 securityContext:
   runAsNonRoot: true
-  allowPrivilegeEscalation: false
-  readOnlyRootFilesystem: true
+  runAsUser: 1000
+```
+
+## Capabilities
+
+Linux capabilities split some root powers into smaller pieces. Many application containers do not need extra capabilities.
+
+```yaml
+securityContext:
   capabilities:
     drop: ["ALL"]
 ```
 
-The first diagnostic step is to anchor the discussion to a digest. A tag can help humans find an image, but the digest identifies the immutable content. When a report mentions `ghcr.io/devpolaris/orders-api@sha256:2f4a1234`, everyone can inspect the same artifact instead of arguing about where `latest` pointed yesterday.
+Dropping capabilities reduces what the process can do even if it is exploited. Some workloads need specific capabilities, but each one should have a reason. Adding `NET_ADMIN` because networking is confusing is a risk. It grants powerful network administration behavior inside the container.
 
-For runtime boundary, the useful evidence is small and specific. Capture the command output that proves the claim, the file or policy that controls the behavior, and the failure text that appears when the behavior is wrong. A long terminal transcript is weaker than five lines that show the image, actor, package, setting, or denied operation.
+## Filesystems
 
-A realistic failure path starts with one mismatch. The Dockerfile says the process runs as `node`, but inspection shows an empty user field. The scanner report says a package is vulnerable, but the base image has a vendor backport. The signature verifies, but the certificate identity belongs to a pull request workflow instead of the release workflow. Each mismatch points to a different fix direction.
+A read-only root filesystem prevents the process from writing into the image filesystem after startup.
 
-Do not fix these problems by adding broad permissions or copying more files into the image. Fix the durable boundary. Update the Dockerfile, dependency lockfile, registry policy, signing workflow, deployment manifest, or exception record. Then rebuild or republish the image so the new evidence belongs to a new digest.
-
-For pull request review, ask three questions. What exact artifact will run? Which command proves the claim in this section? What would fail if this control were removed? If the answer depends on a person remembering a manual step, move that step into CI or a checked-in policy.
-
-The tradeoff is worth naming in the pull request. Tighter images reduce scan noise but can remove shell diagnostics. Strict scan gates catch known risks but can block urgent changes. Signatures prove producer identity but need verification policy. Registry separation improves access control but adds promotion work. Runtime hardening reduces blast radius but exposes hidden write and permission assumptions.
-
-Keep the orders API thread visible as you learn the topic. The service is ordinary, and that is the point. Container security work becomes repeatable when the team can apply the same evidence pattern to every normal API, worker, and scheduled job it ships.
-
-## The devpolaris-orders-api Thread
-
-Runtime Container Hardening matters when the team can connect a security idea to a specific image that will run somewhere. In this section, the image is `devpolaris-orders-api`, built with Docker, published to GHCR for review, and promoted to ECR for production. The service listens on port `3000`, exposes `GET /health`, and is deployed by digest after the release workflow records evidence.
-
-The concept in focus here is non root user. In plain terms, it is the part of the container workflow that helps you answer one operational question before the image reaches production. The question may be what files are present, which known vulnerabilities are reported, who produced the digest, who can replace it in the registry, or what Linux privileges the process receives after startup.
-
-You should read the examples as review evidence, not as commands to paste blindly. A senior reviewer is not looking for perfect-looking YAML. They are looking for a chain of proof: this image was built from this source, contains these components, passed these checks, and runs with these limits.
-
-```dockerfile
-FROM node:22-slim AS build
-WORKDIR /workspace
-COPY package*.json ./
-RUN npm ci
-COPY src ./src
-RUN npm run build && npm prune --omit=dev
-
-FROM node:22-slim AS runtime
-WORKDIR /app
-COPY --from=build /workspace/node_modules ./node_modules
-COPY --from=build /workspace/dist ./dist
-USER node
-CMD ["node", "dist/server.js"]
+```yaml
+securityContext:
+  readOnlyRootFilesystem: true
 ```
 
-The first diagnostic step is to anchor the discussion to a digest. A tag can help humans find an image, but the digest identifies the immutable content. When a report mentions `ghcr.io/devpolaris/orders-api@sha256:2f4a1234`, everyone can inspect the same artifact instead of arguing about where `latest` pointed yesterday.
+The application may still need writable locations for temporary files or caches. Give those locations explicit volumes.
 
-For non root user, the useful evidence is small and specific. Capture the command output that proves the claim, the file or policy that controls the behavior, and the failure text that appears when the behavior is wrong. A long terminal transcript is weaker than five lines that show the image, actor, package, setting, or denied operation.
-
-A realistic failure path starts with one mismatch. The Dockerfile says the process runs as `node`, but inspection shows an empty user field. The scanner report says a package is vulnerable, but the base image has a vendor backport. The signature verifies, but the certificate identity belongs to a pull request workflow instead of the release workflow. Each mismatch points to a different fix direction.
-
-Do not fix these problems by adding broad permissions or copying more files into the image. Fix the durable boundary. Update the Dockerfile, dependency lockfile, registry policy, signing workflow, deployment manifest, or exception record. Then rebuild or republish the image so the new evidence belongs to a new digest.
-
-For pull request review, ask three questions. What exact artifact will run? Which command proves the claim in this section? What would fail if this control were removed? If the answer depends on a person remembering a manual step, move that step into CI or a checked-in policy.
-
-The tradeoff is worth naming in the pull request. Tighter images reduce scan noise but can remove shell diagnostics. Strict scan gates catch known risks but can block urgent changes. Signatures prove producer identity but need verification policy. Registry separation improves access control but adds promotion work. Runtime hardening reduces blast radius but exposes hidden write and permission assumptions.
-
-Keep the orders API thread visible as you learn the topic. The service is ordinary, and that is the point. Container security work becomes repeatable when the team can apply the same evidence pattern to every normal API, worker, and scheduled job it ships.
-
-## The Smallest Useful Artifact
-
-Runtime Container Hardening matters when the team can connect a security idea to a specific image that will run somewhere. In this section, the image is `devpolaris-orders-api`, built with Docker, published to GHCR for review, and promoted to ECR for production. The service listens on port `3000`, exposes `GET /health`, and is deployed by digest after the release workflow records evidence.
-
-The concept in focus here is capabilities. In plain terms, it is the part of the container workflow that helps you answer one operational question before the image reaches production. The question may be what files are present, which known vulnerabilities are reported, who produced the digest, who can replace it in the registry, or what Linux privileges the process receives after startup.
-
-You should read the examples as review evidence, not as commands to paste blindly. A senior reviewer is not looking for perfect-looking YAML. They are looking for a chain of proof: this image was built from this source, contains these components, passed these checks, and runs with these limits.
-
-```dockerfile
-FROM node:22-slim AS build
-WORKDIR /workspace
-COPY package*.json ./
-RUN npm ci
-COPY src ./src
-RUN npm run build && npm prune --omit=dev
-
-FROM node:22-slim AS runtime
-WORKDIR /app
-COPY --from=build /workspace/node_modules ./node_modules
-COPY --from=build /workspace/dist ./dist
-USER node
-CMD ["node", "dist/server.js"]
+```yaml
+volumeMounts:
+  - name: tmp
+    mountPath: /tmp
+volumes:
+  - name: tmp
+    emptyDir: {}
 ```
 
-The first diagnostic step is to anchor the discussion to a digest. A tag can help humans find an image, but the digest identifies the immutable content. When a report mentions `ghcr.io/devpolaris/orders-api@sha256:2f4a1234`, everyone can inspect the same artifact instead of arguing about where `latest` pointed yesterday.
+This pattern makes writes visible. If the app needs `/tmp`, it gets `/tmp`. It does not get the whole root filesystem.
 
-For capabilities, the useful evidence is small and specific. Capture the command output that proves the claim, the file or policy that controls the behavior, and the failure text that appears when the behavior is wrong. A long terminal transcript is weaker than five lines that show the image, actor, package, setting, or denied operation.
+## Seccomp and Privilege Flags
 
-A realistic failure path starts with one mismatch. The Dockerfile says the process runs as `node`, but inspection shows an empty user field. The scanner report says a package is vulnerable, but the base image has a vendor backport. The signature verifies, but the certificate identity belongs to a pull request workflow instead of the release workflow. Each mismatch points to a different fix direction.
+Seccomp filters which Linux system calls a process can make. The common safe baseline is the runtime default profile.
 
-Do not fix these problems by adding broad permissions or copying more files into the image. Fix the durable boundary. Update the Dockerfile, dependency lockfile, registry policy, signing workflow, deployment manifest, or exception record. Then rebuild or republish the image so the new evidence belongs to a new digest.
-
-For pull request review, ask three questions. What exact artifact will run? Which command proves the claim in this section? What would fail if this control were removed? If the answer depends on a person remembering a manual step, move that step into CI or a checked-in policy.
-
-The tradeoff is worth naming in the pull request. Tighter images reduce scan noise but can remove shell diagnostics. Strict scan gates catch known risks but can block urgent changes. Signatures prove producer identity but need verification policy. Registry separation improves access control but adds promotion work. Runtime hardening reduces blast radius but exposes hidden write and permission assumptions.
-
-Keep the orders API thread visible as you learn the topic. The service is ordinary, and that is the point. Container security work becomes repeatable when the team can apply the same evidence pattern to every normal API, worker, and scheduled job it ships.
-
-## Reading The Evidence
-
-Runtime Container Hardening matters when the team can connect a security idea to a specific image that will run somewhere. In this section, the image is `devpolaris-orders-api`, built with Docker, published to GHCR for review, and promoted to ECR for production. The service listens on port `3000`, exposes `GET /health`, and is deployed by digest after the release workflow records evidence.
-
-The concept in focus here is read only filesystem. In plain terms, it is the part of the container workflow that helps you answer one operational question before the image reaches production. The question may be what files are present, which known vulnerabilities are reported, who produced the digest, who can replace it in the registry, or what Linux privileges the process receives after startup.
-
-You should read the examples as review evidence, not as commands to paste blindly. A senior reviewer is not looking for perfect-looking YAML. They are looking for a chain of proof: this image was built from this source, contains these components, passed these checks, and runs with these limits.
-
-```dockerfile
-FROM node:22-slim AS build
-WORKDIR /workspace
-COPY package*.json ./
-RUN npm ci
-COPY src ./src
-RUN npm run build && npm prune --omit=dev
-
-FROM node:22-slim AS runtime
-WORKDIR /app
-COPY --from=build /workspace/node_modules ./node_modules
-COPY --from=build /workspace/dist ./dist
-USER node
-CMD ["node", "dist/server.js"]
+```yaml
+securityContext:
+  seccompProfile:
+    type: RuntimeDefault
 ```
 
-The first diagnostic step is to anchor the discussion to a digest. A tag can help humans find an image, but the digest identifies the immutable content. When a report mentions `ghcr.io/devpolaris/orders-api@sha256:2f4a1234`, everyone can inspect the same artifact instead of arguing about where `latest` pointed yesterday.
+Privilege flags should stay narrow.
 
-For read only filesystem, the useful evidence is small and specific. Capture the command output that proves the claim, the file or policy that controls the behavior, and the failure text that appears when the behavior is wrong. A long terminal transcript is weaker than five lines that show the image, actor, package, setting, or denied operation.
-
-A realistic failure path starts with one mismatch. The Dockerfile says the process runs as `node`, but inspection shows an empty user field. The scanner report says a package is vulnerable, but the base image has a vendor backport. The signature verifies, but the certificate identity belongs to a pull request workflow instead of the release workflow. Each mismatch points to a different fix direction.
-
-Do not fix these problems by adding broad permissions or copying more files into the image. Fix the durable boundary. Update the Dockerfile, dependency lockfile, registry policy, signing workflow, deployment manifest, or exception record. Then rebuild or republish the image so the new evidence belongs to a new digest.
-
-For pull request review, ask three questions. What exact artifact will run? Which command proves the claim in this section? What would fail if this control were removed? If the answer depends on a person remembering a manual step, move that step into CI or a checked-in policy.
-
-The tradeoff is worth naming in the pull request. Tighter images reduce scan noise but can remove shell diagnostics. Strict scan gates catch known risks but can block urgent changes. Signatures prove producer identity but need verification policy. Registry separation improves access control but adds promotion work. Runtime hardening reduces blast radius but exposes hidden write and permission assumptions.
-
-Keep the orders API thread visible as you learn the topic. The service is ordinary, and that is the point. Container security work becomes repeatable when the team can apply the same evidence pattern to every normal API, worker, and scheduled job it ships.
-
-## Diagnostic Path Before Changes
-
-Runtime Container Hardening matters when the team can connect a security idea to a specific image that will run somewhere. In this section, the image is `devpolaris-orders-api`, built with Docker, published to GHCR for review, and promoted to ECR for production. The service listens on port `3000`, exposes `GET /health`, and is deployed by digest after the release workflow records evidence.
-
-The concept in focus here is resource limits. In plain terms, it is the part of the container workflow that helps you answer one operational question before the image reaches production. The question may be what files are present, which known vulnerabilities are reported, who produced the digest, who can replace it in the registry, or what Linux privileges the process receives after startup.
-
-You should read the examples as review evidence, not as commands to paste blindly. A senior reviewer is not looking for perfect-looking YAML. They are looking for a chain of proof: this image was built from this source, contains these components, passed these checks, and runs with these limits.
-
-```dockerfile
-FROM node:22-slim AS build
-WORKDIR /workspace
-COPY package*.json ./
-RUN npm ci
-COPY src ./src
-RUN npm run build && npm prune --omit=dev
-
-FROM node:22-slim AS runtime
-WORKDIR /app
-COPY --from=build /workspace/node_modules ./node_modules
-COPY --from=build /workspace/dist ./dist
-USER node
-CMD ["node", "dist/server.js"]
+```yaml
+securityContext:
+  allowPrivilegeEscalation: false
+  privileged: false
 ```
 
-The first diagnostic step is to anchor the discussion to a digest. A tag can help humans find an image, but the digest identifies the immutable content. When a report mentions `ghcr.io/devpolaris/orders-api@sha256:2f4a1234`, everyone can inspect the same artifact instead of arguing about where `latest` pointed yesterday.
+`allowPrivilegeEscalation: false` prevents a process from gaining more privileges through setuid binaries or similar paths. `privileged: false` keeps the container from receiving broad host-level access. If a workload requests privileged mode, it needs a very clear operational reason and separate review.
 
-For resource limits, the useful evidence is small and specific. Capture the command output that proves the claim, the file or policy that controls the behavior, and the failure text that appears when the behavior is wrong. A long terminal transcript is weaker than five lines that show the image, actor, package, setting, or denied operation.
+## Resource Limits
 
-A realistic failure path starts with one mismatch. The Dockerfile says the process runs as `node`, but inspection shows an empty user field. The scanner report says a package is vulnerable, but the base image has a vendor backport. The signature verifies, but the certificate identity belongs to a pull request workflow instead of the release workflow. Each mismatch points to a different fix direction.
+Resource limits keep one container from consuming unlimited CPU or memory.
 
-Do not fix these problems by adding broad permissions or copying more files into the image. Fix the durable boundary. Update the Dockerfile, dependency lockfile, registry policy, signing workflow, deployment manifest, or exception record. Then rebuild or republish the image so the new evidence belongs to a new digest.
-
-For pull request review, ask three questions. What exact artifact will run? Which command proves the claim in this section? What would fail if this control were removed? If the answer depends on a person remembering a manual step, move that step into CI or a checked-in policy.
-
-The tradeoff is worth naming in the pull request. Tighter images reduce scan noise but can remove shell diagnostics. Strict scan gates catch known risks but can block urgent changes. Signatures prove producer identity but need verification policy. Registry separation improves access control but adds promotion work. Runtime hardening reduces blast radius but exposes hidden write and permission assumptions.
-
-Keep the orders API thread visible as you learn the topic. The service is ordinary, and that is the point. Container security work becomes repeatable when the team can apply the same evidence pattern to every normal API, worker, and scheduled job it ships.
-
-## Failure Modes And Fix Directions
-
-Runtime Container Hardening matters when the team can connect a security idea to a specific image that will run somewhere. In this section, the image is `devpolaris-orders-api`, built with Docker, published to GHCR for review, and promoted to ECR for production. The service listens on port `3000`, exposes `GET /health`, and is deployed by digest after the release workflow records evidence.
-
-The concept in focus here is Kubernetes context. In plain terms, it is the part of the container workflow that helps you answer one operational question before the image reaches production. The question may be what files are present, which known vulnerabilities are reported, who produced the digest, who can replace it in the registry, or what Linux privileges the process receives after startup.
-
-You should read the examples as review evidence, not as commands to paste blindly. A senior reviewer is not looking for perfect-looking YAML. They are looking for a chain of proof: this image was built from this source, contains these components, passed these checks, and runs with these limits.
-
-```dockerfile
-FROM node:22-slim AS build
-WORKDIR /workspace
-COPY package*.json ./
-RUN npm ci
-COPY src ./src
-RUN npm run build && npm prune --omit=dev
-
-FROM node:22-slim AS runtime
-WORKDIR /app
-COPY --from=build /workspace/node_modules ./node_modules
-COPY --from=build /workspace/dist ./dist
-USER node
-CMD ["node", "dist/server.js"]
+```yaml
+resources:
+  requests:
+    cpu: "250m"
+    memory: "256Mi"
+  limits:
+    cpu: "1000m"
+    memory: "512Mi"
 ```
 
-The first diagnostic step is to anchor the discussion to a digest. A tag can help humans find an image, but the digest identifies the immutable content. When a report mentions `ghcr.io/devpolaris/orders-api@sha256:2f4a1234`, everyone can inspect the same artifact instead of arguing about where `latest` pointed yesterday.
+Requests help scheduling. Limits cap usage. Security and reliability meet here: a compromised or broken process that loops or allocates memory should have a smaller blast radius.
 
-For Kubernetes context, the useful evidence is small and specific. Capture the command output that proves the claim, the file or policy that controls the behavior, and the failure text that appears when the behavior is wrong. A long terminal transcript is weaker than five lines that show the image, actor, package, setting, or denied operation.
+Limits require tuning. Too low and the app crashes during normal traffic. Too high and a runaway process can harm the node. Start from observed usage and adjust with evidence.
 
-A realistic failure path starts with one mismatch. The Dockerfile says the process runs as `node`, but inspection shows an empty user field. The scanner report says a package is vulnerable, but the base image has a vendor backport. The signature verifies, but the certificate identity belongs to a pull request workflow instead of the release workflow. Each mismatch points to a different fix direction.
+## Review Evidence
 
-Do not fix these problems by adding broad permissions or copying more files into the image. Fix the durable boundary. Update the Dockerfile, dependency lockfile, registry policy, signing workflow, deployment manifest, or exception record. Then rebuild or republish the image so the new evidence belongs to a new digest.
+A runtime hardening review should record the settings and the reason.
 
-For pull request review, ask three questions. What exact artifact will run? Which command proves the claim in this section? What would fail if this control were removed? If the answer depends on a person remembering a manual step, move that step into CI or a checked-in policy.
-
-The tradeoff is worth naming in the pull request. Tighter images reduce scan noise but can remove shell diagnostics. Strict scan gates catch known risks but can block urgent changes. Signatures prove producer identity but need verification policy. Registry separation improves access control but adds promotion work. Runtime hardening reduces blast radius but exposes hidden write and permission assumptions.
-
-Keep the orders API thread visible as you learn the topic. The service is ordinary, and that is the point. Container security work becomes repeatable when the team can apply the same evidence pattern to every normal API, worker, and scheduled job it ships.
-
-## Review Questions For Pull Requests
-
-Runtime Container Hardening matters when the team can connect a security idea to a specific image that will run somewhere. In this section, the image is `devpolaris-orders-api`, built with Docker, published to GHCR for review, and promoted to ECR for production. The service listens on port `3000`, exposes `GET /health`, and is deployed by digest after the release workflow records evidence.
-
-The concept in focus here is secrets and host access. In plain terms, it is the part of the container workflow that helps you answer one operational question before the image reaches production. The question may be what files are present, which known vulnerabilities are reported, who produced the digest, who can replace it in the registry, or what Linux privileges the process receives after startup.
-
-You should read the examples as review evidence, not as commands to paste blindly. A senior reviewer is not looking for perfect-looking YAML. They are looking for a chain of proof: this image was built from this source, contains these components, passed these checks, and runs with these limits.
-
-```dockerfile
-FROM node:22-slim AS build
-WORKDIR /workspace
-COPY package*.json ./
-RUN npm ci
-COPY src ./src
-RUN npm run build && npm prune --omit=dev
-
-FROM node:22-slim AS runtime
-WORKDIR /app
-COPY --from=build /workspace/node_modules ./node_modules
-COPY --from=build /workspace/dist ./dist
-USER node
-CMD ["node", "dist/server.js"]
+```text
+Service: devpolaris-orders-api
+Runs as root: no, UID 1000
+Capabilities: drop ALL
+Root filesystem: read-only
+Writable paths: /tmp emptyDir
+Seccomp: RuntimeDefault
+Privilege escalation: false
+CPU limit: 1000m
+Memory limit: 512Mi
+Exception: none
 ```
 
-The first diagnostic step is to anchor the discussion to a digest. A tag can help humans find an image, but the digest identifies the immutable content. When a report mentions `ghcr.io/devpolaris/orders-api@sha256:2f4a1234`, everyone can inspect the same artifact instead of arguing about where `latest` pointed yesterday.
+This evidence is short enough for pull request review. If the service needs an exception, the exception should name the reason and owner.
 
-For secrets and host access, the useful evidence is small and specific. Capture the command output that proves the claim, the file or policy that controls the behavior, and the failure text that appears when the behavior is wrong. A long terminal transcript is weaker than five lines that show the image, actor, package, setting, or denied operation.
+## Putting It All Together
 
-A realistic failure path starts with one mismatch. The Dockerfile says the process runs as `node`, but inspection shows an empty user field. The scanner report says a package is vulnerable, but the base image has a vendor backport. The signature verifies, but the certificate identity belongs to a pull request workflow instead of the release workflow. Each mismatch points to a different fix direction.
+Runtime hardening narrows what a running container can do. Users, capabilities, filesystem writes, seccomp, privilege flags, and resource limits each reduce one part of the post-compromise path.
 
-Do not fix these problems by adding broad permissions or copying more files into the image. Fix the durable boundary. Update the Dockerfile, dependency lockfile, registry policy, signing workflow, deployment manifest, or exception record. Then rebuild or republish the image so the new evidence belongs to a new digest.
-
-For pull request review, ask three questions. What exact artifact will run? Which command proves the claim in this section? What would fail if this control were removed? If the answer depends on a person remembering a manual step, move that step into CI or a checked-in policy.
-
-The tradeoff is worth naming in the pull request. Tighter images reduce scan noise but can remove shell diagnostics. Strict scan gates catch known risks but can block urgent changes. Signatures prove producer identity but need verification policy. Registry separation improves access control but adds promotion work. Runtime hardening reduces blast radius but exposes hidden write and permission assumptions.
-
-Keep the orders API thread visible as you learn the topic. The service is ordinary, and that is the point. Container security work becomes repeatable when the team can apply the same evidence pattern to every normal API, worker, and scheduled job it ships.
-
-## Operational Tradeoffs
-
-Runtime Container Hardening matters when the team can connect a security idea to a specific image that will run somewhere. In this section, the image is `devpolaris-orders-api`, built with Docker, published to GHCR for review, and promoted to ECR for production. The service listens on port `3000`, exposes `GET /health`, and is deployed by digest after the release workflow records evidence.
-
-The concept in focus here is hardening tradeoffs. In plain terms, it is the part of the container workflow that helps you answer one operational question before the image reaches production. The question may be what files are present, which known vulnerabilities are reported, who produced the digest, who can replace it in the registry, or what Linux privileges the process receives after startup.
-
-You should read the examples as review evidence, not as commands to paste blindly. A senior reviewer is not looking for perfect-looking YAML. They are looking for a chain of proof: this image was built from this source, contains these components, passed these checks, and runs with these limits.
-
-```dockerfile
-FROM node:22-slim AS build
-WORKDIR /workspace
-COPY package*.json ./
-RUN npm ci
-COPY src ./src
-RUN npm run build && npm prune --omit=dev
-
-FROM node:22-slim AS runtime
-WORKDIR /app
-COPY --from=build /workspace/node_modules ./node_modules
-COPY --from=build /workspace/dist ./dist
-USER node
-CMD ["node", "dist/server.js"]
-```
-
-The first diagnostic step is to anchor the discussion to a digest. A tag can help humans find an image, but the digest identifies the immutable content. When a report mentions `ghcr.io/devpolaris/orders-api@sha256:2f4a1234`, everyone can inspect the same artifact instead of arguing about where `latest` pointed yesterday.
-
-For hardening tradeoffs, the useful evidence is small and specific. Capture the command output that proves the claim, the file or policy that controls the behavior, and the failure text that appears when the behavior is wrong. A long terminal transcript is weaker than five lines that show the image, actor, package, setting, or denied operation.
-
-A realistic failure path starts with one mismatch. The Dockerfile says the process runs as `node`, but inspection shows an empty user field. The scanner report says a package is vulnerable, but the base image has a vendor backport. The signature verifies, but the certificate identity belongs to a pull request workflow instead of the release workflow. Each mismatch points to a different fix direction.
-
-Do not fix these problems by adding broad permissions or copying more files into the image. Fix the durable boundary. Update the Dockerfile, dependency lockfile, registry policy, signing workflow, deployment manifest, or exception record. Then rebuild or republish the image so the new evidence belongs to a new digest.
-
-For pull request review, ask three questions. What exact artifact will run? Which command proves the claim in this section? What would fail if this control were removed? If the answer depends on a person remembering a manual step, move that step into CI or a checked-in policy.
-
-The tradeoff is worth naming in the pull request. Tighter images reduce scan noise but can remove shell diagnostics. Strict scan gates catch known risks but can block urgent changes. Signatures prove producer identity but need verification policy. Registry separation improves access control but adds promotion work. Runtime hardening reduces blast radius but exposes hidden write and permission assumptions.
-
-Keep the orders API thread visible as you learn the topic. The service is ordinary, and that is the point. Container security work becomes repeatable when the team can apply the same evidence pattern to every normal API, worker, and scheduled job it ships.
+For `devpolaris-orders-api`, the practical baseline is non-root execution, dropped capabilities, read-only root filesystem, explicit writable paths, runtime default seccomp, no privilege escalation, and resource limits based on observed behavior.
 
 ---
 
 **References**
 
-- [Docker container security](https://docs.docker.com/engine/security/) - Official or canonical reference for the behavior described in this article.
-- [Kubernetes security context](https://kubernetes.io/docs/tasks/configure-pod-container/security-context/) - Official or canonical reference for the behavior described in this article.
-- [Kubernetes Pod Security Standards](https://kubernetes.io/docs/concepts/security/pod-security-standards/) - Official or canonical reference for the behavior described in this article.
-- [Linux capabilities](https://man7.org/linux/man-pages/man7/capabilities.7.html) - Official or canonical reference for the behavior described in this article.
-- [Kubernetes seccomp](https://kubernetes.io/docs/tutorials/security/seccomp/) - Official or canonical reference for the behavior described in this article.
+- [Docker security overview](https://docs.docker.com/engine/security/) - Docker documents container isolation, Linux namespaces, capabilities, and runtime security concepts.
+- [Kubernetes security context](https://kubernetes.io/docs/tasks/configure-pod-container/security-context/) - Kubernetes documents container and pod security context fields.
+- [Kubernetes resource management](https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/) - Kubernetes documents CPU and memory requests and limits.

@@ -139,7 +139,7 @@ There are several health layers. The container process can be running. The ECS t
 
 The practical mistake is making one health check prove too much. A load balancer health check should usually be quick and stable. Deep dependency checks may belong in separate metrics and alarms so one slow downstream service does not cause every task to churn.
 
-Health checks decide traffic movement during deployments. That makes them release controls, not just monitoring details.
+Health checks decide traffic movement during deployments. That makes them release controls as well as monitoring details.
 
 ## Capacity
 
@@ -193,7 +193,7 @@ The word "previous" is not enough. A rollback target should be specific:
 | Health and metric baseline | Shows what "recovered" should look like |
 | Deployment record | Explains when the bad version started |
 
-The gotcha is config drift. Rolling back only the image may not recover the service if the failure came from a changed secret, environment variable, IAM role, target group, or scaling setting. Runtime operations treats rollback as returning to a known-good contract, not only an older image.
+The gotcha is config drift. Rolling back only the image may not recover the service if the failure came from a changed secret, environment variable, IAM role, target group, or scaling setting. Runtime operations treats rollback as returning to a known-good contract, including the image and the surrounding runtime settings.
 
 ## Operational Surface Area
 

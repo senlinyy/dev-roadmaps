@@ -87,7 +87,7 @@ Company names are comparison anchors in this article. OpenRouter is a useful pub
 
 This is the mode many teams start with. A software-as-a-service (SaaS) product team builds **AI Support Chat**. A customer asks, "Where is my order?" The backend sends the question, order status, and support policy to a managed model API, then streams the answer back into the chat product.
 
-The product team is not operating the model fleet. It is still operating an AI product surface. That surface includes provider credentials, request shape, retries, rate limits, token costs, data handling, user-visible errors, and provider-specific features such as tools, files, batches, or token counting.
+The product team operates the AI product surface even when the provider runs the model fleet. That surface includes provider credentials, request shape, retries, rate limits, token costs, data handling, user-visible errors, and provider-specific features such as tools, files, batches, or token counting.
 
 The first working version may look like this:
 
@@ -374,7 +374,7 @@ A model version should not receive production traffic only because the server st
 
 The model release and eval function owns that decision. It asks whether a candidate model should receive traffic, which users should see it first, what canary signals matter, and how to roll back.
 
-OpenAI's evaluation guidance is useful here because it treats evals as structured tests for model output quality. The important platform idea is simple: model release needs behaviour evidence, not only process health.
+OpenAI's evaluation guidance is useful here because it treats evals as structured tests for model output quality. The important platform idea is simple: model release needs behaviour evidence alongside process health.
 
 A release record might look like this:
 

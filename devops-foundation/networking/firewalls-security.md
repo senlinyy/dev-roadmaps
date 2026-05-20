@@ -19,11 +19,11 @@ id: article-devops-foundation-networking-firewalls-security
 
 ## The 90-Second Rule
 
-You spin up an EC2 instance, install your app, and it works. Congratulations, it is also reachable by every scanner on the internet. Your first SSH brute-force attempt arrives within 90 seconds. That is not an exaggeration. Automated bots sweep entire IP ranges 24/7, probing for open ports, default credentials, and known vulnerabilities. If your instance has a public IP and port 22 is open, something will knock on it before you finish reading this paragraph.
+You spin up an EC2 instance, install your app, and it works. Congratulations, it is also reachable by every scanner on the internet. Your first SSH brute-force attempt arrives within 90 seconds. Automated bots sweep entire IP ranges 24/7, probing for open ports, default credentials, and known vulnerabilities. If your instance has a public IP and port 22 is open, something will knock on it before you finish reading this paragraph.
 
 If you have only ever deployed to Heroku or Vercel, this feels alien. Those platforms hide the infrastructure layer from you. There is no SSH port to protect, no network traffic to filter, no firewall to configure. The platform handles all of that. But the moment you provision your own server, whether on AWS, GCP, DigitalOcean, or a bare-metal box, you inherit responsibility for every packet that reaches it. A firewall is the tool that lets you decide which packets get in and which ones get silently discarded.
 
-A firewall is not antivirus software and it is not an intrusion detection system. It is simpler than both. A firewall is a set of rules that inspects each network packet and makes a binary decision: allow it through, or drop it. Think of it like the bouncer at a venue door. The bouncer does not care what you do once you are inside. It only checks whether you are on the list before letting you past the rope.
+A firewall is a set of rules that inspects each network packet and makes a binary decision: allow it through, or drop it. Antivirus and intrusion detection tools look for malicious behavior after traffic or files are already being examined. A firewall sits at the doorway and decides whether the packet is allowed to enter at all. Think of it like the bouncer at a venue door. The bouncer does not care what you do once you are inside. It only checks whether you are on the list before letting you past the rope.
 
 The rest of this article walks through every layer of firewall you will encounter as a DevOps engineer: kernel-level packet filtering with iptables, cloud-level security groups and NACLs, SSH hardening, and automated defense with fail2ban. By the end, you will know how to lock down a server so that only the traffic you explicitly allow can reach your services.
 
@@ -219,7 +219,7 @@ After saving the file, restart the SSH daemon:
 $ sudo systemctl restart sshd
 ```
 
-Changing the SSH port from 22 to something non-standard is not real security. It is obscurity. But it reduces log noise from automated scanners by over 99%, which makes real attack attempts visible in your logs instead of buried under thousands of bot login failures. Combine the port change with key-based authentication and fail2ban for meaningful protection.
+Changing the SSH port from 22 to something non-standard is obscurity that reduces log noise from automated scanners by over 99%. That quieter log stream makes real attack attempts visible instead of burying them under thousands of bot login failures. Combine the port change with key-based authentication and fail2ban for meaningful protection.
 
 One critical warning: before you set `PasswordAuthentication no`, make sure your SSH key is already installed on the server and you can log in with it. If you disable passwords before setting up key-based auth, you are locked out. If this is a cloud instance, your only recovery option is detaching the disk, mounting it on another instance, editing the config file, and reattaching it. This brings us to the failure modes section later in this article.
 

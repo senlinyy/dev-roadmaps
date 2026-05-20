@@ -130,7 +130,7 @@ Resource groups and tags are useful, but they are not the same as a subscription
 | Same policy needs? | Similar compliance and region rules | Regulated data and open sandbox work |
 | Same quota risk? | Small related services | Load tests or bursty experiments |
 
-The point is not bureaucracy. The point is to make the default mistake smaller.
+The point is to make the default mistake smaller.
 
 ## Resource Groups
 
@@ -203,7 +203,7 @@ Before creating the first production resources, write a short placement review. 
 | Which exceptions? | None for the first release |
 | Which evidence proves context? | `az account show`, resource IDs, tags, deployment record |
 
-This review is not only documentation. It prevents accidental homes. If a command, portal screen, Terraform provider, or pipeline variable disagrees with the review, the team has found the mistake before the resource becomes important.
+This review prevents accidental homes. If a command, portal screen, Terraform provider, or pipeline variable disagrees with the review, the team has found the mistake before the resource becomes important.
 
 ## Putting It All Together
 

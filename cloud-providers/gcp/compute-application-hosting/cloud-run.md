@@ -90,7 +90,7 @@ The service is where operators should expect to answer:
 | Which config is active? | Environment variables and secrets |
 | Which version serves traffic? | Revision traffic split |
 
-Treat the service as the application runtime surface, not just a deployment target.
+Treat the service as the application runtime surface with its deployment target attached.
 
 ## Revisions
 
@@ -131,7 +131,7 @@ An instance is not a durable home. Local memory can disappear. Local files shoul
 
 Minimum instances can reduce cold starts, but they cost more because capacity stays warm. Maximum instances can protect downstream systems, but they can also throttle the service if set too low.
 
-Cloud Run scaling is a tradeoff between cost, latency, and downstream protection. It is not a magic performance button.
+Cloud Run scaling is a tradeoff between cost, latency, and downstream protection.
 
 ## Runtime Identity
 

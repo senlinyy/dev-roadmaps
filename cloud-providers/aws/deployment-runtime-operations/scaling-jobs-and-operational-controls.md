@@ -178,7 +178,7 @@ The practical habit is to put limits near the pressure. If the email provider is
 
 ## Pause Controls
 
-Some controls are not about doing more work. They are about stopping the wrong work.
+Some controls stop the wrong work before it spreads.
 
 Pause controls buy time:
 

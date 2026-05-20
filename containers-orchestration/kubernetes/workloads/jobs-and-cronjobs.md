@@ -81,7 +81,7 @@ For beginner operations, understand these fields first:
 | `activeDeadlineSeconds` | Maximum runtime for the Job | Useful for stuck tasks |
 | `restartPolicy` | Container restart behavior inside the Pod | `Never` or `OnFailure` |
 
-The tradeoff is retry safety. Retrying a read-only report is usually fine. Retrying a migration that is not idempotent can corrupt data. Idempotent means the operation can run more than once and leave the system in the same correct state, like setting a column default rather than blindly inserting duplicate rows.
+The tradeoff is retry safety. Retrying a read-only report is usually fine. Retrying a migration needs idempotent behavior so repeated runs leave the system in the same correct state, like setting a column default rather than blindly inserting duplicate rows.
 
 ## CronJobs for Scheduled Work
 
@@ -124,7 +124,7 @@ NAME                                 COMPLETIONS   DURATION   AGE
 orders-expire-checkouts-29165535     1/1           22s        8h
 ```
 
-The CronJob owns the schedule. The Job owns a particular run. When a run fails, inspect the Job and its Pod, not only the CronJob.
+The CronJob owns the schedule. The Job owns a particular run. When a run fails, inspect the CronJob, the Job, and the Job's Pod.
 
 ## Concurrency and Missed Schedules
 

@@ -154,7 +154,7 @@ From here, the router strips the Ethernet frame, reads the IP header, consults i
 
 ## Seeing the Layers with tcpdump
 
-The layer model is not just theory. You can watch it in action with `tcpdump`, a command-line packet capture tool available on virtually every Linux and macOS system. It lets you see exactly what your network interfaces are sending and receiving, header by header.
+You can watch the layer model in action with `tcpdump`, a command-line packet capture tool available on virtually every Linux and macOS system. It lets you see exactly what your network interfaces are sending and receiving, header by header.
 
 The most basic capture grabs packets on a specific interface and prints a one-line summary for each:
 
@@ -291,7 +291,7 @@ $ curl -v https://api.example.com/users
 curl: (60) SSL certificate problem: certificate has expired
 ```
 
-The connection succeeded at Layer 4 (TCP handshake completed), but the TLS handshake failed at Layer 7 because the certificate expired. The fix is not a network change; it is renewing the certificate.
+The connection succeeded at Layer 4 (TCP handshake completed), but the TLS handshake failed at Layer 7 because the certificate expired. Renew the certificate.
 
 DNS lives at Layer 7 too, and its failures have a distinctive shape. `NXDOMAIN` means the resolver answered authoritatively that the name does not exist (typo, missing record, wrong zone). `SERVFAIL` means the resolver tried but could not get an answer (broken upstream, DNSSEC validation failure). A name that resolves on one host but not another usually points at split-horizon DNS (the same name returns different answers depending on which resolver or VPC view asks) or a stale `/etc/resolv.conf` pointing at a dead server. Compare `dig @8.8.8.8 name` against `dig @internal-resolver name` to tell them apart before blaming the application.
 

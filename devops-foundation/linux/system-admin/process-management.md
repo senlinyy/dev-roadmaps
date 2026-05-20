@@ -41,7 +41,7 @@ The cloning step is a system call called **`fork`**. When the shell calls `fork`
 
 Now the child has to actually become `ls`. That is what the second system call, **`exec`**, does. `exec` is like wiping a process's brain and giving it a new program: same process slot, same PID, but everything inside (the code, the memory) gets replaced with whatever binary you point it at, like `/usr/bin/ls`. After `exec` returns, the child IS the `ls` program. The parent shell, meanwhile, just sits there waiting for the child to finish so it can show you the prompt again. Every single command you type at a shell prompt goes through this same fork-then-exec dance.
 
-"Waiting" sounds passive but it has a specific meaning here. When the `ls` process is done printing its output, it does not just vanish. It hangs around in a kind of half-dead state called a **zombie**, holding onto a tiny piece of information: its exit code (was the command successful or did it fail?). The parent shell calls another system call, **`wait`**, to read that exit code. Only after the parent reads it does the kernel actually clean up the dead process and free its slot in the process table. Reading the child's exit code like this is called **reaping** the child, and it is the parent's job. If the parent forgets, the zombie just sits there forever; more on that in the failure section.
+"Waiting" sounds passive but it has a specific meaning here. When the `ls` process is done printing its output, it hangs around in a kind of half-dead state called a **zombie**, holding onto a tiny piece of information: its exit code (was the command successful or did it fail?). The parent shell calls another system call, **`wait`**, to read that exit code. Only after the parent reads it does the kernel actually clean up the dead process and free its slot in the process table. Reading the child's exit code like this is called **reaping** the child, and it is the parent's job. If the parent forgets, the zombie just sits there forever; more on that in the failure section.
 
 If you have written async JavaScript, this should feel familiar. A `Promise` resolves with a value, and you have to actually `await` it for the value to become useful. A child process exits with a code, and the parent has to actually `wait` for it for the code to be collected. Same pattern, different layer.
 
@@ -58,7 +58,7 @@ flowchart TD
     Zombie -->|parent calls wait| Reaped([reaped])
 ```
 
-That exit code is not just trivia. It is the only piece of information a process can hand back to its parent without going through a pipe or a file. By convention `0` means success and anything from `1` to `255` means failure, and every ecosystem you already know wraps the same kernel call: Node's `process.exit(1)`, Python's `sys.exit(2)`, Go's `os.Exit(code)`. Shell scripts read the most recent exit code through the special variable `$?`, which is what makes constructs like `command && echo ok || echo failed` work.
+That exit code is the only piece of information a process can hand back to its parent without going through a pipe or a file. By convention `0` means success and anything from `1` to `255` means failure, and every ecosystem you already know wraps the same kernel call: Node's `process.exit(1)`, Python's `sys.exit(2)`, Go's `os.Exit(code)`. Shell scripts read the most recent exit code through the special variable `$?`, which is what makes constructs like `command && echo ok || echo failed` work.
 
 ## PIDs, PPIDs, and the Process Tree
 

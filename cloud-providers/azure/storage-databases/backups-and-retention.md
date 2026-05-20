@@ -35,7 +35,7 @@ Then ordinary production mistakes happen:
 - A VM worker corrupts files on a data disk.
 - A file share loses templates a legacy process still needs.
 
-The question is not only "do we have backups?" That sentence is too vague. The real question is whether the team can restore the right data, to the right place, at the right time, without making the incident worse.
+The backup question asks whether the team can restore the right data, to the right place, at the right time, without making the incident worse.
 
 ## Backup vs Restore
 
@@ -99,7 +99,7 @@ For item-shaped data, ask two separate questions: should this item expire as par
 
 Managed disk snapshots capture a disk state at a point in time. They can help recover VM-shaped workloads, compare a corrupted volume, or preserve a known state before risky maintenance.
 
-Snapshots are tied to disk-shaped recovery. They are not a substitute for database backups or object versioning. If a VM writes important business data only to a disk, a snapshot might help after corruption, but the architecture is still coupling business state to one machine-shaped resource.
+Snapshots are tied to disk-shaped recovery. Database backups and object versioning protect different failure modes. If a VM writes important business data only to a disk, a snapshot might help after corruption, but the architecture is still coupling business state to one machine-shaped resource.
 
 Azure Files also has share snapshot and backup options depending on the setup. The lesson is the same: filesystem recovery should match the workload's real access path.
 

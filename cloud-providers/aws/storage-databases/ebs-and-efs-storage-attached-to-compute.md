@@ -93,7 +93,7 @@ Snapshots are how an EBS-backed workload gets a recovery story. If the EC2 insta
 
 There is a gotcha with live filesystems. A snapshot captures blocks as they exist when the snapshot is requested. It does not automatically flush application memory or operating-system caches into a perfect application-consistent state. For data that is actively being written, the team may need to pause writes, coordinate with the application, or use a backup tool that understands the workload.
 
-This is why snapshots are powerful but not magical. A snapshot plan should say what consistency is required and how restore is tested.
+This is why snapshots need a consistency plan. A snapshot plan should say what consistency is required and how restore is tested.
 
 ## EFS
 
@@ -103,7 +103,7 @@ EFS is useful when the shared filesystem behavior is the point. Several EC2 inst
 
 EFS changes the storage shape from "this server has a disk" to "these clients share a filesystem." That makes coordination easier for file-based tools, but it also means you must understand permissions, mount targets, network paths, throughput behavior, and how the application handles concurrent file access.
 
-EFS is not the same as S3 with slashes in the key. S3 keys can look like paths, but EFS gives clients filesystem behavior through mounts.
+EFS gives clients filesystem behavior through mounts. S3 keys can look like paths, but they remain object keys.
 
 ## Mount Targets
 
@@ -176,7 +176,7 @@ That separation makes operations clearer. EBS needs mount and snapshot care. EFS
 
 ## Putting It All Together
 
-The opening team had workloads that asked for paths and disks, not just object keys or SQL tables.
+The opening team had workloads that asked for paths and disks alongside object keys and SQL tables.
 
 EBS fits disk-shaped state attached to EC2 in one Availability Zone. Volumes need formatting, mounting, sizing, and reboot behavior. Snapshots give EBS a recovery path, but application consistency needs thought. EFS fits shared Linux filesystem needs where many clients mount the same directory tree. Mount targets and security groups make EFS access a VPC design question. S3 remains the simpler answer when the application can store and fetch whole objects by key.
 

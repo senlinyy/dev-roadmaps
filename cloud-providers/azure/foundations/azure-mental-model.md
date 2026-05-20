@@ -34,7 +34,7 @@ The Orders API already has an AWS-shaped story in your head. Customer traffic en
 
 Then the team asks for the Azure version.
 
-The first instinct is to translate service names. ECS becomes Container Apps, RDS becomes Azure SQL Database, S3 becomes Blob Storage, CloudWatch becomes Azure Monitor. That helps for a minute, but it is not enough. Azure uses a different control plane and a different boundary map. If you carry over the AWS job map but miss the Azure boundaries, the design will still feel blurry.
+The first instinct is to translate service names. ECS becomes Container Apps, RDS becomes Azure SQL Database, S3 becomes Blob Storage, CloudWatch becomes Azure Monitor. That helps for a minute, then Azure's different control plane and boundary map start to matter. If you carry over the AWS job map but miss the Azure boundaries, the design will still feel blurry.
 
 The beginner question is:
 
@@ -57,7 +57,7 @@ The app has not changed just because the provider changed. The Orders API still 
 | Engineers debug later | Logs, metrics, traces, and alerts are kept |
 | Changes reach production | Deployment leaves repeatable evidence |
 
-This job list is the part that transfers well from AWS. A cloud provider is not magic around your code. It is a set of managed homes for jobs that were hidden in the laptop, repo, shell, local database, and human memory.
+This job list is the part that transfers well from AWS. A cloud provider gives managed homes to jobs that were hidden in the laptop, repo, shell, local database, and human memory.
 
 The useful Azure habit starts there. Ask what job the app needs before asking what service name to memorize.
 

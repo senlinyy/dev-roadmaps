@@ -38,7 +38,7 @@ The orders system fails during checkout:
 - The ECS task that handled the request has already been replaced by the service scheduler.
 - The email Lambda function ran for one invocation and then ended.
 - A worker wrote several repeated error lines, but only one line names the real dependency failure.
-- The team needs the evidence tomorrow too, not only while the container exists.
+- The team needs the evidence tomorrow too, after the container exits.
 - The logs must not expose secrets, tokens, payment details, or raw customer data.
 
 CloudWatch Logs gives AWS workloads a shared place to leave runtime evidence. It does not make weak log messages strong. It gives good log messages somewhere durable, searchable, and governable to live.
@@ -196,7 +196,7 @@ fields @timestamp, level, service, route, requestId, dependency, message
 | limit 50
 ```
 
-The query is not magic. It is just a way to make the story visible in order. The important part is that the logs have a `requestId` field to search.
+The query makes the story visible in order. The important part is that the logs have a `requestId` field to search.
 
 For a wider incident, start with a narrow time window and a known service group. Large broad searches can cost more and return noise. If you add a Logs Insights widget to a dashboard, remember that refreshes run queries again.
 
@@ -246,7 +246,7 @@ Retention should match the use of the evidence:
 | Access or request logs | Balance investigation value, privacy, and volume |
 | Temporary migration logs | Remove or shorten after migration completes |
 
-Cost is not only storage. Ingestion volume, queries, dashboard refreshes, subscriptions, and downstream destinations can matter. The safest habit is to log the right facts once, at the right level, with a retention setting the owner understands.
+Cost includes ingestion volume, queries, dashboard refreshes, subscriptions, downstream destinations, and storage. The safest habit is to log the right facts once, at the right level, with a retention setting the owner understands.
 
 Access also matters. Logs can contain operationally sensitive details. The team that needs to debug checkout may need read access to the orders log group. That does not mean every engineer needs access to every application log in every account.
 

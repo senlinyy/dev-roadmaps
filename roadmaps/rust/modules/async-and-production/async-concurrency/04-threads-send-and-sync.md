@@ -222,7 +222,7 @@ Use the workload to choose the concurrency tool.
 
 The notes indexer is CPU-heavy, so splitting files across worker threads can help. The remote note fetcher is I/O-heavy, so async tasks are a better fit.
 
-Good Rust programs often use both. The point is not to choose one model forever. The point is to match the model to the bottleneck.
+Good Rust programs often use both. Match the model to the bottleneck.
 
 ## Putting It All Together
 

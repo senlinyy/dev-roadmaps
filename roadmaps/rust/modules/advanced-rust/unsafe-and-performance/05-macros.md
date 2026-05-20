@@ -23,7 +23,7 @@ id: article-rust-advanced-rust-macros
 
 The notes app now has several commands: `add`, `list`, `search`, `export`, and `sync`. Each command needs a test case with the same setup shape.
 
-Functions remove ordinary repetition. But sometimes the repeated thing is not just runtime behavior. It is code structure:
+Functions remove ordinary repetition. Sometimes the repeated thing is code structure:
 
 - Several test functions with different names.
 - Several trait implementations that follow the same pattern.

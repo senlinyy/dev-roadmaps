@@ -1,6 +1,6 @@
 ---
 title: "Extract Environment Variable"
-sectionSlug: input-variables-bring-choices-in
+sectionSlug: input-variables
 order: 1
 ---
 

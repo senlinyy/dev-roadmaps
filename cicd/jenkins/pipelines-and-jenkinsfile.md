@@ -433,7 +433,7 @@ The honest tradeoff sits in this table:
 
 The practical advice most Jenkins teams converge on: write Declarative pipelines for application code, write Scripted pipelines only inside the shared libraries that those applications call into. The shared-libraries article covers that pattern in detail. If you find yourself reaching for Scripted because Declarative "won't let you do something," the first question to ask is whether that something belongs in a shared library function instead of inside every team's Jenkinsfile.
 
-The deeper point is that a Jenkinsfile is not just a script, it is the long-term interface between your repo and your CI infrastructure. Anything that makes that interface harder to reason about (dynamic stages, hidden conditional branches, untyped parameters) costs you every time someone new opens the file. Declarative's rigidity is the feature.
+The deeper point is that a Jenkinsfile becomes the long-term interface between your repo and your CI infrastructure. Anything that makes that interface harder to reason about (dynamic stages, hidden conditional branches, untyped parameters) costs you every time someone new opens the file. Declarative's rigidity is the feature.
 
 ---
 

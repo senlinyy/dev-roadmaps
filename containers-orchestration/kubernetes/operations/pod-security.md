@@ -20,11 +20,11 @@ id: article-containers-orchestration-kubernetes-operations-pod-security
 
 ## Containers Share a Kernel
 
-A container feels like a small machine, but it is not a full virtual machine. Containers share the host kernel. Linux isolation features such as namespaces, cgroups, capabilities, and seccomp create boundaries around processes. Those boundaries are useful, but they are still boundaries inside one kernel.
+A container feels like a small machine while still sharing the host kernel. Linux isolation features such as namespaces, cgroups, capabilities, and seccomp create boundaries around processes. Those boundaries are useful, but they are still boundaries inside one kernel.
 
 Pod security reduces what a container can do if the application is compromised. If an attacker finds a remote code execution bug in `devpolaris-orders-api`, the container should not be running as root, should not have extra Linux capabilities, should not be able to write to the root filesystem, and should not receive a Kubernetes API token unless it needs one.
 
-This is not about making every Pod impossible to break. It is about shrinking the next step after a break. A compromised API process should have fewer paths to the node, the cluster API, and other workloads.
+Pod security shrinks the next step after a break. A compromised API process should have fewer paths to the node, the cluster API, and other workloads.
 
 ```mermaid
 flowchart TD
@@ -176,7 +176,7 @@ $ kubectl -n orders logs deploy/devpolaris-orders-api --tail=20
 2026-05-07T11:06:12Z error EACCES: permission denied, mkdir '/app/.cache'
 ```
 
-The fix is not to remove the security context first. Decide whether the app really needs to write there. For a cache or temporary files, redirect writes to `/tmp` or a mounted `emptyDir`. For persistent data, use a proper volume. For build artifacts, fix the image so runtime does not need to write into the application directory.
+Start by deciding whether the app really needs to write there. For a cache or temporary files, redirect writes to `/tmp` or a mounted `emptyDir`. For persistent data, use a proper volume. For build artifacts, fix the image so runtime does not need to write into the application directory.
 
 The diagnostic path is:
 

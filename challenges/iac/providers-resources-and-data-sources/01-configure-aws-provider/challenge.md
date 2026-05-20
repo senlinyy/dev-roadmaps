@@ -1,6 +1,6 @@
 ---
 title: "Configure the AWS Provider"
-sectionSlug: provider-requirements-and-provider-configuration
+sectionSlug: provider-configuration
 order: 1
 ---
 

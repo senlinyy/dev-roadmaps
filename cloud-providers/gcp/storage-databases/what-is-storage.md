@@ -42,7 +42,7 @@ At first, that sounds like one decision. Then the data starts behaving different
 - A legacy worker still expects a mounted directory.
 - A bad release may corrupt data, so the team needs a previous copy to restore.
 
-Those are not one storage problem. They are different data shapes. The fastest way to choose poorly is to start with service names before you can describe how the data is used.
+Those are different data shapes. The fastest way to choose poorly is to start with service names before you can describe how the data is used.
 
 The working mental model is simple: describe what the data needs to do after it is written, then choose the GCP service whose behavior matches that shape.
 

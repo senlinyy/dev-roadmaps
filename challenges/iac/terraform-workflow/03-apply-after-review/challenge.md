@@ -1,6 +1,6 @@
 ---
 title: "Apply After Review"
-sectionSlug: apply-changing-real-infrastructure
+sectionSlug: apply
 order: 3
 ---
 
