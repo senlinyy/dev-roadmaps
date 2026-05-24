@@ -1,6 +1,6 @@
 ---
-title: "Ownership And Borrowing"
-description: "Learn moves, shared references, mutable references, slices, and the lifetime ideas that explain why borrowed data remains valid."
-tags: ["moves", "references", "lifetimes"]
+title: "Data Ownership"
+description: "Follow owned values, borrowed references, strings, vectors, and slices through the everyday checks that keep Rust data valid."
+tags: ["ownership", "borrowing", "slices"]
 order: 1
 ---

@@ -9,24 +9,60 @@ id: article-rust-ownership-and-reliability-error-flow-and-apis
 
 ## Table of Contents
 
-1. [The Problem](#the-problem)
-2. [Return Result](#return-result)
-3. [Wrapping An Error](#wrapping-an-error)
-4. [The Question Mark Operator](#the-question-mark-operator)
-5. [Error Boundaries](#error-boundaries)
-6. [From Option To Result](#from-option-to-result)
-7. [Borrow Or Own Inputs](#borrow-or-own-inputs)
-8. [Small Flexible APIs](#small-flexible-apis)
+1. [What Is Error Flow?](#what-is-error-flow)
+2. [Start With The File](#start-with-the-file)
+3. [Return Result](#return-result)
+4. [Name The Error](#name-the-error)
+5. [The Question Mark Operator](#the-question-mark-operator)
+6. [Convert Option To Result](#convert-option-to-result)
+7. [Choose Borrowed Inputs](#choose-borrowed-inputs)
+8. [Handle Errors At The Boundary](#handle-errors-at-the-boundary)
 9. [Putting It All Together](#putting-it-all-together)
 10. [Toward Idiomatic Rust](#toward-idiomatic-rust)
 
-## The Problem
+## What Is Error Flow?
 
-The previous article gave us the two basic shapes: `Option` for ordinary absence and `Result` for recoverable failure. Fallible means "can fail during normal operation." Now the notes app needs a real fallible function.
+The previous article introduced `Option` for missing values and `Result` for recoverable failures. A real function often has to move both through the same piece of code.
 
-The feature is small. Read a config file, find a `default=` line, and return the notebook name to the rest of the program.
+The notes app has a small config file. The file chooses which notebook opens by default:
 
-The first version is easy to write:
+```text
+default=release checklist
+theme=dark
+```
+
+The program needs a helper with this job: read the file, find the `default=` line, and return the notebook name. Three things can happen:
+
+- The file can be read successfully and contain the setting.
+- The file read can fail because the file is missing or unreadable.
+- The file can exist but have no `default=` line.
+
+Error flow is the path those outcomes take through the program. A good Rust API makes that path visible in the return type.
+
+Create a project:
+
+```bash
+$ cargo new note-config
+    Creating binary (application) `note-config` package
+$ cd note-config
+```
+
+This article builds the config loader in stages. Each stage has a different function signature, and the signature is the part to watch.
+
+## Start With The File
+
+Create a config file and inspect it from the shell:
+
+```bash
+$ printf 'default=release checklist\ntheme=dark\n' > notes.conf
+$ cat notes.conf
+default=release checklist
+theme=dark
+```
+
+The output confirms the file has two lines. The loader only cares about the line that starts with `default=`.
+
+A direct Rust version might look like this:
 
 ```rust
 fn load_default_notebook(path: &str) -> String {
@@ -36,432 +72,414 @@ fn load_default_notebook(path: &str) -> String {
         .find(|line| line.starts_with("default="))
         .unwrap();
 
-    line.trim_start_matches("default=").to_string()
+    line.trim_start_matches("default=").trim().to_string()
+}
+
+fn main() {
+    let notebook = load_default_notebook("notes.conf");
+
+    println!("opening {notebook}");
 }
 ```
 
-This code is short because it hides decisions:
+Run it with the valid file:
 
-- If the file cannot be read, the program panics.
-- If the file has no `default=` line, the program panics.
-- The signature promises a `String` even though the function may not produce one.
+```bash
+$ cargo run
+   Compiling note-config v0.1.0 (/home/you/note-config)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.30s
+     Running `target/debug/note-config`
+opening release checklist
+```
 
-The better Rust version does not try to make failure disappear. It returns failure as part of the API. The trick is keeping that honest code readable.
+The happy path works. The signature says `String`, which means callers see a function that always returns a notebook name.
+
+Now remove the config file and run the same program:
+
+```bash
+$ rm notes.conf
+$ cargo run
+     Running `target/debug/note-config`
+thread 'main' panicked at src/main.rs:2:46:
+called `Result::unwrap()` on an `Err` value: Os { code: 2, kind: NotFound, message: "No such file or directory" }
+```
+
+The function did not return a `String`. It panicked while trying to unwrap a failed file read. The signature hid that possibility from the caller.
+
+That is the problem `Result` solves. A fallible function should return a fallible type.
 
 ## Return Result
 
-A fallible function should usually return `Result<T, E>`.
-
-The success type is the useful value the caller wanted. The error type is the reason the function could not produce it.
-
-For the config loader, the success value is a notebook name. The function can fail for two simple reasons: the file cannot be read, or the file does not contain a default notebook.
-
-Start with a small error enum:
+A first honest signature can return the standard I/O error directly:
 
 ```rust
 use std::io;
 
-#[derive(Debug)]
-enum ConfigError {
-    Read(io::Error),
-    MissingDefault,
-}
-```
-
-Then make the return type honest:
-
-```rust
-fn find_default(text: &str) -> Option<&str> {
-    text.lines()
-        .find(|line| line.starts_with("default="))
-        .map(|line| line.trim_start_matches("default="))
+fn load_config(path: &str) -> Result<String, io::Error> {
+    std::fs::read_to_string(path)
 }
 
-fn load_default_notebook(path: &str) -> Result<String, ConfigError> {
-    let text = std::fs::read_to_string(path)
-        .map_err(ConfigError::Read)?;
-
-    match find_default(&text) {
-        Some(name) => Ok(name.to_string()),
-        None => Err(ConfigError::MissingDefault),
+fn main() {
+    match load_config("notes.conf") {
+        Ok(text) => println!("loaded {} bytes", text.len()),
+        Err(error) => println!("could not read config: {error}"),
     }
 }
 ```
 
-The function now says what can happen. If it succeeds, callers get a `String`. If it fails, callers get a `ConfigError`.
-
-This is the important API shift. A function that returns `String` says, "I can give you a string." A function that returns `Result<String, ConfigError>` says, "I can try to give you a string, and if I cannot, I will tell you why."
-
-## Wrapping An Error
-
-This line is compact enough that it deserves a slower reading:
-
-```rust
-let text = std::fs::read_to_string(path)
-    .map_err(ConfigError::Read)?;
-```
-
-`std::fs::read_to_string(path)` returns `Result<String, io::Error>`. The notes app does not want to expose raw `io::Error` as the whole public error story, so `map_err(ConfigError::Read)` converts the error side:
+Run it with no config file:
 
 ```text
-Ok(text)           stays Ok(text)
-Err(io_error)      becomes Err(ConfigError::Read(io_error))
+could not read config: No such file or directory (os error 2)
 ```
 
-Only after that conversion does `?` run. If the read succeeded, the `String` is taken out of `Ok` and stored in `text`. If the read failed, the function returns `Err(ConfigError::Read(error))` immediately.
+Now create the file again:
+
+```bash
+$ printf 'default=release checklist\ntheme=dark\n' > notes.conf
+$ cargo run
+     Running `target/debug/note-config`
+loaded 37 bytes
+```
+
+The return type is:
+
+```text
+Result<String, io::Error>
+```
+
+Read it as "either file text or an I/O error." The caller must handle both shapes before it can get the text.
+
+This version handles file reading, but it does not handle the missing `default=` setting yet. A missing line is not an I/O error. The file was read successfully. The content failed the app's rule.
+
+## Name The Error
+
+When a function can fail for application-specific reasons, give those reasons names.
+
+For the config loader, use an enum:
+
+```rust
+#[derive(Debug)]
+enum ConfigError {
+    ReadFailed { path: String, message: String },
+    MissingDefault,
+}
+```
+
+The first variant means the file could not be read. It stores the path and the operating system's message. The second variant means the file was readable but did not contain a required setting.
+
+Now write the loader without `unwrap()`:
+
+```rust
+#[derive(Debug)]
+enum ConfigError {
+    ReadFailed { path: String, message: String },
+    MissingDefault,
+}
+
+fn load_default_notebook(path: &str) -> Result<String, ConfigError> {
+    let text = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(error) => {
+            return Err(ConfigError::ReadFailed {
+                path: path.to_string(),
+                message: error.to_string(),
+            });
+        }
+    };
+
+    let line = match text.lines().find(|line| line.starts_with("default=")) {
+        Some(line) => line,
+        None => return Err(ConfigError::MissingDefault),
+    };
+
+    Ok(line.trim_start_matches("default=").trim().to_string())
+}
+```
+
+The signature now says:
+
+```text
+Result<String, ConfigError>
+```
+
+That means:
+
+| Variant | Meaning |
+| --- | --- |
+| `Ok(String)` | The default notebook name was loaded |
+| `Err(ConfigError::ReadFailed { ... })` | The file could not be read |
+| `Err(ConfigError::MissingDefault)` | The file had no `default=` line |
+
+The function still follows the same human steps as the shell session: read the file, scan lines, extract the text after `default=`. The difference is that every early exit is now a value the caller can handle.
 
 ## The Question Mark Operator
 
-The `?` operator keeps fallible code from becoming a staircase of nested `match` blocks.
+The manual `match` around `read_to_string` is clear, but it is noisy. Rust's question mark operator, `?`, is the usual shortcut for "if this is an error, return that error from the current function."
 
-In a function that returns `Result`, placing `?` after another `Result` means:
-
-```text
-If this is Ok(value), take the value out and keep going.
-If this is Err(error), return the error from this function now.
-```
-
-This line uses `?`:
+This version keeps the same behavior:
 
 ```rust
-let text = std::fs::read_to_string(path)
-    .map_err(ConfigError::Read)?;
+#[derive(Debug)]
+enum ConfigError {
+    ReadFailed { path: String, message: String },
+    MissingDefault,
+}
+
+fn load_default_notebook(path: &str) -> Result<String, ConfigError> {
+    let text = std::fs::read_to_string(path).map_err(|error| {
+        ConfigError::ReadFailed {
+            path: path.to_string(),
+            message: error.to_string(),
+        }
+    })?;
+
+    let line = match text.lines().find(|line| line.starts_with("default=")) {
+        Some(line) => line,
+        None => return Err(ConfigError::MissingDefault),
+    };
+
+    Ok(line.trim_start_matches("default=").trim().to_string())
+}
 ```
 
-Without `?`, the same logic is noisier:
+The important expression is:
 
 ```rust
-let text = match std::fs::read_to_string(path) {
+std::fs::read_to_string(path).map_err(|error| {
+    ConfigError::ReadFailed {
+        path: path.to_string(),
+        message: error.to_string(),
+    }
+})?
+```
+
+Read it from left to right. `read_to_string(path)` returns `Result<String, io::Error>`. `map_err(...)` changes the error side from `io::Error` into `ConfigError`. The `?` then checks the result. If it is `Ok(text)`, the text is assigned to `text`. If it is `Err(error)`, the function returns early with that error.
+
+The `?` operator does not hide a panic. It is return-flow shorthand for `Result` and `Option`.
+
+The compiler treats that line like a small `match` around the `Result`:
+
+```rust
+let text = match std::fs::read_to_string(path).map_err(|error| {
+    ConfigError::ReadFailed {
+        path: path.to_string(),
+        message: error.to_string(),
+    }
+}) {
     Ok(text) => text,
-    Err(error) => return Err(ConfigError::Read(error)),
+    Err(error) => return Err(error),
 };
 ```
 
-The `?` operator is not exception handling in disguise. It does not jump to an invisible global handler. It returns from the current function, and the function's return type must allow that error to be returned.
+That expansion shows the mechanism. The success payload is unwrapped into the local variable. The error payload is returned from `load_default_notebook` immediately. The caller still receives a `Result<String, ConfigError>`; the `?` operator only makes the early return small enough to read.
 
-That is why this works when the surrounding function returns a compatible `Result`:
+## Convert Option To Result
+
+The line search returns an `Option<&str>`:
 
 ```rust
-fn load_text(path: &str) -> Result<String, std::io::Error> {
-    let text = std::fs::read_to_string(path)?;
-    Ok(text)
-}
+text.lines().find(|line| line.starts_with("default="))
 ```
 
-The compiler checks the flow. If your function returns `String`, you cannot use `?` on an I/O result and pretend the error vanished.
-
-:::expand[? returns from this function]{kind="design"}
-The most important thing about `?` is where it returns from.
-
-This function:
+That makes sense for `find`: it either finds a line or returns `None`. Inside the config loader, a missing default is an error. Convert the `Option` into a `Result` with `ok_or`:
 
 ```rust
-fn load_text(path: &str) -> Result<String, std::io::Error> {
-    let text = std::fs::read_to_string(path)?;
-    Ok(text)
-}
-```
+fn load_default_notebook(path: &str) -> Result<String, ConfigError> {
+    let text = std::fs::read_to_string(path).map_err(|error| {
+        ConfigError::ReadFailed {
+            path: path.to_string(),
+            message: error.to_string(),
+        }
+    })?;
 
-behaves like this longer version:
-
-```rust
-fn load_text(path: &str) -> Result<String, std::io::Error> {
-    let text = match std::fs::read_to_string(path) {
-        Ok(text) => text,
-        Err(error) => return Err(error),
-    };
-
-    Ok(text)
-}
-```
-
-The `return Err(error)` returns from `load_text`, not from the whole program. The caller still decides what to do with that `Err`.
-
-That makes `?` different from a panic. A panic says the current path cannot continue normally. `?` says this function cannot produce its success value, so it is handing the error back to its caller.
-
-Use this reading habit:
-
-| You see | Read it as |
-| --- | --- |
-| `some_result?` | Continue with the `Ok` value or return the `Err` |
-| `some_option?` | Continue with the `Some` value or return `None` from an `Option`-returning function |
-| `unwrap()` | Continue with the value or panic |
-
-`?` is a readability tool for honest return types. It does not make errors disappear. It makes the early return path small enough that you are willing to keep it in the type.
-:::
-
-## Error Boundaries
-
-Most Rust programs have layers. Low-level functions deal with specific errors. Higher-level functions decide how much detail to expose.
-
-For the notes program, keep text searching separate from file loading:
-
-```rust
-fn find_default(text: &str) -> Option<&str> {
-    text.lines()
+    let line = text
+        .lines()
         .find(|line| line.starts_with("default="))
-        .map(|line| line.trim_start_matches("default="))
+        .ok_or(ConfigError::MissingDefault)?;
+
+    Ok(line.trim_start_matches("default=").trim().to_string())
 }
 ```
 
-`find_default` returns `Option<&str>` because it only searches text. Missing is a normal search result.
+The expression:
 
-`load_default_notebook` returns `Result<String, ConfigError>` because it crosses a fallible boundary. It reads a file and turns the config into a value the rest of the program needs.
+```rust
+.ok_or(ConfigError::MissingDefault)?
+```
+
+means "turn `Some(line)` into `Ok(line)`, turn `None` into `Err(ConfigError::MissingDefault)`, and use `?` to return early on the error."
+
+Read that as two mechanical steps:
 
 ```text
-file path
-  |
-  v
-read file              Result<String, io::Error>
-  |
-  v
-search loaded text     Option<&str>
-  |
-  v
-public config API      Result<String, ConfigError>
+find(...) returns Option<&str>
+
+Some(line)
+  -> ok_or(...) changes it to Ok(line)
+  -> ? extracts line and continues
+
+None
+  -> ok_or(...) changes it to Err(ConfigError::MissingDefault)
+  -> ? returns Err(ConfigError::MissingDefault)
 ```
 
-That boundary keeps the caller from needing to know every internal step. The caller can handle a small domain error:
+Nothing special happens to the line itself. It is still a borrowed `&str` view into the loaded config text. The conversion only changes the control-flow wrapper from "maybe present" to "success or named error."
+
+This is a common Rust pattern. A search, map lookup, or parser step may naturally produce `Option`. At an API boundary, missing data may need to become a named error.
+
+## Choose Borrowed Inputs
+
+The loader accepts `path: &str`:
 
 ```rust
-match load_default_notebook("notes.conf") {
-    Ok(name) => println!("Opening {name}"),
-    Err(ConfigError::MissingDefault) => println!("Choose a notebook first"),
-    Err(ConfigError::Read(error)) => eprintln!("Could not read config: {error}"),
+fn load_default_notebook(path: &str) -> Result<String, ConfigError>
+```
+
+That choice matters. The function only needs to read the path while it runs. It does not store the path as its own long-lived value, except when it builds an error message for the failed case. Accepting `&str` lets callers pass a string literal or a borrowed `String`:
+
+```rust
+fn main() {
+    let path = String::from("notes.conf");
+
+    let first = load_default_notebook("notes.conf");
+    let second = load_default_notebook(&path);
+
+    println!("{first:?}");
+    println!("{second:?}");
 }
 ```
 
-The practical gotcha is losing information too early. If `load_default_notebook` returned `Result<String, String>`, it would be easy to print a message but harder for another caller to react differently to missing config versus an I/O failure. Keep structured errors inside the program. Turn them into human text at the edge, where you print, log, or send a response.
-
-:::expand[Convert errors at boundaries]{kind="pattern"}
-An error boundary is the place where one layer's details become another layer's language.
-
-Inside the config loader, `std::fs::read_to_string` returns `io::Error`. That is the right low-level error. It can say whether the file was missing, permission was denied, or another I/O problem happened.
-
-The rest of the notes app probably does not want every helper to expose raw I/O errors. It wants a config-shaped error:
+The return type owns the notebook name:
 
 ```rust
+Result<String, ConfigError>
+```
+
+That is also deliberate. The notebook name is extracted from `text`, and `text` is a local `String` inside the function. When the function returns, `text` will be dropped. Returning a borrowed `&str` into that local string would create a dangling reference. Returning an owned `String` gives the caller a value that remains valid after the loader finishes.
+
+The signature says the whole story:
+
+| Part | Meaning |
+| --- | --- |
+| `path: &str` | Borrow the path during the call |
+| `Result<..., ConfigError>` | The function can fail in named ways |
+| `String` inside `Ok` | Return an owned notebook name |
+
+Good Rust APIs often come from this kind of plain reading.
+
+## Handle Errors At The Boundary
+
+Library-style functions usually return errors. The outer boundary of the program decides what to print, log, retry, or exit with.
+
+Use this complete program:
+
+```rust
+#[derive(Debug)]
 enum ConfigError {
-    Read(std::io::Error),
+    ReadFailed { path: String, message: String },
     MissingDefault,
 }
-```
 
-The conversion happens here:
-
-```rust
-let text = std::fs::read_to_string(path)
-    .map_err(ConfigError::Read)?;
-```
-
-`map_err` keeps the original I/O error but wraps it in the domain error. The caller can still tell the difference:
-
-```rust
-match error {
-    ConfigError::MissingDefault => println!("run setup first"),
-    ConfigError::Read(source) => eprintln!("config file problem: {source}"),
-}
-```
-
-This pattern becomes more valuable as programs grow:
-
-| Boundary | Error language |
-| --- | --- |
-| Standard library file read | `io::Error` |
-| Config loader | `ConfigError` |
-| Command-line UI | Human message and exit code |
-| HTTP API | Status code and response body |
-
-A string is fine at the final edge. Inside the program, structured errors let different callers make different choices.
-:::
-
-## From Option To Result
-
-The search helper returns `Option<&str>` because not finding `default=` is an ordinary search result:
-
-```rust
-fn find_default(text: &str) -> Option<&str> {
-    text.lines()
-        .find(|line| line.starts_with("default="))
-        .map(|line| line.trim_start_matches("default="))
-}
-```
-
-The public loader needs `Result<String, ConfigError>`, so it turns that absence into a domain error:
-
-```rust
-find_default(&text)
-    .map(str::to_string)
-    .ok_or(ConfigError::MissingDefault)
-```
-
-Read it in two steps. `map(str::to_string)` changes `Some(&str)` into `Some(String)`. It leaves `None` alone. Then `ok_or(ConfigError::MissingDefault)` changes `Option<String>` into `Result<String, ConfigError>`:
-
-```text
-Some(name)    -> Ok(name)
-None          -> Err(ConfigError::MissingDefault)
-```
-
-That is the pattern: use `Option` while searching, then convert to `Result` at the boundary where the caller needs an explanation.
-
-## Borrow Or Own Inputs
-
-Error flow and ownership meet at API boundaries. A function signature should say whether the function needs to keep data or only read it.
-
-The config search function only reads text, so it borrows:
-
-```rust
-fn find_default(text: &str) -> Option<&str> {
-    text.lines()
-        .find(|line| line.starts_with("default="))
-        .map(|line| line.trim_start_matches("default="))
-}
-```
-
-This is efficient, but it also affects the return type. The returned `&str` points into `text`, so it cannot outlive the loaded config string.
-
-The loader returns an owned `String`:
-
-```rust
 fn load_default_notebook(path: &str) -> Result<String, ConfigError> {
-    let text = std::fs::read_to_string(path)
-        .map_err(ConfigError::Read)?;
+    let text = std::fs::read_to_string(path).map_err(|error| {
+        ConfigError::ReadFailed {
+            path: path.to_string(),
+            message: error.to_string(),
+        }
+    })?;
 
-    find_default(&text)
-        .map(str::to_string)
-        .ok_or(ConfigError::MissingDefault)
-}
-```
-
-That `String` is a deliberate ownership boundary. The loaded file text is local to the function and will be dropped when the function returns. Returning `&str` from inside it would point to data that no longer exists. Rust rejects that shape, and it is right to do so.
-
-Use this rule of thumb:
-
-| Function job | Input shape | Return shape |
-| --- | --- | --- |
-| Inspect caller-owned text | Borrow with `&str` or `&[T]` | Borrowed result if it points into the input |
-| Load data from the outside world | Borrow the path | Owned data, usually `String`, `Vec<T>`, or a domain struct |
-| Store data in a struct | Own it unless borrowing is a deliberate design | Owned fields for beginner app code |
-
-:::expand[Borrow inside, own across the boundary]{kind="pattern"}
-The common beginner surprise is that this return type cannot work:
-
-```rust
-fn load_default_notebook(path: &str) -> Result<&str, ConfigError> {
-    let text = std::fs::read_to_string(path)
-        .map_err(ConfigError::Read)?;
-
-    find_default(&text).ok_or(ConfigError::MissingDefault)
-}
-```
-
-The returned `&str` would point into `text`. But `text` is a local `String`. When `load_default_notebook` returns, `text` goes out of scope and Rust drops it. The heap bytes that held the config file are cleaned up. A returned slice would point at data that no longer belongs to the program.
-
-Choose the right ownership boundary:
-
-```rust
-fn load_default_notebook(path: &str) -> Result<String, ConfigError> {
-    let text = std::fs::read_to_string(path)
-        .map_err(ConfigError::Read)?;
-
-    find_default(&text)
-        .map(str::to_string)
-        .ok_or(ConfigError::MissingDefault)
-}
-```
-
-Inside the function, borrowing is perfect. `find_default` can cheaply return a slice into `text`. At the public boundary, the function returns an owned `String` so the caller has a value that remains valid after the loader's local variables are gone.
-
-This is the same pattern you saw with application structs: own at boundaries, borrow inside helpers.
-:::
-
-## Small Flexible APIs
-
-Rust APIs often accept borrowed inputs because callers should not have to allocate just to call a function.
-
-For paths, a common shape is `impl AsRef<Path>`:
-
-```rust
-use std::path::Path;
-
-fn load_default_notebook(path: impl AsRef<Path>) -> Result<String, ConfigError> {
-    let text = std::fs::read_to_string(path)
-        .map_err(ConfigError::Read)?;
-
-    find_default(&text)
-        .map(str::to_string)
-        .ok_or(ConfigError::MissingDefault)
-}
-```
-
-`Path` is Rust's standard borrowed view of a filesystem path. `PathBuf` is the owned, growable path buffer. `AsRef<Path>` is a trait for values that can cheaply present themselves as a `Path`. The `impl AsRef<Path>` parameter means "accept any one value that can be viewed as a path."
-
-This lets callers pass a `&str`, a `String`, a `&Path`, or a `PathBuf` without the loader caring which one they have.
-
-Do not turn every beginner function into a generic API. The private helper below is clearer as `&str`:
-
-```rust
-fn find_default(text: &str) -> Option<&str> {
-    text.lines()
+    let line = text
+        .lines()
         .find(|line| line.starts_with("default="))
-        .map(|line| line.trim_start_matches("default="))
+        .ok_or(ConfigError::MissingDefault)?;
+
+    Ok(line.trim_start_matches("default=").trim().to_string())
+}
+
+fn main() {
+    match load_default_notebook("notes.conf") {
+        Ok(notebook) => println!("opening {notebook}"),
+        Err(ConfigError::ReadFailed { path, message }) => {
+            println!("could not read {path}: {message}");
+        }
+        Err(ConfigError::MissingDefault) => {
+            println!("config is missing the default setting");
+        }
+    }
 }
 ```
 
-Use the flexible shape where the boundary benefits from it. Keep inner helpers plain until real callers need more.
+Run it with a good file:
+
+```bash
+$ printf 'default=release checklist\ntheme=dark\n' > notes.conf
+$ cargo run
+     Running `target/debug/note-config`
+opening release checklist
+```
+
+Run it with a file that is missing the setting:
+
+```bash
+$ printf 'theme=dark\n' > notes.conf
+$ cargo run
+     Running `target/debug/note-config`
+config is missing the default setting
+```
+
+Run it with no file:
+
+```bash
+$ rm notes.conf
+$ cargo run
+     Running `target/debug/note-config`
+could not read notes.conf: No such file or directory (os error 2)
+```
+
+The three outputs correspond to the three states named in the type. The loader stays focused on loading. The `main` function decides what the user sees.
+
+That split keeps error flow readable. Inner functions return structured information. Outer code turns that information into process behavior.
 
 ## Putting It All Together
 
-The finished loader keeps each uncertainty in the right shape:
+The first version of the loader returned `String` and used `unwrap()`:
 
 ```rust
-use std::io;
-use std::path::Path;
-
-#[derive(Debug)]
-enum ConfigError {
-    Read(io::Error),
-    MissingDefault,
-}
-
-fn find_default(text: &str) -> Option<&str> {
-    text.lines()
-        .find(|line| line.starts_with("default="))
-        .map(|line| line.trim_start_matches("default="))
-}
-
-fn load_default_notebook(path: impl AsRef<Path>) -> Result<String, ConfigError> {
-    let text = std::fs::read_to_string(path)
-        .map_err(ConfigError::Read)?;
-
-    find_default(&text)
-        .map(str::to_string)
-        .ok_or(ConfigError::MissingDefault)
-}
+fn load_default_notebook(path: &str) -> String
 ```
 
-The file read uses `Result` because I/O can fail. The text search uses `Option` because a missing line is a normal search outcome. The public loader converts both into one domain result, returning an owned `String` because the loaded file text disappears when the function returns.
+That signature promised a notebook name even though ordinary input could make the function panic.
 
-Count back to the first `unwrap` version:
+The final version returns:
 
-- The read failure is no longer a panic. It is `Err(ConfigError::Read(error))`.
-- The missing default is no longer a panic. It is `Err(ConfigError::MissingDefault)`.
-- The success path is still simple. It returns `Ok(name)`.
+```rust
+fn load_default_notebook(path: &str) -> Result<String, ConfigError>
+```
 
-This is the Rust style beginning to show: the function signature tells the truth, and the code stays small enough to read.
+This signature says four useful things:
+
+- The path is borrowed during the call.
+- The success value is an owned `String`.
+- The function can fail.
+- The failures have names the caller can match on.
+
+Inside the function, `?` keeps the happy path readable while preserving early returns. `map_err` changes low-level I/O errors into the app's error type. `ok_or` turns a missing line into a named failure. At the boundary, `main` decides how each outcome should be reported.
+
+That is Rust's reliability style in a small form. Ownership says who is responsible for data. Borrowing says who can access data temporarily. `Result` says which calls can fail and what the caller must decide next.
 
 ## Toward Idiomatic Rust
 
-You now have the core reliability loop: ownership decides who keeps data alive, borrowing lets helpers inspect without taking over, `Option` represents ordinary absence, and `Result` represents fallible work.
+The next module can build on this foundation. Traits, generics, iterators, tests, documentation, and linting all become easier when data ownership and error flow are already explicit.
 
-The next module moves from mechanics into idiom. It will use traits, generics, iterators, and standard-library patterns to make Rust code feel less like translated code from another language and more like Rust.
+In production Rust, you will also see helper crates such as `thiserror` for defining error types and `anyhow` for application-level error reporting. Those tools are useful after the basic model is clear. The model stays the same: fallible work returns `Result`, missing optional data uses `Option`, and APIs show callers what kind of access and failure they should expect.
 
 ---
 
 **References**
 
-- [Result - Rust standard library](https://doc.rust-lang.org/std/result/)
-- [Option - Rust standard library](https://doc.rust-lang.org/std/option/)
-- [Recoverable Errors with Result - The Rust Programming Language](https://doc.rust-lang.org/book/ch09-02-recoverable-errors-with-result.html)
-- [Defining an Enum - The Rust Programming Language](https://doc.rust-lang.org/book/ch06-01-defining-an-enum.html)
-- [AsRef - Rust standard library](https://doc.rust-lang.org/std/convert/trait.AsRef.html)
+- [The Rust Programming Language: Recoverable Errors with Result](https://doc.rust-lang.org/book/ch09-02-recoverable-errors-with-result.html)
+- [The Rust Programming Language: To panic! or Not to panic!](https://doc.rust-lang.org/book/ch09-03-to-panic-or-not-to-panic.html)
+- [std::result::Result](https://doc.rust-lang.org/std/result/enum.Result.html)
+- [std::option::Option::ok_or](https://doc.rust-lang.org/std/option/enum.Option.html#method.ok_or)
+- [std::fs::read_to_string](https://doc.rust-lang.org/std/fs/fn.read_to_string.html)

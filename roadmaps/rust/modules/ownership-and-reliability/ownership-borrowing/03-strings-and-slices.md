@@ -1,428 +1,521 @@
 ---
 title: "Strings And Slices"
 description: "Choose when Rust code should own text or lists with String and Vec<T>, and when helpers should borrow views with &str and slices."
-overview: "After ownership and borrowing, String, &str, Vec<T>, and slices become much less mysterious. This article shows why application data usually owns values while functions often borrow the parts they only need to inspect."
-tags: ["strings", "slices", "borrowing", "vectors"]
+overview: "String, &str, Vec<T>, and slices make ownership practical in everyday programs. This article follows a notes app that stores owned data and passes borrowed views to helpers."
+tags: ["string", "str", "slices", "vec"]
 order: 3
 id: article-rust-ownership-and-reliability-strings-and-slices
 ---
 
 ## Table of Contents
 
-1. [The Problem](#the-problem)
+1. [What Are Strings And Slices?](#what-are-strings-and-slices)
 2. [Owned Text](#owned-text)
 3. [Borrowed Text](#borrowed-text)
-4. [Bytes, Characters, And UTF-8](#bytes-characters-and-utf-8)
-5. [Slices](#slices)
-6. [What A Slice Stores](#what-a-slice-stores)
-7. [Vectors And List Slices](#vectors-and-list-slices)
-8. [Lifetimes In Plain English](#lifetimes-in-plain-english)
-9. [A Practical Heuristic](#a-practical-heuristic)
-10. [Putting It All Together](#putting-it-all-together)
-11. [What's Next](#whats-next)
+4. [UTF-8 Bytes](#utf-8-bytes)
+5. [String Slices](#string-slices)
+6. [Vec And List Slices](#vec-and-list-slices)
+7. [The Lifetime Of A Slice](#the-lifetime-of-a-slice)
+8. [API Choices](#api-choices)
+9. [Putting It All Together](#putting-it-all-together)
+10. [What's Next](#whats-next)
 
-## The Problem
+## What Are Strings And Slices?
 
-The notes app now has ownership rules in its bones. A note owns its title and body. A search command reads notes without taking them away. A formatter creates new output when it needs to print a result.
+The previous article introduced references. A reference lets a function use data without owning it. Text and lists are where that rule becomes part of ordinary Rust code.
 
-Then Rust examples start mixing types that look almost the same:
+You will see these four shapes constantly:
 
-- `String` for stored note text.
-- `&str` for function parameters.
-- `Vec<Note>` for the list of notes.
-- `&[Note]` for helper functions that scan the list.
+```rust
+String
+&str
+Vec<T>
+&[T]
+```
 
-The question is not "which string type is real?" They are all real. The question is: does this part of the program need to own the data, or does it only need to borrow a view of data owned somewhere else?
+They are related, but they do different jobs. A `String` owns growable text. A `&str` borrows a view of UTF-8 text. A `Vec<T>` owns a growable list. A slice such as `&[T]` borrows a view of part or all of a list.
 
-That is the thread through this article. The notes app stores owned text because the app must keep it. Helper functions borrow slices because they only inspect part of something that already exists.
+Create a small project:
+
+```bash
+$ cargo new note-text
+    Creating binary (application) `note-text` package
+$ cd note-text
+```
+
+Put this program in `src/main.rs`:
+
+```rust
+struct Note {
+    title: String,
+    tags: Vec<String>,
+}
+
+fn title_has_word(title: &str, word: &str) -> bool {
+    title.split_whitespace().any(|part| part == word)
+}
+
+fn print_tags(tags: &[String]) {
+    for tag in tags {
+        println!("#{tag}");
+    }
+}
+
+fn main() {
+    let note = Note {
+        title: String::from("release checklist"),
+        tags: vec![String::from("release"), String::from("ops")],
+    };
+
+    println!("{}", title_has_word(&note.title, "release"));
+    print_tags(&note.tags);
+}
+```
+
+Run it:
+
+```bash
+$ cargo run
+   Compiling note-text v0.1.0 (/home/you/note-text)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.29s
+     Running `target/debug/note-text`
+true
+#release
+#ops
+```
+
+The first output line is `true` because the borrowed title contains the word `release`. The next two lines come from the borrowed tag slice. The important ownership detail is hidden in the function signatures: the `Note` owns the title and tags, while the helper functions borrow views of them.
+
+That split is the practical rule for this article. Store owned data in your application state. Pass borrowed views to helpers that only need to inspect data.
 
 ## Owned Text
 
-`String` is owned, growable UTF-8 text. Use it when the program needs to store text, mutate text, receive text from outside the program, or return newly built text to a caller.
+`String` is Rust's owned, growable text type. Use it when your program needs to store text, build text, or keep text after the current expression finishes.
 
-The notes app's data model should own its text:
+Start with a single title:
+
+```rust
+fn main() {
+    let mut title = String::from("release");
+
+    title.push_str(" checklist");
+
+    println!("{title}");
+}
+```
+
+Run it:
+
+```text
+release checklist
+```
+
+The binding is `mut` because the program grows the string. The `String` owns a heap allocation that stores UTF-8 bytes. `push_str` appends more bytes to that owned buffer.
+
+Owned text is also the natural shape for stored application data:
 
 ```rust
 struct Note {
     title: String,
     body: String,
 }
-```
 
-This means each `Note` is responsible for keeping its own title and body alive. The text remains valid independently of a command line argument or file buffer that might disappear.
-
-Creating a note can take owned strings too:
-
-```rust
 fn new_note(title: String, body: String) -> Note {
     Note { title, body }
 }
 ```
 
-This function consumes the two strings and moves them into the struct. That is a good fit when the caller is finished building the text and wants the note to keep it.
+The returned `Note` owns both fields. It can move into a vector, be written to disk, be sent to another function, or live longer than the local variables that created it.
 
-The practical consequence is simple. Application structs usually own the data they are responsible for keeping. If a `Note` outlives the command that created it, the note should not depend on a borrowed view owned by that command.
-
-:::expand[Application structs usually own text]{kind="pattern"}
-It is tempting to put references inside structs because references feel lighter:
-
-```rust
-struct Note<'a> {
-    title: &'a str,
-    body: &'a str,
-}
-```
-
-The `<'a>` part is a lifetime parameter. It says the `Note` does not own its text; it borrows text that must stay valid for at least as long as the note view is used. That shape can be useful for temporary parser views, but it is usually the wrong first shape for application data. A stored note needs to keep its title and body after the command, file buffer, or request that created it is gone.
-
-Here is the problem in plain terms:
-
-```rust
-fn make_note<'a>() -> Note<'a> {
-    let title = String::from("Buy milk");
-    let body = String::from("Remember oat milk");
-
-    Note {
-        title: &title,
-        body: &body,
-    }
-}
-```
-
-This cannot work as stored data. `title` and `body` are local strings. They are dropped when `make_note` returns. A `Note` that borrowed from them would point at text that no longer exists.
-
-The ordinary app shape is simpler:
-
-```rust
-struct Note {
-    title: String,
-    body: String,
-}
-```
-
-Use owned fields when the struct is responsible for keeping data alive. Use borrowed fields when the struct is a short-lived view into data owned somewhere else. That distinction prevents lifetimes from becoming a workaround for data that should simply be owned.
-:::
+If a struct stores borrowed text, the struct depends on another owner staying alive. That design is sometimes useful, especially for parsers and views, but ordinary application records usually own their fields. Owned fields keep the data and its lifetime in the same place.
 
 ## Borrowed Text
 
-`&str` is a borrowed view of UTF-8 text. It does not own the characters. It points at text that lives somewhere else.
+`&str` is a borrowed view of UTF-8 text. Use it when a function only needs to read text while it runs.
 
-That makes it ideal for helpers that only read text:
+Change the program to a small word counter:
 
 ```rust
 fn word_count(text: &str) -> usize {
     text.split_whitespace().count()
 }
-```
 
-This function does not need to store the text. It does not need to change it. It only needs to look at it long enough to count words.
+fn main() {
+    let title = String::from("release checklist");
+    let literal = "daily notes";
 
-Because `&str` is a borrowed view, the same helper works with several sources:
-
-```rust
-let body = String::from("borrowed views keep helpers flexible");
-
-let a = word_count(&body);
-let b = word_count("string literals work too");
-```
-
-The first call borrows from an owned `String`. The second call uses a string literal, which is already a string slice stored in the program. The helper does not care where the text came from. It only asks for a readable view.
-
-This is why Rust examples often use `&str` in function parameters. Borrowing makes a function easier to call and avoids taking ownership when ownership would add no value.
-
-## Bytes, Characters, And UTF-8
-
-Rust strings are UTF-8. UTF-8 stores text as bytes, and not every visible character uses the same number of bytes.
-
-For plain ASCII text, the relationship looks simple:
-
-```text
-text:  R  u  s  t
-byte:  0  1  2  3
-```
-
-The word `"Rust"` has four visible characters and four bytes. The word `"café"` is different:
-
-```text
-text:  c  a  f  é
-byte:  0  1  2  3  4
-```
-
-The final `é` uses two bytes in UTF-8. That is why Rust string ranges are byte ranges, not character-position ranges. A range must begin and end at valid character boundaries.
-
-`usize` appears often around strings and slices because it is Rust's standard type for counts, lengths, and indexes. When you see a length from `.len()`, read it as a byte count for strings and an element count for list slices.
-
-## Slices
-
-A slice is a borrowed view into a contiguous part of a collection. Contiguous means the items are next to each other in memory, with no gaps in the viewed range. For strings, that view is `&str`. For vectors and arrays, that view looks like `&[T]`.
-
-One way to picture the relationship is:
-
-```text
-owner:      String
-            "learn Rust slices"
-
-borrowed:         &str
-                  "Rust"
-```
-
-The owner keeps the data alive. The slice describes a part of it.
-
-Rust lets you borrow a string slice with a range:
-
-```rust
-let title = String::from("Rust notes");
-let first_word = &title[0..4];
-```
-
-`first_word` is a `&str` view into `title`. It does not copy `"Rust"` into a new owned string.
-
-There is an important gotcha here. Rust strings are UTF-8, and string indexes are byte indexes, not character positions. Slicing with a range must land on valid UTF-8 character boundaries. For word-based text work, methods such as `split_whitespace`, `lines`, and `chars` are often a better first tool than manual byte ranges.
-
-The bigger idea is still the same: a slice borrows part of an owner. It is cheap because it does not duplicate the data, and it is safe because Rust checks that the borrowed view cannot outlive the owner.
-
-## What A Slice Stores
-
-A slice is a view with two essential pieces of information:
-
-```text
-slice = where the viewed data starts + how much of it is visible
-```
-
-For `&str`, the slice points at UTF-8 bytes and stores a length in bytes. For `&[T]`, the slice points at elements of type `T` and stores a length in elements.
-
-```mermaid
-flowchart LR
-    Text["String owner<br/>(Rust notes)"]
-    Slice["&str view<br/>(start + byte length)"]
-    List["Vec<Note> owner"]
-    ListSlice["&[Note] view<br/>(start + element length)"]
-
-    Text --> Slice
-    List --> ListSlice
-```
-
-This is why slices are cheap to pass into helper functions. The helper receives a small view, not a copy of all the underlying text or notes. The owner still controls how long the data lives.
-
-:::expand[String slices are byte ranges with UTF-8 rules]{kind="pitfall"}
-String ranges use byte indexes. That is harmless when the text is plain ASCII:
-
-```rust
-let title = String::from("Rust notes");
-let first = &title[0..4];
-
-println!("{first}");
-```
-
-`"Rust"` is four ASCII characters and four bytes, so `0..4` lands cleanly on character boundaries.
-
-Unicode text can be different:
-
-```rust
-let word = String::from("café");
-let broken = &word[0..4];
-```
-
-The visible word has four characters, but `é` takes two bytes in UTF-8:
-
-```text
-byte indexes: 0   1   2   3   4   5
-text:         c   a   f   é
-bytes:        63  61  66  c3  a9
-range 0..4:   c   a   f   half of é
-```
-
-The range `0..4` cuts into the middle of that final character, so slicing there is invalid and will panic at runtime.
-
-For beginner text work, prefer methods that understand text boundaries:
-
-```rust
-let first_word = title.split_whitespace().next();
-let first_char = word.chars().next();
-```
-
-Those methods express the job better than manual byte indexes. Use manual string ranges only when you know the byte boundaries are valid, such as when a parser has already found boundaries using safe string methods.
-
-The rule of thumb is: `&text[start..end]` is a byte slice, not a character slice. Rust keeps the result valid UTF-8, but you are responsible for choosing valid boundaries.
-:::
-
-## Vectors And List Slices
-
-The same ownership pattern appears with lists.
-
-`Vec<T>` owns a growable list of values. If the notes app stores all notes in memory, it might use a vector:
-
-```rust
-let notes: Vec<Note> = Vec::new();
-```
-
-The `T` in `Vec<T>` is a placeholder for the element type. `Vec<Note>` means a vector whose elements are `Note` values. `Vec<String>` means a vector whose elements are `String` values.
-
-A helper that only searches notes should not need to own that vector. It can borrow a slice:
-
-```rust
-fn count_matching(notes: &[Note], query: &str) -> usize {
-    notes
-        .iter()
-        .filter(|note| note.body.contains(query))
-        .count()
+    println!("{}", word_count(&title));
+    println!("{}", word_count(literal));
 }
 ```
 
-The parameter `notes: &[Note]` says "give me a borrowed view of zero or more notes." The function can iterate over the notes, but it does not take the collection away from the caller.
+Run it:
 
-This also makes the helper flexible. It can accept a whole vector or part of one:
-
-```rust
-let all_matches = count_matching(&notes, "rust");
-let first_three = count_matching(&notes[..3], "rust");
+```bash
+$ cargo run
+   Compiling note-text v0.1.0 (/home/you/note-text)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.21s
+     Running `target/debug/note-text`
+2
+2
 ```
 
-Both calls give the function the same kind of view: a slice of notes. The function does not need separate versions for "whole vector" and "part of vector."
+The same function accepts both calls. `&title` borrows the whole owned `String` as a string slice. `literal` already has type `&str`, because string literals are borrowed views of text stored in the compiled program.
 
-The second call assumes the vector has at least three notes. If it might not, check the length first or use a method that safely handles short lists. Slices are safe views, but range indexes still need to be valid.
+That flexibility is the main reason many Rust APIs accept `&str` instead of `&String`.
 
-Here is the common family pattern:
+```rust
+fn print_title(title: &str) {
+    println!("{title}");
+}
 
-| Owned value | Borrowed view | Usually used when |
+fn main() {
+    let owned = String::from("release checklist");
+    let literal = "daily notes";
+
+    print_title(&owned);
+    print_title(literal);
+    print_title(&owned[0..7]);
+}
+```
+
+Run it:
+
+```text
+release checklist
+daily notes
+release
+```
+
+The helper does not care whether the text came from a `String`, a string literal, or part of a string. It only needs a valid borrowed view during the call.
+
+## UTF-8 Bytes
+
+Rust strings are UTF-8. UTF-8 stores text as bytes, and some characters use more than one byte. This matters because a string index is a byte position, not a character position.
+
+Try to index a string like an array:
+
+```rust
+fn main() {
+    let title = String::from("notes");
+
+    let first = title[0];
+
+    println!("{first}");
+}
+```
+
+Check it:
+
+```bash
+$ cargo check
+    Checking note-text v0.1.0 (/home/you/note-text)
+error[E0277]: the type `str` cannot be indexed by `{integer}`
+ --> src/main.rs:4:17
+  |
+4 |     let first = title[0];
+  |                 ^^^^^^^^ string indices are ranges of `usize`
+```
+
+Rust rejects single-number indexing because the answer would be unclear. Does `title[0]` mean the first byte, the first Unicode scalar value, or the first user-perceived character? Those can differ.
+
+Look at a short UTF-8 example:
+
+```rust
+fn main() {
+    let plain = "cafe";
+    let accented = "caf\u{e9}";
+
+    println!("plain bytes: {}", plain.len());
+    println!("accented bytes: {}", accented.len());
+    println!("accented chars: {}", accented.chars().count());
+}
+```
+
+Run it:
+
+```text
+plain bytes: 4
+accented bytes: 5
+accented chars: 4
+```
+
+The escaped text `caf\u{e9}` displays as a four-character word with an accent when the program runs, but it uses five bytes because the final character takes two bytes in UTF-8. The `.len()` method reports bytes. The `.chars().count()` call walks Unicode scalar values.
+
+That distinction is why slicing strings requires valid byte boundaries.
+
+## String Slices
+
+A string slice is a borrowed view into UTF-8 text. The type is `&str`.
+
+This slice uses byte range `0..7`:
+
+```rust
+fn main() {
+    let title = String::from("release checklist");
+    let first_word = &title[0..7];
+
+    println!("{first_word}");
+}
+```
+
+Run it:
+
+```text
+release
+```
+
+The range starts at byte 0 and ends before byte 7. Because the title is plain ASCII, each visible letter is one byte, so the slice lines up with the word `release`.
+
+Now try a slice that cuts through the two-byte final character in that same word:
+
+```rust
+fn main() {
+    let word = "caf\u{e9}";
+    let broken = &word[0..4];
+
+    println!("{broken}");
+}
+```
+
+Run it:
+
+```text
+thread 'main' panicked at src/main.rs:3:23:
+byte index 4 is not a char boundary; it is inside the final character (bytes 3..5)
+```
+
+The panic tells you exactly what happened. Byte index 4 lands in the middle of the final character. Rust will not create a `&str` that points at invalid UTF-8. A string slice must start and end at valid character boundaries.
+
+For many application tasks, you avoid manual byte ranges and use string methods instead:
+
+```rust
+fn main() {
+    let title = "release checklist";
+
+    for word in title.split_whitespace() {
+        println!("{word}");
+    }
+}
+```
+
+Output:
+
+```text
+release
+checklist
+```
+
+The method returns valid `&str` slices for each word. You get borrowed views without writing byte indexes yourself.
+
+## Vec And List Slices
+
+`Vec<T>` is Rust's owned, growable list type. Use it when your program needs to store a list whose size can change.
+
+```rust
+fn main() {
+    let mut tags = Vec::new();
+
+    tags.push(String::from("release"));
+    tags.push(String::from("ops"));
+
+    println!("{tags:?}");
+}
+```
+
+Run it:
+
+```text
+["release", "ops"]
+```
+
+The vector owns its elements. In this case, each element is an owned `String`. When the vector is dropped, it drops each string and frees the list storage.
+
+A list slice borrows part or all of a vector. Its type is `&[T]`.
+
+```rust
+fn print_tags(tags: &[String]) {
+    for tag in tags {
+        println!("#{tag}");
+    }
+}
+
+fn main() {
+    let tags = vec![
+        String::from("release"),
+        String::from("ops"),
+        String::from("urgent"),
+    ];
+
+    print_tags(&tags[0..2]);
+    println!("all tags: {}", tags.len());
+}
+```
+
+Run it:
+
+```text
+#release
+#ops
+all tags: 3
+```
+
+The helper received a borrowed view of the first two elements. The vector remained owned by `main`, so `main` could still print its length afterward.
+
+This is the list version of the string pattern:
+
+| Owned Container | Borrowed View | Common Use |
 | --- | --- | --- |
-| `String` | `&str` | Reading text without storing it |
-| `Vec<T>` | `&[T]` | Reading a list without taking it |
-| `[T; N]` | `&[T]` | Reading an array through the same list view |
+| `String` | `&str` | Store text, pass text to readers |
+| `Vec<T>` | `&[T]` | Store a list, pass part or all of the list to readers |
 
-Use this table as a map. Owned containers keep data. Borrowed slices let helpers inspect data.
+The borrowed view stores a pointer and a length. It does not own the elements behind the pointer.
 
-:::expand[Accept slices when a function only reads a list]{kind="pattern"}
-If a function only reads a list, prefer a slice parameter:
+For a list slice such as `&tags[0..2]`, the pointer starts at the first selected element and the length says how many elements are in the view:
+
+```text
+Vec<String> owner
++---------+---------+-----------+
+| release | ops     | backend   |
++---------+---------+-----------+
+  ^
+  |
+  +-- &[String] pointer, length 2
+```
+
+The slice has enough information to iterate over `release` and `ops`, but it has no capacity field and no authority to grow or free the vector. The vector owner still controls the allocation. This is why `&[T]` is a good parameter type for readers: the function receives the exact window it needs, and the caller keeps ownership of the storage.
+
+A string slice works the same way, except the length is measured in bytes and the bytes must form valid UTF-8:
+
+```text
+String owner: "release checklist"
+               ^
+               |
+               +-- &str pointer, length 7 bytes
+```
+
+That pointer-and-length shape is also why the owner must outlive the slice. If the owner drops or moves its allocation away, the slice would still contain the old pointer and length. Rust rejects that situation before the program runs.
+
+## The Lifetime Of A Slice
+
+A slice can only live while the data it points at is alive.
+
+This program is valid because the slice is used while the original string still exists:
 
 ```rust
-fn count_matching(notes: &[Note], query: &str) -> usize {
-    notes
-        .iter()
-        .filter(|note| note.body.contains(query))
-        .count()
+fn main() {
+    let title = String::from("release checklist");
+    let first_word = &title[0..7];
+
+    println!("{first_word}");
 }
 ```
 
-That signature says the helper needs a borrowed view of notes. It does not need to own the vector, resize it, or store it.
-
-The benefit is flexibility. The same function can read a whole vector:
+This program is rejected because it tries to use a slice after the owned string is gone:
 
 ```rust
-let count = count_matching(&notes, "rust");
-```
+fn main() {
+    let first_word;
 
-It can read part of a vector:
+    {
+        let title = String::from("release checklist");
+        first_word = &title[0..7];
+    }
 
-```rust
-let count = count_matching(&notes[0..3], "rust");
-```
-
-And it can read an array through the same slice shape:
-
-```rust
-let sample = [note_one, note_two];
-let count = count_matching(&sample, "rust");
-```
-
-If the function took `Vec<Note>`, the caller would have to give the whole collection away. If it took `&Vec<Note>`, it would unnecessarily require the caller to have a vector specifically. `&[Note]` asks for the smallest useful thing: a readable sequence of notes.
-
-This pattern appears all over Rust APIs. Own collections at storage boundaries. Accept slices at read-only helper boundaries.
-:::
-
-## Lifetimes In Plain English
-
-Every borrowed view has a lifetime, even when you do not write lifetime syntax. A lifetime is the span of code where Rust can prove the borrow is valid.
-
-For this article, the intuition is enough:
-
-```rust
-let title = String::from("Rust notes");
-let view = &title;
-
-println!("{view}");
-```
-
-`view` is valid while `title` is still alive. Rust accepts the code because the owner exists long enough for the borrowed view to be used.
-
-This would be the wrong idea:
-
-```rust
-fn bad_title() -> &str {
-    let title = String::from("Rust notes");
-    &title
+    println!("{first_word}");
 }
 ```
 
-The function tries to return a borrowed view into `title`, but `title` is dropped when the function ends. The view would point at text that no longer exists, so Rust rejects it.
+Check it:
 
-When a function needs to return newly created text, return an owned `String`:
-
-```rust
-fn title_label(title: &str) -> String {
-    format!("Note: {title}")
-}
+```text
+error[E0597]: `title` does not live long enough
 ```
 
-The function borrows the input because it only reads it. It returns `String` because the formatted label is new owned text that must live after the function returns.
+The inner binding `title` owns the `String`. At the closing brace, Rust drops that `String`. The slice `first_word` would point into dropped text, so the compiler rejects the program.
 
-## A Practical Heuristic
+This is the same dangling-reference protection from the borrowing article, applied to text slices. A slice is safe because Rust checks that the owner outlives the view.
 
-The most useful beginner heuristic is this: application structs usually own data; functions often borrow inputs.
+## API Choices
 
-For the notes app, that leads to a clean shape:
+The most useful beginner heuristic is simple: own data in structs and collections, borrow data in helper parameters.
+
+| Situation | Prefer | Reason |
+| --- | --- | --- |
+| A `Note` stores a title | `String` | The note owns its own text |
+| A helper reads a title | `&str` | The helper does not need ownership |
+| A notebook stores many notes | `Vec<Note>` | The notebook owns the list |
+| A helper reads notes | `&[Note]` | The helper can inspect a borrowed list |
+| A helper builds new text | `String` return value | The caller receives owned output |
+
+Here is that pattern in one small program:
 
 ```rust
 struct Note {
     title: String,
-    body: String,
+    tags: Vec<String>,
 }
 
-fn title_matches(note: &Note, query: &str) -> bool {
-    note.title.contains(query)
+fn has_tag(tags: &[String], wanted: &str) -> bool {
+    tags.iter().any(|tag| tag == wanted)
+}
+
+fn display_title(title: &str) -> String {
+    title.trim().to_uppercase()
+}
+
+fn main() {
+    let note = Note {
+        title: String::from(" release checklist "),
+        tags: vec![String::from("release"), String::from("ops")],
+    };
+
+    println!("{}", display_title(&note.title));
+    println!("{}", has_tag(&note.tags, "ops"));
 }
 ```
 
-`Note` owns its fields because stored notes need stable text. `title_matches` borrows the note and the query because it only checks them.
+Run it:
 
-The heuristic also helps with API design:
+```text
+RELEASE CHECKLIST
+true
+```
 
-| If the code needs to... | Prefer |
-| --- | --- |
-| Store text in a struct | `String` |
-| Read text passed by a caller | `&str` |
-| Build and return new text | `String` |
-| Store a growable list | `Vec<T>` |
-| Read a caller's list | `&[T]` |
-
-There are exceptions. Sometimes a function takes ownership because it will keep the value, transform it, or avoid a copy. Sometimes a struct borrows data because it is a temporary parser view. But for ordinary application code, owning at storage boundaries and borrowing at helper boundaries keeps the design simple.
+`Note` owns its `String` and `Vec<String>`. `display_title` borrows text and returns a new owned `String` because uppercase conversion creates new text. `has_tag` borrows the tag list and borrows the wanted text. The signatures show which data is stored, which data is inspected, and which data is newly created.
 
 ## Putting It All Together
 
-The opening problem was that Rust examples seem to switch between `String`, `&str`, `Vec<T>`, and `&[T]` without warning. The switch follows ownership:
+The article opened with four shapes:
 
-- `String` owns growable UTF-8 text.
-- `&str` borrows a view of UTF-8 text.
+```rust
+String
+&str
+Vec<T>
+&[T]
+```
+
+They now line up with ownership and borrowing:
+
+- `String` owns growable text.
+- `&str` borrows a valid UTF-8 view.
 - `Vec<T>` owns a growable list.
-- `&[T]` borrows a view of a list.
-- Slices are cheap views into data owned somewhere else.
-- A borrowed view must not outlive its owner.
+- `&[T]` borrows a view into a list.
 
-The notes app now has a practical rule of thumb. Stored notes own their title and body. Search, count, and format helpers borrow the note text or note list when they only need to inspect it. When a helper creates new output, it returns an owned value.
+The notes app stores owned values because notes need to keep their titles, bodies, and tags. Helper functions accept borrowed views because they usually inspect data for a short time. Rust checks that every borrowed view points at data that is still alive.
 
-That is why Rust examples keep using these types differently. They are not competing string and list spellings. They describe who owns the data and who is only looking.
+That is the practical bridge from ownership to everyday APIs. Data structures own what they store. Function parameters borrow what they only read.
 
 ## What's Next
 
-Strings and slices make borrowing feel concrete. The next reliability habit is just as important: representing missing values and recoverable failures without hiding them behind nulls, exceptions, or panics.
-
-The next article introduces `Option` and `Result`, the two enum shapes Rust uses when a value might be absent or an operation might fail.
+Strings and slices make ownership visible in text and list APIs. The next article applies the same explicit style to missing data and recoverable failure with `Option` and `Result`.
 
 ---
 
 **References**
 
-- [The Slice Type](https://doc.rust-lang.org/book/ch04-03-slices.html). Supports slices as references to contiguous portions of collections, including string slices and array slices.
-- [Storing UTF-8 Encoded Text with Strings](https://doc.rust-lang.org/book/ch08-02-strings.html). Supports `String` as growable, mutable, owned UTF-8 text and explains common string operations.
-- [Primitive Type str](https://doc.rust-lang.org/std/primitive.str.html). Supports `str` and `&str` as UTF-8 string slice types and documents string slice methods.
-- [Struct String](https://doc.rust-lang.org/std/string/struct.String.html). Supports `String` as the standard owned string type and documents its relationship to string slices.
+- [The Rust Programming Language: The Slice Type](https://doc.rust-lang.org/book/ch04-03-slices.html)
+- [std::string::String](https://doc.rust-lang.org/std/string/struct.String.html)
+- [std::primitive::str](https://doc.rust-lang.org/std/primitive.str.html)
+- [std::vec::Vec](https://doc.rust-lang.org/std/vec/struct.Vec.html)
+- [std::slice](https://doc.rust-lang.org/std/slice/)

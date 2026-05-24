@@ -1,6 +1,6 @@
 ---
-title: "Errors And APIs"
-description: "Make absence and failure visible with Option, Result, match, the question-mark operator, and API boundaries that borrow or own deliberately."
+title: "Fallible APIs"
+description: "Represent absence and failure with Option, Result, match, the question-mark operator, and signatures that show callers what can happen."
 tags: ["option", "result", "api-design"]
 order: 2
 ---

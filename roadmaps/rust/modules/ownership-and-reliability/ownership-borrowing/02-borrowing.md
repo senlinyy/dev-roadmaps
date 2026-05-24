@@ -1,412 +1,517 @@
 ---
 title: "Borrowing"
 description: "Use references so functions can read or change data without taking ownership, while following Rust's reader and writer rules."
-overview: "Borrowing is how Rust keeps ownership stable while allowing useful access. This article continues the notes app example with shared references, mutable references, borrow scopes, and function signatures."
-tags: ["borrowing", "references", "mutable-references", "functions"]
+overview: "Borrowing keeps ownership in one place while allowing temporary access somewhere else. This article follows shared references, mutable references, borrow scopes, and dangling-reference checks."
+tags: ["borrowing", "references", "mutability"]
 order: 2
 id: article-rust-ownership-and-reliability-borrowing
 ---
 
 ## Table of Contents
 
-1. [The Problem](#the-problem)
-2. [What A Reference Is](#what-a-reference-is)
-3. [Shared References](#shared-references)
+1. [What Is Borrowing?](#what-is-borrowing)
+2. [Shared References](#shared-references)
+3. [Read The Compiler Output](#read-the-compiler-output)
 4. [Function Signatures](#function-signatures)
-5. [Mutable Binding vs Mutable Borrow](#mutable-binding-vs-mutable-borrow)
-6. [Mutable References](#mutable-references)
-7. [Readers And Writers](#readers-and-writers)
-8. [Borrow Scopes](#borrow-scopes)
-9. [No Dangling References](#no-dangling-references)
-10. [Choosing A Signature](#choosing-a-signature)
-11. [Putting It All Together](#putting-it-all-together)
-12. [What's Next](#whats-next)
+5. [Mutable References](#mutable-references)
+6. [Readers And Writers](#readers-and-writers)
+7. [Borrow Scopes](#borrow-scopes)
+8. [No Dangling References](#no-dangling-references)
+9. [Choosing A Signature](#choosing-a-signature)
+10. [Putting It All Together](#putting-it-all-together)
+11. [What's Next](#whats-next)
 
-## The Problem
+## What Is Borrowing?
 
-The ownership article showed why this notes-app function is too strong for a simple summary:
+The previous article showed that a `String` moves when a function takes `String` by value. That is useful when the function needs to keep the string. It is too much when the function only needs to inspect the string for a moment.
+
+Create a small project for the next step:
+
+```bash
+$ cargo new note-borrow
+    Creating binary (application) `note-borrow` package
+$ cd note-borrow
+```
+
+Put this program in `src/main.rs`:
 
 ```rust
-fn print_title(title: String) {
-    println!("{title}");
+fn word_count(title: String) -> usize {
+    title.split_whitespace().count()
 }
 
-let title = String::from("Buy milk");
-print_title(title);
-println!("{title}");
+fn main() {
+    let title = String::from("release checklist");
+
+    let count = word_count(title);
+
+    println!("{title}: {count} words");
+}
 ```
 
-`print_title` only prints the title, but its signature says it takes ownership of the `String`. The caller loses the title after the function call. That is strange design. Printing a note title should not consume the note title.
+The helper only counts words. It does not store the title. It does not change the title. It does not need to clean up the title. The signature still asks for `String`, so the call moves ownership into the helper:
 
-The same problem appears across the app:
-
-- A search function needs to inspect note bodies without owning every note.
-- A preview function needs to read a title and return a short display string.
-- An edit function needs to change one note body while the rest of the app waits.
-
-Borrowing is Rust's answer. A reference lets code use a value without becoming its owner.
-
-## What A Reference Is
-
-In JavaScript and Python, people often say variables "hold references" to objects. That is useful background, but a Rust reference is stricter. A Rust reference is temporary, checked access to a value owned somewhere else.
-
-The reference does not own the value. It does not keep the value alive by itself. It also carries rules about what kind of access is allowed:
-
-| Reference | Plain meaning | Access rule |
-| --- | --- | --- |
-| `&T` | Shared reference to a `T` | Read-style access; many can exist together |
-| `&mut T` | Mutable reference to a `T` | Write-capable access; it must be exclusive |
-
-That is the big difference from managed-language references. The compiler checks when Rust references start, when they stop being used, and whether they overlap with mutation.
-
-:::expand[JS and Python references vs Rust references]{kind="design"}
-The same word, "reference," can point to different ideas.
-
-In JavaScript:
-
-```javascript
-const a = { title: "Buy milk" };
-const b = a;
-b.title = "Read Rust";
-console.log(a.title);
+```bash
+$ cargo check
+    Checking note-borrow v0.1.0 (/home/you/note-borrow)
+error[E0382]: borrow of moved value: `title`
+  --> src/main.rs:10:15
+   |
+6  |     let title = String::from("release checklist");
+   |         ----- move occurs because `title` has type `String`, which does not implement the `Copy` trait
+7  |
+8  |     let count = word_count(title);
+   |                            ----- value moved here
+9  |
+10 |     println!("{title}: {count} words");
+   |               ^^^^^ value borrowed here after move
 ```
 
-Both `a` and `b` refer to the same object. Either name can observe mutation through the other. The runtime allows that aliasing by default.
+The error points at the shape of the API. `word_count(title)` moved the value because `word_count` asked for an owned `String`. Borrowing is the Rust tool for this exact case. A function can receive a reference to a value, use that reference while it runs, and leave ownership with the caller.
 
-Rust makes the access mode explicit:
-
-```rust
-let mut title = String::from("Buy milk");
-
-let preview = &title;
-println!("{preview}");
-
-let edit = &mut title;
-edit.push_str(" today");
-```
-
-The shared reference `preview` reads. The mutable reference `edit` writes. Rust accepts this only because the read is finished before the write begins.
-
-That rule is why Rust references can feel less casual than references in JS or Python. The payoff is that a function signature tells you whether the function merely reads a value, mutates it in place, or takes ownership completely.
-:::
+A reference is a value that points at another value without owning it. Shared references are written with `&`.
 
 ## Shared References
 
-A shared reference is written with `&`.
+Change the helper to accept `&String` and change the call to pass `&title`:
 
 ```rust
-fn print_title(title: &String) {
-    println!("{title}");
+fn word_count(title: &String) -> usize {
+    title.split_whitespace().count()
 }
 
-let title = String::from("Buy milk");
-print_title(&title);
-println!("{title}");
-```
+fn main() {
+    let title = String::from("release checklist");
 
-The call `print_title(&title)` borrows the string. The function receives `&String`, which means "a reference to a `String`." It can read the string, but it does not own it.
+    let count = word_count(&title);
 
-That changes the ownership story:
-
-```mermaid
-flowchart LR
-    Owner["title<br/>(owner)"]
-    Ref["title ref<br/>(borrower)"]
-    Heap["Heap bytes<br/>(Buy milk)"]
-
-    Owner --> Heap
-    Ref -. reads .-> Heap
-```
-
-When `print_title` returns, the reference is gone. The original `title` is still the owner, so the caller can keep using it.
-
-You will often see signatures use `&str` instead of `&String` for text-reading functions:
-
-```rust
-fn print_title(title: &str) {
-    println!("{title}");
+    println!("{title}: {count} words");
 }
 ```
 
-That is more flexible because a string slice can refer to a `String` or to a string literal. For this article, the important idea is the same: the `&` means the function borrows instead of owns.
+Run it:
+
+```bash
+$ cargo run
+   Compiling note-borrow v0.1.0 (/home/you/note-borrow)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.25s
+     Running `target/debug/note-borrow`
+release checklist: 2 words
+```
+
+The output shows the ownership problem is gone. The helper counted two words, then `main` still printed the original title.
+
+The two `&` markers have related jobs:
+
+```text
+fn word_count(title: &String) -> usize
+                     ^ receives a reference to a String
+
+let count = word_count(&title);
+                       ^ creates a reference to title
+```
+
+The flow looks like this:
+
+```text
+main owns the String
+  |
+  +-- creates a shared reference
+          |
+          v
+       word_count reads through the reference
+          |
+          v
+       reference stops being used
+  |
+  v
+main still owns the String
+```
+
+The helper can read through the reference because the original `String` is still alive. The helper cannot drop the `String`, because it does not own the `String`.
+
+The actual reference is small. It is closer to a checked pointer than to a copy of the string:
+
+```text
+main owns:
+title -> String handle -> heap text "release checklist"
+
+word_count receives:
+title: &String -------> the String owned by main
+```
+
+The borrowed parameter lets `word_count` follow the pointer to read the string's length and bytes. It does not receive the `String` handle as an owner, so it cannot free the heap allocation and cannot keep the reference after the owner is gone. The compiler checks that the reference is only used while the owner remains valid.
+
+Shared references are common because many pieces of code need read-only access at the same time. This program creates two shared references and also uses the owner afterward:
+
+```rust
+fn main() {
+    let title = String::from("release checklist");
+
+    let first_view = &title;
+    let second_view = &title;
+
+    println!("{first_view}");
+    println!("{second_view}");
+    println!("{title}");
+}
+```
+
+Run it:
+
+```text
+release checklist
+release checklist
+release checklist
+```
+
+All three lines are reads. No code is changing the string while another reference expects to see stable text. Rust allows many shared references for that reason.
+
+## Read The Compiler Output
+
+Borrowing errors become easier once you read the labels in the compiler output. Change the program back to the broken owned version:
+
+```rust
+fn word_count(title: String) -> usize {
+    title.split_whitespace().count()
+}
+
+fn main() {
+    let title = String::from("release checklist");
+
+    let count = word_count(title);
+
+    println!("{title}: {count} words");
+}
+```
+
+The checker says:
+
+```text
+8  |     let count = word_count(title);
+   |                            ----- value moved here
+10 |     println!("{title}: {count} words");
+   |               ^^^^^ value borrowed here after move
+```
+
+The phrase `value moved here` marks the place where ownership left `main`. The phrase `borrowed here after move` marks the later read. In Rust compiler messages, "borrow" often appears because printing, formatting, method calls, and many operators read through references internally. The important beginner question is still simple: who owns the value at this line?
+
+Changing the function signature from `String` to `&String` changes the answer. Ownership stays in `main`, and the helper receives temporary access.
 
 ## Function Signatures
 
-Rust function signatures tell you what kind of access a function needs.
+Function signatures tell callers what kind of access a function needs.
+
+Compare these three helpers:
 
 ```rust
-fn save_note(title: String) {
+fn save_title(title: String) {
     println!("saved: {title}");
 }
 
-fn preview_title(title: &str) {
+fn word_count(title: &String) -> usize {
+    title.split_whitespace().count()
+}
+
+fn add_suffix(title: &mut String) {
+    title.push_str(" checklist");
+}
+```
+
+The parameter type is the contract:
+
+| Parameter | Meaning For The Caller | Typical Use |
+| --- | --- | --- |
+| `String` | The function takes ownership | Store, consume, send, or transform into another owner |
+| `&String` | The function reads through a shared reference | Inspect text without taking it |
+| `&mut String` | The function gets temporary write access | Change the existing string in place |
+
+For learning, `&String` makes the ownership contrast easy to see. In everyday Rust APIs, a read-only text parameter is usually `&str`, because `&str` accepts both owned strings and string literals. The next article explains that choice in detail.
+
+## Mutable References
+
+Shared references read. Mutable references write. A mutable reference uses `&mut`.
+
+Start with a local change:
+
+```rust
+fn main() {
+    let mut title = String::from("release");
+
+    title.push_str(" checklist");
+
     println!("{title}");
 }
 ```
 
-These functions make different promises. `save_note(title: String)` takes ownership. It can store the title, return it, move it into another struct, or drop it. `preview_title(title: &str)` only borrows text. It can read the title during the call, but it cannot keep owning that title afterward.
+Run it:
 
-That makes signatures part of the design.
-
-| Signature shape | Meaning |
-| --- | --- |
-| `String` | Takes ownership |
-| `&String` | Borrows a `String` for reading |
-| `&str` | Borrows text for reading |
-| `&mut String` | Borrows a `String` for changing |
-
-When a function surprises you by moving a value, read its parameter list first. If the parameter type is owned, the call transfers ownership unless the type is `Copy`.
-
-## Mutable Binding vs Mutable Borrow
-
-Rust uses `mut` in two nearby but different places.
-
-`let mut body` means the local binding can be changed through this name:
-
-```rust
-let mut body = String::from("Remember:");
-body.push_str(" Buy milk");
+```text
+release checklist
 ```
 
-`&mut body` means a function temporarily receives the only write-capable access to that value:
+The binding is `let mut title` because the program changes the `String` owned by `title`. Move that change into a helper:
 
 ```rust
-add_line(&mut body, "Buy milk");
-```
-
-The first is about whether this variable may change. The second is about lending exclusive mutable access to someone else for a short time.
-
-## Mutable References
-
-Reading is not the only kind of borrowing. A function can also borrow a value mutably with `&mut`.
-
-The notes app might need a helper that appends text to a draft:
-
-```rust
-fn add_line(body: &mut String, line: &str) {
-    body.push_str("\n");
-    body.push_str(line);
+fn add_suffix(title: &mut String) {
+    title.push_str(" checklist");
 }
 
-let mut body = String::from("Remember:");
-add_line(&mut body, "Buy milk");
-println!("{body}");
+fn main() {
+    let mut title = String::from("release");
+
+    add_suffix(&mut title);
+
+    println!("{title}");
+}
 ```
 
-Several parts must line up:
+Run it:
 
-- The variable is declared with `let mut body`.
-- The call passes `&mut body`.
-- The function accepts `body: &mut String`.
+```bash
+$ cargo run
+   Compiling note-borrow v0.1.0 (/home/you/note-borrow)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.23s
+     Running `target/debug/note-borrow`
+release checklist
+```
 
-That repetition is useful. Mutation is visible at the binding, the call site, and the function boundary. A reader does not have to inspect the function body to know it may change the value.
+There are two separate permissions here. `let mut title` says the owner is allowed to mutate the value it owns. `&mut title` says the helper receives temporary write access. The helper does not become the owner. It can change the string while the mutable borrow is active.
 
 ## Readers And Writers
 
-Rust's borrowing rule is often summarized as many readers or one writer.
+Rust's borrowing rule can be stated as a reader and writer rule:
 
-You can have multiple shared references at the same time:
-
-```rust
-let title = String::from("Buy milk");
-let first_view = &title;
-let second_view = &title;
-
-println!("{first_view}");
-println!("{second_view}");
-```
-
-This is safe because shared references can read but cannot mutate. No reader can surprise another reader by changing the title halfway through.
-
-A mutable reference is different. While a mutable reference exists, Rust does not allow other references to the same value.
-
-```rust
-let mut title = String::from("Buy milk");
-let edit = &mut title;
-
-edit.push_str(" today");
-println!("{edit}");
-```
-
-The mutable borrow has exclusive access. That exclusivity is what lets Rust permit mutation without letting two parts of the program observe and change the same value in conflicting ways.
-
-| Active access | Allowed at the same time? | Why |
+| Active Access | Allowed At The Same Time | Reason |
 | --- | --- | --- |
-| Many `&T` references | Yes | Readers cannot mutate |
-| One `&mut T` reference | Yes | One writer has exclusive access |
-| `&T` and `&mut T` together | No | A reader could see a surprise change |
-| Multiple `&mut T` references | No | Two writers could conflict |
+| Many shared references | More shared references | Readers do not change the value |
+| One mutable reference | No other access to that value | A writer needs exclusive access |
 
-This rule can feel restrictive at first. In return, Rust catches accidental shared mutation before runtime.
-
-:::expand[Many readers or one writer prevents surprise changes]{kind="design"}
-The reader-or-writer rule protects a simple expectation: if code is reading a value through a shared reference, the value should not change underneath that reader.
-
-This shape is rejected:
+Try to create two mutable references at once:
 
 ```rust
-let mut title = String::from("Buy milk");
+fn main() {
+    let mut title = String::from("release");
 
-let preview = &title;
-let edit = &mut title;
+    let first = &mut title;
+    let second = &mut title;
 
-edit.push_str(" today");
-println!("preview: {preview}");
+    first.push_str(" checklist");
+    second.push_str(" notes");
+
+    println!("{title}");
+}
 ```
 
-The problem is not that `push_str` is dangerous by itself. The problem is overlap. `preview` is a shared reference that will be used later. `edit` wants exclusive mutable access before that read is finished.
+Check it:
 
-If Rust allowed both at once, `preview` could mean "the old title" in one reader's mind while another part of the program changes the title. In larger programs, that kind of surprise is where bugs hide.
+```bash
+$ cargo check
+    Checking note-borrow v0.1.0 (/home/you/note-borrow)
+error[E0499]: cannot borrow `title` as mutable more than once at a time
+ --> src/main.rs:5:18
+  |
+4 |     let first = &mut title;
+  |                 ---------- first mutable borrow occurs here
+5 |     let second = &mut title;
+  |                  ^^^^^^^^^^ second mutable borrow occurs here
+6 |
+7 |     first.push_str(" checklist");
+  |     ----- first borrow later used here
+```
 
-The fix is to separate the phases:
+The checker is pointing at overlapping write access. `first` is a mutable reference that will be used on line 7. While that writer is active, Rust will not create `second`.
+
+The same idea blocks reading while a writer is active:
 
 ```rust
-let mut title = String::from("Buy milk");
+fn main() {
+    let mut title = String::from("release");
 
-let preview = &title;
-println!("preview: {preview}");
+    let writer = &mut title;
+    let reader = &title;
 
-let edit = &mut title;
-edit.push_str(" today");
+    writer.push_str(" checklist");
+    println!("{reader}");
+}
 ```
 
-Now the shared read is done before the mutable borrow starts. The rule is not "mutation is bad." The rule is "mutation needs a moment where it is alone."
-:::
+```text
+error[E0502]: cannot borrow `title` as immutable because it is also borrowed as mutable
+```
+
+The word `immutable` means read-only here. Rust rejects the shared read because a mutable writer is still active. That rule prevents code from reading a value while another part of the same program is changing it.
+
+The mechanism is easiest to see with `String`. A shared reference to a string is a view of the current string data. A mutable operation such as `push_str` may write more bytes into the existing allocation. If the allocation has enough spare capacity, the pointer may stay the same and the length changes. If the allocation is full, the string may ask the allocator for a larger buffer, copy the old bytes into the new buffer, free the old buffer, and update its pointer.
+
+That means an active reader could be relying on a pointer and length that a writer is about to change. Rust does not try to guess whether this particular `push_str` will reallocate. The rule is simpler and safer:
+
+```text
+shared references active -> no mutable reference
+mutable reference active -> no shared or second mutable reference
+```
+
+The rule protects both cases: ordinary value changes and deeper changes such as a growable buffer moving to a new heap allocation.
 
 ## Borrow Scopes
 
-A borrow lasts until its last use, not always until the end of the curly-brace scope.
+A borrow lasts until its final use, not always until the end of the surrounding block. This is why the following program works:
 
 ```rust
-let mut title = String::from("Buy milk");
+fn main() {
+    let mut title = String::from("release");
 
-let preview = &title;
-println!("{preview}");
+    let reader = &title;
+    println!("{reader}");
 
-let edit = &mut title;
-edit.push_str(" today");
-```
+    let writer = &mut title;
+    writer.push_str(" checklist");
 
-This compiles because the shared borrow `preview` is not used after the first `println!`. The mutable borrow begins after the reader is done.
-
-This small rule explains many fixes for borrowing errors. You often do not need to clone. You can move code so the read finishes before the write begins.
-
-For the notes app, imagine a function that prints a preview and then updates the title. Keep those phases separate:
-
-```rust
-let mut title = String::from("Buy milk");
-
-println!("preview: {title}");
-title.push_str(" today");
-```
-
-The print reads the title. After that read is over, the mutation can happen. Rust is checking that these phases do not overlap in a way that would make the program harder to reason about.
-
-:::expand[Shorten the borrow before reaching for clone]{kind="pattern"}
-When the borrow checker complains, cloning is often the loudest-looking escape hatch. First ask whether the borrow can end earlier.
-
-This version keeps the shared borrow alive until the final `println!`:
-
-```rust
-let mut title = String::from("Buy milk");
-
-let preview = &title;
-title.push_str(" today");
-println!("old preview: {preview}");
-```
-
-Rust rejects it because `preview` is still needed after the mutation. If the code really wants to print the preview before editing, write the phases that way:
-
-```rust
-let mut title = String::from("Buy milk");
-
-let preview = &title;
-println!("old preview: {preview}");
-
-title.push_str(" today");
-```
-
-An inner block can make the boundary even clearer:
-
-```rust
-let mut title = String::from("Buy milk");
-
-{
-    let preview = &title;
-    println!("old preview: {preview}");
+    println!("{title}");
 }
-
-title.push_str(" today");
 ```
 
-The braces show the reader that `preview` is only needed for that small region. After the block, the shared borrow is gone, so mutation can begin. Use `clone` when you truly need two independent values. Use phase boundaries when you only need a read to finish before a write starts.
-:::
+Run it:
+
+```text
+release
+release checklist
+```
+
+The shared reference `reader` is last used in the first `println!`. After that line, the shared borrow is finished. The mutable borrow through `writer` begins later, so the accesses do not overlap.
+
+This detail matters in real code because small rearrangements can change whether borrows overlap. If a reader is printed, logged, or returned after a writer is created, Rust treats the reader as still active. If the reader has no later uses, Rust can end that borrow earlier.
+
+You can make the boundary visible with a smaller scope:
+
+```rust
+fn main() {
+    let mut title = String::from("release");
+
+    {
+        let reader = &title;
+        println!("{reader}");
+    }
+
+    let writer = &mut title;
+    writer.push_str(" checklist");
+
+    println!("{title}");
+}
+```
+
+The inner braces are not required in this exact program, but they show the idea. References are temporary access paths. Once the path is no longer used, the owner can be borrowed in another way.
 
 ## No Dangling References
 
-Borrowing also prevents references from pointing to values that no longer exist.
+A dangling reference points at data that no longer exists. Rust rejects code that would create one.
 
 This function tries to return a reference to a local `String`:
 
 ```rust
-fn make_title() -> &String {
-    let title = String::from("Buy milk");
+fn make_title() -> &'static String {
+    let title = String::from("release checklist");
+
     &title
+}
+
+fn main() {
+    let title = make_title();
+    println!("{title}");
 }
 ```
 
-Rust rejects this because `title` is dropped when the function returns. A reference to it would point at memory that is no longer valid.
+Check it:
 
-The fix is to return ownership:
+```bash
+$ cargo check
+    Checking note-borrow v0.1.0 (/home/you/note-borrow)
+error[E0515]: cannot return reference to local variable `title`
+ --> src/main.rs:4:5
+  |
+4 |     &title
+  |     ^^^^^^ returns a reference to data owned by the current function
+```
+
+The local `String` is owned by the binding `title` inside `make_title`. When `make_title` returns, that binding leaves scope and the `String` is dropped. A reference returned to the caller would point at memory that has already been cleaned up. Rust catches that at compile time.
+
+The fix is to return an owned value:
 
 ```rust
 fn make_title() -> String {
-    String::from("Buy milk")
+    let title = String::from("release checklist");
+
+    title
+}
+
+fn main() {
+    let title = make_title();
+    println!("{title}");
 }
 ```
 
-This is a good place to keep the mental model simple. If a function creates a new owned value and the caller needs it afterward, return the owned value. Borrowing is for temporary access to a value that already has an owner outside the function.
+Now ownership moves from the local binding to the caller. The value is still alive after the function returns because the caller owns it.
 
 ## Choosing A Signature
 
-When you write a notes-app helper, start by asking what the function needs to do with the value.
+When writing a Rust function, start by deciding what access the function really needs.
 
-| Function job | Good signature shape |
-| --- | --- |
-| Store a title inside a new note | `fn new(title: String)` |
-| Print or search a title | `fn search(title: &str)` |
-| Count words in a body | `fn word_count(body: &str) -> usize` |
-| Append text to a draft body | `fn add_line(body: &mut String, line: &str)` |
-| Create a fresh title | `fn default_title() -> String` |
+| Need | Signature Shape | Example |
+| --- | --- | --- |
+| Keep the value after the call | `String` or another owned type | `fn store_title(title: String)` |
+| Read text during the call | `&str` or `&String` while learning | `fn word_count(title: &str) -> usize` |
+| Change the caller's value | `&mut String` | `fn add_suffix(title: &mut String)` |
+| Return a new value | owned return type | `fn normalize(title: &str) -> String` |
 
-The signature should match the responsibility. Own data when the function becomes responsible for it. Borrow data when the function only needs temporary access. Use a mutable borrow when the function must change the caller's value in place.
+The signature is part of the documentation. A caller can see whether ownership moves, whether the function only reads, and whether the function may change the caller's value.
 
-This habit makes compiler errors easier to interpret. A "value moved" error often means the signature asks for ownership where a borrow would express the real intent.
+This is one reason Rust APIs can feel explicit. The access pattern is written into the function boundary.
 
 ## Putting It All Together
 
-The opening problem was a function that consumed a title just to print it. Borrowing fixes that by separating access from ownership.
+The opening program failed because a read-only helper took ownership:
 
-For the notes app:
+```rust
+fn word_count(title: String) -> usize {
+    title.split_whitespace().count()
+}
+```
 
-- `&T` lets a function read a value without owning or dropping it.
-- `&mut T` lets a function change a value, but only with exclusive access.
-- Function signatures show whether a function owns, reads, or mutates.
-- Many readers can coexist, but one writer must be alone.
-- Borrow scopes usually end at the last use, so reads and writes can happen in separate phases.
-- Rust prevents dangling references by making sure borrowed data outlives the reference.
+The corrected shape borrows:
 
-The reliability payoff is that data can be shared temporarily without losing the clear cleanup path from ownership. Rust lets code collaborate around values while still knowing exactly who owns them.
+```rust
+fn word_count(title: &str) -> usize {
+    title.split_whitespace().count()
+}
+
+fn main() {
+    let title = String::from("release checklist");
+
+    let count = word_count(&title);
+
+    println!("{title}: {count} words");
+}
+```
+
+Run it:
+
+```text
+release checklist: 2 words
+```
+
+Ownership stays with `main`. The helper gets a shared reference. The reference is valid during the call and then disappears. The original string remains available afterward.
+
+Borrowing is the everyday tool that makes ownership practical. Without it, every helper would have to take, return, clone, or avoid owned data. With it, functions can state exactly what kind of temporary access they need.
 
 ## What's Next
 
-Borrowing explains how functions can read and mutate existing values without taking ownership. The next ownership idea is slices: borrowed views into part of a string, array, or collection.
-
-Slices make the notes app more precise. A parser can point at the title portion of a line or the first matching word without copying the whole string.
+Borrowing explains how functions read and change values without taking ownership. The next article applies that rule to the text and list types you will use constantly: `String`, `&str`, `Vec<T>`, and slices.
 
 ---
 
 **References**
 
-- [References and Borrowing](https://doc.rust-lang.org/book/ch04-02-references-and-borrowing.html). Supports shared references, mutable references, the reader-or-writer borrowing rule, borrow scopes, and Rust's prevention of dangling references.
-- [What Is Ownership?](https://doc.rust-lang.org/book/ch04-01-what-is-ownership.html). Supports the connection between function parameters, ownership transfer, returning owned values, and cleanup through ownership.
+- [The Rust Programming Language: References and Borrowing](https://doc.rust-lang.org/book/ch04-02-references-and-borrowing.html)
+- [The Rust Programming Language: The Slice Type](https://doc.rust-lang.org/book/ch04-03-slices.html)
+- [std::string::String](https://doc.rust-lang.org/std/string/struct.String.html)
+- [std::primitive::str](https://doc.rust-lang.org/std/primitive.str.html)

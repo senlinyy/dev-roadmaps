@@ -1,357 +1,526 @@
 ---
 title: "Ownership"
-description: "Understand why Rust moves values, when data is copied or cloned, and how ownership lets Rust clean up memory reliably."
-overview: "Ownership is the rule system behind Rust's most surprising beginner errors. This article explains moves, stack and heap intuition, Copy, Clone, and drop through a small notes app."
-tags: ["ownership", "moves", "copy", "clone", "drop"]
+description: "Understand why Rust moves values, when data is copied or cloned, and how ownership lets Rust clean memory reliably."
+overview: "Ownership is the first Rust rule that changes how ordinary code feels. This article follows one note title through creation, movement, copying, cloning, returns, and cleanup."
+tags: ["ownership", "moves", "clone", "drop"]
 order: 1
 id: article-rust-ownership-and-reliability-ownership
 ---
 
 ## Table of Contents
 
-1. [The Problem](#the-problem)
-2. [Names, Values, And Cleanup](#names-values-and-cleanup)
-3. [One Owner](#one-owner)
-4. [Stack, Heap, And Handles](#stack-heap-and-handles)
-5. [Moves](#moves)
-6. [Copy](#copy)
-7. [Clone](#clone)
-8. [Drop](#drop)
-9. [Returning Ownership](#returning-ownership)
+1. [What Is Ownership?](#what-is-ownership)
+2. [Create A Value](#create-a-value)
+3. [Move A String](#move-a-string)
+4. [Why Rust Moves](#why-rust-moves)
+5. [Copy Values](#copy-values)
+6. [Clone Values](#clone-values)
+7. [Function Calls](#function-calls)
+8. [Returning Ownership](#returning-ownership)
+9. [Drop And Cleanup](#drop-and-cleanup)
 10. [Putting It All Together](#putting-it-all-together)
 11. [What's Next](#whats-next)
 
-## The Problem
+## What Is Ownership?
 
-The notes app from Rust Foundations can create notes, count words, and print a small summary. Now you start splitting the work into helper functions. That is when Rust begins saying a value was moved.
+The previous module introduced programs, memory, and values. Rust now adds one rule to every value you create: some part of the program owns that value right now.
 
-The error usually appears in ordinary-looking code:
+Ownership answers three practical questions:
 
-- You pass a note title to a function, then try to print the title again.
-- You put a note into a collection, then try to use the old variable.
-- You assign one `String` variable to another and expect both names to keep working.
+- Which name is allowed to use this value?
+- When can responsibility for the value move somewhere else?
+- When should Rust clean up the value's resources?
 
-Rust is protecting a memory rule: each value has one owner, and the owner is responsible for the value until ownership moves somewhere else or the value is dropped.
+Those questions appear in very small programs. Start with a notes project:
 
-That rule is the foundation for Rust's reliability story. Rust does not need a garbage collector to find unused values later, and it does not ask you to manually free memory. Instead, the compiler checks ownership before the program runs.
+```bash
+$ cargo new note-owner
+    Creating binary (application) `note-owner` package
+$ cd note-owner
+```
 
-## Names, Values, And Cleanup
-
-In JavaScript, TypeScript, and Python, you usually create objects and let the runtime decide when unused objects are cleaned up. Rust makes that cleanup path part of the program's structure.
-
-Start with a name and a value:
+The project contains a `src/main.rs` file. Put this program in it:
 
 ```rust
-let title = String::from("Buy milk");
-```
-
-`title` is the name in your code. The `String` is the value. That value owns resources: a small handle in the variable and heap memory for the text bytes. Handle here means the small value Rust follows to reach owned data, not a second copy of the data.
-
-Rust wants one clear answer to this question: when this `String` is finished, who cleans up the heap memory? Ownership is the answer. The owner is responsible for the value until ownership moves or the owner goes out of scope.
-
-## One Owner
-
-Every Rust value has an owner. Most of the time, the owner is a variable.
-
-```rust
-let title = String::from("Buy milk");
-```
-
-Here, `title` owns the `String`. The string can be used while `title` is valid.
-
-Valid means the name is still inside the region of code where it was created. That region is called a scope. Most Rust scopes are marked by braces:
-
-```rust
-{
-    let title = String::from("Buy milk");
-    println!("{title}");
-} // title's scope ends here
-```
-
-When execution reaches the closing brace, `title` goes out of scope. That means the name is no longer usable after that point. Because `title` was the owner, Rust cleans up the string there.
-
-That sounds simple, but it matters because `String` owns memory that can grow at runtime. A `String` needs heap storage for its bytes, and Rust needs one clear place where that storage will be cleaned up.
-
-The ownership rule gives Rust that place. The owner is the cleanup handle: the one valid path Rust will use later to drop the value and release any resources it owns.
-
-## Stack, Heap, And Handles
-
-A useful beginner model is that Rust values often have a small stack part and sometimes a larger heap part.
-
-```mermaid
-flowchart LR
-    TitleVar["title"]
-    Stack["String value<br/>(ptr len cap)"]
-    Heap["Heap bytes<br/>(Buy milk)"]
-
-    TitleVar --> Stack
-    Stack --> Heap
-```
-
-For a `String`, the stack part stores a pointer, a length, and a capacity. The heap part stores the actual text bytes.
-
-The pointer says where the heap bytes start. The length says how many bytes are currently used. The capacity says how many bytes are reserved before the `String` has to ask for a larger allocation. That small stack value is why people sometimes call `String` a handle to heap data.
-
-This explains why Rust treats different values differently. A small number such as `i32` can be copied cheaply because the whole value is fixed-size stack data. A `String` cannot be copied in the same automatic way without deciding what to do with the heap bytes.
-
-| Value | Typical memory shape | Assignment behavior |
-| --- | --- | --- |
-| `i32` | Fixed-size value | Copy |
-| `bool` | Fixed-size value | Copy |
-| `String` | Stack handle plus heap bytes | Move |
-| `Vec<T>` | Stack handle plus heap elements | Move |
-
-The table gives the practical intuition: if a value owns runtime allocation or another resource, Rust will usually move it instead of silently duplicating it.
-
-:::expand[Why String moves but i32 copies]{kind="design"}
-Rust's assignment behavior is easiest to understand if you ask what would have to be duplicated.
-
-For an integer, the whole value is small and fixed-size:
-
-```rust
-let word_count = 2;
-let saved_count = word_count;
-```
-
-Copying `2` means copying a few bytes. There is no heap allocation and no cleanup conflict. Both names can keep working because each has its own complete value.
-
-A `String` is different:
-
-```rust
-let title = String::from("Buy milk");
-let saved_title = title;
-```
-
-The stack part of `title` is only a handle: pointer, length, and capacity. The text bytes live on the heap. Rust has three possible choices here:
-
-| Choice | Problem |
-| --- | --- |
-| Copy only the handle | Two owners would point to the same heap bytes |
-| Copy the heap bytes automatically | Assignment could become surprisingly expensive |
-| Move the handle | One owner remains responsible for cleanup |
-
-Rust chooses the third behavior for `String`. The heap bytes are not silently duplicated, and the old name is not allowed to clean up the same allocation later. That is why `String` moves while `i32` copies: one has ownership of runtime allocation, and the other is just a small fixed value.
-:::
-
-## Moves
-
-A move transfers ownership from one place to another.
-
-```rust
-let title = String::from("Buy milk");
-let saved_title = title;
-
-println!("{title}");
-```
-
-This does not compile. After `let saved_title = title;`, the `String` is owned by `saved_title`. The old name, `title`, is no longer valid.
-
-The important detail is what Rust refuses to do automatically. It does not copy the heap bytes behind your back. If both variables pointed at the same heap allocation and both later tried to clean it up, the program could free the same memory twice. If Rust secretly copied the heap bytes every time, assignment could become unexpectedly expensive.
-
-So Rust chooses a third behavior:
-
-```mermaid
-flowchart LR
-    Old["title<br/>(no longer valid)"]
-    New["saved_title<br/>(owner)"]
-    Heap["Heap bytes<br/>(Buy milk)"]
-
-    Old -. moved .-> New
-    New --> Heap
-```
-
-The word "moved" means ownership changed hands. The data did not necessarily travel to a new address. The permission to use and clean up the value moved.
-
-:::expand[A move changes permission, not necessarily location]{kind="pattern"}
-The word "move" can sound like Rust physically picks up all the bytes and carries them somewhere else. For a `String`, the useful mental model is that ownership of the handle changes.
-
-Start here:
-
-```rust
-let title = String::from("Buy milk");
-let saved_title = title;
-```
-
-The heap bytes for `"Buy milk"` can stay where they are. What changes is the stack handle and the right to use it. After the assignment, `saved_title` is the valid name that owns the string. `title` is no longer a usable name.
-
-That distinction explains why this is rejected:
-
-```rust
-println!("{title}");
-```
-
-Rust is saying `title` no longer has permission to access or clean up that text. There is still exactly one owner: `saved_title`.
-
-This is a good reading habit:
-
-| Question | Answer after the move |
-| --- | --- |
-| Did the heap text need to be copied? | No |
-| Which name can use the value now? | `saved_title` |
-| Which name cleans it up later? | `saved_title` |
-| Can the old name be used? | No |
-
-When a compiler error says a value was moved, look for the line where ownership changed hands. Sometimes the function should borrow. Sometimes the old name should simply stop being used. Clone only when the program really needs two owned values.
-:::
-
-This comes up often with functions because passing a value into a function can also move it.
-
-```rust
-fn save_note(title: String) {
+fn save_title(title: String) {
     println!("saved: {title}");
 }
 
-let title = String::from("Buy milk");
-save_note(title);
-println!("{title}");
-```
+fn main() {
+    let title = String::from("release checklist");
 
-The parameter `title: String` means `save_note` takes ownership. After the call, the original `title` in the caller is no longer usable.
+    save_title(title);
 
-For a notes app, that can be the right design. If `save_note` stores the title permanently, it should own it. If it only needs to inspect the title, taking ownership is too strong. The next article covers that better tool: borrowing.
-
-## Copy
-
-Some values do not move on assignment because they implement `Copy`.
-
-```rust
-let word_count = 2;
-let saved_count = word_count;
-
-println!("{word_count} words");
-println!("{saved_count} words");
-```
-
-Both variables remain valid because an integer is cheap to duplicate. There is no separate heap allocation to clean up and no danger that two owners will free the same resource.
-
-Common `Copy` values include integers, booleans, floating-point numbers, characters, and tuples made only of `Copy` values.
-
-The useful question is not "why does Rust move this?" The better question is "would silently copying this value be trivial and safe?" For `String`, the answer is no. For `i32`, the answer is yes.
-
-## Clone
-
-When you really want a second owned value, ask for it explicitly with `clone`.
-
-```rust
-let title = String::from("Buy milk");
-let saved_title = title.clone();
-
-println!("{title}");
-println!("{saved_title}");
-```
-
-Now there are two independent strings. Each has its own owned data and each will be cleaned up separately.
-
-`clone` is deliberately visible. It tells the next reader that this line may allocate memory or do work proportional to the size of the value. In a notes app, cloning a short title is usually fine. Cloning the full body of thousands of notes inside a search loop may be the line that makes the app feel slow.
-
-That is the practical tradeoff:
-
-| Need | Rust tool |
-| --- | --- |
-| Give the value away | Move it |
-| Keep using a small fixed value | Let it copy |
-| Make a second owned value | Clone it |
-| Let code inspect without owning | Borrow it |
-
-Ownership makes ownership and allocation choices visible.
-
-:::expand[Clone is a design choice, not a compiler escape hatch]{kind="pitfall"}
-A common beginner reaction is to add `.clone()` until the compiler stops complaining.
-
-```rust
-let title = String::from("Buy milk");
-save_note(title.clone());
-println!("{title}");
-```
-
-This may be correct if `save_note` needs its own independent title and the caller also needs to keep one. But cloning as a reflex can hide the real design question: who should own this text?
-
-For a notes app, compare the choices:
-
-| Situation | Better tool | Why |
-| --- | --- | --- |
-| `save_note` stores the title permanently | Move `String` | The note becomes responsible for the title |
-| `print_title` only reads the title | Borrow `&str` | Printing should not take ownership |
-| Caller and callee both need owned strings | `clone()` | Two independent values are genuinely needed |
-| Small number is reused | Copy | Cheap fixed-size values can duplicate silently |
-
-The expensive version of "clone until it compiles" often appears in loops:
-
-```rust
-for note in notes {
-    results.push(note.body.clone());
+    println!("done with {title}");
 }
 ```
 
-That might allocate a new string for every result. Sometimes that is fine. Sometimes the search only needs borrowed views or indexes. The rule of thumb is: clone when a second owned value is part of the design, not when you only need temporary access.
-:::
+The program looks ordinary in many languages. The caller creates a title, passes it to a helper, and then wants to print it again. Rust reads the code differently because `String` is an owned value. Check it:
 
-## Drop
+```bash
+$ cargo check
+    Checking note-owner v0.1.0 (/home/you/note-owner)
+error[E0382]: borrow of moved value: `title`
+  --> src/main.rs:10:26
+   |
+6  |     let title = String::from("release checklist");
+   |         ----- move occurs because `title` has type `String`, which does not implement the `Copy` trait
+7  |
+8  |     save_title(title);
+   |                ----- value moved here
+9  |
+10 |     println!("done with {title}");
+   |                          ^^^^^ value borrowed here after move
+```
 
-When an owner goes out of scope, Rust drops the value.
+Read this output like you would read a Linux command listing. The error code is `E0382`. The short message is `borrow of moved value`. The first marker points at the binding named `title`. The second marker points at the call that moved the value into `save_title`. The final marker points at the later `println!` that tried to use `title` after the move.
+
+Ownership is the rule system behind that message. Passing `title` to a function that accepts `String` gives the function ownership of the string. After that call, the original binding no longer has a usable value.
+
+## Create A Value
+
+Begin with the smallest useful version:
 
 ```rust
-{
-    let title = String::from("Buy milk");
+fn main() {
+    let title = String::from("release checklist");
+
     println!("{title}");
 }
 ```
 
-At the closing brace, `title` is no longer valid. Rust calls the value's cleanup behavior. For `String`, that means the heap memory for the text can be returned.
+Run it:
 
-This is why the "one owner" rule matters. If exactly one owner is responsible for cleanup, Rust can make cleanup automatic and predictable. No garbage collector has to pause later to discover the string is unused. No programmer has to remember to call `free`.
-
-Drop also happens when a variable is replaced.
-
-```rust
-let mut title = String::from("Buy milk");
-title = String::from("Read Rust");
+```bash
+$ cargo run
+   Compiling note-owner v0.1.0 (/home/you/note-owner)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.31s
+     Running `target/debug/note-owner`
+release checklist
 ```
 
-The old `"Buy milk"` string is dropped when `title` is assigned the new string. The variable keeps existing, but the value it used to own is finished.
+The binding is the name `title`. A binding connects a name to a value for a region of code. That region is called a scope. In this program, the scope begins at the `let` line and ends at the closing brace of `main`.
+
+```text
+fn main() {
+    let title = String::from("release checklist");
+    println!("{title}");
+}
+^ main begins                          ^ main ends
+```
+
+The value is a `String`. A `String` owns growable UTF-8 text. The word "owns" matters because the text usually lives in heap memory, and some part of the program must be responsible for freeing that memory later.
+
+Rust ties that responsibility to the owner. When `title` leaves scope, Rust drops the `String`. Dropping means running the cleanup code for the value. For `String`, cleanup releases the heap allocation that stores the text.
+
+This is the first ownership rule in plain language:
+
+| Rule | What It Means In The Program |
+| --- | --- |
+| Every value has an owner | `title` owns the `String` value |
+| The owner has a scope | `title` is valid until the end of `main` |
+| Cleanup happens at the end of the scope | Rust drops the `String` when `title` goes out of scope |
+
+There is no garbage collector looking for unused strings later. Rust knows the exact point where the owner stops being valid.
+
+## Move A String
+
+Now assign the same `String` to a second binding:
+
+```rust
+fn main() {
+    let first = String::from("release checklist");
+    let second = first;
+
+    println!("{second}");
+}
+```
+
+Run it:
+
+```bash
+$ cargo run
+   Compiling note-owner v0.1.0 (/home/you/note-owner)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.28s
+     Running `target/debug/note-owner`
+release checklist
+```
+
+The program works because `second` is now the owner. The binding `first` gave up ownership when the assignment happened. If you try to print both names, the checker shows the same ownership rule in a smaller form:
+
+```rust
+fn main() {
+    let first = String::from("release checklist");
+    let second = first;
+
+    println!("{first}");
+    println!("{second}");
+}
+```
+
+```bash
+$ cargo check
+    Checking note-owner v0.1.0 (/home/you/note-owner)
+error[E0382]: borrow of moved value: `first`
+ --> src/main.rs:5:15
+  |
+2 |     let first = String::from("release checklist");
+  |         ----- move occurs because `first` has type `String`, which does not implement the `Copy` trait
+3 |     let second = first;
+  |                  ----- value moved here
+4 |
+5 |     println!("{first}");
+  |               ^^^^^^^ value borrowed here after move
+```
+
+The important line is `let second = first;`. Rust calls this a move. The ownership of the string moved from `first` to `second`. The original binding remains in the source code, but it no longer owns a usable `String`.
+
+That behavior prevents a serious cleanup problem. A `String` is a small handle on the stack that points to text on the heap:
+
+```text
+Stack
++------------------------------+
+| first                         |
+| pointer ----+                 |
+| length: 17  |                 |
+| capacity: 17|                 |
++------------|-----------------+
+             |
+             v
+Heap
++------------------------------+
+| release checklist            |
++------------------------------+
+```
+
+The handle stores a pointer, a length, and a capacity. The pointer says where the heap allocation starts. The length says how many bytes are in use. The capacity says how many bytes the allocation can hold before it must grow.
+
+After `let second = first;`, the heap allocation is still in the same place. The ownership of the handle moved:
+
+```text
+Stack
++------------------------------+
+| first: no usable value        |
++------------------------------+
+| second                        |
+| pointer ----+                 |
+| length: 17  |                 |
+| capacity: 17|                 |
++------------|-----------------+
+             |
+             v
+Heap
++------------------------------+
+| release checklist            |
++------------------------------+
+```
+
+Rust does not copy the text bytes on the heap for a move. It transfers the right to use and later clean up that allocation.
+
+## Why Rust Moves
+
+If Rust allowed both `first` and `second` to act like full owners, both names would try to clean up the same heap allocation at the end of the scope. That bug is called a double free. It means the program frees memory once, then tries to free the same memory again. In systems programming, double frees can corrupt memory and create security problems.
+
+Rust avoids that entire class of bugs with a simple rule: after a move, the old owner cannot be used.
+
+The rule is easier to see if you compare the two timelines:
+
+| Code | Owner After The Line | What Can Be Used |
+| --- | --- | --- |
+| `let first = String::from("release checklist");` | `first` | `first` |
+| `let second = first;` | `second` | `second` |
+| `println!("{first}");` | still `second` | rejected because `first` no longer owns the value |
+
+This is why ownership errors often arrive before you think about memory at all. The compiler is checking who will clean up the resource, even when the program only looks like it is printing text.
+
+## Copy Values
+
+Some values do not move in this visible way. Plain integers are copied:
+
+```rust
+fn main() {
+    let first = 3;
+    let second = first;
+
+    println!("first: {first}");
+    println!("second: {second}");
+}
+```
+
+Run it:
+
+```bash
+$ cargo run
+   Compiling note-owner v0.1.0 (/home/you/note-owner)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.19s
+     Running `target/debug/note-owner`
+first: 3
+second: 3
+```
+
+Both bindings work because `i32` implements the `Copy` trait. A trait is a named capability that a type can have. `Copy` means a value can be duplicated by copying its bits, and the old binding remains usable.
+
+Small fixed-size values commonly implement `Copy`:
+
+| Type Shape | Example | Why Copy Is Fine |
+| --- | --- | --- |
+| Integers | `i32`, `u64` | The value is the number itself |
+| Booleans | `bool` | The value is one small bit pattern |
+| Characters | `char` | The value is stored directly |
+| Tuples of copy values | `(i32, bool)` | Every field can be copied directly |
+
+`String` does not implement `Copy` because the bits in a `String` are not the text itself. They are a handle to text stored somewhere else.
+
+Conceptually, the handle has three pieces:
+
+```text
+String handle on the stack
++-------------------------+
+| pointer: 0x...a0        | ----+
+| length: 17              |     |
+| capacity: 17            |     |
++-------------------------+     |
+                                v
+heap allocation
++-------------------------+
+| release checklist       |
++-------------------------+
+```
+
+A bitwise copy would duplicate those three handle fields exactly:
+
+```text
+first.pointer  -> 0x...a0
+second.pointer -> 0x...a0
+```
+
+The text bytes would not be copied. Both handles would point at the same heap allocation, and both handles would look responsible for freeing it when they leave scope. At the end of the scope, `first` would try to drop the allocation and `second` would try to drop the same allocation again. That second cleanup is the double-free problem.
+
+Rust's move rule avoids this by treating `let second = first;` as a transfer. The handle bits can be copied into `second`, but the old binding `first` is no longer usable. There is still only one owner that will run cleanup.
+
+```text
+after move:
+
+first   no usable String
+second  owns pointer 0x...a0, length 17, capacity 17
+```
+
+That is the mechanism behind the compiler phrase "does not implement `Copy`." It is not saying a `String` cannot be copied at all. It is saying the cheap automatic copy would copy only the handle, and that would make cleanup ownership ambiguous. Use `.clone()` when you want a second heap allocation with its own copied text.
+
+## Clone Values
+
+When you really want two independent strings, ask for a clone:
+
+```rust
+fn main() {
+    let first = String::from("release checklist");
+    let second = first.clone();
+
+    println!("first: {first}");
+    println!("second: {second}");
+}
+```
+
+Run it:
+
+```bash
+$ cargo run
+   Compiling note-owner v0.1.0 (/home/you/note-owner)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.24s
+     Running `target/debug/note-owner`
+first: release checklist
+second: release checklist
+```
+
+`clone()` makes a new heap allocation and copies the text into it. After cloning, `first` owns one allocation and `second` owns another allocation.
+
+```text
+first  -> heap text "release checklist"
+second -> separate heap text "release checklist"
+```
+
+That is different from a move. A move is cheap because it transfers the handle. A clone can be more expensive because it may allocate memory and copy bytes. Rust makes that cost visible in the source code. When you see `.clone()`, you know the program asked for another owned copy.
+
+Use this table as a first-pass reading guide:
+
+| Operation | Example | Old Binding Usable? | Heap Text Copied? |
+| --- | --- | --- | --- |
+| Move | `let second = first;` | No | No |
+| Copy | `let second = first_number;` | Yes | No heap text involved |
+| Clone | `let second = first.clone();` | Yes | Yes |
+
+## Function Calls
+
+Function parameters follow the same ownership rules as assignments.
+
+This helper takes ownership because its parameter type is `String`:
+
+```rust
+fn save_title(title: String) {
+    println!("saved: {title}");
+}
+
+fn main() {
+    let title = String::from("release checklist");
+
+    save_title(title);
+}
+```
+
+The call `save_title(title)` moves the `String` into the function. Inside `save_title`, the parameter named `title` is the owner. When the function returns, that parameter leaves scope, and Rust drops the string.
+
+You can see the flow as a small ownership trace:
+
+```text
+main creates String
+  |
+  v
+title in main owns it
+  |
+  v
+save_title(title) moves it
+  |
+  v
+title parameter in save_title owns it
+  |
+  v
+function ends, parameter is dropped
+```
+
+This is why the opening program failed. The caller tried to use a binding after the function had already received ownership.
+
+If the helper needs to store the title, taking ownership is reasonable. If the helper only needs to read it, the next article's borrowing rules are usually the better fit.
 
 ## Returning Ownership
 
-Sometimes a function needs to take ownership, do work, and give ownership back.
+A function can also give ownership back to the caller:
 
 ```rust
 fn normalize_title(title: String) -> String {
     title.trim().to_lowercase()
 }
 
-let title = String::from("  Buy Milk  ");
-let title = normalize_title(title);
-println!("{title}");
+fn main() {
+    let raw = String::from("  Release Checklist  ");
+    let clean = normalize_title(raw);
+
+    println!("{clean}");
+}
 ```
 
-The first `title` moves into `normalize_title`. The function returns a new `String`, and the caller binds that returned value to `title` again.
+Run it:
 
-This pattern is valid, but it can get awkward if a function only needs to look at data. Passing values in and returning them just to keep ownership flowing makes signatures noisy. It also hides the real intent.
+```bash
+$ cargo run
+   Compiling note-owner v0.1.0 (/home/you/note-owner)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.26s
+     Running `target/debug/note-owner`
+release checklist
+```
 
-When the function's job is "use this data without becoming responsible for it," ownership is the wrong tool. Borrowing is the next tool.
+The value flow has two moves. First, `raw` moves into `normalize_title`. Then the returned `String` moves into `clean`.
+
+The expression `title.trim().to_lowercase()` builds a new owned `String`. `trim()` creates a borrowed view of the original text without the outer spaces. `to_lowercase()` creates owned lowercase text. That owned result becomes the return value.
+
+If you try to use `raw` after the call, Rust rejects the program for the same reason as before:
+
+```rust
+fn main() {
+    let raw = String::from("  Release Checklist  ");
+    let clean = normalize_title(raw);
+
+    println!("{raw}");
+    println!("{clean}");
+}
+```
+
+```text
+error[E0382]: borrow of moved value: `raw`
+```
+
+The short error is enough once you know the rule. The binding `raw` moved into the function, so the caller must use the returned owner, `clean`.
+
+## Drop And Cleanup
+
+Rust runs cleanup automatically when an owner leaves scope. The standard library trait behind custom cleanup is called `Drop`.
+
+You can make cleanup visible with a tiny type:
+
+```rust
+struct NoteFile {
+    name: String,
+}
+
+impl Drop for NoteFile {
+    fn drop(&mut self) {
+        println!("closing {}", self.name);
+    }
+}
+
+fn main() {
+    let file = NoteFile {
+        name: String::from("notes.txt"),
+    };
+
+    println!("writing {}", file.name);
+}
+```
+
+Run it:
+
+```bash
+$ cargo run
+   Compiling note-owner v0.1.0 (/home/you/note-owner)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.22s
+     Running `target/debug/note-owner`
+writing notes.txt
+closing notes.txt
+```
+
+The line `writing notes.txt` comes from the explicit `println!` in `main`. The line `closing notes.txt` comes from `drop`, which Rust calls when `file` reaches the end of its scope.
+
+Real standard library types use the same idea. A `String` frees its heap buffer. A `Vec<T>` frees its list storage and drops each element. A file handle closes the underlying file descriptor. The owner does the cleanup at a predictable point.
+
+This predictability is one of Rust's central reliability benefits. Resource cleanup follows the structure of the code instead of depending on a later garbage collection pass or a manual `free` call.
 
 ## Putting It All Together
 
-The opening problem was the compiler saying a value was moved. That message is Rust showing you where ownership changed hands.
+The opening program failed because ownership moved into `save_title`:
 
-For the notes app:
+```rust
+fn save_title(title: String) {
+    println!("saved: {title}");
+}
 
-- A `String` title owns heap memory, so assignment or passing by value moves it.
-- A moved value cannot be used through its old name because it is no longer the owner.
-- Small fixed values such as word counts can be copied.
-- `clone` creates a second owned value when that is really what you want.
-- `drop` runs when the owner goes out of scope or is replaced.
+fn main() {
+    let title = String::from("release checklist");
 
-The reliability payoff is that every owned value has one cleanup path. Rust catches use-after-move mistakes before the program runs, and cleanup happens at clear scope boundaries.
+    save_title(title);
+
+    println!("done with {title}");
+}
+```
+
+You can now read the failure without treating it as a strange compiler habit:
+
+- `title` owns a `String`.
+- `save_title(title)` moves that `String` into the helper.
+- The helper's parameter becomes the owner.
+- The parameter is dropped when the helper returns.
+- The original binding cannot be printed after that move.
+
+If the helper needs to keep or consume the title, taking `String` is honest. If the helper only needs to read the title, taking ownership is more than the helper needs. Rust has a separate tool for that case.
 
 ## What's Next
 
-Moving ownership is useful when responsibility should truly change hands. But many functions do not need responsibility. They only need temporary access.
-
-The next article introduces borrowing: how a function can read or change a note without owning the note.
+Ownership explains why values move and why old owners become unusable. The next article covers borrowing, which lets a function read or change data for a short time while the original owner keeps responsibility for cleanup.
 
 ---
 
 **References**
 
-- [What Is Ownership?](https://doc.rust-lang.org/book/ch04-01-what-is-ownership.html). Supports Rust's ownership rules, stack and heap model, moves, `Copy`, `Clone`, function ownership transfer, and automatic cleanup through `drop`.
+- [The Rust Programming Language: What Is Ownership?](https://doc.rust-lang.org/book/ch04-01-what-is-ownership.html)
+- [The Rust Programming Language: References and Borrowing](https://doc.rust-lang.org/book/ch04-02-references-and-borrowing.html)
+- [std::ops::Drop](https://doc.rust-lang.org/std/ops/trait.Drop.html)
+- [std::clone::Clone](https://doc.rust-lang.org/std/clone/trait.Clone.html)
+- [std::marker::Copy](https://doc.rust-lang.org/std/marker/trait.Copy.html)

@@ -1,6 +1,6 @@
 ---
 title: "Ownership And Reliability"
-description: "Use ownership, borrowing, strings, slices, lifetimes, Option, Result, and explicit errors to make programs safer and clearer."
+description: "Follow Rust values through ownership, borrowing, text views, missing data, and recoverable errors so program boundaries stay explicit."
 tags: ["ownership", "borrowing", "errors"]
 icon: "GitBranch"
 order: 3

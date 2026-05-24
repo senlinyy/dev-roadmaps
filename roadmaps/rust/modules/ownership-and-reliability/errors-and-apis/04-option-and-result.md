@@ -1,397 +1,403 @@
 ---
 title: "Option And Result"
 description: "Represent missing values and recoverable failures in Rust without null, exceptions, or casual unwraps."
-overview: "After ownership, borrowing, strings, and slices, Rust's error types show the same design habit in another place: make important states visible in the type system."
-tags: ["option", "result", "errors", "enums"]
+overview: "After ownership, borrowing, strings, and slices, Rust uses the same explicit style for ordinary uncertainty: a value may be missing, or an operation may fail."
+tags: ["option", "result", "match", "unwrap"]
 order: 1
 id: article-rust-ownership-and-reliability-option-and-result
 ---
 
 ## Table of Contents
 
-1. [The Problem](#the-problem)
-2. [Nulls, Exceptions, And Return Values](#nulls-exceptions-and-return-values)
-3. [Enums Carry States](#enums-carry-states)
-4. [Option](#option)
-5. [Result](#result)
-6. [Handling With Match](#handling-with-match)
-7. [if let](#if-let)
-8. [The Unwrap Trap](#the-unwrap-trap)
+1. [What Are Option And Result?](#what-are-option-and-result)
+2. [Searching With Option](#searching-with-option)
+3. [Reading Files With Result](#reading-files-with-result)
+4. [Enums Carry The State](#enums-carry-the-state)
+5. [Handling With Match](#handling-with-match)
+6. [if let](#if-let)
+7. [The Unwrap Trap](#the-unwrap-trap)
+8. [Choosing Option Or Result](#choosing-option-or-result)
 9. [Putting It All Together](#putting-it-all-together)
 10. [What's Next](#whats-next)
 
-## The Problem
+## What Are Option And Result?
 
-The notes app can now hold owned text, borrow slices for search, and keep project files in a normal Cargo layout. The next feature sounds small: read a config file, choose the default notebook, and print part of a notes file.
+The previous article showed how Rust makes owned data and borrowed views visible in types. Rust uses the same habit for two everyday cases: sometimes a value is missing, and sometimes an operation fails.
 
-That small feature creates three different kinds of uncertainty:
+A notes app runs into both cases quickly:
 
-- The user might not have configured a default notebook yet.
-- The notes file might not exist, or the program might not have permission to read it.
-- The file might load successfully but contain no first line to print.
+- Searching for a note title may find no matching note.
+- Reading a config file may fail because the file is missing.
+- Parsing a setting may fail because the text has the wrong shape.
 
-Those states should not collapse into the same answer. A missing default notebook is ordinary absence. A file read failure has a reason. An empty file is different from a file that could not be opened.
+Rust represents these cases with ordinary values. `Option<T>` means a value may be present or absent. `Result<T, E>` means an operation may succeed with `T` or fail with error `E`.
 
-Rust pushes those distinctions into return types. A function that might not find a value returns `Option<T>`. A function that might fail and should explain why returns `Result<T, E>`. The caller cannot use the successful value until it decides what to do with the other path.
+Create a small project:
 
-## Nulls, Exceptions, And Return Values
+```bash
+$ cargo new note-state
+    Creating binary (application) `note-state` package
+$ cd note-state
+```
 
-If you come from JavaScript, TypeScript, or Python, you may expect missing values and failures to travel through `null`, `undefined`, `None`, or exceptions. Rust's default style is different: ordinary absence and recoverable failure are values returned from the function.
+Put this program in `src/main.rs`:
 
-That does not mean Rust never panics. It means Rust prefers return types for states the caller can reasonably handle.
+```rust
+fn main() {
+    let tags = vec!["release", "ops"];
 
-| Familiar shape | Rust usually uses | Why |
-| --- | --- | --- |
-| `null`, `undefined`, or Python `None` for "not found" | `Option<T>` | The caller must handle value or no value |
-| `throw` or `raise` for recoverable work | `Result<T, E>` | The caller sees success and failure in the signature |
-| Crash for impossible internal state | `panic!` | The program cannot continue normally |
+    println!("{:?}", tags.iter().position(|tag| *tag == "release"));
+    println!("{:?}", tags.iter().position(|tag| *tag == "missing"));
+    println!("{:?}", std::fs::read_to_string("notes.conf"));
+}
+```
 
-This is why `Option` and `Result` appear so early in Rust. They are everyday data shapes for uncertainty.
+Run it in a directory with no `notes.conf` file:
 
-## Enums Carry States
+```bash
+$ cargo run
+   Compiling note-state v0.1.0 (/home/you/note-state)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.27s
+     Running `target/debug/note-state`
+Some(0)
+None
+Err(Os { code: 2, kind: NotFound, message: "No such file or directory" })
+```
 
-`Option` and `Result` are enums. An enum says a value is one of several named variants, and each variant can carry data.
+The first line is `Some(0)` because the search found the tag at index 0. The second line is `None` because the search completed without a match. The third line is `Err(...)` because the operating system said the file does not exist.
 
-A variant is one named case. An `Option<String>` value is either the `Some` variant carrying a `String`, or the `None` variant carrying no data. It is one case at a time, not a bag of flags.
+The state is part of the value. The caller does not have to remember that a special string, a null pointer, or a hidden exception might appear. The type says what can happen.
 
-The shape behind `Option` is small:
+## Searching With Option
+
+`Option<T>` is used when absence is a normal answer.
+
+Here is a small note search:
+
+```rust
+#[derive(Debug)]
+struct Note {
+    title: String,
+    body: String,
+}
+
+fn find_note<'a>(notes: &'a [Note], title: &str) -> Option<&'a Note> {
+    notes.iter().find(|note| note.title == title)
+}
+
+fn main() {
+    let notes = vec![
+        Note {
+            title: String::from("release checklist"),
+            body: String::from("ship build"),
+        },
+        Note {
+            title: String::from("incident notes"),
+            body: String::from("collect timeline"),
+        },
+    ];
+
+    println!("{:?}", find_note(&notes, "release checklist"));
+    println!("{:?}", find_note(&notes, "missing"));
+}
+```
+
+Run it:
+
+```text
+Some(Note { title: "release checklist", body: "ship build" })
+None
+```
+
+The return type is `Option<&Note>`. Read that as "maybe a borrowed note." The first call returns `Some(...)` because a matching note exists. The second call returns `None` because no note has the requested title.
+
+The lifetime annotation in `find_note<'a>` says the returned borrowed note comes from the borrowed `notes` slice. The function is not creating a new note. It is handing back a view of a note that already lives inside the caller's vector.
+
+The two possible shapes are simple:
+
+```rust
+Some(value)
+None
+```
+
+There is no note inside `None`. Code that wants the note has to handle that case.
+
+## Reading Files With Result
+
+`Result<T, E>` is used when failure has a reason worth keeping.
+
+File reading is a good example:
+
+```rust
+fn main() {
+    let config = std::fs::read_to_string("notes.conf");
+
+    println!("{config:?}");
+}
+```
+
+Run it before the file exists:
+
+```text
+Err(Os { code: 2, kind: NotFound, message: "No such file or directory" })
+```
+
+Now create the file:
+
+```bash
+$ printf 'default=release checklist\n' > notes.conf
+$ cat notes.conf
+default=release checklist
+```
+
+Run the program again:
+
+```text
+Ok("default=release checklist\n")
+```
+
+The same expression returned two different variants:
+
+```rust
+Ok(text)
+Err(error)
+```
+
+`Ok` contains the file contents. `Err` contains the I/O error from the operating system. That error carries useful details such as `NotFound`, `PermissionDenied`, or another filesystem problem.
+
+This is the difference between `Option` and `Result`. A missing search result usually needs no extra explanation. A failed file read usually does, because the caller may respond differently to "file missing" and "permission denied."
+
+## Enums Carry The State
+
+`Option` and `Result` are enums. An enum is a type whose value is one of a fixed set of variants.
+
+Their simplified shapes look like this:
 
 ```rust
 enum Option<T> {
     Some(T),
     None,
 }
-```
 
-The `<T>` means `Option` can wrap many different types. `Option<String>` is either `Some(String)` or `None`. `Option<&str>` is either `Some(&str)` or `None`.
-
-`T` is a type placeholder, like a generic type parameter in TypeScript. It lets the same enum shape work for many contained types.
-
-`Result` has two type parameters because success and failure usually carry different data:
-
-```rust
 enum Result<T, E> {
     Ok(T),
     Err(E),
 }
 ```
 
-`Result<String, std::io::Error>` means the operation either produced a `String` or failed with an I/O error.
+The angle-bracket names are type parameters. In `Option<&Note>`, `T` is `&Note`. In `Result<String, std::io::Error>`, `T` is `String` and `E` is `std::io::Error`.
 
-The useful mental model is simple:
+This table shows the shape in the notes app:
 
-```mermaid
-flowchart LR
-    Option["Option<T>"] --> Some["Some(value)"]
-    Option --> None["None"]
-    Result["Result<T, E>"] --> Ok["Ok(value)"]
-    Result --> Err["Err(error)"]
-```
-
-| Situation | Rust shape | Possible states |
+| Expression | Type Shape | Possible Values |
 | --- | --- | --- |
-| A value may be missing | `Option<T>` | `Some(value)` or `None` |
-| An action may fail | `Result<T, E>` | `Ok(value)` or `Err(error)` |
+| `find_note(&notes, "release")` | `Option<&Note>` | `Some(&Note)` or `None` |
+| `std::fs::read_to_string("notes.conf")` | `Result<String, io::Error>` | `Ok(String)` or `Err(io::Error)` |
+| `"42".parse::<u32>()` | `Result<u32, ParseIntError>` | `Ok(42)` or `Err(ParseIntError)` |
 
-The compiler will not let you treat an `Option<String>` as a plain `String`. It asks you to handle the case where there is no string. That pressure is the point.
+The compiler tracks those shapes. If code tries to use an `Option<&Note>` as if it were definitely a `&Note`, Rust stops you.
 
-## Option
+The mechanism is the same idea as the enum from the previous module: a value has a current variant and, for some variants, a payload.
 
-Use `Option<T>` when absence is expected and ordinary.
+```text
+Some(&Note)
+  variant: Some
+  payload: reference to a Note
 
-A default notebook is a good example. A user might not have configured one yet. The answer is simply: there is a default notebook, or there is not.
+None
+  variant: None
+  payload: none
 
-```rust
-fn default_notebook(config: &str) -> Option<&str> {
-    config
-        .lines()
-        .find(|line| line.starts_with("default="))
-        .map(|line| line.trim_start_matches("default="))
-}
+Ok(String)
+  variant: Ok
+  payload: owned file contents
+
+Err(io::Error)
+  variant: Err
+  payload: operating-system error details
 ```
 
-This function borrows `config` and returns a borrowed slice from inside it. If a matching line exists, the return value is `Some("work")` or another borrowed string slice. If no matching line exists, the return value is `None`.
-
-Notice the ownership story. The function does not allocate a new `String`. The returned `&str` is tied to the input text. Rust can express both ideas at once: the value might be missing, and if it exists, it is borrowed from the input.
-
-The caller handles the missing case before using the value:
-
-```rust
-let config = "default=work\n";
-
-match default_notebook(config) {
-    Some(name) => println!("Default notebook: {name}"),
-    None => println!("No default notebook configured"),
-}
-```
-
-`Option` is not a failure bucket. It works best when `None` is a normal answer and no extra explanation is needed.
-
-:::expand[None is not an error]{kind="design"}
-The design pressure behind `Option` is precision. `None` should mean "there is no value here," not "something mysterious failed."
-
-For the notes app, this is a good `Option`:
-
-```rust
-fn first_line(text: &str) -> Option<&str> {
-    text.lines().next()
-}
-```
-
-An empty note file has no first line. That is a normal fact about the text. The caller does not need an error code to understand it.
-
-This is a weaker use of `Option`:
-
-```rust
-fn read_notes(path: &str) -> Option<String> {
-    std::fs::read_to_string(path).ok()
-}
-```
-
-The function is easy to call, but it hides the reason for failure. `None` could mean the file was missing, permission was denied, the path was a directory, or something else went wrong. The caller has lost information that might change the next step.
-
-Use this decision table:
-
-| Question | Good shape |
-| --- | --- |
-| "Did the search find an item?" | `Option<T>` |
-| "Is this optional config present?" | `Option<T>` |
-| "Did a file operation fail?" | `Result<T, E>` |
-| "Did user input fail to parse?" | `Result<T, E>` |
-
-`None` is strongest when no further explanation would change the caller's decision. If a caller would want to log, retry, show a specific message, or choose a different recovery path, use `Result`.
-:::
-
-## Result
-
-Use `Result<T, E>` when an operation can fail and the caller needs the reason.
-
-Reading a file is the classic case. A path might be wrong. A permission might be missing. The disk might be unavailable. Those failures carry reasons the program may want to report, retry, log, or convert into a user-friendly message.
-
-```rust
-use std::fs;
-use std::io;
-
-fn load_notes(path: &str) -> Result<String, io::Error> {
-    fs::read_to_string(path)
-}
-```
-
-The success type is `String` because reading the file owns the loaded text. The error type is `io::Error` because the standard library can explain I/O failures more precisely than a plain string can.
-
-A caller handles both sides:
-
-```rust
-match load_notes("notes.txt") {
-    Ok(text) => println!("Loaded {} bytes", text.len()),
-    Err(error) => eprintln!("Could not load notes: {error}"),
-}
-```
-
-This is why `Result` feels different from exceptions. The function signature shows the possibility of failure. The calling code can see it before the program runs.
-
-| Situation | Type | Meaning |
-| --- | --- | --- |
-| Look up a configured default | `Option<&str>` | Missing is a normal answer |
-| Read a notes file | `Result<String, io::Error>` | Failure needs an explanation |
-| Parse an optional line after loading text | `Option<&str>` | The file loaded, but the line may not exist |
-| Parse user input into a number | `Result<u32, ParseIntError>` | The input may be invalid |
-
-The beginner mistake is using `Option` because it feels simpler even when the caller needs an error message. If every failure becomes `None`, the program can only say "nothing there," even when the real problem was "permission denied."
-
-:::expand[Result keeps the reason alive]{kind="pattern"}
-`Result` lets the program keep the reason for failure until the right layer decides what to do with it.
-
-Suppose the notes app needs to parse a line number from user input:
-
-```rust
-fn parse_line_number(input: &str) -> Result<usize, std::num::ParseIntError> {
-    input.trim().parse()
-}
-```
-
-The success path gives the caller a `usize`. The error path gives the caller the parse error. That error might later become a command-line message:
-
-```rust
-match parse_line_number("abc") {
-    Ok(number) => println!("opening line {number}"),
-    Err(error) => eprintln!("line number is not valid: {error}"),
-}
-```
-
-If the function returned `Option<usize>`, the caller would know only that parsing did not produce a number. That might be enough for a tiny toy program, but it is weak for a real app. A command-line tool may want to print "line number is not valid." A web service may want to return a `400 Bad Request`. A test may want to assert that the failure was specifically a parse failure.
-
-This is the deeper pattern:
-
-| Layer | Good job |
-| --- | --- |
-| Low-level parser | Preserve the specific failure |
-| Domain function | Convert it into the app's error type if needed |
-| User interface | Turn it into human text |
-
-Do not turn errors into strings or `None` too early. Keep structure inside the program, then format it at the edge.
-:::
+When code writes `match maybe_note`, Rust checks the current variant. If it is `Some(note)`, the payload is available inside that branch as `note`. If it is `None`, there is no payload to extract. That is the actual step that replaces a null check: the program branches on the enum variant and only receives the inner value in the branch where that value exists.
 
 ## Handling With Match
 
-`match` is the most explicit way to handle `Option` and `Result`.
+The direct way to handle an enum is `match`.
 
-It works by pattern matching against enum variants:
+Use `match` to print a note search result:
 
 ```rust
-fn print_first_line(text: &str) {
-    match text.lines().next() {
-        Some(line) => println!("{line}"),
-        None => println!("The file is empty"),
+#[derive(Debug)]
+struct Note {
+    title: String,
+    body: String,
+}
+
+fn find_note<'a>(notes: &'a [Note], title: &str) -> Option<&'a Note> {
+    notes.iter().find(|note| note.title == title)
+}
+
+fn main() {
+    let notes = vec![Note {
+        title: String::from("release checklist"),
+        body: String::from("ship build"),
+    }];
+
+    match find_note(&notes, "release checklist") {
+        Some(note) => println!("found: {}", note.title),
+        None => println!("no matching note"),
+    }
+
+    match find_note(&notes, "incident notes") {
+        Some(note) => println!("found: {}", note.title),
+        None => println!("no matching note"),
     }
 }
 ```
 
-`text.lines().next()` returns `Option<&str>`. The `Some(line)` arm pulls the borrowed line out of the option. The `None` arm handles the empty file.
+Run it:
 
-For `Result`, `match` separates success from failure:
+```text
+found: release checklist
+no matching note
+```
+
+The first `match` receives `Some(note)`, so it runs the first arm. The payload inside `Some` becomes the local name `note`, and only that branch can read `note.title`. The second `match` receives `None`, so it runs the second arm. There is no note payload in that branch, so the code cannot accidentally read a missing note. An arm is one branch of a `match`.
+
+The same pattern handles `Result`:
 
 ```rust
-match load_notes("notes.txt") {
-    Ok(text) => print_first_line(&text),
-    Err(error) => eprintln!("notes.txt: {error}"),
+fn main() {
+    match std::fs::read_to_string("notes.conf") {
+        Ok(text) => println!("loaded {} bytes", text.len()),
+        Err(error) => println!("could not read config: {error}"),
+    }
 }
 ```
 
-`match` must be exhaustive. If you handle `Ok` but forget `Err`, the program does not compile. If you handle `Some` but forget `None`, the program does not compile.
+If `notes.conf` exists and contains one setting, the output might be:
 
-That exhaustiveness is one of Rust's quiet reliability features. The compiler is not guessing what the missing case should do. It asks you to say it.
+```text
+loaded 26 bytes
+```
+
+If the file is missing, the output is:
+
+```text
+could not read config: No such file or directory (os error 2)
+```
+
+The important part is that both paths are written down. Rust's `match` must cover every variant unless you explicitly use a catch-all pattern.
 
 ## if let
 
-Sometimes you only care about one variant. `if let` gives you a shorter shape for that.
+`match` is clear when both branches matter. Sometimes only one branch needs work.
+
+This program prints a note only if it is present:
 
 ```rust
-if let Some(name) = default_notebook("default=work\n") {
-    println!("Using {name}");
+#[derive(Debug)]
+struct Note {
+    title: String,
+}
+
+fn main() {
+    let maybe_note = Some(Note {
+        title: String::from("release checklist"),
+    });
+
+    if let Some(note) = maybe_note {
+        println!("opening {}", note.title);
+    }
 }
 ```
 
-This means: if the value is `Some`, bind the inside value to `name` and run the block. If it is `None`, do nothing.
+Output:
 
-You can add an `else` when there is a useful fallback:
-
-```rust
-if let Some(line) = "alpha\nbeta".lines().next() {
-    println!("First line: {line}");
-} else {
-    println!("No lines found");
-}
+```text
+opening release checklist
 ```
 
-Use `if let` when the ignored case is genuinely boring. If both cases matter, `match` is usually clearer.
+`if let Some(note) = maybe_note` means "if the value has the `Some` shape, pull out the note and run this block." If the value is `None`, the block is skipped.
+
+This is useful for small optional actions: print a value if present, add a tag if found, or use a config override if the config contains one. When the missing case needs its own behavior, use `match`.
 
 ## The Unwrap Trap
 
-`unwrap()` says, "give me the value, and panic if this is the other variant."
+`unwrap()` extracts the value from `Some` or `Ok`. It panics on `None` or `Err`.
 
-A panic is a runtime stop for a path that cannot continue normally. Depending on settings, Rust may unwind the stack and run cleanup or abort the process. Either way, it is not the same thing as returning a normal error value to the caller.
-
-That can be fine in a throwaway experiment. It can be fine in a test where panic is exactly how the test should fail. It can be fine when you just proved an invariant in the previous line and there is no realistic recovery path.
-
-It is a poor default for application code.
+This program compiles:
 
 ```rust
-let first = text.lines().next().unwrap();
-```
+fn main() {
+    let tags = vec!["release", "ops"];
+    let index = tags.iter().position(|tag| *tag == "missing").unwrap();
 
-This line crashes if `text` has no line. The return type already told us that no line was possible: `next()` returned `Option<&str>`. `unwrap()` throws away that warning and turns a normal state into a runtime surprise.
-
-`expect()` is only a little better:
-
-```rust
-let first = text.lines().next().expect("notes file should not be empty");
-```
-
-The panic message is clearer, but the program still panics. Use `expect` when panic is truly the right behavior and the message explains the invariant. Use `match`, `if let`, `ok_or`, or `?` when the caller should handle the state normally.
-
-:::expand[unwrap turns a typed state into a runtime surprise]{kind="pitfall"}
-The tempting mistake is treating `unwrap()` as a shortcut for "I do not want to think about this case yet."
-
-Imagine a command that prints the first note:
-
-```rust
-fn print_first_note(text: &str) {
-    let line = text.lines().next().unwrap();
-    println!("{line}");
+    println!("{index}");
 }
 ```
 
-It passes during happy-path testing. Then a user creates an empty notes file, and the program exits with a panic instead of saying the file has no notes.
+Run it:
 
-The safer version keeps the state visible:
-
-```rust
-fn print_first_note(text: &str) {
-    match text.lines().next() {
-        Some(line) => println!("{line}"),
-        None => println!("No notes yet"),
-    }
-}
+```text
+thread 'main' panicked at src/main.rs:3:58:
+called `Option::unwrap()` on a `None` value
 ```
 
-Use this rule of thumb:
+The panic is accurate. The search returned `None`, and `unwrap()` demanded a value anyway. A panic stops the current thread. In a command-line tool, that may end the process. In a server, a panic may abort a request or, depending on the runtime, bring down more of the program than intended.
 
-| Context | `unwrap` fit |
+`unwrap()` is useful in examples, tests, and short scripts where a crash is acceptable. In application code, it often hides a decision the program should make:
+
+| Situation | Better Shape |
 | --- | --- |
-| Tiny scratch program | Usually acceptable |
-| Unit test setup | Often acceptable |
-| Proved invariant with no recovery path | Sometimes acceptable with `expect` |
-| User input, files, network, config | Avoid it |
+| Missing value is expected | Return or handle `Option` |
+| Failure has a reason | Return or handle `Result` |
+| Missing value means a config error | Convert `Option` to `Result` with a clear error |
+| A value must exist because the code just created it | `expect("message")` can document the invariant |
 
-`unwrap()` is loud. In code that handles the outside world, prefer returning or handling the missing state instead of surprising the user at runtime.
-:::
+Panics have legitimate uses in tests, examples, and unrecoverable situations. In this example, the issue is a signature that looks reliable while the body can crash during ordinary input.
+
+## Choosing Option Or Result
+
+Use `Option` when absence is the whole story. Use `Result` when the caller needs a reason for failure.
+
+| Question | Prefer | Example |
+| --- | --- | --- |
+| Did a search find a value? | `Option<T>` | `notes.iter().find(...)` |
+| Does this map contain a key? | `Option<&V>` | `settings.get("theme")` |
+| Did file reading succeed? | `Result<String, io::Error>` | `read_to_string("notes.conf")` |
+| Did parsing succeed? | `Result<u32, ParseIntError>` | `"42".parse::<u32>()` |
+| Is a required setting missing? | `Result<T, ConfigError>` | `load_default_notebook(...)` |
+
+A missing optional theme can be `None`. A missing required config entry should usually become an error because the caller needs to know why startup cannot continue.
+
+That boundary is a design choice. Rust's types make the choice visible.
 
 ## Putting It All Together
 
-The notes feature now has different shapes for different kinds of uncertainty:
+The opening examples produced three values:
 
-```rust
-use std::io;
-
-fn default_notebook(config: &str) -> Option<&str> {
-    config
-        .lines()
-        .find(|line| line.starts_with("default="))
-        .map(|line| line.trim_start_matches("default="))
-}
-
-fn load_notes(path: &str) -> Result<String, io::Error> {
-    std::fs::read_to_string(path)
-}
-
-fn print_first_line(text: &str) {
-    match text.lines().next() {
-        Some(line) => println!("{line}"),
-        None => println!("The file is empty"),
-    }
-}
+```text
+Some("release")
+None
+Err(Os { code: 2, kind: NotFound, message: "No such file or directory" })
 ```
 
-The config search returns `Option<&str>` because a missing default is ordinary. The file load returns `Result<String, io::Error>` because failure has a reason. The first-line printer handles `Option` with `match` because both outcomes deserve a message.
+Those lines are the whole lesson in miniature. `Some` means a value is present. `None` means absence is a normal result. `Err` means an operation failed and carried a reason.
 
-Count back to the opener:
+Rust makes callers deal with those shapes before they can use the inner value. `match` handles every branch directly. `if let` handles the branch you care about. `unwrap()` skips the decision and panics when the value is missing or failed.
 
-- Missing default notebook: `Option`.
-- File could not be read: `Result`.
-- Empty file after a successful read: `Option`.
-
-The important shift is learning to ask what state the caller needs to see.
+The same habit from ownership is still present: important program states should be visible in the type, not hidden in a convention the caller might forget.
 
 ## What's Next
 
-`Option` and `Result` make absence and failure visible. The next article shows how those values move through larger functions without filling every line with manual `match`: returning `Result`, using `?`, converting errors at boundaries, and designing small APIs that borrow or own data deliberately.
+`Option` and `Result` explain how Rust represents missing values and recoverable failures. The next article shows how those values move through real functions with `Result` return types, custom error enums, and the `?` operator.
 
 ---
 
 **References**
 
-- [Option - Rust standard library](https://doc.rust-lang.org/std/option/)
-- [Result - Rust standard library](https://doc.rust-lang.org/std/result/)
-- [Defining an Enum - The Rust Programming Language](https://doc.rust-lang.org/book/ch06-01-defining-an-enum.html)
-- [Recoverable Errors with Result - The Rust Programming Language](https://doc.rust-lang.org/book/ch09-02-recoverable-errors-with-result.html)
+- [std::option::Option](https://doc.rust-lang.org/std/option/enum.Option.html)
+- [std::result::Result](https://doc.rust-lang.org/std/result/enum.Result.html)
+- [The Rust Programming Language: Recoverable Errors with Result](https://doc.rust-lang.org/book/ch09-02-recoverable-errors-with-result.html)
+- [The Rust Programming Language: The match Control Flow Construct](https://doc.rust-lang.org/book/ch06-02-match.html)
+- [The Rust Programming Language: Concise Control Flow with if let](https://doc.rust-lang.org/book/ch06-03-if-let.html)

@@ -1,7 +1,7 @@
 ---
 title: "Computer Science for Rust"
-description: "Learn the memory, type, data structure, process, thread, and I/O concepts that make Rust's rules easier to understand."
-tags: ["memory", "types", "data-structures", "threads"]
+description: "Learn how Rust programs run, where values live, how bits become typed data, and how collections, processes, threads, and I/O shape real Rust code."
+tags: ["memory", "types", "collections", "threads"]
 icon: "Cpu"
 order: 2
 ---
