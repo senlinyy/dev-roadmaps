@@ -25,6 +25,10 @@ A directory is simply a container that holds files and other directories. You ca
 
 When you first open a terminal on a Linux machine, you land in your home directory, which is typically `/home/yourname`. This is your personal workspace where your files and configuration live. From here, you can move around the entire tree using a handful of simple commands.
 
+![A clean infographic showing the Linux root path branching into functional zones like home, configuration, logs, kernel views, devices, and mounts](/content-assets/articles/article-devops-foundation-linux-linux-basics-filesystem-navigation/one-linux-tree.png)
+
+*Linux presents the system as one tree rooted at `/`, with user workspaces, configuration, logs, programs, temporary files, and live kernel views all reached by paths inside that tree.*
+
 ## Basic Navigation: cd, ls, and pwd
 
 Three commands form the foundation of moving around in Linux. The first is `pwd`, which stands for "print working directory." It tells you exactly where you are right now.
@@ -259,6 +263,10 @@ The number on the left is the inode number, essentially the primary key of that 
 
 This separation explains several Linux behaviors that would otherwise look strange. A hard link is a second filename pointing to the same inode, so two different paths refer to the exact same file on disk (not a copy). Deleting one name does not delete the data; the kernel only frees the blocks when the inode's link count drops to zero AND no process has the file open. That is exactly why deleted-but-still-open files keep consuming space: the name is gone from the directory, but the inode still has a live reference from the process, so the data blocks stay allocated. Renaming a file is also instant regardless of its size, because you are only editing the directory entry, not touching the inode or data blocks.
 
+![A focused infographic showing a removed filename while the inode, data blocks, and open process handle remain connected](/content-assets/articles/article-devops-foundation-linux-linux-basics-filesystem-navigation/inodes-open-handles.png)
+
+*A filename is a directory entry that points to an inode. The inode owns the metadata and data-block pointers, and a running process can keep that inode alive even after the visible filename has been removed.*
+
 Hard links have one important limitation that follows directly from the inode design: inode numbers are only unique within a single filesystem. Two separate filesystems can each have an inode 1835023, and they refer to completely unrelated files. That means a hard link cannot point across filesystems, because there is no global way to name "inode 1835023 on the disk mounted at /data" from a directory entry on the disk mounted at /. This is the constraint that forced the existence of symbolic links. A symlink stores a path string instead of an inode number, so it can point anywhere the kernel can resolve a path: across filesystems, across mount points, even at targets that do not exist yet. The tradeoff is that symlinks break if their target moves, while hard links keep working because they are bound to the data, not to the name.
 
 A less obvious disk space problem is inode exhaustion. Every file consumes one inode, and a filesystem has a fixed number of inodes set at creation time (much like a database table with a capped row count). If a system generates millions of tiny files (common with mail spools, session caches, or package manager metadata), you can run out of inodes while still having plenty of raw disk space available. The error message is the same misleading "No space left on device." The command `df -i` shows inode usage per filesystem and is worth checking whenever free space looks fine but file creation fails.
@@ -283,6 +291,10 @@ python3  5678  app    6w  REG    8,1  1048576     0  9012 /tmp/upload_cache (del
 Before talking about mount points, it helps to understand what "mounting" actually means. On Windows, when you plug in a USB drive it shows up as a new drive letter like `E:\`. On macOS it appears under `/Volumes/MyDrive`. Linux takes a different approach: there are no drive letters, and every storage device is attached somewhere inside the single tree rooted at `/`. "Mounting" is the act of attaching a device (or a network share, or even a chunk of RAM) to a specific directory so that reading and writing that directory actually reads and writes the device. That directory is called the **mount point**.
 
 A useful mental model: think of a mount point like a Python `dict` where a key gets reassigned to point at a different object. Before mounting, the directory `/mnt/usb` is just an empty folder on your root disk. After running `mount /dev/sdb1 /mnt/usb`, the kernel rewires that path so any access to `/mnt/usb/...` is actually served by the USB drive. Nothing physically moves; only the lookup target changes. Unmounting reverses the wiring and the directory points back at its original (usually empty) contents.
+
+![A path lookup infographic showing slash mnt slash usb routed by the mount table to USB contents while the root disk folder is hidden](/content-assets/articles/article-devops-foundation-linux-linux-basics-filesystem-navigation/mount-point-overlay.png)
+
+*Mounting keeps the path stable while changing what storage answers behind that path. If files already existed in the mount-point directory, they are hidden until the mounted filesystem is unmounted.*
 
 This design is why Linux handles diverse storage so cleanly. A program reading files from `/data` does not need to know whether that directory is backed by a local SSD, a network file share (NFS or SMB), or an in-RAM `tmpfs`. The mount abstraction makes them all look like ordinary directories. Database servers, container runtimes, and backup tools all rely on this uniformity.
 
@@ -317,6 +329,10 @@ tmpfs                                      /tmp     tmpfs   defaults,nodev    0 
 ```
 
 One subtlety of mount points that surprises newcomers: if the mount point directory already contains files, those files become invisible (but not deleted) while the mount is active. Unmounting reveals them again. That is how overlaying works. The mounted filesystem takes precedence at that directory path, and the original contents are hidden underneath until the mount is removed.
+
+![A six-part summary infographic for the Linux filesystem covering the root tree, navigation commands, standard directories, live kernel views, disk space, inodes, and mount routing](/content-assets/articles/article-devops-foundation-linux-linux-basics-filesystem-navigation/filesystem-navigation-summary.png)
+
+*Use this as the short mental checklist: Linux is one tree rooted at `/`; `pwd`, `cd`, and `ls` orient you inside it; standard directories tell you what kind of data you are looking at; `/proc`, `/dev`, and `/sys` expose live system views; disk usage depends on both blocks and inodes; and mount points route stable paths to different backing filesystems.*
 
 ---
 

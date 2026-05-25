@@ -13,237 +13,128 @@ aliases:
 
 ## Table of Contents
 
-1. [The Problem](#the-problem)
+1. [Relational Scaling Limits to Serverless NoSQL](#relational-scaling-limits-to-serverless-nosql)
 2. [What Is DynamoDB](#what-is-dynamodb)
-3. [Access Patterns](#access-patterns)
-4. [Tables](#tables)
-5. [Items](#items)
-6. [Partition Keys](#partition-keys)
-7. [Sort Keys](#sort-keys)
-8. [Conditional Writes](#conditional-writes)
-9. [Indexes](#indexes)
-10. [Capacity And Pressure](#capacity-and-pressure)
-11. [Sample Table Shape](#sample-table-shape)
-12. [Putting It All Together](#putting-it-all-together)
-13. [What's Next](#whats-next)
+3. [Physical Partitioning and Hashing Mechanics](#physical-partitioning-and-hashing-mechanics)
+4. [Composite Primary Keys and Item Modeling](#composite-primary-keys-and-item-modeling)
+5. [Designing for Access Patterns Instead of Schema Normalization](#designing-for-access-patterns-instead-of-schema-normalization)
+6. [Conditional Writes as Concurrency Barriers](#conditional-writes-as-concurrency-barriers)
+7. [Alternative Access Paths with Global Secondary Indexes](#alternative-access-paths-with-global-secondary-indexes)
+8. [On-Demand vs. Provisioned Capacity Planning](#on-demand-vs-provisioned-capacity-planning)
+9. [Putting It All Together](#putting-it-all-together)
+10. [What's Next](#whats-next)
 
-## The Problem
+## Relational Scaling Limits to Serverless NoSQL
 
-The previous article used RDS for relational checkout data. Now the team has a smaller but very important problem: retries.
+The previous RDS article detailed relational databases, which excel at managing structured transaction schemas requiring strict ACID transactional boundaries and dynamic SQL joins. In a standard relational environment, your application normalizes data into separate tables and queries them dynamically, relying on the database engine to parse complex SQL queries and scan B-tree indexes.
 
-Checkout calls can be retried by browsers, mobile apps, load balancers, workers, or human support tools. If the same checkout request is processed twice, customers might be charged twice or receive duplicate receipts. The app needs to remember that a request id was already claimed.
+However, as your application's transaction volume scales to thousands of requests per second, this relational model encounters severe architectural bottlenecks:
 
-That data has a different shape from orders and line items:
+* **Connection Exhaustion**: Relational databases allocate dedicated memory and CPU threads for every open TCP connection. Under sudden traffic spikes, horizontal auto-scaling can quickly exhaust database connection limits.
+* **Row Locking and Latency**: High-velocity write queries (such as checking API idempotency tokens or updating active shopping carts) can lock database rows or tables, causing concurrent queries to wait and driving up response times.
+* **Vertical Scaling Limits**: Relational engines are designed to scale vertically on a single server. Scaling a SQL database horizontally introduces complex replica synchronization delays, distributed locking overhead, and physical single-point failures.
 
-- The app already knows the exact idempotency key it wants to check.
-- The record is small and does not need joins.
-- A write should succeed only if the key does not already exist.
-- The record can expire after the retry window.
-- High traffic should not require one relational transaction for every duplicate check.
-
-This is a DynamoDB-shaped problem. The app wants fast access by known key and a safe conditional write.
+To bypass these relational scaling limits, you must move high-frequency, key-based application state out of SQL and into serverless NoSQL databases. Amazon DynamoDB is cabled specifically to solve this high-volume scale, discarding database connections and SQL query parsers in favor of an HTTP-based service cabled to the regional AWS network. To unlock DynamoDB's predictable, sub-10ms performance, however, you must throw away relational database habits and design your storage around your application's exact access patterns.
 
 ## What Is DynamoDB
 
-Amazon DynamoDB is a managed NoSQL database service built around tables, items, and keys. Instead of modeling around tables and joins first, you model around the questions the app must answer quickly.
+DynamoDB is a serverless, non-relational (NoSQL) database service. While relational database engines like RDS PostgreSQL organize data into normalized tables cabled together dynamically using complex SQL joins, DynamoDB takes a completely different path. It is built explicitly for high-velocity, single-digit millisecond performance at a traffic scale that would exhaust traditional SQL database connection and CPU pools.
 
-For a beginner, the most important sentence is this: DynamoDB works best when the application knows how it will access the data. If you need "get item by this exact key," "list records for this customer in time order," or "claim this idempotency key if it does not exist," DynamoDB can be a strong fit. If you need flexible ad hoc joins across changing relationships, RDS is usually easier to reason about.
+The easiest way to visualize DynamoDB is as a massive spreadsheet cabled directly to the cloud network. Instead of managing rows with uniform column schemas, DynamoDB stores independent items. Every item in your table must be identified and written using a unique primary row key (the Partition Key). Outside of this Partition Key, the items in the same table can hold entirely different attributes without any structural checks or schema validations. Because DynamoDB is completely serverless, you do not manage virtual servers, provision disk sizes, or configure connection pools. Instead, your application communicates with the database over secure HTTP APIs, and AWS handles all backend capacity scaling, physical hardware replication, and server maintenance automatically.
 
-DynamoDB has its own design contract:
+By trading the dynamic query flexibility of SQL joins for infinite horizontal scale, DynamoDB guarantees constant sub-10ms response times at any scale. While it is not designed for unpredictable business analytics, it represents the premier AWS home for high-velocity, key-based application state like customer sessions, API idempotency tokens, and active shopping carts.
 
-| DynamoDB concept | Plain-English job |
-| --- | --- |
-| Table | Holds items with a primary key design |
-| Item | One record, stored as attributes |
-| Partition key | Decides where an item is distributed and how exact-key reads find it |
-| Sort key | Orders related items under the same partition key when used |
-| Index | Adds another key-based access path |
-| Conditional write | Writes only if a condition is true |
+## Physical Partitioning and Hashing Mechanics
 
-The table design follows the access patterns, not the other way around.
+A standard database searches for records by scanning tables or indexes, meaning that searching a table containing 10 million rows is fundamentally slower than searching a table with 100 rows. DynamoDB guarantees predictable, high-speed query performance by utilizing physical storage partitions. 
 
-## Access Patterns
+When your application writes a record (called an item) to a DynamoDB table, you must provide a unique primary Partition Key (abbreviated as PK). When the write request arrives, DynamoDB runs the partition key value through an internal hashing algorithm to generate an address. This address immediately resolves to a specific physical storage partition cabled within the AWS regional network. DynamoDB routes the write request straight to that partition, bypassing table scans. When your application queries the item by its Partition Key, DynamoDB runs the exact same hashing function to find the physical partition holding the item and retrieves the bytes directly.
 
-An access pattern is a question the app needs the database to answer. DynamoDB design starts by writing those questions down.
+Because DynamoDB reads and writes directly to the designated partition, the search time remains identical whether your table holds ten items or ten billion items. Query latency is entirely decoupled from the overall size of the table.
 
-For the orders system, useful DynamoDB access patterns might be:
+## Composite Primary Keys and Item Modeling
 
-| Access pattern | Example |
-| --- | --- |
-| Claim one checkout request | Create idempotency key `checkout:req-8f2` only if missing |
-| Read current job state | Get export job `job-2026-05-14-001` |
-| List order events | Query events for `order-1042` sorted by time |
-| Store short-lived session | Get session by token and expire it later |
+Partition key hashing delivers high-speed lookups for simple key-value states, like retrieving a user session token. However, e-commerce applications require relational context, meaning you must be able to retrieve an order header and all its associated product line items. Since DynamoDB does not support database joins, storing orders and items as independent tables would force your application to make multiple expensive network round-trips.
 
-Notice how specific these are. "Search all orders by every field" is not a DynamoDB access pattern. "Get all events for one order in time order" is. The key design can support that.
+To model relationships within a flat NoSQL database, you must deploy **Composite Primary Keys**. The Partition Key (PK) determines the physical partition where a related group of items resides, acting as the primary container ID for the collection. The Sort Key (SK) controls how items are sorted and cabled within that physical partition, enabling range queries (such as begins_with, between, or logical comparisons).
 
-This is the main mental shift from RDS. In SQL, you can often start with normalized tables and add queries later. In DynamoDB, the future queries need to be part of the design conversation early.
+Using a composite key structure, you can group and sort related entities together in a single table, constructing a layout known as an item collection:
 
-## Tables
+| Partition Key (PK) | Sort Key (SK) | Attribute: Type | Attribute: Value |
+| --- | --- | --- | --- |
+| `ORDER#1042` | `METADATA` | `CreatedTime` | `2026-05-25T18:00:00Z` |
+| `ORDER#1042` | `ITEM#PRODUCT-88` | `Quantity` | `2` |
+| `ORDER#1042` | `ITEM#PRODUCT-99` | `Quantity` | `1` |
 
-A DynamoDB table stores items. Every item in a table must have the table's primary key attributes. Other attributes can vary by item. That flexibility is useful, but it does not mean the table is unstructured. The structure lives in the key design and access patterns.
+Using composite keys lets your application retrieve the order header and all associated line items with a single range query to a single partition key (`PK = ORDER#1042`), bypassing the need for expensive SQL joins and executing the transaction in under 10 milliseconds.
 
-Beginners often ask whether every entity needs its own table. Sometimes separate tables are clearer, especially early in a learning path. A table for idempotency keys and a table for job state can be perfectly reasonable if they have different lifecycles and access patterns.
+Item collections allow you to represent relationships inside a single table. To implement this successfully, you must completely invert your database modeling habits. In relational design, you normalize your schema by separating data into multiple distinct tables to eliminate duplicate fields, designing your SQL queries later. In NoSQL DynamoDB design, you must design your table schema strictly around a predefined list of the exact queries your application needs to answer.
 
-The key is to avoid pretending the table is just a bucket for random JSON. If the table is called `orders-support-state`, a reviewer should still be able to say which keys exist, which access patterns they support, and which writes must be conditional.
+First, you identify access patterns before writing any table schema, listing every operational query your application will execute (such as finding order metadata by OrderID, listing all items for an order, or checking if an API token is claimed). Second, you denormalize your data. Instead of splitting data across multiple tables, store related data together in a single table, duplicating metadata like a product's name or price directly within items if doing so prevents the application from making secondary round-trip queries. Third, you accept schema flexibility. DynamoDB is schema-flexible; outside of the primary PK and SK attributes, items in the same table can have entirely different attributes. A metadata item can hold timestamp fields, while a product item beside it holds quantity and price fields.
 
-Table design should be boring to read:
+Designing around access patterns requires careful foresight. If your application needs to run unpredictable, ad-hoc analytical queries (like "Find the average order value for customers in London who bought a red shirt"), DynamoDB is the wrong tool. Use DynamoDB for predictable, high-speed transactional workflows, and stream table changes to an RDS database or data warehouse for ad-hoc business reporting.
 
-| Table | Primary access pattern | Retention |
-| --- | --- | --- |
-| `checkout-idempotency` | Claim or read one request key | Expires after retry window |
-| `order-events` | Query events for one order | Kept for support window |
-| `export-jobs` | Read and update one job by id | Kept until audit cutoff |
+## Conditional Writes as Concurrency Barriers
 
-That table tells you why the data exists.
+With your denormalized table cabled, your application can process high-velocity transactions. However, high-velocity workloads introduce concurrency threats. If a customer double-clicks a checkout button, or a transient network timeout triggers a rapid API retry, two separate application workers will attempt to write the checkout transaction at the exact same millisecond, risking duplicate credit card charges.
 
-## Items
+To construct a reliable concurrency barrier without relational row locks, you must deploy **Conditional Writes**. 
 
-An item is one DynamoDB record. It is made of attributes, and the primary key attributes identify it in the table.
-
-An idempotency item might look like this:
-
-```json
-{
-  "idempotencyKey": "checkout:req-8f2",
-  "orderId": "order-1042",
-  "status": "processing",
-  "createdAt": "2026-05-14T12:40:00Z",
-  "expiresAt": 1778762400
-}
-```
-
-The important field is `idempotencyKey` because that is how the app finds the item. The other fields explain what the key means and how long it should remain useful.
-
-Item size and shape matter. DynamoDB is not where you put a giant PDF or a full export file. Store the file in S3 and store a pointer or metadata item in DynamoDB if the app needs fast key-based lookup.
-
-This keeps each service in its natural role: S3 owns object bytes; DynamoDB owns small key-addressed state.
-
-## Partition Keys
-
-The partition key is the primary input DynamoDB uses to distribute and find data. If a table has only a partition key, that key uniquely identifies each item. If a table also has a sort key, the combination of partition key and sort key identifies each item.
-
-For idempotency, a simple partition key works well:
-
-| Partition key | Meaning |
-| --- | --- |
-| `checkout:req-8f2` | This checkout request has already been claimed or completed |
-
-The gotcha is distribution. If many writes use the same partition key, they create pressure in one place. A table where every active write uses `partitionKey = "today"` is not using DynamoDB's distribution well. A table where keys spread by request id, order id, customer id, or another natural identifier is usually easier to scale.
-
-The partition key is the address and distribution decision.
-
-## Sort Keys
-
-A sort key lets multiple related items share the same partition key while remaining ordered within that partition.
-
-For order events, the partition key might be the order id and the sort key might start with a timestamp:
-
-| Partition key | Sort key | Item |
-| --- | --- | --- |
-| `order-1042` | `2026-05-14T12:40:01Z#created` | Order created event |
-| `order-1042` | `2026-05-14T12:40:03Z#payment` | Payment captured event |
-| `order-1042` | `2026-05-14T12:40:05Z#receipt` | Receipt queued event |
-
-That shape supports the access pattern "list events for one order in time order." It does not automatically support "find every payment event across all orders today" unless you design another access path for that question.
-
-Sort keys are powerful because they let one partition hold an ordered collection. They are dangerous when teams assume they can recover every future query from one convenient string.
-
-## Conditional Writes
-
-Conditional writes are one of DynamoDB's most practical features for application correctness. A write can say, in effect, "Create this item only if it does not already exist."
-
-For idempotency, the app can try to claim a request key. If the item is missing, the write succeeds and the request can proceed. If the item already exists, the write fails the condition and the app knows this request has already been seen.
-
-The useful behavior is atomic decision-making around one key. Two retrying callers can race, but only one should claim the missing key.
-
-This prevents a common failure pattern:
-
-| Weak design | Safer design |
-| --- | --- |
-| Read key, see nothing, then write later | Conditional write claims key in one operation |
-| Duplicate request creates duplicate side effect | Duplicate request sees existing claim |
-| Retry behavior depends only on app timing | Retry behavior depends on database condition |
-
-RDS can also protect uniqueness with constraints and transactions. DynamoDB's conditional writes are the key-value version of the same safety instinct: make the data store enforce the critical rule.
-
-## Indexes
-
-An index gives DynamoDB another key-based way to read the data. If the base table key answers "get idempotency item by request key," an index might answer a different planned question such as "list active jobs by customer" or "find records by status and creation time."
-
-Indexes should come from real access patterns. Adding an index because a future dashboard might ask something vague can add write cost and operational complexity without making the design clearer.
-
-The beginner habit is to name each index by the question it answers:
-
-| Index question | Possible key idea |
-| --- | --- |
-| List jobs for one customer | Partition by customer id, sort by created time |
-| List failed exports by day | Partition by status and date, sort by job id |
-| Find active sessions for one user | Partition by user id, sort by expiration |
-
-If the team cannot state the question, the index is probably premature.
-
-## Capacity And Pressure
-
-DynamoDB can scale, but table design still affects pressure. Hot keys, large items, inefficient scans, and poorly planned indexes can create cost or throttling surprises.
-
-A hot key happens when too much traffic targets the same partition key. For example, if every write during a sale uses the same key prefix as the actual partition key, one partition can become the bottleneck. Good key design spreads work across natural identifiers.
-
-Scans are another warning sign. A scan reads through table data looking for matches. That can be useful for admin or backfill work, but it should not be the steady path for a user-facing request. User requests should usually use `GetItem` or `Query` with known keys.
-
-Operational evidence should connect back to the design:
-
-| Symptom | Design question |
-| --- | --- |
-| Throttled writes | Is one key or partition taking too much traffic? |
-| Expensive reads | Is the app scanning instead of querying by key? |
-| Large item errors | Is object-shaped data being stored in DynamoDB? |
-| Duplicate side effects | Is the critical write conditional? |
-
-DynamoDB is friendly when the access pattern is honest. It gets awkward when teams use it like a search database or a relational database without joins.
-
-## Sample Table Shape
-
-For checkout idempotency, a small table shape might look like this:
+When your application executes a write query (such as PUT, UPDATE, or DELETE), it attaches a logical assertion, such as requiring that the key does not already exist. DynamoDB checks this condition at the physical storage partition immediately before executing the write. If the condition is met, the write succeeds. If the condition is violated, DynamoDB rejects the write instantly, throwing a conditional check failure.
 
 ```mermaid
-flowchart TB
-    Request["Checkout request"] --> Claim["Conditional write"]
-    Claim --> Table["checkout-idempotency"]
-    Table --> New["Key missing"]
-    Table --> Seen["Key exists"]
-    New --> Process["Process order"]
-    Seen --> Return["Return known result"]
+flowchart TD
+    AppTask1["API Worker 1"] -->|1. PUT PK=TOKEN#99<br/>Condition: Key must not exist| DynamoDB["DynamoDB Partition"]
+    AppTask2["API Worker 2 (retry)"] -->|2. PUT PK=TOKEN#99<br/>Condition: Key must not exist| DynamoDB
+
+    DynamoDB -->|3. Condition met: Write success| AppTask1
+    DynamoDB -->|4. Condition failed: Reject write| AppTask2
 ```
 
-The table stores a marker and helps the app decide whether this request owns the right to perform the side effect.
+Using conditional writes provides an atomic lock. The first worker successfully writes the idempotency token `TOKEN#99` and processes the payment, while the concurrent retry fails the condition check and is blocked, guaranteeing that the checkout side-effect runs exactly once.
 
-For order events, the shape changes:
+## Alternative Access Paths with Global Secondary Indexes
 
-```text
-PK = order-1042
-SK = 2026-05-14T12:40:03Z#payment
-```
+A composite primary key structure forces you to query data by its primary Partition Key. However, application access patterns often require alternative query paths. An e-commerce system might routinely query an order by its unique `OrderID` (the table's PK), but support staff also need to list orders by a customer's `EmailAddress`.
 
-That key shape supports a timeline for one order. It is a different access pattern, so it deserves a different key design or table.
+To query by attributes other than your primary key without running slow, cost-prohibitive full-table scans, you must deploy **Global Secondary Indexes (GSIs)**. 
+
+A GSI is a secondary partition layout of your table's data, cabled with its own custom Partition Key and Sort Key, such as using an email address as the index partition key. When you define a GSI, you choose which attributes from the main table are projected (copied) into the index. When your application writes an item to the main table, DynamoDB automatically and asynchronously copies the item to the GSI partition layout. Your application can then query the GSI directly, locating items by the secondary key. Note that GSIs are read-only; you cannot write directly to a GSI.
+
+Global Secondary Indexes are powerful tools that provide alternative query paths. However, because they replicate data, they incur additional write costs and consume extra storage. Use GSIs deliberately to satisfy core access patterns, and keep index projections as slim as possible to minimize costs.
+
+## On-Demand vs. Provisioned Capacity Planning
+
+Unlike managed RDS instances where you pay for continuous running virtual servers and disk allocation, DynamoDB is serverless. You do not manage database servers. Instead, you pay strictly for the database throughput your application consumes, measured in Read Capacity Units (RCUs) and Write Capacity Units (WCUs). A Read Capacity Unit represents one strongly consistent read per second, or two eventually consistent reads per second, for an item up to 4 kilobytes in size, while a Write Capacity Unit represents one write per second for an item up to 1 kilobyte in size.
+
+To control costs and handle scaling, you must choose between two capacity billing models. On-Demand Capacity charges you strictly per request. If your application receives zero traffic, you pay zero throughput fees, making this ideal for developer environments, early-stage applications, or workloads with highly unpredictable traffic spikes. Provisioned Capacity allows you to allocate a flat, reserved throughput capacity that the table is guaranteed to support. AWS charges a flat hourly fee for this reserved capacity, which is significantly cheaper than On-Demand rates for steady, high-volume production traffic. You can pair provisioned capacity with Auto Scaling to automatically adjust limits based on operational load.
+
+By starting with On-Demand capacity during development and switching to Provisioned capacity once your production traffic stabilizes, you can optimize your database budget while guaranteeing absolute scaling performance.
 
 ## Putting It All Together
 
-The opening retry problem did not need a relational schema or an object store. It needed a small item found by a known key and a safe way to claim that key once.
+Amazon DynamoDB replaces relational database constraints and connection limits with high-velocity, serverless NoSQL partitions. DynamoDB guarantees constant sub-10ms response times at any scale by hashing partition keys to physical storage hosts:
 
-DynamoDB fits that shape. Access patterns come first. Tables hold items. Partition keys address and distribute data. Sort keys organize related items. Conditional writes protect critical one-time decisions. Indexes add planned access paths. Capacity and pressure signals tell you whether the key design matches real traffic.
+* **Constant Velocity**: Leverage partition key hashing to route queries directly to storage partitions, maintaining constant latency regardless of table scale.
+* **Access-Driven Design**: Denormalize your data model and design composite PK/SK item structures around your application's exact query patterns, bypassing SQL joins.
+* **Atomic Protection**: Deploy conditional writes to construct concurrency barriers, preventing duplicate API charges and race conditions under heavy traffic.
+* **Secondary Lookups**: Create Global Secondary Indexes to establish alternative, read-only query paths for different lookup attributes.
+* **Capacity Control**: Start with On-Demand capacity during development and transition to Provisioned capacity once production workloads display steady scaling profiles.
 
-The main habit is to write the app's questions before writing the table. If the questions are exact-key or predictable-key questions, DynamoDB can be wonderfully direct. If the questions are open-ended joins and reports, RDS may be the calmer choice.
+DynamoDB is the premier cloud database for high-velocity key-value state. By modeling your data around clear access patterns and conditional operations, you construct a database layer that scales infinitely, securely, and predictably.
 
 ## What's Next
 
-S3 stores objects, RDS stores relational state, and DynamoDB stores key-shaped application state. The next article covers storage that looks like a disk or shared filesystem to compute: EBS and EFS.
+DynamoDB, RDS, and S3 cover all API, database, and object storage requirements. However, certain cloud workloads expect storage to integrate directly with the server's operating system as a mounted disk volume or a shared network directory. In the next article, we will cover attached block and file storage in EBS and EFS.
 
 ---
 
 **References**
 
-- [Core components of Amazon DynamoDB](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/HowItWorks.CoreComponents.html). Supports the table, item, partition key, and sort key explanations.
-- [Partitions and data distribution in DynamoDB](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/HowItWorks.Partitions.html). Supports the partition key distribution explanation and the relationship between keys and partitions.
-- [Working with items and attributes](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/WorkingWithItems.html). Supports the item operations, primary key requirements, and conditional write discussion.
-- [Best practices for designing and using partition keys effectively](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/bp-partition-key-design.html). Supports the hot-key and key-distribution design guidance.
+- [Amazon DynamoDB developer guide](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/Introduction.html) - Compiles all DynamoDB NoSQL guidelines, performance limits, and API structures.
+- [How DynamoDB partitions data](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/HowItWorks.Partitions.html) - Details physical partition storage, partition limits, and consistent-speed query mechanics.
+- [Primary key design guidelines](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/HowItWorks.NamingRulesDataTypes.html) - Explains simple keys, composite PK/SK keys, and item collection boundaries.
+- [Best practices for DynamoDB design](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/best-practices.html) - Focuses on NoSQL denormalization, access pattern mapping, and single-table modeling.
+- [Working with conditional writes](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/WorkingWithItems.html#WorkingWithItems.ConditionalWrites) - Details atomic condition assertions, evaluation logic, and concurrency controls.
+- [Global secondary indexes](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/GSI.html) - Outlines asynchronous replication, projection sets, and secondary lookup query paths.
+- [DynamoDB capacity modes](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/HowItWorks.ReadWriteCapacityMode.html) - Explains Read and Write Capacity Units, On-Demand per-request billing, and Provisioned Auto Scaling.

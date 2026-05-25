@@ -34,6 +34,10 @@ When you migrate a system to AWS, this informal naming model becomes a major ope
 
 The engineer is forced to guess, clicking through screens in a panic. In the cloud, this ambiguity can easily lead to high-impact mistakes. Human-friendly labels help us organize our thoughts, but they do not guarantee operational uniqueness. To secure your systems, debug failures, or track costs, you must master the precise coordinate systems AWS uses to identify resources.
 
+![An infographic showing a payments upload alert pointing to several similar payments resources and resolving only after account, Region, and ARN evidence identify the exact target](/content-assets/articles/article-cloud-providers-aws-foundations-resources-arns-tags/friendly-name-ambiguity.png)
+
+*Friendly names are for humans, but they are not coordinates. When several resources share similar names, the safe target is the one identified by account, Region, service, and resource path.*
+
 ## Precise Physical Resource IDs
 
 Friendly names are incomplete because they do not carry service type, owning account ID, or physical region details. To eliminate this ambiguity, AWS services automatically generate a unique physical resource ID the moment any resource is created.
@@ -66,6 +70,10 @@ Dissecting a standard ECS service ARN illustrates how this format encodes all lo
 
 Reading the ARN from left to right gives you an absolute coordinate. If an alert names a resource ARN in `us-east-1`, you know immediately that a similarly named resource in `us-west-2` or inside your developer sandbox account is not the target.
 
+![An infographic showing an ARN as a left-to-right coordinate chain from partition to service, Region, account, resource path, and exact resource](/content-assets/articles/article-cloud-providers-aws-foundations-resources-arns-tags/arn-coordinate-chain.png)
+
+*Read an ARN from broad scope to exact target: partition, service, Region, account, then the service-specific resource path.*
+
 ## Syntactical Variations Across Services
 
 While the delimited colon format is the standard pattern, some services feature historical or structural variations that you must recognize.
@@ -97,20 +105,9 @@ To solve this context gap, AWS provides metadata tags. Tags are key-value string
 
 Tags do not alter how the resource performs. They add business metadata that makes your growing cloud inventory searchable, groups related resources together, and enables FinOps cost allocation reporting.
 
-```mermaid
-flowchart TD
-    subgraph S3Bucket["S3 Bucket Resource"]
-        ARN["arn:aws:s3:::devpolaris-exports"]
-        subgraph Tags["Metadata Tags"]
-            App["Application = orders"]
-            Env["Environment = prod"]
-            Owner["Owner = payments-team"]
-            Cost["CostCenter = commerce-042"]
-        end
-    end
-```
+![An infographic showing an S3 bucket resource identified by an ARN and surrounded by business context tags for application, environment, owner, cost center, and management source](/content-assets/articles/article-cloud-providers-aws-foundations-resources-arns-tags/tags-business-context.png)
 
-The diagram shows how tags wrap a physical resource in operational context, making its ownership and purpose immediately clear to any engineer or automated auditing script.
+*The ARN identifies the physical resource, while tags add the operational context humans and automation need: application, environment, owner, cost center, and management source.*
 
 ## Enforcing a Consistent Tagging Standard
 
@@ -191,6 +188,10 @@ By applying our pre-change operational checklist, we ensure that every modificat
 Now that we can locate, identify, and tag resources precisely across account, regional, and zonal coordinates, we are ready to analyze what jobs these resources actually perform.
 
 The next article is **AWS Core Services Map**. We will zoom out and build a complete functional blueprint of how traffic routing, compute, storage, databases, secrets, and observability pipelines connect to run a production application.
+
+![A six-part summary infographic for AWS resource identity covering colliding names, precise IDs, ARN coordinate fields, omitted ARN fields, business tags, and the pre-change checklist](/content-assets/articles/article-cloud-providers-aws-foundations-resources-arns-tags/resources-arns-tags-summary.png)
+
+*Use this as the short resource safety checklist: names help you search, IDs and ARNs identify exact targets, tags add business meaning, and the pre-change checklist proves you are about to modify the right thing.*
 
 ---
 

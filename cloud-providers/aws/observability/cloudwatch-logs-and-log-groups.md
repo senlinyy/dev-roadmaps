@@ -1,8 +1,8 @@
 ---
 title: "CloudWatch Logs"
-description: "Use CloudWatch Logs to preserve, structure, search, and retain runtime evidence from AWS applications after containers, functions, and instances disappear."
-overview: "Logs are the first concrete evidence many engineers reach for. This article explains CloudWatch log groups, log streams, log events, structured fields, workload log paths, searching, retention, and cost habits through one failed checkout request."
-tags: ["cloudwatch", "logs", "ecs", "lambda"]
+description: "Centralize and query application and system logs using CloudWatch Logs and high-performance Logs Insights."
+overview: "Logs are an engineer's first source of diagnostic truth. This article explains how CloudWatch organizes log data, how to configure log collection paths, and how to write structured JSON queries to rapidly isolate production errors."
+tags: ["cloudwatch", "logs", "ecs", "lambda", "aws"]
 order: 2
 id: article-cloud-iac-observability-logs-traces
 aliases:
@@ -16,258 +16,197 @@ aliases:
 
 ## Table of Contents
 
-1. [The Problem](#the-problem)
+1. [The Disappearing Evidence Problem](#the-disappearing-evidence-problem)
 2. [What Is CloudWatch Logs](#what-is-cloudwatch-logs)
-3. [Log Groups](#log-groups)
-4. [Log Streams](#log-streams)
-5. [Log Events](#log-events)
-6. [Structured Logs](#structured-logs)
-7. [Workload Logs](#workload-logs)
-8. [Searching Logs](#searching-logs)
-9. [First Useful Error](#first-useful-error)
-10. [Retention And Cost](#retention-and-cost)
-11. [Putting It All Together](#putting-it-all-together)
-12. [What's Next](#whats-next)
+3. [The Log Directory Analogy](#the-log-directory-analogy)
+4. [Durable Log Ingestion Paths](#durable-log-ingestion-paths)
+5. [The Structured Logging Standard](#the-structured-logging-standard)
+6. [Metric Filters: Extracting Telemetry from Text](#metric-filters-extracting-telemetry-from-text)
+7. [CloudWatch Logs Insights Queries](#cloudwatch-logs-insights-queries)
+8. [The "First Useful Error" Diagnostic Habit](#the-first-useful-error-diagnostic-habit)
+9. [Retention, Governance, and Cost Controls](#retention-governance-and-cost-controls)
+10. [Putting It All Together](#putting-it-all-together)
+11. [What's Next](#whats-next)
 
-## The Problem
+## The Disappearing Evidence Problem
 
-The previous article introduced logs, metrics, traces, and alarms. Logs are the signal most developers already understand. The hard part is that production logs are not sitting in the terminal that started the app.
+In traditional local application hosting, finding your runtime logs is highly intuitive. The application process writes directly to local standard output, or prints to a specific, static file on disk like `/var/log/app.log`. If the server experiences an error, you establish a terminal shell connection, scroll through the log file, and locate the problem. 
 
-The orders system fails during checkout:
+However, in a modern cloud network, this direct approach is impossible. When a distributed application fails under load, the virtual host environments are ephemeral and stateless. The container task that threw the database connection error may have already been terminated by the ECS service scheduler and replaced by a fresh, blank task instance. The serverless Lambda function that failed to send an email executed for a brief 100 milliseconds and then disappeared completely, taking any local memory state with it. 
 
-- The ECS task that handled the request has already been replaced by the service scheduler.
-- The email Lambda function ran for one invocation and then ended.
-- A worker wrote several repeated error lines, but only one line names the real dependency failure.
-- The team needs the evidence tomorrow too, after the container exits.
-- The logs must not expose secrets, tokens, payment details, or raw customer data.
-
-CloudWatch Logs gives AWS workloads a shared place to leave runtime evidence. It does not make weak log messages strong. It gives good log messages somewhere durable, searchable, and governable to live.
+If your application writes its execution history to local server disks, that critical diagnostic evidence vanishes the moment the compute node is replaced. To troubleshoot production incidents, you need a highly durable, centralized logging vault that sits outside the life cycle of your compute servers.
 
 ## What Is CloudWatch Logs
 
-Amazon CloudWatch Logs stores, monitors, searches, and retains log data from AWS services, applications, and systems. The service gives log events a home outside the runtime that produced them.
+Amazon CloudWatch Logs is the serverless, regional service designed to store, monitor, index, and query log data from all of your AWS services, applications, and operating systems. Instead of leaving logs trapped on isolated server filesystems, your virtual machines, container tasks, and serverless functions continuously stream their execution lines to CloudWatch over secure, HTTPS API calls.
 
-The beginner mental model has three levels:
+To organize and secure millions of incoming log lines, CloudWatch enforces a strict, three-tiered structural hierarchy:
 
-| Level | Plain meaning |
-| --- | --- |
-| Log group | The home for related logs and shared settings |
-| Log stream | The sequence of events from one source or runtime |
-| Log event | One timestamped log record |
-
-For `devpolaris-orders-api`, the log group might represent the service. One ECS task may write to one stream. A Lambda function may have streams for execution environments. Each application log line becomes an event.
+* **Log Event**: The fundamental unit of telemetry. A log event is a single chronological record containing a millisecond-precision timestamp and the raw message payload (such as a JSON block or plain-text string).
+* **Log Stream**: A sequence of log events originating from a single, specific source instance. In a containerized or serverless cluster, one ECS task replica or one Lambda execution environment writes all of its events into its own unique, dedicated log stream.
+* **Log Group**: The logical administrative parent container. A log group is a collection of related log streams that share the same retention policies, encryption keys, IAM access controls, and metric filter rules.
 
 ```mermaid
 flowchart TD
-    Group["Log group"] --> StreamA["ECS stream"]
-    Group --> StreamB["Lambda stream"]
-    Group --> StreamC["Worker stream"]
-    StreamA --> EventA["Log event"]
-    StreamB --> EventB["Log event"]
-    StreamC --> EventC["Log event"]
+    AppGroup[Log Group: /aws/ecs/orders-api-prod] --> StreamA[Log Stream: ecs-task-a-4f22]
+    AppGroup --> StreamB[Log Stream: ecs-task-b-8a91]
+    
+    StreamA --> EventA1[Log Event: 12:40:01 INFO Checkout Started]
+    StreamA --> EventA2[Log Event: 12:40:03 ERROR RDS Timeout]
+    
+    StreamB --> EventB1[Log Event: 12:40:02 INFO Checkout Started]
+    StreamB --> EventB2[Log Event: 12:40:05 INFO Checkout Succeeded]
 ```
 
-That shape matters because the group is where teams usually reason about retention, access, search scope, and ownership. The stream is where one runtime wrote. The event is the evidence itself.
+By separating log storage from log execution, your diagnostic evidence is fully preserved. If a virtual host crashes, the logs it streamed to CloudWatch Logs remain fully searchable and secure, ready to be analyzed by your engineering team.
 
-## Log Groups
+## The Log Directory Analogy
 
-A log group is a collection of log streams that share the same retention, monitoring, and access-control settings. In practice, it is the first boundary an engineer chooses when they search logs.
+To build an intuitive mental model of this hierarchy, you can compare CloudWatch Logs to a standard operating system file directory:
 
-Good log group design follows operational ownership. A log group such as `/aws/ecs/devpolaris-orders-api` tells the team that this is the runtime evidence for the orders API. A log group such as `/aws/lambda/devpolaris-receipt-email` tells the team that the evidence belongs to one function.
+* **The Log Group acts as a Folder**: It is the top-level boundary representing a specific application service or environment. Just as you apply folder-level permissions, you define access control, storage retention timelines, and billing tags at the Log Group boundary.
+* **The Log Stream acts as an Individual File**: It is a dedicated document inside that folder holding the chronological print statements of a single compute process.
+* **The Log Event acts as a Single Line inside that File**: It is the concrete message printed at one split-second.
 
-The gotcha is that log group names can look tidy while ownership is messy. If five unrelated services dump into one group, searching becomes noisy and access control becomes blunt. If every tiny helper creates its own mysterious group, the team spends too much time finding the right home.
+When you begin a production investigation, never try to guess the specific Log Stream "file" beforehand. In an autoscaled cluster, searching through thousands of dynamically generated streams is incredibly tedious. 
 
-Use log groups to match how humans investigate:
+Instead, your primary diagnostic entrance should always be the Log Group folder. You run search queries and filters against the entire group, letting CloudWatch parse across all nested streams simultaneously to locate the specific transaction context you need.
 
-| Boundary | Good fit |
-| --- | --- |
-| One API service | App request and runtime logs |
-| One Lambda function | Invocation logs for that function |
-| One worker family | Background job processing logs |
-| One shared platform component | Load balancer, proxy, or agent logs |
+## Durable Log Ingestion Paths
 
-The group should make the first search easier: "which service owned this evidence?"
+Before your code can emit useful evidence, you must configure a durable networking path that ships standard print streams into CloudWatch Logs. AWS structures these paths differently depending on the compute runtime:
 
-## Log Streams
+### 1. Amazon ECS (Containers)
+Under the Fargate compute model, your container definition in the task blueprint declares the `awslogs` log driver. This driver automatically captures any text written by your application process to standard output (`stdout`) and standard error (`stderr`) streams inside the container, forwarding those lines directly to a configured Log Group (such as `/aws/ecs/orders-api`). This ensures your application code remains completely pure; you simply print to the console, and Fargate handles the cloud shipping in the background.
 
-A log stream is a sequence of log events from the same source. For containers and functions, the stream often maps to a specific runtime instance, task, container, or execution environment.
+### 2. AWS Lambda (Serverless)
+When a serverless Lambda function executes, the runtime environment automatically intercepts all print calls and console logs, streaming them to a dedicated Log Group named `/aws/lambda/<function-name>`. This path is managed entirely by the platform, but it requires that your Lambda function's IAM Execution Role includes explicit policy permissions to create log streams and put log events (`logs:CreateLogStream` and `logs:PutLogEvents`). If these permissions are missing, the function will execute successfully, but you will have zero log visibility in the console.
 
-This is why streams can multiply quickly. If ECS replaces tasks during a deploy, new streams appear. If Lambda scales out, each execution environment can have its own stream. That is normal.
+### 3. Amazon EC2 (Virtual Servers)
+Unlike managed runtimes, an EC2 instance does not have an automatic print driver. To ship logs, you must install the Unified CloudWatch Agent as a background system daemon on the guest operating system. The agent is configured via a JSON file to monitor specific local files (such as `/var/log/nginx/access.log`), sweep new lines as they are written, and stream them securely to your specified CloudWatch Log Group.
 
-The stream helps when you need local sequence. It can show what one task or function instance did over time. But most production investigations should start at the log group and narrow by time, fields, request ID, or message content. Starting by guessing the stream is often too brittle.
+## The Structured Logging Standard
 
-The practical habit is:
+A central database for logs is only useful if the logs themselves are searchable. In a production outage, searching through unstructured plain-text strings (like `"User USR882 clicked place order and got an error"`) forces you to write slow regular expressions that are highly brittle and fail to parse multiline stack traces.
 
-| Search need | Start here |
-| --- | --- |
-| One service around an incident window | Log group |
-| One request ID or order ID | Log group query/filter |
-| One runtime after you know it handled the request | Log stream |
-| One Lambda invocation | Function log group, then stream or request ID |
-
-Streams are useful context. They should not be the only way to find evidence.
-
-## Log Events
-
-A log event is one timestamped record. It may be a plain text line, a JSON object, a stack trace fragment, or a service-generated message.
-
-The event is where usefulness is won or lost. CloudWatch Logs can store and search the event, but the application decides whether the event contains enough context.
-
-A weak event says:
-
-```text
-ERROR failed
-```
-
-A useful event says:
+To make logs highly indexable, you must enforce a structured logging standard. This means your application code writes every single log event as a flat, single-line JSON object:
 
 ```json
 {
-  "timestamp": "2026-05-14T12:40:03Z",
   "level": "ERROR",
+  "timestamp": "2026-05-25T22:53:15.042Z",
   "service": "orders-api",
   "route": "POST /checkout",
   "requestId": "req-7b91",
   "orderId": "order-1042",
+  "customerId": "cust-882",
+  "durationMs": 2450,
   "dependency": "rds",
-  "message": "failed to commit order",
-  "errorType": "connection_timeout"
+  "message": "database transaction failed",
+  "error": "connection timeout pool exhausted"
 }
 ```
 
-The second event gives the next engineer handles. It names the service, operation, request, safe business identifier, dependency, and failure shape. It does not include a password, card number, authorization token, full address, or raw request body.
+Standardizing on structured JSON logs delivers three critical architectural benefits:
+* **Automated Indexing**: CloudWatch Logs automatically parses the JSON structure upon ingestion, indexing every single key (like `level`, `durationMs`, and `orderId`) as a first-class queryable attribute.
+* **No Regular Expressions**: You can search for precise parameters directly (e.g., locating errors where `durationMs > 2000`) without writing a single regex line.
+* **Safe Context Preservation**: You can include rich business and transaction context (like `requestId` and `customerId`) safely within searchable keys, without cluttering the human-readable `message` string.
 
-The gotcha is repeated symptoms. If a worker retries the same bad message five times, the loudest log line may be the retry failure. The first useful event is the one that changes what you check next.
+## Metric Filters: Extracting Telemetry from Text
 
-## Structured Logs
+Sometime you must operate legacy application binaries that you cannot rewrite to output structured JSON. If a legacy payment service only prints unstructured text lines like `"Authentication failed for user admin"`, you can extract numerical telemetry from these text streams using CloudWatch Metric Filters.
 
-Structured logs use predictable fields instead of only human sentences. JSON is common because fields can be searched and parsed reliably.
+A Metric Filter continuously scans incoming log events in a Log Group for a specific text pattern (such as `[level, timestamp, msg = "Authentication failed", ...]`). When the pattern matches an incoming log line, the filter increments a custom CloudWatch Metric (such as `FailedLogins`) in real-time. 
 
-For the orders system, the team should standardize a small set of fields:
+This enables you to create performance metrics, draw time-series dashboards, and trigger automated alerts from raw text logs without changing a single line of legacy application code.
 
-| Field | Why it helps |
-| --- | --- |
-| `service` | Identifies the application component |
-| `env` | Separates prod, staging, and dev |
-| `level` | Filters warnings and errors |
-| `requestId` | Connects logs for one request |
-| `traceId` | Connects logs to traces when available |
-| `route` or `operation` | Shows what the user or worker was doing |
-| `dependency` | Names the downstream service or database |
-| `status` or `errorType` | Makes failure shape searchable |
+## CloudWatch Logs Insights Queries
 
-Do not make every field a dumping ground. A good log event is specific enough to search and safe enough to keep. Private data should stay out of logs unless there is a carefully reviewed reason, masking behavior, and retention policy.
+To query structured JSON logs across terabytes of data quickly during an active incident, you use CloudWatch Logs Insights. Logs Insights is a high-performance, serverless query engine that features a dedicated, pipe-delimited syntax to filter, aggregate, and inspect log events.
 
-Structured logs also help later articles. Metrics can be created from log filters. Traces can be easier to connect when logs include trace IDs. Alarms can point responders to the right log group and fields.
+Below are three highly practical Logs Insights query templates cabled to standard structured fields:
 
-## Workload Logs
-
-Different AWS runtimes send logs differently.
-
-ECS tasks commonly send container output to CloudWatch Logs through the `awslogs` log driver or through FireLens. That usually captures the container's `stdout` and `stderr`. If the application writes useful structured logs to standard output, the container log path can preserve them.
-
-Lambda sends function logs to CloudWatch Logs by default when the execution role has the needed permissions. The default log group shape is `/aws/lambda/<function-name>`, though functions can use custom log groups.
-
-EC2 instances need an agent or another shipping path if application files should reach CloudWatch Logs. The local file itself is not enough if the instance is replaced or the disk rotates.
-
-The workload path matters because a missing log can have several meanings:
-
-| Missing evidence | Possible explanation |
-| --- | --- |
-| No ECS app logs | Task definition did not configure the log driver, or app did not write to captured streams |
-| No Lambda logs | Execution role lacks log permissions, function did not run, or logs have not arrived yet |
-| No EC2 file logs | Agent is not installed, configured, or able to reach the Logs API |
-| Logs in wrong group | Runtime uses a different log group than the responder expected |
-
-Before debugging the application, confirm that the runtime has a path to send logs.
-
-## Searching Logs
-
-Search should narrow the evidence before it reads deeply.
-
-CloudWatch Logs supports filtering and Logs Insights queries. For beginner investigations, the first search usually combines time window, log group, level, and request or correlation field.
-
-For a failed checkout request with ID `req-7b91`, a small Logs Insights query might be:
+### 1. Locate Slow Checkout Transactions
+Find the slowest 50 checkout requests, listing their timestamp, request ID, duration, and error messages:
 
 ```sql
-fields @timestamp, level, service, route, requestId, dependency, message
-| filter requestId = "req-7b91"
-| sort @timestamp asc
+fields @timestamp, requestId, durationMs, error
+| filter route = "POST /checkout"
+| sort durationMs desc
 | limit 50
 ```
 
-The query makes the story visible in order. The important part is that the logs have a `requestId` field to search.
+### 2. Count Error Rates by Service
+Aggregate the volume of `ERROR` logs across a 5-minute window to identify which service component is experiencing a spike:
 
-For a wider incident, start with a narrow time window and a known service group. Large broad searches can cost more and return noise. If you add a Logs Insights widget to a dashboard, remember that refreshes run queries again.
-
-The search habit is simple:
-
-| Step | Reason |
-| --- | --- |
-| Choose the log group | Avoid scanning unrelated evidence |
-| Set the incident time window | Reduce noise and cost |
-| Filter by request, route, or level | Find the relevant story |
-| Sort by time | See cause before symptom |
-| Keep output small | Read evidence, not a dump |
-
-Good log search is guided reading, not panic scrolling.
-
-## First Useful Error
-
-In a noisy incident, the first useful error is the earliest error that changes the investigation.
-
-Suppose the logs show this sequence:
-
-```text
-12:40:01 INFO checkout started requestId=req-7b91
-12:40:02 WARN retrying database connection requestId=req-7b91
-12:40:03 ERROR failed to commit order dependency=rds errorType=connection_timeout requestId=req-7b91
-12:40:04 ERROR checkout failed requestId=req-7b91
-12:40:05 ERROR response 500 requestId=req-7b91
+```sql
+fields @timestamp, service, message
+| filter level = "ERROR"
+| stats count() by service, bin(5m)
+| sort count() desc
 ```
 
-The last two lines are loud, but they are symptoms. The first useful error is the RDS timeout because it points to the next layer to check.
+### 3. Parse and Filter Unstructured Text Logs
+Extract variables from unstructured web server logs (like Apache/Nginx access logs) to identify which client IPs are generating `500` status codes:
 
-This habit prevents a common production mistake: treating the final user-facing failure as the cause. Logs often record the same failure at several layers. The best log line names the dependency, operation, and failure type that first made the work impossible.
+```sql
+filter @message like / 500 /
+| parse @message "* - * [*] \"*\" * *" as ip, user, time, request, status, bytes
+| stats count() by ip, request
+| sort count() desc
+```
 
-For background work, the same idea applies. A DLQ message may be the final evidence. The first useful error may be the worker log that says the email provider returned `429` or the message payload was missing a required field.
+By leveraging these queries, you eliminate the need to download large log files or scroll blindly through thousands of lines in the AWS Console, reducing your mean-time-to-detection (MTTD) to seconds.
 
-## Retention And Cost
+## The "First Useful Error" Diagnostic Habit
 
-Logs need a retention plan. Keeping everything forever is rarely the right default. Deleting everything quickly can leave the team blind after a delayed report.
+During a major production incident, logs can quickly become overwhelmed with cascading error messages. When a database becomes unreachable, the database driver throws an error, the repository layer throws a transaction exception, the API controller logs a checkout failure, and the load balancer writes a `502 Bad Gateway` log.
 
-Retention should match the use of the evidence:
+When an engineer starts debugging, the loudest and most frequent logs are usually the user-facing symptoms. However, treating these late-stage errors as the cause leads to false troubleshooting paths. You must practice the diagnostic habit of locating the **First Useful Error**:
 
-| Log type | Retention thinking |
-| --- | --- |
-| High-volume debug logs | Short retention, lower level in production |
-| Application errors | Long enough for incident review and support |
-| Security-sensitive events | Follow compliance and audit requirements |
-| Access or request logs | Balance investigation value, privacy, and volume |
-| Temporary migration logs | Remove or shorten after migration completes |
+1. **Sort Chronologically**: Run your log search and sort the events in strict ascending order (`sort @timestamp asc`) to follow the cause-and-effect timeline.
+2. **Scan Inward**: Bypass the generic, outer-edge errors (like `502 Gateway Timeout` or `Checkout failed`).
+3. **Locate the Origin**: Find the very first event that deviated from normal behavior, such as the database pool warning that read `rds connection pool exhausted`.
 
-Cost includes ingestion volume, queries, dashboard refreshes, subscriptions, downstream destinations, and storage. The safest habit is to log the right facts once, at the right level, with a retention setting the owner understands.
+Identifying the First Useful Error instantly isolates the core bottleneck, directing your team to fix the database connection capacity instead of wasting time debugging API gateway routing configurations or container restart scripts.
 
-Access also matters. Logs can contain operationally sensitive details. The team that needs to debug checkout may need read access to the orders log group. That does not mean every engineer needs access to every application log in every account.
+## Retention, Governance, and Cost Controls
+
+Logging is an ongoing cost and security responsibility. If you do not configure strict policies, your logs can quickly become a massive cost driver and a security liability. You must implement the following three governance controls:
+
+### 1. Log Retention Policies
+By default, every newly created CloudWatch Log Group has its retention setting set to "Never Expire". This is a dangerous cost trap, as you pay a monthly fee to store verbose development debug logs that are useless after 24 hours. You must configure explicit retention policies:
+* **Development/Staging**: 7 days or less.
+* **Production Application Logs**: 30 to 90 days (sufficient for post-mortems and capacity planning).
+* **Security Audits & Compliance**: Configure CloudWatch to stream logs to Amazon S3 Glacier for cheap, multi-year cold storage, rather than keeping them active in CloudWatch.
+
+### 2. Log Level Discipline
+Enforce strict logging level discipline in your application code. Use `DEBUG` logs exclusively for local development, configure your production containers to run at the `INFO` or `WARN` level, and elevate to `DEBUG` dynamically only during active troubleshooting windows to avoid saturating storage budgets.
+
+### 3. Log Redaction (Data Privacy)
+Logs must never contain personally identifiable information (PII) or security credentials. Ensure that your application logging frameworks automatically redact sensitive keys, including `password`, `creditCard`, `authorizationToken`, and `ssn`, before the JSON block is written to standard output. 
 
 ## Putting It All Together
 
-The opening problem was disappearing runtime evidence. ECS tasks are replaced. Lambda invocations end. Workers retry. Local terminals do not hold the production story.
+Centralizing your application logs in CloudWatch is the first step toward achieving operational control in the cloud:
 
-CloudWatch Logs gives that story a durable home. Log groups organize related logs and shared settings. Log streams preserve source-specific sequences. Log events carry the actual evidence. Structured fields make searches useful. Workload logging paths explain how ECS, Lambda, and EC2 evidence arrives. Logs Insights helps narrow by time, request, route, level, and dependency. Retention and access keep evidence useful without turning it into a security or cost problem.
+* **Eliminate Local Disk Logs**: Configure container tasks via the `awslogs` driver and install the CloudWatch Agent on EC2 to stream all logs immediately to centralized regional endpoints.
+* **Adopt JSON as Your Logging Standard**: Always write structured JSON logs to enable automated indexing, rich metadata searching, and fast query execution.
+* **Master Logs Insights Queries**: Use structured, pipe-delimited queries to filter, aggregate, and analyze logs instantly during incidents, bypassing console scrolling.
+* **Practice the First Useful Error Habit**: Always sort log events ascending to identify the origin failure rather than chasing the loudest user-facing symptoms.
+* **Govern Your Storage Costs**: Never leave retention set to "Never Expire". Set explicit prunings and use log level gates to manage ingestion budgets.
 
-The design is healthy when a responder can find the right log home, search by stable fields, and identify the first useful error without reading every line the system ever wrote.
+By treating logging as a structured, searchable data layer, you build a system that is transparent, predictable, and simple to debug under production pressure.
 
 ## What's Next
 
-Logs explain details. The next article covers metrics, dashboards, and alarms: the signals that show shape, trends, customer impact, and when a human should look.
+Logs are highly effective for deconstructing the details of a single request, but querying raw text lines is too slow and expensive for real-time alerting and high-level health monitoring. To watch your entire system's health constantly in the background, we must transition to numeric telemetry. In the next article, we will explore CloudWatch Metrics, dashboards, and automated alarm alerting loops cabled to SNS.
 
 ---
 
 **References**
 
-- [What is Amazon CloudWatch Logs?](https://docs.aws.amazon.com/AmazonCloudWatch/latest/logs/WhatIsCloudWatchLogs.html). Supports the CloudWatch Logs role for centralizing, storing, searching, filtering, and retaining logs.
-- [Working with log groups and log streams](https://docs.aws.amazon.com/AmazonCloudWatch/latest/logs/Working-with-log-groups-and-streams.html). Supports the definitions of log groups, log streams, retention, monitoring, and access-control settings.
-- [CloudWatch Logs Insights language query syntax](https://docs.aws.amazon.com/AmazonCloudWatch/latest/logs/CWL_QuerySyntax.html). Supports the Logs Insights query examples and query-scope/cost guidance.
-- [Send Amazon ECS logs to CloudWatch](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/using_awslogs.html). Supports the ECS `awslogs` log-driver explanation and container output behavior.
-- [Sending Lambda function logs to CloudWatch Logs](https://docs.aws.amazon.com/lambda/latest/dg/monitoring-functions-logs.html). Supports the Lambda default CloudWatch Logs behavior and execution-role permission notes.
+- [What is Amazon CloudWatch Logs?](https://docs.aws.amazon.com/AmazonCloudWatch/latest/logs/WhatIsCloudWatchLogs.html) - Official AWS guide to centralizing, storing, and managing system logs.
+- [CloudWatch Logs Insights Query Syntax](https://docs.aws.amazon.com/AmazonCloudWatch/latest/logs/CWL_QuerySyntax.html) - Technical reference for writing high-performance Log Insights queries.
+- [Using the awslogs Log Driver](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/using_awslogs.html) - Guide on configuring container tasks to stream stdout to CloudWatch.
+- [Monitoring Lambda Functions with CloudWatch Logs](https://docs.aws.amazon.com/lambda/latest/dg/monitoring-functions-logs.html) - Technical reference for Lambda automatic log creation and IAM permissions.

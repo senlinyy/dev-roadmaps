@@ -24,7 +24,7 @@ aliases:
 
 ## The Danger of Permanent Keys
 
-To make your application talk to AWS services, your code must sign every API request using access credentials. A common and dangerous shortcut is to generate a pair of permanent credentials—an access key ID and a secret access key—for a personal administrative user, and paste those keys directly into a dot-environment file inside the production container.
+To make your application talk to AWS services, your code must sign every API request using access credentials. A common and dangerous shortcut is to generate a pair of permanent credentials consisting of an access key ID and a secret access key for a personal administrative user, and paste those keys directly into a dot-environment file inside the production container.
 
 While this approach immediately solves the database or S3 connection failure, it introduces three severe security vulnerabilities:
 

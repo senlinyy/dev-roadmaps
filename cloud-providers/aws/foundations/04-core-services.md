@@ -27,7 +27,7 @@ aliases:
 
 ## Connecting the Standalone Pieces
 
-At this stage of your cloud journey, you have mastered the foundational mental models: you understand how the cloud runs your code, how coordinates (Accounts, Regions, and Zones) organize placement, and how Resource Names (ARNs) and tags establish precise inventory control. However, having a collection of isolated, standalone resources—like a running container, a relational database, and an object storage bucket—does not yet yield a live, functioning website.
+At this stage of your cloud journey, you have mastered the foundational mental models: you understand how the cloud runs your code, how coordinates (Accounts, Regions, and Zones) organize placement, and how Resource Names (ARNs) and tags establish precise inventory control. However, having a collection of isolated, standalone resources, such as a running container, a relational database, and an object storage bucket, does not yet yield a live, functioning website.
 
 To share your application with the public reliably, you must connect these isolated pieces into a unified, secure, and cooperative system. You face a new set of real-world operational challenges:
 
@@ -51,18 +51,9 @@ This job-based map groups services by the specific operational role they perform
 * **Observability Signals**: Aggregates stdout logs, performance metrics, and API audit logs. Key services include CloudWatch Logs and CloudTrail.
 * **Release Operations**: Manages safe container images, cost budgets, and centralized data protection. Key services include ECR, AWS Budgets, and AWS Backup.
 
-```mermaid
-flowchart TD
-    Browser["Customer Browser"] --> R53["Route 53 DNS<br/>(resolves name to ALB IP)"]
-    R53 --> ALB["Application Load Balancer<br/>(public entry front door)"]
-    ALB --> TG["Target Group Health<br/>(evaluates backend status)"]
-    TG --> ECS["ECS Fargate task<br/>(runs container on port 3000)"]
-    ECS --> Secrets["Secrets Manager vault<br/>(injects DB credentials)"]
-    ECS --> RDS["RDS Database<br/>(writes transactional record)"]
-    ECS --> S3["S3 Object Storage<br/>(uploads CSV exports)"]
-```
+![An infographic showing a customer request flowing from browser to Route 53, load balancer, target health, ECS task, and supporting VPC services such as Secrets Manager, RDS, S3, and CloudWatch Logs](/content-assets/articles/article-cloud-iac-cloud-providers-core-services/core-request-path.png)
 
-The flowchart traces a customer request through this cooperative service map, showing how each family completes a specific step in the checkout lifecycle.
+*The production request path is a chain of jobs. DNS finds the entry point, the load balancer checks healthy targets, compute runs the container, state lives outside compute, and signals leave a trail for debugging.*
 
 ## Networking: Private IP Network Rooms
 
@@ -75,6 +66,10 @@ To protect your system from threat actors, you must design a structured three-ti
 * **Isolated Data Tier Subnets**: These subnets host your transactional database engines and caches. To guarantee absolute isolation, their route tables have no gateways cabled, preventing both inbound internet connections and outbound internet exits. They can communicate only with the app compute hosts sitting in the private tier.
 
 By separating your VPC network into these three tiers, you establish a solid architectural boundary. The database is not kept private because of a loose software policy; it is private because the physical topology of the network makes public routing impossible.
+
+![An infographic showing a three-tier VPC with public load balancer and NAT gateway, private ECS tasks, isolated RDS database, and no internet route for the data tier](/content-assets/articles/article-cloud-iac-cloud-providers-core-services/three-tier-vpc.png)
+
+*The VPC tiering rule is simple: public subnets expose only entry points, private app subnets run compute, and isolated data subnets keep databases away from direct internet routes.*
 
 ## Traffic: Public DNS and HTTP Load Balancing
 
@@ -175,6 +170,10 @@ When an incident occurs, use the core services map to trace the path of the fail
 
 This systematic trace stops you from wasting hours debugging the DNS configuration when the actual failure lies inside a rotated database secret.
 
+![An infographic showing a 502 incident traced through traffic health, ECS compute, CloudWatch logs, and state plus access checks before redeploying tasks](/content-assets/articles/article-cloud-iac-cloud-providers-core-services/request-diagnostic-trace.png)
+
+*Trace incidents along the request path instead of guessing. A 502 may start at traffic, but the evidence can lead through compute logs to a stale secret or state connection issue.*
+
 ## Putting It All Together
 
 The AWS core services map organizes a massive catalog of services into a cohesive, cooperative system.
@@ -189,6 +188,10 @@ Instead of searching for floating product names, professional cloud engineers tr
 * Budgets, Cost Explorer, and AWS Backup protect the business lifecycle from spending surprises and data loss.
 
 By following this functional map and tracing failures along the request path, you replace random console clicks with deliberate, structured diagnostics.
+
+![A six-part summary infographic for the AWS core services map covering traffic entry, VPC tier separation, compute tasks, persistent state, IAM and secrets, and operational signals](/content-assets/articles/article-cloud-iac-cloud-providers-core-services/core-services-summary.png)
+
+*Use this as the short service map checklist: traffic enters through DNS and load balancing, the VPC separates tiers, compute runs tasks, state persists outside compute, IAM and secrets protect access, and signals guide operations.*
 
 ---
 

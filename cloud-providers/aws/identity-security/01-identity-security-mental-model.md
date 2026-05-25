@@ -37,7 +37,7 @@ However, once that same application moves to a professional cloud provider like 
 * Why does the S3 upload work perfectly from the developer's laptop terminal, but fail when run inside the cloud container?
 * How does the system distinguish between a human developer, a deployment script, and a running container when they all try to touch the same database?
 
-These are not general security problems. They are specific authorization questions. In the cloud, there is no automatic trust based on physical proximity or user logins. Every single interaction—whether it is a database query, a file read, or a configuration fetch—is a formal web request. To survive and operate safely in this environment, you need to understand the request-level authorization system that evaluates every single packet before any work can begin.
+These are not general security problems. They are specific authorization questions. In the cloud, there is no automatic trust based on physical proximity or user logins. Every single interaction, including database queries, file reads, and configuration fetches, is a formal web request. To survive and operate safely in this environment, you need to understand the request-level authorization system that evaluates every single packet before any work can begin.
 
 ## What Is IAM
 

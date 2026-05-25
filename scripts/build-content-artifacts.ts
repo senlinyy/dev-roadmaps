@@ -1264,6 +1264,16 @@ function writeArticleArtifacts(versionRoot: string, roadmapData: RootModule[]): 
   }
 }
 
+function writeContentAssets(): void {
+  const sourcePath = path.join(ROOT_DIR, 'content-assets');
+
+  if (!exists(sourcePath)) {
+    return;
+  }
+
+  fs.cpSync(sourcePath, path.join(DIST_ROOT, 'content-assets'), { recursive: true });
+}
+
 function writeGroupArtifacts(
   versionRoot: string,
   categories: ChallengeCategoryMeta[],
@@ -1391,6 +1401,7 @@ function main(): void {
   writeJson(path.join(versionRoot, 'manifest.json'), manifest);
   writeGroupArtifacts(versionRoot, manifest.categories, manifest.groupsByCategory);
   writeArticleArtifacts(versionRoot, manifest.roadmaps.flatMap((roadmap) => roadmap.roots));
+  writeContentAssets();
   writeText(path.join(DIST_ROOT, '.nojekyll'), '');
   writeStaticIndex();
 

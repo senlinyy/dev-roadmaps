@@ -42,6 +42,10 @@ The Account field shows the exact logical container targeted by your session. Th
 
 Understanding this wall changes how your team collaborates. By treating the account as a solid security perimeter, you ensure that raw developer experiments are physically isolated at the account edge. A developer can run testing scripts or break databases in their private workspace without any risk of affecting live customer transactions, because the account wall has no default administrative path across it.
 
+![An infographic showing AWS placement as nested coordinates from account to Region to Availability Zone to subnet](/content-assets/articles/article-cloud-providers-aws-foundations-accounts-regions-availability-zones/aws-coordinate-nesting.png)
+
+*AWS placement starts with logical isolation, then physical geography, then physical resilience. Check the account first, then the Region, then the Availability Zone and subnet where the resource actually lives.*
+
 ## Isolating Environments by Risk Profiles
 
 Because the account is a solid perimeter, you must use separate accounts to isolate different stages of your application lifecycle. You do not need a separate account for every individual microservice, but you must split environments that require different administrative permissions or operate under different threat vectors.
@@ -79,27 +83,9 @@ To achieve physical resilience, you must understand how network design interacts
 
 This zonal nature means that simply having a regional VPC is not enough to survive failures. You must actively duplicate your subnet tiers across multiple Availability Zones and instruct your compute and database engines to deploy resources into those dynamic subnets.
 
-```mermaid
-flowchart TD
-    subgraph ProdAccount["Production Account 123456789012"]
-        subgraph RegionLondon["London Region (eu-west-2)"]
-            subgraph AZA["AZ A (eu-west-2a)"]
-                SubnetPubA["public subnet a"]
-                SubnetAppA["private subnet a"]
-                AppTaskA["orders app task a"]
-            end
-            subgraph AZB["AZ B (eu-west-2b)"]
-                SubnetPubB["public subnet b"]
-                SubnetAppB["private subnet b"]
-                AppTaskB["orders app task b"]
-            end
-        end
-    end
-    SubnetAppA --> AppTaskA
-    SubnetAppB --> AppTaskB
-```
+![An infographic showing a Regional VPC duplicated across two Availability Zones with traffic continuing through the healthy zone when one zone fails](/content-assets/articles/article-cloud-providers-aws-foundations-accounts-regions-availability-zones/multi-az-placement.png)
 
-The diagram illustrates a Multi-AZ network topology. A load balancer node in each public subnet routes traffic to application tasks in the private subnets. If `eu-west-2a` experiences a physical facility failure, the load balancer routes incoming traffic exclusively to the healthy tasks in `eu-west-2b`, keeping the checkout service live without manual intervention.
+*A VPC is Regional, but subnets are zonal. Multi-AZ designs repeat public and private subnet tiers across AZs so traffic can keep flowing when one physical zone fails.*
 
 ## Global, Regional, and Zonal Scopes
 
@@ -111,6 +97,10 @@ As you build your cloud inventory, you will interact with resources that operate
 
 A common beginner mistake is searching for a Regional database while the console Region selector is set to the wrong Region, leading the developer to believe the resource has been deleted. Aligning your documentation with these scopes ensures you always target the correct resource coordinate.
 
+![An infographic comparing AWS global, Regional, and zonal resource scopes with examples and failure boundaries](/content-assets/articles/article-cloud-providers-aws-foundations-accounts-regions-availability-zones/resource-scope-levels.png)
+
+*Scope tells you where to look and how a resource fails. Some resources are global, most application resources are Regional, and the most failure-sensitive building blocks are tied to a single Availability Zone.*
+
 ## The Placement Review Habit
 
 Establish a formal placement review as a standard engineering habit before creating any cloud resource. This review acts as an active sanity check to ensure that all logical and physical coordinate decisions are deliberate:
@@ -121,6 +111,10 @@ Establish a formal placement review as a standard engineering habit before creat
 * **Scope Tracking**: Record global resources (like IAM roles) and zonal subnets in your architecture inventory to keep your topology auditable.
 
 By documenting and validating logical perimeters, geographic regions, and physical zones at launch, you establish a resilient, organized coordinate system that keeps your cloud architecture stable and secure.
+
+![A six-part summary infographic for AWS accounts, Regions, and zones covering account isolation, environment separation, Regional placement, Multi-AZ resilience, zonal subnets, and scope tracking](/content-assets/articles/article-cloud-providers-aws-foundations-accounts-regions-availability-zones/accounts-regions-zones-summary.png)
+
+*Use this as the short placement checklist: isolate risk with accounts, split dev and prod, choose Regions deliberately, spread resilient systems across AZs, remember subnets are zonal, and track every resource by scope.*
 
 ---
 

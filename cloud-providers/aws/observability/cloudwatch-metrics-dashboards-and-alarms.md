@@ -1,8 +1,8 @@
 ---
-title: "Metrics And Alarms"
-description: "Use CloudWatch metrics, dashboards, and alarms to see service health, customer impact, resource pressure, and the moments that deserve human attention."
-overview: "Metrics show the shape of production behavior before you read thousands of log lines. This article explains namespaces, dimensions, periods, statistics, service metrics, dashboards, alarms, and noisy-signal tradeoffs for an AWS checkout system."
-tags: ["cloudwatch", "metrics", "dashboards", "alarms"]
+title: "CloudWatch Metrics"
+description: "Monitor real-time system performance, compile operational dashboards, and trigger automated alarms using CloudWatch Metrics."
+overview: "Metrics compress raw behavior into time-series numeric trends. This article explains how to design metric namespaces and dimensions, structure operational dashboards, and configure automated alarms cabled to SNS alert loops."
+tags: ["cloudwatch", "metrics", "dashboards", "alarms", "aws"]
 order: 3
 id: article-cloud-iac-observability-metrics-dashboards
 aliases:
@@ -16,211 +16,187 @@ aliases:
 
 ## Table of Contents
 
-1. [The Problem](#the-problem)
-2. [What Is a Metric](#what-is-a-metric)
-3. [Namespaces And Dimensions](#namespaces-and-dimensions)
-4. [Statistics And Periods](#statistics-and-periods)
-5. [Service Metrics](#service-metrics)
-6. [Dashboards](#dashboards)
-7. [Alarms](#alarms)
-8. [Noisy Signals](#noisy-signals)
+1. [The Diagnostic Detail Trap](#the-diagnostic-detail-trap)
+2. [What Is a CloudWatch Metric](#what-is-a-cloudwatch-metric)
+3. [Namespaces and Dimensions](#namespaces-and-dimensions)
+4. [Resolution: Standard vs. High Resolution](#resolution-standard-vs-high-resolution)
+5. [Custom Business Metrics](#custom-business-metrics)
+6. [Designing Operational Dashboards](#designing-operational-dashboards)
+7. [Automated Alarms: States and Thresholds](#automated-alarms-states-and-thresholds)
+8. [The Notification Loop: SNS and Escalations](#the-notification-loop-sns-and-escalations)
 9. [Putting It All Together](#putting-it-all-together)
 10. [What's Next](#whats-next)
 
-## The Problem
+## The Diagnostic Detail Trap
 
-The previous article used logs to find concrete runtime evidence. But logs are too detailed for the first production question.
+When a production outage strikes your cloud environment, an engineer's first instinct is to open log files. If customers complain that checkouts are failing, you immediately query your application log groups to scan for connection errors. 
 
-At 12:40, support says checkout feels broken. The team has thousands of log events. Before reading them, the team needs the shape of the problem:
+However, searching raw logs is a detailed, heavy operation. If your orders API is handling 10,000 requests per second, searching through millions of log lines during a high-severity incident is highly inefficient. 
 
-- Are many customers failing, or one unlucky request?
-- Did latency rise before errors appeared?
-- Is API Gateway rejecting requests, or is the backend returning 5xx?
-- Are ECS tasks saturated, or is RDS under connection pressure?
-- Is the email queue falling behind while checkout itself stays healthy?
-- Should this page a human now, or can it wait for normal review?
+Logs are designed to give you rich, granular details, but they are too slow and expensive to act as your first operational checkpoint. Before you search logs, you must understand the macro shape and scope of the problem:
 
-Metrics answer those shape questions. Dashboards put related metrics together. Alarms turn selected metrics into attention.
+* Are checkouts failing globally for all users, or is it isolated to a single container instance?
+* Did latency spike gradually over an hour, or did it jump instantly at the exact second a new deployment was rolled out?
+* Is your load balancer seeing connection errors, or are backend applications actively returning `500` status codes?
+* Is your database under high connection pressure, or are your background queues backed up?
 
-## What Is a Metric
+To answer these high-level questions instantly, you need numeric telemetry. You need a highly compressed, real-time signal that monitors system performance constantly in the background, aggregates metrics onto operational dashboards, and alerts your team automatically when performance boundaries are crossed.
 
-A metric is a number recorded over time. It might count requests, measure latency, report CPU utilization, show queue age, or count failed Lambda invocations.
+## What Is a CloudWatch Metric
 
-CloudWatch collects many AWS service metrics automatically. Applications can also publish custom metrics through the CloudWatch API or OpenTelemetry. But the beginner path usually starts with the AWS service metrics already available.
+Amazon CloudWatch Metrics is the regional, high-performance service designed to collect, aggregate, and store numeric time-series data points from all of your AWS resources and custom applications. Unlike logs, which capture rich text strings, a metric stores only raw numbers (such as CPU percentages, active database connection counts, or total API error volumes) recorded over continuous time intervals.
 
-The useful mental model is a time series:
+Because metrics are purely numerical, they are incredibly cheap to store, fast to query, and highly compressed. This makes them the primary source for drawing real-time trend graphs, configuring automated resource scaling rules, and driving threshold alerts.
 
-```mermaid
-flowchart LR
-    Resource["Resource"] --> Metric["Metric name"]
-    Metric --> Points["Data points"]
-    Points --> Graph["Graph"]
-    Graph --> Alarm["Alarm"]
-```
-
-Each point says: at this time, for this metric identity, the value was this number.
-
-A metric is not a log line. It does not explain one exact failure by itself. It shows trend, pressure, and scale. A log might say one checkout request failed because RDS timed out. A metric can show that RDS connections climbed for 15 minutes and checkout errors rose at the same time.
-
-## Namespaces And Dimensions
-
-CloudWatch metrics have identity. The identity decides which numbers are grouped together and which resource or slice you are looking at.
-
-| Concept | Plain meaning | Example |
-| --- | --- | --- |
-| Namespace | A metric family | `AWS/Lambda`, `AWS/RDS`, `AWS/ApplicationELB` |
-| Metric name | The measured thing | `Errors`, `CPUUtilization`, `TargetResponseTime` |
-| Dimension | A name/value slice | `FunctionName=receipt-email` |
-| Data point | One value at one timestamp | `Errors=3 at 12:40` |
-
-Dimensions are powerful because they let you filter by resource. They are also a gotcha. A dimension is part of the unique metric identity. Adding many unique dimension values can create many metric series, especially for custom metrics.
-
-Good dimensions describe stable operational slices: service, environment, route, dependency, queue name, function name, DB instance, or target group. Dangerous dimensions describe unbounded data: raw user ID, order ID, request ID, or session ID. Those belong in logs or traces, not as metric dimensions.
-
-For the orders API, useful metric identities might be:
-
-| Question | Metric shape |
-| --- | --- |
-| Are checkout requests failing? | API or load balancer 5xx by route/service |
-| Are targets slow? | ALB target response time by target group |
-| Are workers behind? | SQS age of oldest message by queue |
-| Is the database pressured? | RDS connections and CPU by DB instance |
-| Is receipt email failing? | Lambda errors by function name |
-
-The habit is to make metrics answer stable operating questions.
-
-## Statistics And Periods
-
-CloudWatch stores data points and summarizes them over periods. A period is the time bucket, such as 1 minute or 5 minutes. A statistic is how the values in that bucket are summarized.
-
-Common statistics include average, sum, minimum, maximum, and percentiles. The choice changes what you see.
-
-Average can hide pain. If most checkout requests finish in 80 ms but a smaller group waits 4 seconds, average latency may look acceptable. A percentile such as p95 can reveal that slow tail. Maximum can show spikes, but it may overreact to one outlier. Sum is useful for counts such as total errors or invocations.
-
-| Need | Better statistic |
-| --- | --- |
-| Count requests or errors | Sum |
-| Track typical CPU use | Average |
-| Catch worst resource pressure | Maximum |
-| Understand user-facing slow tail | p95 or p99 |
-| See whether any target is unhealthy | Minimum or maximum depending on metric meaning |
-
-Period length matters too. A 1 minute graph can show sharp incident timing. A 1 hour graph can show daily trend. An alarm period should match how quickly the team needs to respond and how noisy the metric is.
-
-The gotcha is false confidence. A smooth graph can be hiding the wrong statistic, period, or dimension. Always ask what the graph is grouping and summarizing before trusting the shape.
-
-## Service Metrics
-
-The orders system spans many AWS services. Each service gives a different view of the same customer experience.
-
-Start with user impact, then move inward.
-
-| Layer | Useful first metrics |
-| --- | --- |
-| API Gateway or ALB | Request count, 4xx, 5xx, latency |
-| ECS service | CPU, memory, running task count, deployment stability |
-| Lambda | Invocations, errors, duration, throttles |
-| SQS | Visible messages, age of oldest message, messages received/deleted |
-| EventBridge | Matched events, failed invocations, throttled rules |
-| RDS | CPU, connections, storage, read/write latency |
-| DynamoDB | Throttled requests, consumed capacity, latency |
-| S3 | Request errors, latency, object count or storage where enabled |
-
-Do not start by graphing every metric. Start with the path the user or work item takes. For checkout, the first dashboard row should show whether the customer path is healthy. Deeper rows can show the runtime, database, queue, and function layers.
+A metric does not explain *why* an individual request failed. It shows the system-wide pressure and trend:
+* A log event records: *Request `req-7b91` failed at 12:40:03 because the RDS connection pool timed out.*
+* A metric records: *RDS connection usage rose from 20% to 98% over 15 minutes, while the cluster-wide API error rate climbed to 15% during the same window.*
 
 ```mermaid
 flowchart TD
-    Impact["User impact"] --> Entry["API metrics"]
-    Entry --> Runtime["ECS metrics"]
-    Runtime --> Data["RDS/DynamoDB"]
-    Runtime --> Queue["SQS metrics"]
-    Queue --> Function["Lambda metrics"]
+    App[App Task Process] -->|Emit Numeric Tick| Metric[CloudWatch Metric]
+    Metric -->|Aggregate by Period| Stats[Statistic: p95 Latency]
+    Stats -->|Draw Chart| Graph[CloudWatch Dashboard]
+    Stats -->|Evaluate Rules| Alarm[CloudWatch Alarm]
 ```
 
-This ordering prevents a common mistake: scaling the layer you know best before checking whether it is the bottleneck. High API latency does not automatically mean ECS needs more tasks. It might mean RDS is slow, a queue is backed up, or a downstream dependency is retrying.
+By pairing numeric metrics with raw log files, you establish a powerful diagnostic path: metrics show you *when* and *where* the system broke, while logs reveal the exact *what* and *why* in the underlying code execution.
 
-## Dashboards
+## Namespaces and Dimensions
 
-A dashboard is a shared view of related metrics and logs. It should reduce translation work during an incident.
+To manage thousands of metrics across multiple service tiers without collisions, CloudWatch uses a strict identity schema based on namespaces and dimensions:
 
-A good dashboard tells a story from outside to inside:
+### 1. Namespace
+A Namespace is the top-level grouping container that isolates a family of metrics. AWS-native services automatically publish their metrics under standard, reserved namespaces (such as `AWS/ECS` for container tasks, `AWS/RDS` for database engines, and `AWS/ApplicationELB` for load balancers). Your custom application metrics are kept isolated in their own designated namespaces (such as `Custom/OrdersApp`).
 
-| Dashboard row | What it answers |
-| --- | --- |
-| User impact | Are requests failing or slow? |
-| Entry point | Is API Gateway or ALB seeing errors? |
-| Runtime | Are ECS or Lambda resources pressured? |
-| Data | Are RDS, DynamoDB, or S3 signals abnormal? |
-| Async work | Are queues, events, or workflows behind? |
-| Alarms and notes | What already thinks this is urgent? |
+### 2. Metric Name
+The specific parameter being measured within that namespace, such as `CPUUtilization`, `ActiveConnections`, or `HTTP5xxCount`.
 
-Dashboards are decision surfaces. During an incident, a dashboard should help the team decide the next check. During normal operation, it should show whether the service is inside expected behavior.
+### 3. Dimensions
+Dimensions are key-value metadata pairs that uniquely identify and partition the metric (such as `ClusterName=production` and `ServiceName=orders-api`). Dimensions act as the relational coordinates for your telemetry. 
 
-The gotcha is dashboard sprawl. A dashboard with forty unrelated graphs creates work. A dashboard that starts with user impact and moves toward dependencies creates context.
+A critical gotcha of dimensions is that they form the unique identity of the metric. If you publish a metric with a specific dimension set (e.g., `ClusterName` + `ServiceName`), you cannot query that metric using only `ClusterName` without specifying `ServiceName`, unless you use metric search or metric math to aggregate the series.
 
-CloudWatch dashboards can include metrics and alarms, and teams can create custom views for resources across Regions. That does not mean every metric belongs there. A dashboard should be a practiced operating view, not a metric museum.
+Furthermore, dimensions must never contain high-cardinality, unbounded data like user IDs, request IDs, or order IDs. Storing unbounded values creates millions of unique metric series, resulting in massive metric creation fees and unreadable charts. Unbounded data belongs strictly in logs or traces; dimensions must only describe stable operational coordinates.
 
-## Alarms
+## Resolution: Standard vs. High Resolution
 
-An alarm watches a metric, metric math expression, query, or related alarm state and changes state when the condition is met over configured periods. Its job is attention.
+When you configure metrics, you must select the appropriate collection resolution based on how rapidly your team needs to detect and respond to performance changes:
 
-The best alarm design starts with the sentence a responder needs:
+* **Standard Resolution (1-Minute Intervals)**: The default option for most AWS resources and custom metrics. AWS aggregates and publishes standard metrics once per minute. This is highly cost-effective and ideal for high-level dashboards, daily trend reviews, and standard database or compute capacity planning.
+* **High Resolution (1-Second Intervals)**: Designed for highly dynamic, time-sensitive workloads. High-resolution metrics can be published at sub-minute intervals (down to 1 second). Choose high resolution exclusively for critical auto-scaling triggers that must react instantly to flash sales, or high-frequency business operations (like real-time financial trading gates) where a 1-minute delay in detection is unacceptable.
 
-```text
-Checkout 5xx rate is above the agreed threshold for 5 minutes.
-Check API errors, target health, and orders-api logs.
+## Custom Business Metrics
+
+While AWS-native metrics are excellent for monitoring infrastructure health (like CPU and network packets), they cannot measure your application's business correctness. A load balancer can report successful HTTP status codes, but it cannot detect if your checkout logic is writing blank orders to the database.
+
+To bridge this gap, you must write custom metrics. Application code can publish numeric custom metrics directly using the AWS SDK `PutMetricData` API.
+
+Below is the standard configuration shape for publishing a custom business metric:
+
+```json
+{
+  "Namespace": "Custom/OrdersApp",
+  "MetricData": [
+    {
+      "MetricName": "CompletedCheckouts",
+      "Timestamp": "2026-05-25T22:53:15Z",
+      "Value": 1.0,
+      "Unit": "Count",
+      "Dimensions": [
+        {
+          "Name": "Environment",
+          "Value": "Production"
+        },
+        {
+          "Name": "PaymentGateway",
+          "Value": "Stripe"
+        }
+      ]
+    }
+  ]
+}
 ```
 
-That sentence tells the human what changed, why it matters, and where to start. The alarm threshold and period should match the risk. A single brief spike may belong on a dashboard. Sustained customer-facing failure may deserve a page.
+By publishing this data points on every checkout, you can track transaction volumes in real time, build dashboards showing payment gateway success rates, and trigger alarms if order volumes suddenly drop to zero during peak operational hours.
 
-| Alarm target | Better when |
-| --- | --- |
-| API 5xx rate | Customer requests are failing |
-| p95 latency | Customers are waiting too long |
-| No healthy targets | Traffic cannot reach trusted tasks |
-| SQS age | Background work is delayed |
-| Lambda errors | Side jobs are failing |
-| RDS connections | Database capacity risk is rising |
+## Designing Operational Dashboards
 
-CloudWatch also supports composite alarms, which can reduce noise by combining alarm states. For example, a team may page only when high latency and high 5xx are both present, while still showing each underlying metric on the dashboard.
+A dashboard is a shared visual interface that aggregates related metrics, logs, and alarms to reduce cognitive load during a production incident. 
 
-The gotcha is that an alarm action is not wisdom. If the alarm is based on the wrong metric, wrong statistic, wrong threshold, or wrong period, it can either miss impact or wake people for noise.
+A common architectural trap is dashboard sprawl, which involves building a massive screen packed with fifty identical, flashing charts with no clear hierarchy. During a high-stress incident, operators are blinded by the noise and struggle to locate the bottleneck.
 
-## Noisy Signals
+You must design dashboards like an aircraft cockpit, organizing charts in a strict, top-down hierarchy:
 
-Noise is not harmless. Noise teaches people to distrust the system.
+* **Row 1: High-Level User Impact**: Place the most critical business KPIs at the top in large, bold numbers. This row answers: *Are customers experiencing errors or slow checkouts right now?* (e.g., `CompletedCheckouts`, `ALB 5xx Rate`, `p95 Checkout Latency`).
+* **Row 2: Entry Ingress**: Chart the entry network interfaces. This row answers: *Is the entry gateway or load balancer accepting and routing packets correctly?* (e.g., `ALB RequestCount`, `TargetResponseTime`, `HealthyHostCount`).
+* **Row 3: Compute Runtime**: Chart the resource pressure of your application servers. This row answers: *Are containers or virtual machines saturated?* (e.g., `ECS CPUUtilization`, `ECS MemoryUtilization`, `Lambda Throttles`).
+* **Row 4: Data Layer**: Chart database and object storage performance. This row answers: *Are databases locking or S3 API limits choked?* (e.g., `RDS ActiveConnections`, `RDS WriteLatency`, `DynamoDB ThrottledRequests`).
+* **Row 5: Asynchronous queues**: Chart background jobs. This row answers: *Are background workers falling behind?* (e.g., `SQS ApproximateAgeOfOldestMessage`).
 
-A noisy metric jumps around without changing operational decisions. A noisy dashboard has so many graphs that responders cannot find the first question. A noisy alarm fires often, resolves on its own, and has no clear owner or action.
+By enforcing this logical top-down layout, you guide responders to systematically isolate incident pathways, moving their focus from customer impact down to the specific, saturated database or compute instance.
 
-Improve signal quality before adding more signal:
+## Automated Alarms: States and Thresholds
 
-| Symptom | Better move |
-| --- | --- |
-| CPU alarm pages but customers are fine | Move to dashboard or combine with user-impact alarm |
-| Average latency looks fine during complaints | Add p95/p99 latency view |
-| Queue depth grows during normal batches | Alarm on age or sustained backlog instead |
-| One custom metric creates thousands of series | Remove unbounded dimensions |
-| Dashboard is unreadable during incidents | Reorder by user impact and dependency path |
+Because your engineering team cannot watch dashboards 24 hours a day, you must configure automated CloudWatch Alarms. An alarm watches a specific metric over time and transitions between three logical states:
 
-Good observability is selective. It gives the team enough information to act without burying the useful signal.
+* **OK**: The metric is operating within healthy, defined parameters.
+* **ALARM**: The metric has violated the threshold rules.
+* **INSUFFICIENT_DATA**: Telemetry is not being received, indicating a potential agent failure or lack of request traffic.
+
+To prevent alert fatigue and ignore harmless, temporary spikes, you must configure evaluation periods (the "M out of N" rule). For example, instead of triggering an alarm the single second CPU touches 90%, you define: *Trigger only if the metric exceeds 90% for 3 out of 3 consecutive 1-minute periods.* This filters out brief garbage collection cycles or short CPU bursts while ensuring sustained resource saturation triggers a response.
+
+CloudWatch Alarm Configuration Matrix:
+
+| Operational Metric | Statistic | Recommended Alarm Rule | Rationale |
+| :--- | :--- | :--- | :--- |
+| **ALB 5xx Rate** | Sum | > 1% for 2 out of 2 periods | Customers are experiencing immediate server errors. |
+| **TargetResponseTime** | p95 | > 2000ms for 3 out of 3 periods | The slow tail latency is degrading the customer checkout experience. |
+| **HealthyHostCount** | Minimum | < 2 hosts for 1 period | Immediate high-availability risk; the cluster is down to a single task. |
+| **SQS Oldest Message Age** | Maximum | > 300 seconds for 5 periods | Asynchronous processing queue is severely delayed. |
+| **RDS Connection Count** | Maximum | > 85% of pool capacity for 3 periods | The database is approaching its connection limit; subsequent tasks will fail. |
+
+## The Notification Loop: SNS and Escalations
+
+A CloudWatch alarm does not send an email or Slack message directly. To decouple alerting logic from communication platforms, AWS uses Amazon Simple Notification Service (SNS):
+
+```mermaid
+flowchart LR
+    Alarm[CloudWatch Alarm] -->|State Transition: ALARM| SNS[Amazon SNS Topic]
+    SNS -->|SMS Protocol| Phone[Operator Phone]
+    SNS -->|HTTPS Webhook| Slack[Slack Alert Channel]
+    SNS -->|HTTPS API| Escalation[PagerDuty / Opsgenie]
+```
+
+When an alarm transitions to the `ALARM` state, it publishes a structured JSON message to a designated Amazon SNS Topic. Downstream communication channels subscribe to this topic to process and dispatch the alert:
+
+* **Immediate Paging (PagerDuty/Opsgenie)**: High-severity alarms (like `NoHealthyHosts` or `ALB 5xx Rate`) are sent to specialized paging gateways, triggering phone calls and on-call engineer escalations.
+* **Informational Alerts (Slack/MS Teams)**: Mid-severity alerts (like `High CPU` or `Queue Backlog`) are sent via HTTPS webhooks directly to team Slack channels for review during business hours.
+* **Self-Healing Actions (Auto Scaling)**: Alarms can be cabled directly to Auto Scaling policies, automatically triggering the deployment of new container tasks to resolve CPU saturation without human intervention.
+
+By decoupling the alert trigger from the communication target, you ensure that you can easily route, filter, and adapt notifications to match your team's escalation workflows.
 
 ## Putting It All Together
 
-The opening team had logs, but logs were too detailed for the first question. They needed to know whether checkout was broadly failing, where pressure appeared, and whether a human needed to respond.
+Numeric telemetry is the key to operating cloud environments at scale without manual overhead:
 
-Metrics show production shape over time. Namespaces, metric names, dimensions, periods, and statistics decide what the graph really means. Service metrics let the team move from user impact into API, runtime, queue, function, and database layers. Dashboards arrange those metrics into an operating story. Alarms turn selected conditions into human attention.
+* **Monitor Percentiles, Not Averages**: Always use `p95` or `p99` statistics to watch the slow tail latency of your systems; averages conceal customer pain.
+* **Isolate Identities via Dimensions**: Standardize your custom metric namespaces and apply stable dimensions (like `Environment` and `Service`) while keeping high-cardinality user IDs out of metrics.
+* **Structure Your Cockpit Dashboards**: Arrange charts in a logical top-down grid from business KPIs and ingress gateways down to compute tasks and database engines.
+* **Enforce Conservative Alarm Rules**: Configure evaluation periods (e.g., M out of N data points) to filter out temporary network blips, avoiding alert fatigue.
+* **Decouple Alerts via SNS**: Stream all alarm actions through central SNS topics to manage escalations, team notifications, and auto-scaling events.
 
-The design is healthy when dashboards answer "what is happening?" and alarms answer "does someone need to act now?"
+By wrapping your cloud applications in structured metrics, real-time dashboards, and automated self-healing loops, you ensure your production environment remains stable, visible, and resilient.
 
 ## What's Next
 
-Metrics show shape, but they do not follow one request through every hop. The next article covers tracing and correlation: how one unit of work keeps a shared identity across API calls, containers, queues, events, functions, and databases.
+Metrics show us the high-level performance trends across our entire system, but they cannot follow the journey of a single, complex request as it hops between isolated servers and databases. To isolate bottlenecks and track requests across distributed boundaries, we must establish correlation. In the next article, we will go deep into distributed tracing, request headers propagation, segments, and AWS X-Ray service maps.
 
 ---
 
 **References**
 
-- [Metrics concepts](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/cloudwatch_concepts.html). Supports the CloudWatch model of namespaces, metrics, dimensions, periods, statistics, percentiles, and alarms.
-- [Metrics in Amazon CloudWatch](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/working_with_metrics.html). Supports the distinction between AWS vended metrics, custom metrics, OpenTelemetry metrics, graphing, dashboards, and alarms.
-- [Using Amazon CloudWatch dashboards](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/CloudWatch_Dashboards.html). Supports the dashboard explanation and custom shared views for AWS telemetry.
-- [Using Amazon CloudWatch alarms](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/CloudWatch_Alarms.html). Supports metric alarms, PromQL alarms, composite alarms, alarm actions, state changes, and noise-reduction guidance.
+- [Amazon CloudWatch Metrics Concepts](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/cloudwatch_concepts.html) - AWS guide to metrics, namespaces, dimensions, and timestamps.
+- [Using Amazon CloudWatch Dashboards](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/CloudWatch_Dashboards.html) - Documentation on building shared operational visual dashboards.
+- [Amazon CloudWatch Alarm States](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/AlarmThatSendsEmail.html) - Guide on configuring metric alarms, thresholds, and evaluation periods.
+- [AWS SDK PutMetricData API](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/publishingMetrics.html) - Guide to publishing custom time-series metrics from application code.

@@ -57,30 +57,9 @@ To make sense of the vast AWS console catalog, translate your familiar local lap
 * **Durable Database**: Your local database running on `localhost` maps to transactional RDS relational databases in the cloud.
 * **Observability Logs**: Your local terminal stdout scrollback maps to persistent CloudWatch log groups in the cloud, keeping your logs readable after the process exits.
 
-```mermaid
-flowchart TD
-    subgraph Laptop["Local Laptop"]
-        LocalApp["orders-api app"]
-        LocalEnv[".env variables"]
-        LocalFile["local CSV files"]
-        LocalConsole["stdout/stderr console"]
-    end
-    Laptop --> AWS
-    subgraph AWS["AWS Cloud"]
-        VPC["VPC network isolation"]
-        ECS["ECS Fargate containers"]
-        Secrets["Secrets Manager vault"]
-        S3["S3 storage bucket"]
-        CloudWatch["CloudWatch log groups"]
-    end
-    LocalApp --> ECS
-    LocalEnv --> Secrets
-    LocalFile --> S3
-    LocalConsole --> CloudWatch
-    VPC --> ECS
-```
+![An infographic showing a local laptop stack of process, env file, files, database, and terminal logs moving into specialized AWS services inside an account boundary](/content-assets/articles/article-cloud-providers-aws-foundations-aws-mental-model/local-laptop-to-aws-services.png)
 
-The flowchart traces the transition from a single local laptop host to a coordinated cloud topology, showing how each local component maps to a dedicated, secure cloud resource inside our VPC network boundary.
+*The important shift is separation of responsibilities. The laptop bundles execution, files, secrets, data, and logs into one machine; AWS splits those jobs into managed services that cooperate inside network and permission boundaries.*
 
 ## Isolated Network Rooms
 
@@ -98,6 +77,10 @@ In the cloud, this all-powerful default posture is a massive security vulnerabil
 
 Unless an action is explicitly allowed by a security policy, AWS blocks it. Every single request inside the cloud is an API call that must pass through the IAM permission gate. When your container attempts to write a file to an S3 bucket or read a database URL, AWS validates the task's identity first. It asks: Who is making the request, what specific action are they attempting, and what target resource is involved? Instead of hardcoding static password keys into your codebase, you assign a low-privilege IAM task role to your container, which dynamically assumes temporary, short-lived API credentials at runtime.
 
+![An infographic showing a task role request passing through an IAM gate that checks who, action, and resource before allowing S3 and Secrets Manager access or denying a database deletion](/content-assets/articles/article-cloud-providers-aws-foundations-aws-mental-model/iam-default-deny-gate.png)
+
+*IAM is the cloud permission checkpoint. A role can be allowed to read one secret or write one bucket while still being denied unrelated actions in the same AWS account.*
+
 Sensitive API credentials, like database connection strings, are vaulted inside AWS Secrets Manager. Secrets Manager encrypts the values at rest and decrypts them only when authorized by an IAM request, allowing your containers to securely pull database credentials at boot time without exposing them to developers or Git repositories.
 
 ## Durable Log Streams Outside the Container
@@ -107,6 +90,10 @@ When you test an application locally, troubleshooting is simple because the proc
 In the cloud, you do not have a terminal window to watch. Runtimes are headless and automated. If a container encounters a database connection error and crashes, the physical instance hosting the container is immediately destroyed by the scheduler, taking the terminal scrollback history with it.
 
 To diagnose failures, you must route all operational evidence to a persistent location that exists outside the compute runtime. CloudWatch Logs acts as this permanent vault, capturing the application's stdout and stderr streams and preserving them even after the container ceases to exist. CloudWatch Metrics tracks numeric trends, like database connection limits and memory leaks, while CloudTrail records every management API call in the account. Observability is the continuous practice of collecting these signals to verify that your system is performing as intended, turning mysterious cloud behavior into visible, debuggable evidence.
+
+![An infographic showing stdout, stderr, metrics, and CloudTrail events streaming from an app container into persistent evidence stores after the container stops](/content-assets/articles/article-cloud-providers-aws-foundations-aws-mental-model/observability-outside-runtime.png)
+
+*Cloud runtimes are temporary, so diagnostic evidence has to leave the runtime while it is still alive. Logs, metrics, and API events become the durable record you inspect after the container is gone.*
 
 ## Putting It All Together
 
@@ -123,6 +110,10 @@ When you run an app locally, all components are concentrated on a single physica
 * Diagnostic scrollback moves from the active terminal to persistent CloudWatch log groups.
 
 By mapping local concepts to their cloud-native equivalents and structuring them as a continuous, cooperative narrative, we demystify the cloud console and build our systems with architectural intent.
+
+![A six-part summary infographic for the AWS mental model covering the laptop baseline, compute, VPC isolation, IAM request gates, durable data, and logs outside runtime](/content-assets/articles/article-cloud-providers-aws-foundations-aws-mental-model/aws-mental-model-summary.png)
+
+*Use this as the short mental checklist: start from the laptop baseline, move code execution into managed compute, draw network boundaries with VPCs, gate every cloud request with IAM, keep durable data outside ephemeral runtimes, and preserve operational evidence after the runtime disappears.*
 
 ---
 

@@ -50,6 +50,10 @@ Command-line mode activates when you press `:` from Normal mode. A colon appears
 
 If you remember nothing else, remember this: `Esc` always brings you back to Normal mode. If you are confused about what mode you are in, press `Esc` once or twice and you are back to safe ground.
 
+![A Vim mode map showing Normal mode as the central hub, with Insert, Command, and Search modes entered by keys and returned from with Escape](/content-assets/articles/article-devops-foundation-linux-linux-basics-vim-essentials/vim-mode-map.png)
+
+*Treat Normal mode as Vim's home base. You briefly leave it to type text, run a command, or search, then use `Esc` to return to the safe command hub before doing the next action.*
+
 ## Survival Basics: Open, Edit, Save, Quit
 
 Let's walk through the absolute minimum workflow. Open a file with `vim` followed by the filename:
@@ -74,6 +78,10 @@ The `!` in `:q!` is a force flag. It tells Vim "I know I have unsaved changes an
 If you accidentally opened the wrong file or made edits you regret, `:q!` is your escape hatch. No damage done.
 
 There is one more piece of vim's design worth knowing about before you make your first edits, because eventually you will see it on screen. When you open a file, vim does not edit the file directly. It loads the contents into an in-memory buffer and writes a hidden swap file alongside it (something like `.deploy.sh.swp`). All your edits go into the buffer, and `:w` is what actually overwrites the file on disk. The swap file exists for a single reason: crash recovery. If your SSH session drops, your laptop loses power, or vim itself crashes mid-edit, the swap file preserves your unsaved changes so you can recover them next time you open the file. The downside is that if you ever see "swap file already exists" when opening a file, vim is warning you that either another process is editing the same file, or a previous session crashed and never cleaned up. That distinction (buffer in memory, swap file on disk, real file untouched until you save) is also why `:q!` is safe: nothing you typed has touched the original file.
+
+![An infographic showing Vim opening a real file into a buffer, writing a swap file for recovery, saving with colon w, and discarding buffer changes with colon q bang](/content-assets/articles/article-devops-foundation-linux-linux-basics-vim-essentials/vim-buffer-swap-file.png)
+
+*Vim edits the buffer first. The real file changes only when you run `:w`, while the swap file protects unsaved work if the session dies before you save.*
 
 To create a new file, just open a name that does not exist yet:
 
@@ -179,6 +187,10 @@ D     → same as d$ (shortcut)
 ```
 
 The `d` key is the "delete operator." It waits for a motion to tell it how much to delete. `dw` means "delete a word," `d$` means "delete to end of line," and `dG` means "delete from here to the end of the file." Any motion you learned in the navigation section works here.
+
+![An infographic showing Vim editing commands as an operator plus a motion, with examples for delete word, delete to line end, delete three lines, and change word](/content-assets/articles/article-devops-foundation-linux-linux-basics-vim-essentials/vim-operator-motion.png)
+
+*Many Vim commands are small pieces that compose. Once you understand operator plus motion, commands like `dw`, `d$`, `3dd`, and `cw` become patterns instead of separate shortcuts to memorize.*
 
 ### Copying and Pasting
 
@@ -419,6 +431,10 @@ Ctrl+w q   Close split
 4yy        Yank 4 lines
 2dw        Delete 2 words
 ```
+
+![A six-part summary infographic for Vim essentials covering Normal mode, Insert mode, Command mode, chunk navigation, operator-motion editing, and search verification](/content-assets/articles/article-devops-foundation-linux-linux-basics-vim-essentials/vim-essentials-summary.png)
+
+*Use this as the short mental checklist: return to Normal mode when confused, enter Insert mode only when you are typing, use Command mode to save or quit, move by meaningful chunks, compose edits from operators and motions, and verify config changes with search before testing the service.*
 
 ---
 

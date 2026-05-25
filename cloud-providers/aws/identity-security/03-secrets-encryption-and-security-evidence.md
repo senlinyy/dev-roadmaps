@@ -162,7 +162,7 @@ To gather evidence without exposing the secret payload, AWS implements AWS Cloud
 
 * **Identifiable caller**: CloudTrail records the exact assumed workload role session principal that requested the secret.
 * **Precise action**: It logs the exact operation, such as `GetSecretValue` or `Decrypt`.
-* **Zero payload exposure**: CloudTrail records the metadata of the call—the timestamp, caller IP, and target ARN—but never logs the plaintext secret value itself.
+* **Zero payload exposure**: CloudTrail records the metadata of the call, such as the timestamp, caller IP, and target ARN, but never logs the plaintext secret value itself.
 
 While CloudTrail keeps your cloud API calls safe, your own application logs inside the container require careful design. A common diagnostic trap is writing broad exception catch blocks that print full objects or raw error strings to console output. 
 
