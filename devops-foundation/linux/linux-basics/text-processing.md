@@ -27,6 +27,10 @@ There is a second reason this toolkit looks the way it does, and it traces back 
 
 You will also notice that there is a separate command for searching (`grep`), a separate command for substituting (`sed`), and a separate command for column processing (`awk`), even though one large tool could in theory do all three. That split is deliberate. The Unix tradition is that every tool does exactly one job, takes text on stdin, and emits text on stdout. The reason is composition: when each piece is small and predictable, you can chain them in any order, and you only have to learn how each piece behaves once. A monolithic "text tool" with hundreds of options would be harder to learn, harder to compose, and impossible to extend without modifying it. Keep this in mind when a pipeline looks like five commands in a row: that is the design working as intended, not a sign that the toolkit is missing something.
 
+![A text stream filters infographic showing raw text flowing line by line through grep filters, sed transforms, awk extracts, and a result stream](/content-assets/articles/article-devops-foundation-linux-linux-basics-text-processing/text-stream-filters.png)
+
+*Linux text tools are stream filters. Each command reads lines, keeps or changes the useful parts, and passes plain text to the next step.*
+
 Let's start with the simplest tools for looking at text.
 
 ### Viewing Files with cat, head, and tail
@@ -174,6 +178,10 @@ Jan 12 09:14:04 devbox01 app[4021]: connected to db-replica.internal:5432
 ```
 
 Seeing surrounding lines gives you context about what was happening when the error occurred.
+
+![A grep context window infographic showing a matched error line together with before and after lines, plus the -B, -A, and -C flags](/content-assets/articles/article-devops-foundation-linux-linux-basics-text-processing/grep-context-window.png)
+
+*Context flags turn a single match into a small evidence window. Before and after lines often explain why the matching error happened.*
 
 Here is a quick reference for the most commonly used grep flags:
 
@@ -472,15 +480,9 @@ This pulls the ninth field (the HTTP status code in common log format), counts o
 
 ### The Pipeline Diagram
 
-```mermaid
-graph TD
-    A["Raw\nLog File"] --> B["Filter lines<br/>(grep)"]
-    B --> C["Extract fields<br/>(awk)"]
-    C --> D["Order lines<br/>(sort)"]
-    D --> E["Count duplicates<br/>(uniq -c)"]
-    E --> F["Rank by count<br/>(sort -rn)"]
-    F --> G["Top results<br/>(head -n 10)"]
-```
+![A pipeline pattern infographic showing a raw log flowing through filter, extract, sort, count, rank, and top results stages](/content-assets/articles/article-devops-foundation-linux-linux-basics-text-processing/pipeline-pattern.png)
+
+*Most useful text-processing pipelines follow the same shape: filter noisy input, extract the field you care about, sort it, count repeats, and rank the result.*
 
 This pattern of filter, extract, sort, count, and rank appears over and over in real-world text processing. The specific tools in the middle may change, but the shape of the pipeline stays the same.
 
@@ -597,6 +599,10 @@ For filenames that contain spaces, use `-0` with `grep -Z` (or `find -print0`) t
 ```bash
 grep -rlZ "TODO" src/ | xargs -0 wc -l
 ```
+
+![A six-part text processing map infographic covering streams, grep search, sed edit, awk fields, pipes compose, and sort-count-rank workflows](/content-assets/articles/article-devops-foundation-linux-linux-basics-text-processing/text-processing-summary.png)
+
+*Use this as the short text-processing checklist: think in streams, search with grep, edit streams with sed, read fields with awk, compose tools with pipes, and sort-count-rank when you need a quick operational summary.*
 
 ## References
 

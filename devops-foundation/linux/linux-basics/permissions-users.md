@@ -61,6 +61,10 @@ The remaining nine characters are three groups of three:
 
 Each group of three represents the permissions for a different category of user. The first triplet is for the file's owner. The second is for anyone in the file's group. The third is for everyone else on the system. Within each triplet, the three positions are always in the same order: read, write, execute. A letter means the permission is granted; a dash means it is not.
 
+![A Linux permission string anatomy infographic breaking a long listing into file type, owner permissions, group permissions, others permissions, owner name, group name, and file path](/content-assets/articles/article-devops-foundation-linux-linux-basics-permissions-users/permission-string-anatomy.png)
+
+*The long listing is the permission record in compact form: file type first, then owner, group, and everyone-else permissions, with owner and group metadata beside it.*
+
 Here is a directory listing with more variety so you can practice reading these:
 
 ```bash
@@ -104,6 +108,10 @@ $ ls /opt/secrets/                # fails with "Permission denied"
 ```
 
 Conversely, read without execute on a directory lets you see filenames but not actually open or stat any of the files inside. In practice you almost always want both r and x together on directories.
+
+![A directory permission infographic showing read as listing names, write as creating or deleting names, and execute as traversing a path](/content-assets/articles/article-devops-foundation-linux-linux-basics-permissions-users/directory-rwx-model.png)
+
+*Directory permissions control the directory's name table. Read lists names, write changes names, and execute lets a path pass through the directory.*
 
 ## Numeric (Octal) Notation
 
@@ -384,16 +392,9 @@ Root is the superuser, UID 0, and root can do anything on the system with no per
 
 It is worth pausing on what makes root "root" in the first place, because the answer is more mechanical than people often assume. The kernel has no list of "root-equivalent" usernames and ignores whether the running process is owned by a user named "root". It checks one specific number: is the effective UID of this process equal to 0? If yes, skip every permission check. If no, run the normal checks. That is it. The username "root" is just a convention enforced by `/etc/passwd`, which maps the name to UID 0. If you renamed root to "admin" in `/etc/passwd`, the account would still be all-powerful because the kernel only cares about the number. Conversely, if you created a second user with UID 0 (some systems used to call it `toor`), that user would also bypass every permission check. This is also why "remove root access" really means "remove UID 0 access", and why audits look at every account's UID alongside its name.
 
-```mermaid
-graph TD
-    A["User runs\nsudo command"] --> B{"In sudoers\nfile?"}
-    B -->|No| C["Access\ndenied"]
-    B -->|Yes| D{"Allowed\ncommand?"}
-    D -->|No| E["Command\nnot permitted"]
-    D -->|Yes| F["Authenticate\n(password)"]
-    F --> G["Execute as\ntarget user"]
-    G --> H["Log to\n/var/log/auth.log"]
-```
+![A sudo gate infographic showing a user request checked against sudoers rules, denied when not allowed, allowed to run as root, and recorded in an audit log](/content-assets/articles/article-devops-foundation-linux-linux-basics-permissions-users/sudo-permission-gate.png)
+
+*Sudo is a checked elevation path. The user, target command, authorization step, and audit log are all part of the permission boundary.*
 
 The sudo configuration lives in `/etc/sudoers`, which should only be edited with `visudo` (it validates syntax before saving, preventing you from locking yourself out).
 
@@ -429,6 +430,10 @@ Mar 15 14:35:12 web01 sudo[4910]:   deploy : TTY=unknown ; PWD=/opt/deploy ; USE
 ```
 
 Combining sudo restrictions with proper file ownership and permissions creates defense in depth: even if a compromised service escapes its permission sandbox, it still cannot escalate to root unless sudo rules allow it.
+
+![A six-part summary infographic for Linux permissions covering owner group others, rwx, octal mode, special bits, ACL entries, and the sudo gate](/content-assets/articles/article-devops-foundation-linux-linux-basics-permissions-users/permissions-users-summary.png)
+
+*Use this as the short permissions checklist: identify owner, group, and others; read rwx by audience; translate octal modes carefully; respect special bits; reach for ACLs only when the simple model is too coarse; and keep sudo rules narrow.*
 
 ## References
 

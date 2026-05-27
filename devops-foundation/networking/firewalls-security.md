@@ -43,6 +43,10 @@ Here are the layers from bottom to top:
 
 Each layer is independent. A misconfigured security group does not affect iptables. A bug in your WAF does not weaken SSH hardening. This independence is what makes defense in depth work. You are not stacking identical protections; you are covering different failure modes at different points in the network path.
 
+![A defense-in-depth infographic showing traffic passing through cloud firewall, host firewall, SSH rules, and application controls before reaching a service](/content-assets/articles/article-devops-foundation-networking-firewalls-security/defense-in-depth-layers.png)
+
+*Defense in depth works because each control sits at a different boundary. A packet can be stopped before the host, inside the kernel, at SSH access, or inside the application itself.*
+
 ## iptables: The Linux Packet Filter
 
 Every Linux system ships with Netfilter, the kernel-level packet filtering framework. `iptables` is the user-space tool that configures it. Even if you use higher-level tools like `firewalld` or `ufw`, they all generate iptables rules underneath. Understanding iptables directly means you can debug any Linux firewall, regardless of which frontend someone chose.
@@ -62,6 +66,10 @@ When a rule matches, the guard does one of three things, called the **target**:
 For anything facing the public internet, `DROP` beats `REJECT`. A `REJECT` confirms to the scanner that something is listening on this IP, just not on this port. A `DROP` makes the scanner waste time waiting for a response that never comes, and gives them no signal at all. Silence is the best answer to a stranger trying door handles.
 
 The "default rule at the bottom of the clipboard" has its own name: the chain's **policy**. If your `INPUT` policy is `ACCEPT`, the guard waves through anything that didn't match a specific rule. That is the "no bouncer" state and it is what you get on a fresh server. You want the policy to be `DROP` so that the only way in is through a rule you explicitly wrote. This is called **default-deny**, and it is the only sane way to run a firewall. The cost is that the rules become harder to write, because forgetting a single rule (say, the one that allows SSH) locks you out of your own server. We will cover that exact failure mode at the end of the article.
+
+![An iptables rule-evaluation infographic showing an incoming packet entering the INPUT chain, checking rules in order, stopping at the first match, and falling to default DROP when no rule matches](/content-assets/articles/article-devops-foundation-networking-firewalls-security/iptables-rule-evaluation.png)
+
+*iptables is ordered and first-match wins. The safest rule set allows only known traffic, logs what remains, and lets the default policy drop everything else.*
 
 ### Building a Rule Set
 
@@ -162,6 +170,10 @@ Here is the practical difference:
 | Use case | Per-instance access control | Subnet-wide guardrails |
 
 The combination of Security Groups (instance-level, stateful) and NACLs (subnet-level, stateless) gives you defense in depth at the cloud layer. A compromised instance with a misconfigured Security Group still has the NACL as a backstop. In practice, most teams rely heavily on Security Groups for day-to-day access control and use NACLs as a coarse safety net at the subnet boundary. Layer on top of that whatever your team uses for HTTP-level filtering (Cloudflare WAF, AWS WAF, an Nginx reverse proxy with rate limits) and you are filtering bad traffic at four different points before it reaches your application code.
+
+![A cloud firewall comparison infographic showing a stateful security group attached to one instance and a stateless network ACL around a subnet, with return traffic handled differently](/content-assets/articles/article-devops-foundation-networking-firewalls-security/security-group-vs-nacl.png)
+
+*Security groups protect resources and remember return traffic. Network ACLs protect subnet boundaries and need separate thinking for both inbound and outbound paths.*
 
 One more place this layering bites juniors: Docker. When you run `docker run -p 8080:80 nginx`, Docker quietly inserts iptables rules that punch a hole through the host firewall to forward port 8080 to the container. People then add an iptables `DROP` rule for port 8080 and are surprised it does nothing, because Docker's rules are evaluated first. If your container's published port is unexpectedly reachable, check `iptables -L DOCKER -n` before assuming your firewall is broken.
 
@@ -276,6 +288,10 @@ Status for the jail: sshd
 
 The output shows how many login attempts have failed, how many IPs are currently banned, and which specific addresses are blocked. Each banned IP gets a temporary iptables rule that drops all traffic from it for the configured ban duration. After the ban expires, the rule is removed automatically and the IP can try again.
 
+![A fail2ban lifecycle infographic showing failed logins flowing through a log watcher, retry threshold, temporary ban, and later unban](/content-assets/articles/article-devops-foundation-networking-firewalls-security/fail2ban-lifecycle.png)
+
+*fail2ban turns repeated log evidence into temporary firewall action. It is reactive, local, and reversible, which makes noisy brute-force traffic much less useful to attackers.*
+
 If you accidentally ban your own IP (it happens), you can unban it manually from a different session or from the server console:
 
 ```bash
@@ -373,6 +389,10 @@ $ sudo systemctl enable iptables
 ```
 
 Make saving your rules the last step of every firewall change session. Building rules without saving them is like writing code without committing.
+
+![A six-part summary infographic for firewalls and security covering default deny, rule order, conntrack, cloud firewalls, SSH hardening, and fail2ban](/content-assets/articles/article-devops-foundation-networking-firewalls-security/firewalls-security-summary.png)
+
+*Use this as the short firewall checklist: default to deny, read ordered rules carefully, understand conntrack before blocking replies, check both cloud and host firewalls, harden SSH first, and use fail2ban to react to repeated login abuse.*
 
 ---
 

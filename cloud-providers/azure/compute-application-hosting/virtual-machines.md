@@ -12,123 +12,152 @@ aliases:
 
 ## Table of Contents
 
-1. [The Problem](#the-problem)
-2. [What Is A VM](#what-is-a-vm)
-3. [Image](#image)
-4. [VM Size](#vm-size)
-5. [Disks](#disks)
-6. [Network Interface](#network-interface)
-7. [Startup](#startup)
-8. [Process Management](#process-management)
-9. [Patching And Logs](#patching-and-logs)
-10. [Putting It All Together](#putting-it-all-together)
-11. [What's Next](#whats-next)
+1. [What Is A Virtual Machine](#what-is-a-virtual-machine)
+2. [Image](#image)
+3. [VM Size](#vm-size)
+4. [Disks](#disks)
+5. [Network Interface](#network-interface)
+6. [Startup](#startup)
+7. [Process Management](#process-management)
+8. [Patching And Logs](#patching-and-logs)
+9. [Putting It All Together](#putting-it-all-together)
+10. [What's Next](#whats-next)
 
-## The Problem
+## What Is A Virtual Machine
 
-Most modern Azure apps should not start with a virtual machine. App Service, Container Apps, Functions, and AKS can remove a lot of server work. But some workloads still need a server-shaped home.
+An Azure Virtual Machine (VM) is a cloud-based guest operating system instance executed by a physical hypervisor using software-defined virtualized hardware allocations. Azure manages the physical datacenter facilities, server blade hardware, hypervisor scheduling, and cooling infrastructure. Your team, however, retains full administrative control and operational ownership over everything inside the guest operating system boundary.
 
-The checkout platform has one awkward worker:
+:::expand[Under the Hood: Hypervisor CPU Scheduling and NUMA Latency]{kind="design"}
+The customized Hyper-V hypervisor controls physical processor cores and coordinates execution schedules. The hypervisor partitions the physical CPU into virtual processor units (vCPUs) and assigns them to guest operating systems. To guarantee high performance, the hypervisor coordinates CPU scheduling by pinning virtual threads directly to physical hardware threads (Hyper-Threading).
 
-- It needs a vendor binary installed from a private package feed.
-- It writes temporary files to a mounted disk during each batch.
-- It is supervised by systemd today, and the team already knows the failure modes.
-- It must run a custom network diagnostic tool during migration.
+A critical performance constraint in this virtualized scheduling is the boundary of physical NUMA (Non-Uniform Memory Access) nodes. A physical server blade contains multiple CPU sockets, each directly cabled to its own local blocks of RAM. The combination of a CPU socket and its local memory is a NUMA node. When the hypervisor allocates a guest VM's vCPUs and RAM, it attempts to fit the entire allocation within a single physical NUMA node. If a guest VM's RAM allocation is split across multiple NUMA nodes, or if the hypervisor schedules a vCPU thread on CPU Socket 1 that must fetch data from RAM wired to CPU Socket 2, the data must travel across the slow inter-socket bus (such as Intel UPI or AMD Infinity Fabric). This cross-NUMA socket traversal increases memory retrieval latency, causing L3 cache misses and degrading application throughput under high performance loads.
 
-For this piece, a VM may be honest. The team is not choosing a VM because servers are fashionable. They are choosing one because the workload needs operating system control that the managed application platforms do not expose cleanly.
+Memory isolation between the guest virtual machine and the physical host is enforced directly at the silicon processor tier. The physical host CPU utilizes hardware Second Level Address Translation (SLAT), specifically Extended Page Tables (EPT) on Intel processors or Nested Page Tables (NPT) on AMD chips. The guest operating system manages its own virtual-to-physical memory page tables, assuming it has direct access to hardware. However, the EPT hardware interceptor translates the guest's physical memory references into the actual host physical RAM addresses. This hardware-assisted translation guarantees that a virtual machine can never read or overwrite memory blocks belonging to the host OS or other guest virtual machines, ensuring raw hardware-enforced isolation.
+:::
 
-## What Is A VM
+If you operate servers on AWS, Azure VMs are the direct equivalent of AWS EC2 instances. Both provide raw, unmanaged virtual guest servers in the cloud. However, they integrate differently with adjacent cloud resources. In AWS, persistent storage block attachments utilize Elastic Block Store (EBS) cabled directly to your instances, whereas in Azure, persistent volumes use Managed Disks cabled over Microsoft's high-speed distributed storage networks. Furthermore, while AWS EC2 relies on IMDS metadata queries wired directly to local hypervisor sockets, Azure integrates the VM Agent (`waagent`) dynamically cabled to the Azure Resource Manager to manage guest setups.
 
-An Azure Virtual Machine is a cloud server. Azure provides virtualized compute, storage attachments, network resources, platform APIs, and integration with monitoring and management tools. You choose the image, size, disks, network placement, access model, and operating system behavior.
+Choosing a Virtual Machine is a deliberate engineering tradeoff. You accept the operational overhead of server patching, security compliance audits, backup policies, and process monitoring in exchange for the absolute runtime freedom required by specialized systems.
 
-If you know AWS, the broad comparison is EC2. The same warning applies: a VM gives control, and control brings chores. Azure manages the physical infrastructure. Your team still owns much of what happens inside the guest operating system.
-
-The useful beginner split looks like this:
-
-| Azure provides | Your team still owns |
-| --- | --- |
-| Virtualized server capacity | OS configuration and hardening |
-| VM sizes and hardware families | Runtime installation and updates |
-| Managed disks and snapshots | Disk layout and data lifecycle |
-| Network interface placement | Firewall, ports, routes, and access choices |
-| Platform health signals | Application logs and process supervision |
-| Management APIs | Patch policy, backups, recovery, and incident playbooks |
-
-A VM is not wrong. It is just explicit. If the workload really needs server control, say so. If it only needs a place to run a normal HTTP app, a managed app platform is usually the simpler first answer.
+| Resource Provider | Operational Owner | Systems Detail |
+| --- | --- | --- |
+| Physical Hardware | Azure Fabric | Core hypervisor updates, server blade hardware, and power units |
+| Operating System OS | Your Team | Guest OS updates, security hardening, package updates, and kernels |
+| Storage Volumes | Your Team | Partition tables, file systems, disk mounts, and directory trees |
+| Process Supervision | Your Team | Keeping systemd daemons active and monitoring process restarts |
+| Logging Pipelines | Your Team | Installing log agents to forward files to centralized log workspaces |
+| Network Routing NIC | Your Team | Configuring firewalls, network interfaces, and guest routing tables |
 
 ## Image
 
-The image is the starting operating system and software shape for the VM. It may be a marketplace image, a custom image, or an image built through a golden-image pipeline. The image decides what exists before your startup script or configuration tool runs.
+The image is the template file that contains the pre-configured operating system, kernel version, default libraries, and system configurations used to boot the virtual machine. When you provision a VM, the Azure Fabric Controller copies this image payload from the regional marketplace repository to your VM's OS disk.
 
-This matters because image drift creates hard-to-debug production differences. If one VM was created from Ubuntu 22.04 last year and another from a newer image today, the package versions, kernel behavior, and default settings may differ. If a human installed a package after creation and never captured that change, the next VM may not work the same way.
+Relying on raw marketplace images can introduce configuration drift over time. If a developer boots a generic Ubuntu image and manually installs packages, updates libraries, and edits system files, the machine cannot be easily reproduced. If the VM's host hardware fails and the platform migrates the workload to a new node, recreating the configuration by hand creates serious recovery latency.
 
-For long-lived systems, the better habit is to make the image and bootstrap path repeatable. The team should be able to answer: which image created this VM, what was installed after boot, and how would we recreate it?
+To ensure consistency, automate the image creation path using golden-image pipelines (such as HashiCorp Packer). These pipelines compile your application binaries, install required security daemons, and configure system libraries into a custom, versioned image. You register this image in an Azure Compute Gallery, ensuring that every VM launched in your scaling group boots from the exact same pre-tested template.
 
 ## VM Size
 
-The VM size defines the CPU, memory, temporary storage, network bandwidth characteristics, and sometimes special hardware such as GPUs. Choosing a size is more than choosing "small" or "large." It is choosing the capacity envelope for the process.
+The VM Size (also referred to as the VM SKU) defines the compute, memory, local ephemeral disk space, and network bandwidth characteristics of the virtualized environment. Selecting a size is a critical step that must match the physical resource needs of your guest processes.
 
-A CPU-bound batch worker may need a compute-optimized size. A memory-heavy service may need more RAM before it needs more cores. A disk-heavy workload may need attention to disk throughput, IOPS, and VM vCPU count together.
+Azure categorizes VM sizes into specialized families designed for distinct workloads:
+* **D-Family (General Purpose)**: Balanced CPU-to-memory ratios; designed for standard web backends, small databases, and testing environments.
+* **E-Family (Memory Optimized)**: High RAM-to-core ratios; designed for in-memory databases, large cache layers, and high-volume data engines.
+* **F-Family (Compute Optimized)**: High core-to-RAM ratios; designed for CPU-bound batch processing, compilation engines, and video encoding.
 
-The size also shapes cost. A VM costs while it is allocated, even if the process inside is idle. If the workload only runs for short windows and does not require a server shape, a job-oriented service may be cheaper. If the workload must stay warm and needs OS control, the VM cost is the price of that control.
+The VM Size also imposes strict, non-adjustable hardware limits on network interface card (NIC) throughput and disk input/output operations per second (IOPS). If you select a small VM size (such as `Standard_B2s`), the hypervisor limits your network bandwidth to a low rate and caps your disk IOPS. Even if you attach a high-performance SSD capable of 20,000 IOPS, the VM's virtual disk controller will throttle I/O operations to match the VM size limits, creating disk queue bottlenecks.
 
 ## Disks
 
-A VM normally has an OS disk and may have one or more data disks. The OS disk holds the operating system. Data disks hold application data, mounted working directories, or other persistent files. Some VM sizes also expose temporary local storage that should not be treated as durable.
+An Azure Virtual Machine normally utilizes two distinct categories of storage: managed disks (durable, network-attached storage) and temporary local disks (ephemeral, physically attached SSDs).
 
-The main gotcha is local state. A file written to a VM is not automatically the same as durable application state. If the VM is replaced, recreated, or restored from an old snapshot, the state story changes. Databases, uploads, logs, and business records usually belong in managed storage or database services unless the VM is specifically operating that data layer.
+```mermaid
+flowchart LR
+    OSFS["Guest OS Block I/O<br/>(/dev/sda)"] --> VController["Virtual SCSI Controller"]
+    VController -- "SCSI packets over fiber" --> ManagedDisk["Azure Storage Managed Disk LUN"]
+```
 
-For the legacy worker, a data disk might be reasonable for temporary batch workspace. The durable output should still land in a storage account, database, or another managed destination that survives VM replacement.
+```mermaid
+flowchart LR
+    TempFS["Temporary Mount<br/>(/dev/sdb)"] --> LocalSSD["Physical Local NVMe SSD<br/>(on Hypervisor Host Blade)"]
+```
+
+Managed disks represent software-defined virtual disk drives hosted on Azure's distributed storage cluster. Under the hood, when your guest operating system performs a file write, the virtual SCSI or NVMe controller in the hypervisor intercepts the block I/O requests. It converts the block requests into TCP packets and streams them over a dedicated high-speed storage network to the physical storage scale units. The storage fabric writes the data across three separate physical disk arrays in the datacenter to guarantee durability before returning a success signal to the hypervisor.
+
+Temporary disks, conversely, are physically attached to the server blade hosting the hypervisor. On Linux VMs, this drive is typically mounted at `/mnt` or `/mnt/resource`. Because this disk is physically cabled to the local server blade, I/O latency is extremely low. However, this storage is fully ephemeral. If the underlying server blade hardware fails, or if you stop (deallocate) the VM, the Fabric Controller migrates your VM to a healthy blade in a different rack. Because the local SSD stays with the physical host blade, all data stored on the temporary disk is permanently lost. Never store database logs, source code, application state, or critical files on the temporary disk; restrict its use to system swap space and volatile caches.
 
 ## Network Interface
 
-The network interface connects the VM to a virtual network subnet. It is where private IP addressing, network security group rules, and sometimes public IP association come together.
+The Network Interface Card (NIC) is the virtualized resource that connects your VM to a virtual network subnet. It owns the private IP address mapping, links to public IP resources, and ties directly to Network Security Group (NSG) packet filtering rules.
 
-This is where server familiarity can create cloud mistakes. A VM with SSH open to the internet is easy to understand and often too broad. A database port exposed from a VM is easy to test and dangerous to leave public. The network interface and subnet placement should match the role of the machine.
+Under the hood, when packets reach the host blade's physical network adapter, the hypervisor's software-defined virtual switch inspects the VLAN headers. It routes the packets to the virtual NIC assigned to your VM, where the guest OS kernel parses the Ethernet frames. To bypass this virtual switch overhead and achieve near-line-rate network performance under high traffic, enable Accelerated Networking.
 
-For most application VMs, start private. Put the VM in an application subnet, control inbound access with network security groups, and use safer administration paths such as Bastion, VPN, private connectivity, or just-in-time access. A public IP should be a deliberate exception.
+Accelerated Networking utilizes Single Root I/O Virtualization (SR-IOV) technology. When enabled, the hypervisor bypasses the virtual switch entirely, presenting the physical NIC's virtual functions directly to the guest VM's PCIe bus. Packets are copied directly from the physical network adapter to the guest VM's memory buffers, reducing CPU utilization, cutting network jitter, and minimizing round-trip latency.
 
 ## Startup
 
-Startup is everything that happens between "Azure created the VM" and "the workload is ready." It can include cloud-init, custom script extensions, package installation, configuration management, service registration, secrets retrieval, and application start.
+The VM startup path represents the bridge between virtual machine creation and application process readiness. When the Fabric Controller boots the guest OS, the system must parse configuration metadata to set hostnames, wire network routing, retrieve secrets, and install runtimes.
 
-This is where a VM often feels easy in development and fragile in production. If the startup sequence depends on a human SSH session, the machine cannot be reproduced reliably. If package installation sometimes fails because a repository is unavailable, the VM can exist but the app can be missing. If secrets are copied by hand, recovery becomes memory work.
+To automate this provisioning flow without manual SSH commands, rely on the guest VM Agent (`waagent`) and cloud-init. During the boot sequence, the guest OS system systemd services start the VM Agent daemon. The agent makes a link-local HTTP request to the Instance Metadata Service (IMDS) at the private IP `169.254.169.254`. The hypervisor intercepts this packet, validates the VM's hardware identity, and returns a JSON payload containing the VM's resource group, subscription, private IP, and user-provided custom data scripts.
 
-A production VM should have a written, automated startup path. It should also have a clear health signal after startup, because "the VM is running" only means the hypervisor started the guest. It does not prove the application process is healthy.
+The VM Agent parses this metadata, configures the local network interfaces, writes host files, and executes your cloud-init shell scripts. A production-ready VM should utilize these scripts to pull configuration files from private repositories, register the machine with configuration engines (like Ansible or Chef), mount persistent data disks, retrieve database secrets via managed identity tokens, and start your application processes automatically.
 
 ## Process Management
 
-Inside the VM, something must keep the application process alive. On Linux, that might be systemd. On Windows, it might be a Windows service or another supervisor. The process manager defines how the app starts on boot, restarts after failure, receives environment variables, and writes logs.
+Once the operating system boots and the VM Agent finishes executing configuration scripts, you must ensure that your application processes are supervised and restarted automatically on failure. Because there is no managed platform to monitor process states, you must configure a local process supervisor inside the guest OS.
 
-This is the layer managed app platforms hide from you. On a VM, it is yours again. A process that was started manually over SSH can vanish after a reboot. A systemd unit with the wrong working directory can fail even when the binary exists. A restart loop can look like "the server is up" from Azure's point of view while the app is constantly crashing.
+On modern Linux distributions, the standard tool is `systemd`. You write a systemd service unit file (typically located in `/etc/systemd/system/`) that defines the process environment, specifies the working directory, maps the user privileges, and sets restart rules.
 
-Use the process manager as evidence. A good incident check asks whether the VM is reachable, whether the service is enabled, whether it is active, which version is running, and what the last logs say.
+```ini
+[Unit]
+Description=DevPolaris Checkout API Service
+After=network.target
+
+[Service]
+Type=simple
+User=node
+WorkingDirectory=/var/www/checkout-api
+ExecStart=/usr/bin/node dist/index.js
+Restart=always
+RestartSec=5
+Environment=NODE_ENV=production
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Using a systemd service ensures that if your Node.js or Python application crashes due to an unhandled exception or memory exhaustion, the guest OS kernel detects the process termination and restarts the service automatically. It also integrates application logs directly with `journald`, providing a local logging system that can be queried using `journalctl`.
 
 ## Patching And Logs
 
-VMs need patching. The operating system, runtime, vendor packages, agents, and security configuration all age. Azure provides management tools, but the team still needs a policy: when patches apply, how reboots are handled, how compatibility is tested, and how emergency fixes roll out.
+Virtual Machines do not patch themselves. As operating system kernels, SSL/TLS libraries, runtime engines, and system daemons age, they accumulate security vulnerabilities. Your team must implement an automated patching policy using tools like Azure Update Manager to orchestrate monthly package updates and schedule guest OS reboots.
 
-Logs need the same ownership. Application logs written only to a local file are easy to lose and hard to search. Platform metrics can tell you CPU or disk pressure, but they cannot explain an application exception unless the app emits useful logs somewhere central.
+Logging requires the same active ownership. Application logs written only to local files inside the VM are highly volatile. If a disk controller fails or a developer deallocates the machine, those logs are lost. Furthermore, logging into active production servers via SSH to run `tail -f` or `grep` commands is slow and creates operational security risks.
 
-The practical baseline is simple: send application logs to a central place, collect VM metrics, monitor disk space, know the patch posture, and make restore or rebuild possible. A VM without this baseline is not simple. It is just quiet until something breaks.
+To secure your telemetry, install a centralized log collector agent (such as the Azure Monitor Agent or Fluent Bit) inside the guest OS. Configure the agent to tail your application log files and stream them in real-time to a central Log Analytics workspace. Set up host alerts to monitor CPU spikes, disk space exhaustion on persistent volumes, and memory utilization, ensuring you receive warnings before a filled OS disk crashes your databases.
 
 ## Putting It All Together
 
-The opener's legacy worker needed a vendor binary, a mounted workspace, systemd, and direct diagnostics. A VM can fit that shape because it gives the team server-level control.
+Virtual Machines provide low-level guest OS access at the cost of high operational overhead.
 
-The cost is visible now. The image defines the starting system. The size defines the capacity and cost envelope. The disks define the local storage story. The network interface defines reachability. Startup defines reproducibility. The process manager defines whether the app actually stays alive. Patching and logs define whether the team can operate the server over time.
+* **Hypervisor CPU and NUMA scheduling**: Virtual machines run on guest processors isolated by the Hyper-V hypervisor.
+* **Extended Page Tables (EPT)**: Hardware-nested page tables translate guest physical addresses directly to host RAM blocks, ensuring secure memory isolation.
+* **Network-Attached Managed Disks**: Managed disks translate block I/O requests into network packets, streaming them over dedicated networks to triple-replicated distributed storage fabrics.
+* **Temporary Disk Volatility**: Ephemeral local SSDs are physically attached to host server blades. Their data is lost permanently when a VM deallocates or migrates due to host hardware failure.
+* **VM Agent Provisioning**: The guest `waagent` fetches custom data scripts from link-local IMDS requests (`169.254.169.254`), orchestrating automated package installations via cloud-init.
 
-Use Virtual Machines when those controls are requirements. Do not use them merely because a VM is easy to picture. The easiest compute choice to understand is not always the easiest one to operate.
+By managing guest operating systems, process supervisors, and storage mounts systematically, you can run highly customized workloads that require absolute runtime control.
 
 ## What's Next
 
-Next we will look at AKS, where the unit of operation moves from one server to a Kubernetes cluster with nodes, pods, deployments, services, and ingress.
+In the next chapter, we will go up the compute abstraction ladder to explore Azure Kubernetes Service (AKS). We will analyze managed control plane architectures, contrast Kubenet with Azure CNI overlay networks, and inspect Entra ID Workload Identity cryptographic token exchanges.
 
 ---
 
 **References**
 
-- [Virtual machines in Azure](https://learn.microsoft.com/en-us/azure/virtual-machines/overview)
-- [Sizes for virtual machines in Azure](https://learn.microsoft.com/en-us/azure/virtual-machines/sizes/overview)
-- [Managed disks overview](https://learn.microsoft.com/en-us/azure/virtual-machines/managed-disks-overview)
-- [Create, change, or delete a network interface](https://learn.microsoft.com/en-us/azure/virtual-network/virtual-network-network-interface)
+- [Virtual Machines in Azure](https://learn.microsoft.com/en-us/azure/virtual-machines/overview) - Introduction to Azure's IaaS compute platform.
+- [Sizes for Virtual Machines](https://learn.microsoft.com/en-us/azure/virtual-machines/sizes/overview) - Technical reference for compute, memory, and storage VM SKU families.
+- [Managed Disks Overview](https://learn.microsoft.com/en-us/azure/virtual-machines/managed-disks-overview) - Architecture details of remote network-attached durable storage LUNs.
+- [Accelerated Networking SR-IOV](https://learn.microsoft.com/en-us/virtual-network/create-vm-accelerated-networking-cli) - Performance guide on Single Root I/O Virtualization.

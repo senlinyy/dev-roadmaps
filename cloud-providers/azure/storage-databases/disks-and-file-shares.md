@@ -1,120 +1,112 @@
 ---
 title: "Disks and File Shares"
-description: "Use Managed Disks and Azure Files when a workload needs VM-attached block storage or a mounted shared folder rather than object storage."
-overview: "Some storage needs to look like a disk or file path to an operating system. This article explains Managed Disks, OS disks, data disks, temporary storage, Azure Files, and when Blob Storage is still the simpler answer."
-tags: ["azure", "managed-disks", "azure-files", "virtual-machines", "storage"]
-order: 5
-id: article-cloud-providers-azure-storage-databases-managed-disks-azure-files
+description: "Configure managed cloud disk volumes and shared network file directories using Premium SSDs, host caching rules, and SMB/NFS protocols."
+overview: "Managed Disks and Azure Files provide VM-bound block and shared folder storage. This article contrasts Premium SSD v1/v2 IOPS bounds, VM host caching write safety, and network SMB/NFS mounts."
+tags: ["azure", "disks", "file-shares", "smb", "nfs"]
+order: 3
+id: article-cloud-providers-azure-storage-databases-disks-file-shares
 aliases:
-  - managed-disks-and-azure-files
-  - cloud-providers/azure/storage-databases/managed-disks-and-azure-files.md
+  - azure-managed-disks-and-file-shares
+  - cloud-providers/azure/storage-databases/azure-managed-disks-and-file-shares.md
 ---
 
 ## Table of Contents
 
-1. [The Problem](#the-problem)
+1. [What Is A Disk or File Share](#what-is-a-disk-or-file-share)
 2. [Managed Disks](#managed-disks)
-3. [OS Disks](#os-disks)
-4. [Data Disks](#data-disks)
-5. [Temporary Storage](#temporary-storage)
-6. [Azure Files](#azure-files)
-7. [Blob Storage Comparison](#blob-storage-comparison)
-8. [VM-Shaped Workloads](#vm-shaped-workloads)
-9. [Putting It All Together](#putting-it-all-together)
-10. [What's Next](#whats-next)
+3. [Disk Performance And IOPS](#disk-performance-and-iops)
+4. [Host Caching](#host-caching)
+5. [Azure Files And File Shares](#azure-files-and-file-shares)
+6. [SMB vs NFS Protocols](#smb-vs-nfs-protocols)
+7. [Putting It All Together](#putting-it-all-together)
+8. [What's Next](#whats-next)
 
-## The Problem
+## What Is A Disk or File Share
 
-Blob Storage stores durable objects. Azure SQL stores relational records. Cosmos DB stores item-shaped data. But some workloads still expect a disk or a mounted folder.
+Azure Managed Disks and Azure Files provide operating-system-attached cloud storage for virtual machine workloads. Managed Disks represent persistent, virtualized block storage volumes that are cabled directly to virtual machine hypervisors, allowing a single guest operating system to partition, format, and mount the drive. Azure Files represents a managed network file share that allows multiple distinct compute hosts to mount the same shared directory concurrently over local virtual networks. Both resources decouple machine-level storage from the physical server blade hardware, ensuring that local directories and operating system volumes survive physical blade failures.
 
-The orders system has a legacy import worker during migration:
+:::expand[Under the Hood: Host Caching Physics and SMB/NFS Protocol Locking]{kind="design"}
+Managed Disk block storage performance is governed by strict IOPS and throughput ceilings. Under high traffic, the virtual disk controller enforces limits using a Token Bucket algorithm for storage bursting, allowing temporary IOPS bursts that drain a performance credit pool. To accelerate disk reads and writes without saturating network bandwidth, configure VM Host Caching:
+* **Read-Only Caching**: Stores frequently read blocks directly in the physical host blade's RAM and local NVMe SSDs. If a read request hits the host cache, the hypervisor returns the data instantly, bypassing network round-trips to the storage cluster.
+* **Read-Write Caching**: Intercepts guest OS write block requests and writes them to local host NVMe cache buffers before flushing them asynchronously to remote storage. While highly performant, this write-back mechanism introduces a structural write-safety risk; if the host blade experiences sudden power loss before the NVMe cache buffer flushes, uncommitted blocks are lost, potentially corrupting guest filesystems.
 
-- It runs on a VM because it needs a vendor binary and custom OS packages.
-- It writes temporary files during a batch import.
-- It expects a mounted directory for shared templates.
-- It produces final CSV outputs that finance downloads later.
+Azure Files network shares handle concurrent mounts using protocol-level active file-locking tables. Under the SMB protocol, when a VM process opens a file for writing, the share engine registers an exclusive file-locking lease in its central metadata index. Any other compute node attempting to write to the same file receives a sharing violation error from the filesystem API. NFS, conversely, implements stateless network locking, which requires application-level lock coordination to prevent data corruption when multiple Linux containers write to the same network share.
+:::
 
-Those needs are easy to blur. A disk, a file share, and object storage can all hold bytes. They solve different problems. This article separates storage that belongs to VM-shaped work from storage that belongs to the application data model.
+If you run operating system volumes on AWS, Azure Managed Disks are the direct equivalent of AWS EBS (Elastic Block Store) volumes, and Azure Files is the equivalent of AWS EFS (Elastic File System). Contrast their configuration models: while AWS EBS relies on custom AWS task execution fabrics, Azure Managed Disks offer Premium SSD v2 options that allow you to scale IOPS and throughput independently of disk size, whereas AWS EBS GP3 provides similar independent scaling but cabled to different performance limits.
+
+Decouple your application data from your machine OS disks. If your application code is standard and does not require low-level guest filesystem API calls, Blob Storage is the simpler, faster, and more cost-effective object storage choice.
+
+| Storage Option | Access Protocol | Concurrency Bound | Systems Use Case |
+| --- | --- | --- | --- |
+| Managed Disk | Block I/O (FC / iSCSI) | Single VM mount only | Operating system boot drives, local databases, and raw scratch directories |
+| Azure Files Share | SMB (v2.1/v3.0) or NFS (v4.1) | Concurrent multi-node mounts | Shared legacy templates, central configurations, and migration directory bridges |
 
 ## Managed Disks
 
-Azure Managed Disks are block-level storage volumes managed by Azure and used with Azure Virtual Machines. Block storage means the operating system sees something disk-like: a volume it can format, mount, and use through normal disk operations.
+Azure Managed Disks are high-performance virtual block volumes designed to run guest operating systems and stateful databases. Azure manages disk provisioning, physical server rack placement, and storage cluster scaling, presenting each disk as a single, durable logical unit number (LUN) cabled to your Virtual Machine.
 
-Managed disks belong close to VMs. Every VM has an OS disk, and many VMs have data disks. Azure manages disk placement and durability at the platform level, but the guest operating system and application still decide what is written to the disk.
+Every Virtual Machine requires an OS disk containing the boot sector, system configuration files, and installed runtime libraries. A common architectural anti-pattern is writing application-generated logs, database tables, or customer uploads directly to the OS disk. If the OS disk fills up, the guest operating system kernel will panic, crashing your application and blocking remote SSH administration routes.
 
-If you know AWS, Managed Disks are closest to EBS volumes. The useful habit transfers: use disk storage when a machine needs a disk, not when an app merely needs durable files.
+To isolate system files from application files, attach dedicated Managed Data Disks to your VM. Data disks own their own IOPS limits and storage billing. If an application data disk runs out of space, the OS continues to run, allowing you to scale the disk volume dynamically using the Azure CLI without experiencing host downtime.
 
-## OS Disks
+## Disk Performance And IOPS
 
-The OS disk contains the operating system and boot files for a VM. Without it, the VM does not boot. It is part of the machine's identity and lifecycle.
+Selecting the correct Managed Disk tier is key to preventing I/O bottleneck delays during database batch operations:
+* **Premium SSD (v1)**: IOPS and throughput caps are hard-locked to the provisioned disk size (e.g., a 128 GB P10 disk is capped at 500 IOPS). Sizing a disk larger than needed is often required just to purchase higher performance.
+* **Premium SSD (v2)**: The modern standard. It allows you to provision disk size, IOPS, and throughput independently, optimizing costs for high-transaction, low-capacity databases.
+* **Ultra Disk**: Designed for extremely performance-critical databases. It supports sub-millisecond write latencies and allows you to adjust IOPS and throughput dynamically while the disk remains online.
 
-The OS disk should not become the app's general storage plan. If the app writes customer uploads, receipts, exports, or business records onto the OS disk, recovery and scaling become tied to one machine. Replacing the VM becomes dangerous because the machine now holds business data that should have lived elsewhere.
+If your database experiences read/write latency spikes, inspect the host-level Disk Queue Depth metric. A high queue depth indicates that the guest OS is submitting block requests faster than the disk's IOPS limit can process, causing requests to stack up in hypervisor buffers. Upgrading the disk to a Premium SSD v2 or scaling IOPS independently resolves this bottleneck.
 
-Keep the OS disk focused on the operating system and installed runtime. Put application records in databases, generated files in Blob Storage, and shared filesystem needs in a data disk or Azure Files when the workload truly needs that shape.
+## Host Caching
 
-## Data Disks
+Host Caching leverages the physical RAM and local NVMe solid-state drives cabled directly to the VM's host hypervisor blade to accelerate disk operations:
+* **None**: Bypasses all local cache buffers. Every read and write block request traverses the network to the Azure Storage scale units. This is the mandatory configuration for transaction log drives (such as SQL Server `.ldf` files) to guarantee that commits are immediately written to durable storage.
+* **Read-Only**: Caches read operations. This is highly effective for read-heavy database data paths (`.mdf` files) and static template directories.
+* **Read-Write**: Caches both reads and writes. This provides maximum throughput but must be used with extreme caution. It is only safe for applications that manage their own transactional flush rules or handle volatile temporary scratch data.
 
-A data disk is an additional managed disk attached to a VM. It can hold application workspace, imported files, local caches, or data that a VM-shaped workload needs close to the machine.
+## Azure Files And File Shares
 
-For the legacy import worker, a data disk might be a good place for batch scratch files while the job runs. It might also hold a local cache that can be rebuilt. The final export should still move to Blob Storage if finance needs to download it later and the file should survive VM replacement.
+Azure Files provides fully managed serverless file shares accessible over industry-standard SMB and NFS protocols. It removes the administrative burden of running dedicated Windows File Servers or Linux Samba VMs inside your virtual networks.
 
-Data disks need operational thinking. They have size and performance characteristics. They can be snapshotted. They can fill up. They can be detached or reattached in some recovery flows. None of that makes them a relational database or an object store.
+Azure Files shares support two primary performance tiers: Standard (hosted on shared hard-disk scale units, designed for general-purpose files) and Premium (hosted on dedicated SSD hardware, designed for high-throughput, low-latency concurrent mounts). 
 
-## Temporary Storage
+When mounting an Azure Files share to an App Service container or an AKS pod, the integration utilizes secure internal network mounts. If your containerized API needs to read shared document templates, the platform mounts the share as a local directory path, allowing your standard Node.js or Python code to read and write files using ordinary filesystem libraries.
 
-Some Azure VMs include temporary local storage. Temporary storage can be useful for scratch files, paging, or ephemeral work. It is not durable application storage.
+## SMB vs NFS Protocols
 
-This is one of the most important gotchas in the article. Temporary storage can be lost when the VM is moved, redeployed, resized, or otherwise affected by platform operations. If losing the file would hurt the business, it does not belong there.
+When provisioning an Azure Files share, you must select either the SMB or the NFS protocol based on your guest operating system and concurrency requirements:
+* **SMB Protocol**: The default standard. It supports Windows and Linux clients, integrates with Active Directory or Microsoft Entra Domain Services for advanced file-level access control lists (ACLs), and uses encrypted transport over TCP port `445`.
+* **NFS Protocol**: Designed exclusively for Linux-native environments. It requires a Premium SSD storage account, maps directly to Linux POSIX file permissions, and must be deployed inside a private virtual network subnet since it does not support public internet routing.
 
-Use temporary storage only for data the workload can recreate. A batch intermediate file may fit. A customer's receipt PDF does not.
-
-## Azure Files
-
-Azure Files provides managed file shares. A file share is a folder-like storage surface clients can mount and use through file protocols such as SMB and, in some configurations, NFS.
-
-Azure Files is useful when software expects a shared path. A legacy app may read templates from `\\share\templates`. Several VMs may need to see the same import folder. A migration may need a managed file share before the app can be rewritten to use object storage.
-
-The file share still needs design. Who mounts it? Over which network path? Which identity or key authorizes access? What performance tier fits the workload? How are snapshots or backups handled? A managed share removes file server maintenance, but it does not remove filesystem operations.
-
-## Blob Storage Comparison
-
-Blob Storage and Azure Files both store file-like bytes, but the access model is different.
-
-| Need | Better first fit | Why |
+| Metric | SMB Protocol | NFS Protocol |
 | --- | --- | --- |
-| Customer downloads a receipt PDF | Blob Storage | The app stores and serves an object by name. |
-| Finance downloads a generated CSV | Blob Storage | Durable object storage fits generated exports. |
-| Legacy VM reads templates from a mounted path | Azure Files | The software expects a filesystem path. |
-| VM needs an extra local working volume | Managed Disk | The workload needs block storage attached to one VM. |
-| App stores business records | Azure SQL Database | Records need relationships, queries, and transactions. |
+| OS Compatibility | Windows and Linux | Linux only |
+| Security Integration | Active Directory Domain Services ACLs | POSIX permissions mapped to UID/GID |
+| Transport Encryption | In-transit encryption over port 445 | Relies on private virtual network subnets |
+| Concurrency Model | Strict stateful lease file-locking | Stateless network locking |
 
-This table prevents a common mistake: choosing a mounted folder because it feels familiar. If the app does not need filesystem semantics, object storage is often simpler, more portable, and easier to use across compute runtimes.
-
-## VM-Shaped Workloads
-
-Disks and file shares are most natural around VM-shaped workloads. A VM needs an OS disk. It may need data disks. A legacy app may need a mounted file share. A migration may temporarily keep filesystem behavior while the team modernizes the application.
-
-That does not mean every VM should keep important data locally. The stronger cloud habit is to ask what survives VM replacement. A rebuild should not destroy customer data. If the VM is replaced and the app cannot recover because data lived only on one disk, the architecture is fragile.
-
-For the orders system, the legacy worker can use a data disk for scratch space and Azure Files for shared templates. Final exports move to Blob Storage. Business records stay in Azure SQL. Temporary files can be recreated.
+For modern cloud architectures, avoid using mounted file shares as a generic storage backplane. If your application code can be written to use the Azure Storage SDK, prefer Blob Storage for object operations. Object storage is more portable, scales infinitely, and avoids the file-locking performance bottlenecks of network file shares.
 
 ## Putting It All Together
 
-The opener had a legacy worker, batch scratch files, shared templates, and final exports. Managed Disks and Azure Files solve only the parts that need disk or folder behavior.
+Virtual machine and shared folder storage require matching performance limits to your physical access patterns.
 
-Managed Disks attach block storage to VMs. OS disks boot machines. Data disks support VM-local workload storage. Temporary storage is disposable. Azure Files gives managed shared folders. Blob Storage remains the better first home for generated files that should outlive compute and be downloaded later.
-
-Use disks and file shares when the workload truly needs operating-system storage. Do not let a familiar folder path become the default design for cloud application data.
+* **SCSI Block Translations**: Guest OS block reads and writes on Managed Disks are converted by hypervisor virtual controllers into network packets, streaming over dark fiber to triple-replicated remote LUN volumes.
+* **Host Caching write safety**: Host Caching leverages hypervisor host RAM and local NVMe drives. Read-Write caching provides maximum performance but introduces write-safety risks under host power failure.
+* **Premium SSD v2 Scaling**: Modern Premium SSD v2 volumes allow developers to scale disk capacity, IOPS, and throughput independently, avoiding unnecessary disk over-provisioning.
+* **Network SMB/NFS Shares**: Azure Files manages shared directory mounts over SMB and NFS protocols, utilizing stateful metadata lease tables to coordinate concurrent file-system write locks.
 
 ## What's Next
 
-Next we will look at Backups and Retention, because storage is only trustworthy when the team knows how to recover from deletion, corruption, and bad changes.
+In the next chapter, we will look at Azure SQL Database. We will explore managed relational database engines, contrast General Purpose and Business Critical storage structures, and inspect synchronous transaction log write architectures.
 
 ---
 
 **References**
 
-- [Azure Managed Disks overview](https://learn.microsoft.com/en-us/azure/virtual-machines/managed-disks-overview)
-- [What is Azure Files?](https://learn.microsoft.com/en-us/azure/storage/files/storage-files-introduction)
-- [Azure Files planning guide](https://learn.microsoft.com/en-us/azure/storage/files/storage-files-planning)
-- [Temporary disk on Azure VMs](https://learn.microsoft.com/en-us/azure/virtual-machines/managed-disks-overview#temporary-disk)
+- [Azure Managed Disks Overview](https://learn.microsoft.com/en-us/azure/virtual-machines/managed-disks-overview) - Official overview of virtual block storage.
+- [VM Host Caching Details](https://learn.microsoft.com/en-us/azure/virtual-machines/caching-and-performance) - Technical guide to read/write caching and write-safety.
+- [What is Azure Files?](https://learn.microsoft.com/en-us/azure/storage/files/storage-files-introduction) - Overview of managed SMB and NFS file shares.
+- [Azure Files SMB and NFS Planning](https://learn.microsoft.com/en-us/azure/storage/files/storage-files-planning) - Performance and network guide for network mounts.

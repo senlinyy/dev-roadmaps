@@ -172,6 +172,10 @@ Slab:             542720 kB
 
 `MemAvailable` was added to the kernel in 2014 specifically because so many people were misreading `free`. If your distro is from this decade, trust it.
 
+![A Linux memory pressure infographic showing physical RAM split into process RSS, page cache, kernel slab, and free pages, with available memory, swap thrashing, and the OOM killer boundary](/content-assets/articles/article-devops-foundation-linux-system-admin-cpu-memory/memory-pressure-map.png)
+
+*Memory pressure is about what the kernel can still satisfy: free pages and reusable cache feed available memory, swap traffic shows active pressure, and the OOM killer is the last resort.*
+
 ## Page Cache, Buffers, and Slab
 
 That 8.7 GB of "buff/cache" is the line on the dashboard that triggers the most false alarms. "Memory is 90% full!" goes the Slack ping. The truth is closer to: the kernel has been quietly hoarding scraps of useful data so the next request is faster. It is the same instinct as your browser keeping recently-visited pages in memory, or Node.js holding compiled JIT code around even after the function returned. Empty memory does no work; cached memory might.
@@ -360,6 +364,10 @@ Knowing the metrics is half the job. The other half is recognizing the patterns.
 **4. OOM-killed container.** Your Kubernetes pod restarts every few hours. `kubectl describe pod` shows `Last State: Terminated, Reason: OOMKilled, Exit Code: 137`. The host has 32 GB free; the pod's `resources.limits.memory` is 256 MiB and the app blew past it. The fix is either to raise the limit or to make the app respect it. On the JVM, that means setting `-Xmx` *below* the cgroup limit and (on modern JDKs) trusting `-XX:+UseContainerSupport`. On Node.js, that means `--max-old-space-size`. The kernel and the language runtime each have their own idea of "how much memory is available," and when they disagree, the kernel always wins.
 
 The thread tying all four together: the answer is in the metrics, and the metrics are in `/proc`. Every dashboard, every alerting tool, every fancy observability vendor is ultimately reading the same files you can read by hand. Learning to read them yourself means you are never blocked when the dashboard is down.
+
+![A six-tile CPU and Memory summary infographic covering CPU time buckets, load versus cores, available memory, page cache, swap traffic, and OOM clues](/content-assets/articles/article-devops-foundation-linux-system-admin-cpu-memory/cpu-memory-summary.png)
+
+*Use this as the CPU-and-memory checklist: separate CPU time buckets, compare load to core count, trust available memory, recognize cache, watch swap traffic, and confirm OOM from kernel evidence.*
 
 ---
 

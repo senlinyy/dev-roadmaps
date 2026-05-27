@@ -31,6 +31,10 @@ The replacement is `systemd`, which now ships as the default on essentially ever
 
 > PID 1 is not an honor. It is a job. systemd is the program that took that job seriously.
 
+![A systemd supervision infographic showing PID 1 connecting unit files, boot targets, readiness, restart policy, journal logs, and a cgroup-tracked service process](/content-assets/articles/article-devops-foundation-linux-system-admin-service-management/systemd-supervision-map.png)
+
+*A systemd service is not just a command: PID 1 reads the unit, starts it at the right target, waits for readiness, keeps its process group together, captures logs, and applies restart rules.*
+
 ## systemctl: Verbs You Will Type Every Day
 
 `systemctl` is the client you use to ask systemd to do things. The handful of verbs below cover ninety percent of operational work.
@@ -331,6 +335,10 @@ systemd is precise, which means its failures are precise too. Knowing the half-d
 **`enable` worked but the service is not running after reboot.** Check that the `[Install]` section actually has a `WantedBy=` (or `RequiredBy=`) line. Without it, `enable` has nothing to symlink and silently does nothing useful. `systemctl is-enabled myapp` will report `static`, which is the giveaway.
 
 The pattern across all of these is the same: ask systemd what it thinks is happening (`status`, `list-dependencies`, `journalctl -u`, `systemd-analyze`) before changing anything. The answer is almost always already on the screen.
+
+![A six-tile Service Management summary infographic covering PID 1 supervision, systemctl verbs, unit files, readiness types, journal logs, and restart limits](/content-assets/articles/article-devops-foundation-linux-system-admin-service-management/service-management-summary.png)
+
+*Use this as the service-management checklist: identify the supervisor, drive it with `systemctl`, read the unit file, check readiness semantics, query the journal, and understand restart limits before changing policy.*
 
 ---
 

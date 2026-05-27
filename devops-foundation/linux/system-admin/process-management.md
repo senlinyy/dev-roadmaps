@@ -31,6 +31,10 @@ Linux gives every process its own virtual address space, its own file descriptor
 
 The reason you need to care about process management as an operator is simple: when a system misbehaves, the symptom is almost always a process. Either the wrong process is running, the right process is using too much memory, a process refuses to exit, or a process exited when you expected it to stay up. Every diagnosis starts with "what is actually running, and what is it doing?"
 
+![A Linux process anatomy infographic showing a program on disk becoming a running process tracked by PID, memory, file descriptors, current directory, environment, CPU time, and the kernel record](/content-assets/articles/article-devops-foundation-linux-system-admin-process-management/process-anatomy.png)
+
+*A process is more than a program file: the kernel tracks its identity, memory, open handles, working directory, environment, and scheduled CPU time while it runs.*
+
 ## The Lifecycle: fork, exec, wait, exit
 
 When you type `ls` and hit enter in your shell, something has to actually start that `ls` program. The way Linux does this is genuinely weird the first time you see it, but it makes sense once you know the trick. Linux never creates a brand-new process from scratch. Instead, it always clones an existing one and lets the clone transform itself into something else.
@@ -346,6 +350,10 @@ $ dmesg -T | grep -i 'killed process'
 If a service mysteriously vanishes and its supervisor restarts it every few hours, OOM is the first thing to rule out. The fix is either to give the process more memory, lower its consumption, or set `oom_score_adj` to protect critical processes (the kernel will prefer to kill anything with a higher score). On systemd-managed services, `OOMScoreAdjust=` in the unit file is the supported way to set it.
 
 The thread connecting all of these failures is the same: every weird process behavior is observable somewhere: in `/proc`, in `dmesg`, in `ps` state codes, in the parent's logs. The job of process management is mostly knowing where to look.
+
+![A six-tile Process Management summary infographic covering process anatomy, fork then exec, the process tree, signals, job control, and proc inspection](/content-assets/articles/article-devops-foundation-linux-system-admin-process-management/process-management-summary.png)
+
+*Use this as the process-management checklist: know what the kernel records, how processes are born, who owns them, how signals affect them, how the shell manages jobs, and where `/proc` exposes the live truth.*
 
 ---
 

@@ -63,6 +63,10 @@ You could hardcode the path as `#!/bin/bash`, and many scripts do, but there is 
 
 From this point forward, every script we write will start with a shebang line.
 
+![A shell script execution infographic showing a script file, execute bit, kernel header reading, Bash interpreter, and commands running, with separate paths for running through Bash or directly](/content-assets/articles/article-devops-foundation-linux-linux-basics-shell-scripting/script-execution-path.png)
+
+*Running a script directly involves both filesystem permissions and interpreter routing: the execute bit allows the file to run, and the shebang tells the kernel which interpreter should read it.*
+
 ## Variables: Assigning, Reading, and Quoting
 
 Variables in Bash are untyped strings. If you are coming from Python or JavaScript where values have distinct types (numbers, booleans, arrays, objects), Bash treats everything as text. The number `42` and the string `"42"` are the same thing to Bash. You assign variables without any spaces around the equals sign, and you reference them with a dollar sign:
@@ -89,6 +93,10 @@ cat "$filename"   # RIGHT: Bash treats it as one argument
 ```
 
 Without quotes, Bash performs word splitting on the expanded value, turning `my report.txt` into two separate arguments. Bash also performs glob expansion, treating characters like `*` and `?` as filename wildcards and replacing them with matching files. With quotes, both behaviors are suppressed and the value stays as one argument. This is the single most common source of bugs in shell scripts. The rule is simple: always quote your variables.
+
+![A Bash quoting infographic contrasting an unquoted filename split into two arguments with a quoted filename preserved as one argument](/content-assets/articles/article-devops-foundation-linux-linux-basics-shell-scripting/quoted-variable-splitting.png)
+
+*Quoting keeps expanded values as one argument. Without quotes, Bash splits on whitespace and then applies filename expansion, which is why filenames with spaces break naive scripts.*
 
 Curly braces let you be explicit about where the variable name ends. This is useful when you need to append text directly to a variable's value:
 
@@ -242,14 +250,9 @@ The fix is a single line that you should add to every script, right after the sh
 set -euo pipefail
 ```
 
-```mermaid
-graph TD
-    START["Script begins\nexecution"] --> SETE["Exit on any error<br/>(set -e)"]
-    SETE --> SETU["Error on unset variables<br/>(set -u)"]
-    SETU --> PIPE["Pipeline fails if any stage fails<br/>(set -o pipefail)"]
-    PIPE --> SAFE["Script is\nfail-fast safe"]
-    SAFE --> LOGIC["Your actual\nscript logic"]
-```
+![A safe Bash infographic contrasting default Bash continuing after failure with set -euo pipefail catching command errors, unset variables, and broken pipelines](/content-assets/articles/article-devops-foundation-linux-linux-basics-shell-scripting/bash-safety-flags.png)
+
+*The safety flags turn hidden failure into immediate failure: stop on command errors, reject unset variables, and make a broken pipeline report failure.*
 
 Each flag addresses a different category of silent failure. The `-e` flag makes the script exit immediately when any command returns a non-zero exit code. The `cd` example above would stop at the failed `cd` instead of continuing to the destructive `rm`. The `-u` flag treats references to unset variables as errors. Without it, a typo like `$UDNEFINED_VAR` silently expands to an empty string, which can turn an innocent `rm -rf "$BUILD_DIR/"` into `rm -rf "/"` if `BUILD_DIR` was never set. The `-o pipefail` flag ensures that if any command in a pipeline fails, the whole pipeline's exit code reflects that failure. Without it, `bad_command | sort | uniq` reports success as long as `uniq` succeeds, even though the data feeding it was garbage.
 
@@ -435,6 +438,10 @@ main "$@"
 
 The `trap cleanup EXIT` line means the `cleanup` function runs no matter how the script ends. If it succeeds, cleanup runs. If it crashes halfway through, cleanup runs. If someone hits Ctrl+C, cleanup runs. This is how you ensure temporary files get deleted, lock files get removed, and resources get released. Without traps, a script that fails partway through will leave debris behind, and that debris can cause the next run to fail too.
 
+![A Bash trap cleanup lifecycle infographic showing success, error, and Ctrl C all flowing through trap cleanup EXIT before removing locks, deleting temp files, and releasing resources](/content-assets/articles/article-devops-foundation-linux-linux-basics-shell-scripting/trap-cleanup-lifecycle.png)
+
+*A trap gives the script a cleanup exit path. Success, failure, and interruption all converge on the same cleanup routine before the process ends.*
+
 The `main "$@"` pattern at the bottom is a convention worth adopting. It puts all your top-level logic inside a `main` function and passes all script arguments through with `"$@"` (a special variable that expands to all positional parameters, preserving their original quoting). This keeps the global scope clean, makes the script's entry point obvious, and allows you to define helper functions in any order.
 
 ## Safe File Iteration with Null Delimiters
@@ -472,6 +479,10 @@ The `-print0` flag tells `find` to separate results with null bytes instead of n
 The `< <(...)` syntax is process substitution. It runs the `find` command and feeds its output into the `while` loop as if it were a file. This is preferable to piping (`find ... | while read ...`) because a pipe runs the `while` loop in a subshell (a separate child shell process with its own copy of variables), which means any variables set inside the loop are lost when the loop ends.
 
 This pattern looks more complicated than the naive `for` loop, and it is. But the naive version is a latent bug: it works until someone creates a filename with a space in it, and then it fails in a way that is difficult to diagnose. The safe version works in all cases, every time.
+
+![A six-part shell script checklist infographic covering shebang, quoted variables, exit codes, fail-fast behavior, local functions, and cleanup traps](/content-assets/articles/article-devops-foundation-linux-linux-basics-shell-scripting/shell-scripting-summary.png)
+
+*Use this as the short shell-scripting checklist: start with a shebang, quote variables, make decisions from exit codes, enable fail-fast behavior, keep function state local, and register cleanup for every exit path.*
 
 ---
 

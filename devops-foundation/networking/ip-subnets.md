@@ -66,6 +66,10 @@ Here is the reference table you will reach for constantly:
 
 A quick trick for the math: take 32, subtract the prefix length, and raise 2 to that power. So `/20` gives you `2^(32-20) = 2^12 = 4,096` total addresses. Subtract 2 for the network and broadcast addresses, and you get 4,094 usable hosts. AWS actually reserves 5 addresses per subnet (network, broadcast, plus three for the VPC router, DNS, and a future-use address), so the real usable count in an AWS subnet is `2^(32 - prefix) - 5`.
 
+![A CIDR boundary infographic showing IPv4 octets split into network and host portions for slash sixteen, slash twenty, and slash twenty-four prefixes](/content-assets/articles/article-devops-foundation-networking-ip-subnets/cidr-boundary.png)
+
+*A larger slash number moves the boundary to the right, locks more of the address as the network prefix, and leaves a smaller host pool behind it.*
+
 You can verify subnet boundaries with `ipcalc` if it is installed on your system:
 
 ```bash
@@ -167,6 +171,10 @@ Remaining: 49152
 
 That is 75% of the address space still available for future needs.
 
+![A VPC subnet planning infographic showing a slash sixteen VPC carved into public and private slash twenty subnets across two availability zones, with unallocated room for growth](/content-assets/articles/article-devops-foundation-networking-ip-subnets/vpc-subnet-plan.png)
+
+*A good VPC plan carves adjacent, non-overlapping subnet blocks for current tiers while leaving visible address space for future availability zones, data services, and management networks.*
+
 Two practical constraints shape how small or large a subnet you should pick. AWS rejects anything smaller than `/28` (16 addresses, 11 usable after the 5 reserved), so a `/29` or `/30` you might draw on paper for a tiny tier is illegal in a VPC. At the other end, route tables on routers and cloud gateways have entry limits (AWS VPC route tables default to 50 routes), so carving a single `/16` into hundreds of tiny `/24`s is usually worse than carving it into a handful of `/20`s and letting hosts inside each subnet find each other locally. When you do hit a route-table limit, the answer is **route summarization** (also called supernetting): advertising one short prefix that covers many adjacent subnets, so the upstream router needs one entry instead of many. This is why per-region `/16`s aggregate cleanly into a `/12` at the inter-region boundary, and why allocating subnets in adjacent, power-of-two-aligned blocks pays off later.
 
 ## IPv6: What Changes
@@ -232,6 +240,10 @@ OVERLAP: 10.0.0.0/20 and 10.0.0.0/24
 ```
 
 Python's `ipaddress` module catches overlaps instantly. Run a script like this as part of your infrastructure-as-code review process, and you will never deploy conflicting subnets.
+
+![A six-part summary infographic for IP addressing and subnets covering IPv4 parts, CIDR prefixes, private ranges, overlap avoidance, reserved addresses, and IPv6 slash sixty-four subnets](/content-assets/articles/article-devops-foundation-networking-ip-subnets/ip-subnets-summary.png)
+
+*Use this as the short subnetting checklist: split addresses into network and host portions, choose CIDR prefixes deliberately, stay inside private ranges for internal networks, avoid overlap before peering, account for reserved addresses, and treat IPv6 `/64` subnets as the normal unit of design.*
 
 ---
 

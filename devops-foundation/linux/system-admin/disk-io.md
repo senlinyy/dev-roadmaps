@@ -143,6 +143,10 @@ The first command shows blocks (shelf space); the second shows inodes (catalog c
 
 > A filesystem can run out of space in two ways. `df -h` only checks one of them. Always check `df -i` too.
 
+![A filesystem limits infographic showing data blocks checked by df -h and inode file slots checked by df -i, with few large files filling bytes and many tiny files filling inodes](/content-assets/articles/article-devops-foundation-linux-system-admin-disk-io/filesystem-limits.png)
+
+*Disk-full errors can come from two separate limits: bytes in data blocks or file slots in the inode table. Check both before deleting the wrong thing.*
+
 `df` tells you a filesystem is full. `du` tells you what is filling it. Run it from the top of the offending mount and let `sort -rh` rank the offenders:
 
 ```bash
@@ -358,6 +362,10 @@ Some storage failures present themselves as application bugs because the tools y
 **NFS mount hangs the system.** A mounted NFS share whose server has gone away will, by default, block any process touching it forever in uninterruptible sleep (state `D` in `ps`). Even `df` will hang if it tries to stat the mount. Mount network filesystems with `soft,timeo=30,retrans=3` (or hard with `intr` on older kernels) so that I/O fails with an error rather than hanging the box. This single option turns a system-wide outage into a per-application error.
 
 The thread connecting all of these is the same: the storage stack is layered, and "disk full" or "disk slow" is rarely a single thing. Confirm which layer is unhappy, confirm whether you have run out of blocks or inodes or IOPS or file descriptors, and the fix usually presents itself.
+
+![A six-tile Disk and I/O summary infographic covering block devices, filesystems, mount points, blocks and inodes, iostat latency, and resize layers](/content-assets/articles/article-devops-foundation-linux-system-admin-disk-io/disk-io-summary.png)
+
+*Use this as the disk-and-I/O checklist: identify the device, understand the filesystem, verify the mount, check both blocks and inodes, read latency with `iostat`, and resize every layer in order.*
 
 ---
 

@@ -34,19 +34,11 @@ Here is what a reverse proxy gives you in concrete terms:
 - **HTTP/2 support**: Your app speaks HTTP/1.1 to Nginx locally; Nginx speaks HTTP/2 to clients over the internet.
 - **Rate limiting and request buffering**: Nginx can reject abusive traffic before it reaches your app.
 
-```mermaid
-flowchart TD
-    Client["Browser<br/>(client)"]
-    Nginx["Reverse proxy<br/>(Nginx)"]
-    App1["App server<br/>(:3000)"]
-    Static["Static files<br/>(/var/www)"]
+![A reverse proxy front-door infographic showing client HTTPS traffic entering Nginx, where TLS terminates, static files are served directly, and dynamic requests are forwarded to an app server on localhost](/content-assets/articles/article-devops-foundation-networking-nginx-reverse-proxy/reverse-proxy-front-door.png)
 
-    Client -->|"HTTPS :443"| Nginx
-    Nginx -->|"HTTP :3000"| App1
-    Nginx -->|"Direct serve"| Static
-```
+*Nginx becomes the public front door: clients speak HTTPS to it, static files can stop there, and dynamic requests continue inward to your app over a private local hop.*
 
-The diagram above shows the typical production setup. Clients connect to Nginx over HTTPS on port 443. Nginx either serves static files directly or forwards dynamic requests to your app server over plain HTTP on localhost. Your app never touches TLS, never serves a single CSS file, and never worries about connection limits. Now let's get Nginx installed and see what you are working with.
+The infographic above shows the typical production setup. Clients connect to Nginx over HTTPS on port 443. Nginx either serves static files directly or forwards dynamic requests to your app server over plain HTTP on localhost. Your app never touches TLS, never serves a single CSS file, and never worries about connection limits. Now let's get Nginx installed and see what you are working with.
 
 ## Installing and Starting Nginx
 
@@ -182,6 +174,10 @@ server {
 
 In this example, a request to `/health` hits the exact match and returns "OK" immediately. A request to `/api/users` matches the `/api/` prefix and gets forwarded to your app server. Everything else falls through to the root location and gets served as a static file. This cascading logic is the core of Nginx configuration, and once you understand it, every config file you encounter will make sense.
 
+![An Nginx configuration nesting infographic showing main, events, http, server, and location scopes, with exact, prefix, and fallback route matching](/content-assets/articles/article-devops-foundation-networking-nginx-reverse-proxy/nginx-config-nesting.png)
+
+*Nginx config is scoped from broad runtime settings down to individual path matches. A request lands in the matching `server` block, then the best `location` block decides what happens next.*
+
 ## Serving Static Files
 
 The simplest thing Nginx does is serve files from a directory. No proxying, no application logic, just mapping URL paths to filesystem paths and streaming bytes to the client. This is what happens when you deploy a React, Next.js, or Vue build output: you run `npm run build`, get a folder full of HTML, CSS, and JavaScript files, and point Nginx at it.
@@ -284,6 +280,10 @@ location /api/ {
 ```
 
 If your backend's router has routes registered as `/api/users`, use the no-slash form. If your backend only knows about `/users` and you are using Nginx to add the `/api` prefix from the outside, use the trailing-slash form. Mixing them up is the source of an enormous amount of "why does my route 404 only behind Nginx?" debugging time.
+
+![A proxy path forwarding infographic contrasting no trailing slash keeping the outside path slash api slash users with trailing slash removing the slash api prefix and forwarding slash users](/content-assets/articles/article-devops-foundation-networking-nginx-reverse-proxy/proxy-pass-trailing-slash.png)
+
+*The trailing slash changes path rewriting. Without it, the original URI stays intact; with it, the matching location prefix is replaced before the request reaches your app.*
 
 A common pattern splits static assets and API routes into different `location` blocks:
 
@@ -455,20 +455,9 @@ upstream app_servers {
 
 This configuration says: if a backend fails 3 times within 30 seconds, stop sending it traffic for 30 seconds, then try again. If the backend has recovered, it re-enters the rotation. If not, the timer resets. This keeps one crashed backend from dragging down your entire service.
 
-```mermaid
-flowchart TD
-    Client["Client"]
-    Nginx["Load balancer<br/>(Nginx)"]
-    A["App :3001"]
-    B["App :3002"]
-    C["App :3003"]
+![An Nginx load-balancing infographic showing requests distributed to three app backends, with one backend marked down after failures and later requests skipping it](/content-assets/articles/article-devops-foundation-networking-nginx-reverse-proxy/nginx-load-balancing-health.png)
 
-    Client -->|"HTTPS"| Nginx
-    Nginx -->|"1st request"| A
-    Nginx -->|"2nd request"| B
-    Nginx -->|"3rd request"| C
-    Nginx -.->|"Marked down\nafter 3 failures"| C
-```
+*Load balancing is request routing plus health awareness: Nginx spreads traffic across backends and stops sending requests to a backend that keeps failing.*
 
 One important caveat: if your application uses sessions (login state stored in server memory), round-robin will break things. User A logs in and hits server `:3001`, where the session is stored. Their next request goes to `:3002`, which has no session, so they appear logged out. The fix is to store sessions externally (Redis, a database) rather than in server memory, so any backend can serve any request. This is called making your application "stateless," and it is a prerequisite for any load-balanced deployment.
 
@@ -606,6 +595,10 @@ $ sudo ss -tlnp | grep -E ':80|:443|:3000'
 ```
 
 These five commands will diagnose the vast majority of Nginx problems. The error log in particular is your best friend: Nginx writes clear, specific error messages that tell you exactly what went wrong and where.
+
+![A six-part summary infographic for web servers and reverse proxies covering front door routing, config scopes, static files, proxy headers, TLS termination, and load balancing](/content-assets/articles/article-devops-foundation-networking-nginx-reverse-proxy/nginx-reverse-proxy-summary.png)
+
+*Use this as the short Nginx checklist: let the proxy be the front door, understand config scopes, serve static files directly, preserve proxy headers, terminate TLS at the edge, and make load-balanced apps stateless.*
 
 ---
 

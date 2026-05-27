@@ -18,183 +18,162 @@ aliases:
 
 ## Table of Contents
 
-1. [The Problem](#the-problem)
-2. [What Is Compute](#what-is-compute)
-3. [Workload Shape](#workload-shape)
-4. [App Service](#app-service)
-5. [Container Apps](#container-apps)
-6. [Functions](#functions)
-7. [Virtual Machines](#virtual-machines)
-8. [AKS](#aks)
-9. [Sample Compute Map](#sample-compute-map)
-10. [Putting It All Together](#putting-it-all-together)
-11. [What's Next](#whats-next)
-
-## The Problem
-
-A team has a checkout backend running on a laptop. It starts with `npm run dev`, talks to a database, sends receipts, and exposes one HTTP API to the frontend. The code works. The harder question is where it should run after it leaves the laptop.
-
-The first Azure compute choice looks simple until the workload splits:
-
-- The public API receives requests all day and needs predictable logs, health checks, secrets, and scaling.
-- The receipt sender should run only when a queue message arrives.
-- A monthly export job needs more CPU for a short window, then should stop costing money.
-- One legacy worker needs a custom Linux package and a process manager the team already understands.
-- A platform team asks whether the service should join a Kubernetes cluster with shared ingress, policies, and deployment tooling.
-
-All of these are "compute" problems, but they do not want the same hosting shape. Compute is the operating contract around your code: who starts it, where configuration lives, how traffic reaches it, what wakes it up, how it scales, how it logs, and who owns the runtime when it misbehaves.
-
-This article builds the first mental model for Azure compute. The goal is to look at a workload and say, "this is a web app, this is a containerized service, this is event work, this is a server, and this is Kubernetes-shaped platform work."
+1. [What Is Compute](#what-is-compute)
+2. [Workload Shape](#workload-shape)
+3. [App Service](#app-service)
+4. [Container Apps](#container-apps)
+5. [Functions](#functions)
+6. [Virtual Machines](#virtual-machines)
+7. [AKS](#aks)
+8. [Sample Compute Map](#sample-compute-map)
+9. [Putting It All Together](#putting-it-all-together)
+10. [What's Next](#whats-next)
 
 ## What Is Compute
 
-Compute is the Azure layer that turns code or an image into a running process. A deployment pipeline can build an artifact, and a database can store state, but neither one runs the application loop. Compute is the place where the process starts, receives work, uses memory and CPU, emits logs, and either stays alive or exits.
+Azure compute is the virtualized platform layer that executes application logic by allocating dynamic processor and memory resources to running guest processes. Rather than choosing a compute service based on product brand names, you should evaluate the runtime contract your workload requires. Every hosting platform in Azure solves a core set of operational needs, but they distribute the ownership boundary differently between your team and Azure. Choosing a compute service means deciding what you deploy, what starts the process, how long it lives, and who manages the runtime environment.
 
-That sounds obvious, but it prevents a common beginner mistake. Many teams choose compute by product name. They ask whether App Service, Container Apps, Functions, Virtual Machines, or AKS is "best." A better question is what the workload needs Azure to do.
+:::expand[Under the Hood: Bare-Metal Virtualization and the Fabric Controller]{kind="design"}
+At the base of every cloud deployment sits a physical datacenter filled with server blades. Azure deploys a Type 1 bare-metal hypervisor (a customized version of Hyper-V) directly on the host blades, creating a secure virtualization layer that partitions CPU and memory. 
 
-Every compute service answers the same small set of runtime questions:
+To orchestrate millions of these hypervisor blades, Azure relies on a distributed control plane called the Fabric Controller. The controller schedules VM provisioning, monitors hardware health, and manages software-defined switches cabled to host interfaces. When your code runs, the virtual CPUs (vCPUs) are scheduled by the hypervisor onto physical threads. Guest memory is isolated directly in hardware using Second Level Address Translation (SLAT) or Extended Page Tables (EPT), which translate guest memory address tables to physical host RAM blocks without CPU translation overhead.
+:::
 
-| Question | Why it matters |
+If you are transitioning from AWS, orienting your mental model is straightforward. Azure Virtual Machines map closely to Amazon EC2, Azure Functions maps directly to AWS Lambda, and Azure Kubernetes Service (AKS) matches the role of Amazon EKS. Azure Container Apps (ACA) provides serverless container execution similar to Amazon ECS on AWS Fargate. 
+
+Do not assume that network defaults, IAM permissions, or scaling pipelines translate directly between providers. Treat each service as an independent platform with its own API limits, storage dependencies, and networking rules.
+
+| Operational Question | Why It Matters |
 | --- | --- |
-| What do you deploy? | Source code, a zip, a container image, a VM image, or Kubernetes manifests each imply a different operating model. |
-| What starts the work? | HTTP traffic, a queue message, a timer, a system service, or the Kubernetes scheduler changes the right host. |
-| How long does it live? | Always-on APIs, short jobs, and event handlers scale and fail differently. |
-| What does Azure manage? | The less server surface you own, the less patching and orchestration work you inherit. |
-| What must the team still own? | App settings, secrets, identity, health, logs, retries, and release safety never disappear. They move to different places. |
-
-If you know AWS, the first orientation is useful but imperfect. Azure Virtual Machines feel closest to EC2. Functions are closest to Lambda. AKS is Azure's managed Kubernetes service, so it belongs in the same mental bucket as EKS. Container Apps often solves the learner problem that ECS on Fargate solves: run containers without making a team operate raw servers first. App Service has no single perfect AWS twin. Treat it as Azure's managed web application platform rather than forcing a one-to-one translation.
-
-The careful part is that the responsibility lines are provider-specific. Do not assume the AWS deployment flow, identity model, networking defaults, or scaling rules carry over. Use the comparison to recognize the workload shape, then read the Azure service on its own terms.
+| What do you deploy? | Source code files, ZIP archives, container images, or VM images dictate your deployment tooling and local pipeline steps. |
+| What starts the process? | An incoming HTTP request, a message arriving on a queue, a timer tick, or the Kubernetes control plane scheduler determines the correct trigger model. |
+| How long does the process live? | Steady-state web APIs, short-lived batch jobs, and ephemeral event handlers scale and fail differently under load. |
+| What does Azure manage? | The more platform details Azure owns (like OS patches and runtime upgrades), the less administrative overhead your team inherits. |
+| What must the team still own? | Application configuration, secrets, identities, logging, error handling, and release verification always remain the team's responsibility. |
 
 ## Workload Shape
 
-Start with the shape of the work. A checkout system might contain several pieces, and each piece can deserve a different host.
+The design of a compute platform begins by matching your application architecture to the workload's operational shape. A single large system often contains multiple distinct components, and each component may deserve a different compute host.
 
-The public API is request-shaped. It listens for HTTP traffic, returns responses, and should usually have a small number of warm instances ready. A managed web runtime such as App Service can be a good fit when the team wants to bring code and let Azure own much of the web host. Container Apps can be a good fit when the team already ships a container image and wants container-native scaling and revisions without running a Kubernetes cluster.
+A request-shaped component, like a public HTTP API, must listen continuously for web traffic. It needs to maintain warm instances to prevent startup latency, register with load balancers, expose a public network entry point, and scale up dynamically when concurrent requests spike. A managed web platform such as App Service is highly effective when you want to deploy raw application code and let the platform manage the underlying IIS or Kestrel web server. If you package your application as a container image and want container-native scaling without managing Kubernetes YAML, Container Apps provides a container-first request-driven runtime.
 
-The receipt sender is event-shaped. It does not need to listen on a public port all day. It needs to wake up when a queue message arrives, process one unit of work, and leave a clear retry trail when something fails. Azure Functions fits this kind of work because the trigger is part of the runtime contract.
+An event-shaped component, such as a background process that generates PDF receipts, does not need a public port or a warm server running 24 hours a day. It needs to wake up when a message lands in a queue, process that single unit of work, write to a database, and shut down. If the queue is empty, the compute should scale to zero to prevent idle billing. Azure Functions fits this event-driven pattern because the runtime triggers are natively integrated into the platform's scaling engine.
 
-The legacy worker is machine-shaped. If the team needs SSH, a specific operating system layout, custom agents, long-lived local processes, or direct package installation, a virtual machine may be honest. It gives the team a familiar server boundary with more runtime ownership than the managed application platforms.
+A machine-shaped component, like a legacy daemon or a database system that requires direct access to custom kernel modules, local disks, and custom OS agents, requires deep administrative access. For these workloads, a Virtual Machine is the correct tool. It gives you a familiar operating system boundary with full root or administrator privileges, allowing you to control local processes, custom scripts, and systemd daemons.
 
-The platform cluster is orchestration-shaped. If many services already use Kubernetes concepts such as pods, deployments, services, ingress controllers, Helm charts, admission policies, and node pools, AKS can give Azure-managed Kubernetes control plane support while the team keeps Kubernetes as the operating layer.
+A platform-shaped component, where many containerized microservices share ingress paths, network policies, deployment charts, and common observability tools, represents orchestration-shaped work. When your organization chooses Kubernetes as its unified platform layer, Azure Kubernetes Service (AKS) provides a managed Kubernetes control plane while your team retains full control over pods, namespaces, deployments, and cluster nodes.
 
 ```mermaid
-flowchart TB
-    Work["Workload"] --> Web["Request-shaped API"]
-    Work --> Event["Event-shaped job"]
-    Work --> Machine["Machine-shaped server"]
-    Work --> Kube["Kubernetes-shaped platform"]
-    Web --> AS["App Service"]
-    Web --> ACA["Container Apps"]
-    Event --> Func["Functions"]
-    Machine --> VM["Virtual Machines"]
-    Kube --> AKS["AKS"]
+flowchart TD
+    Work["Workload"] --> Web["Request-Shaped API"]
+    Work --> Event["Event-Shaped Job"]
+    Work --> Machine["Machine-Shaped Server"]
+    Work --> Kube["Platform-Shaped Cluster"]
 ```
 
-This split is deliberately plain. You can add nuance later, but the first decision should not require a service catalog. Ask what wakes the code, what artifact you deploy, and what your team wants to operate.
+```mermaid
+flowchart LR
+    Web["Request-Shaped API"] --> AS["App Service"]
+    Web --> ACA["Container Apps"]
+    Event["Event-Shaped Job"] --> Func["Functions"]
+    Machine["Machine-Shaped Server"] --> VM["Virtual Machines"]
+    Kube["Platform-Shaped Cluster"] --> AKS["AKS"]
+```
+
+```mermaid
+flowchart TD
+    subgraph Services["Azure Compute Services"]
+        AS["App Service"]
+        ACA["Container Apps"]
+        Func["Functions"]
+        VM["Virtual Machines"]
+        AKS["AKS"]
+    end
+    subgraph Host["Physical Infrastructure Tier"]
+        Hypervisor["Bare-Metal Hypervisor Host Blade"]
+    end
+    Services --> Host
+```
+
+This classification separates workloads by their runtime trigger and deployment artifact. Start by identifying the primary way your code receives work, and choose the smallest managed platform that supports that trigger.
 
 ## App Service
 
-App Service is Azure's managed home for web apps, REST APIs, and mobile backends. You bring application code or a custom container. Azure gives you a web hosting platform that handles much of the underlying server work.
+App Service is Azure's fully managed platform for hosting web applications, REST APIs, and mobile backends. You deploy your raw application code (such as Node.js, Python, Java, or .NET) or a custom container image, and Azure manages the underlying web server, routing, security updates, and operating system updates.
 
-The useful beginner model has two nouns. The App Service plan is the pool of compute capacity and pricing tier. The web app is the application resource that runs on that plan. If three web apps share one plan, they share that plan's capacity. Scaling the plan changes the capacity available to the apps that use it.
+The core of the App Service mental model is the division between two resources: the App Service Plan and the Web App. The App Service Plan represents the physical virtual machine capacity, pricing tier, regional location, and scale limits of your host. The Web App represents the logical application workspace, including environmental settings, connection strings, custom domains, deployment history, and system-assigned managed identities. 
 
-This distinction matters during incidents. A slow web app may have bad code, missing settings, or a failing dependency. It may also be sharing a plan with another app that consumes the workers. "The app is slow" and "the plan is saturated" lead to different fixes.
-
-App Service is often a good first Azure host when the workload is a normal HTTP application and the team does not need a container-first or Kubernetes-first operating model. It gives the team app settings, managed identity support, deployment slots, custom domains, TLS, logs, health checks, and scale controls in a web-platform shape.
+If you host five distinct Web Apps on a single App Service Plan, all five applications share the memory, CPU cycles, and network bandwidth of that plan's virtual machines. During a performance incident, you must separate application-specific issues (like memory leaks in one app's code) from plan-level constraints (like CPU exhaustion caused by another app sharing the same plan). Sharing a plan is highly cost-effective for development and testing environments, but production workloads should run on dedicated plans to ensure resource isolation.
 
 ## Container Apps
 
-Container Apps is for running containerized applications while Azure hides much of the server and orchestration surface. You bring a container image. Azure runs it inside a Container Apps environment, gives the app ingress if you need a network entry point, manages revisions when you deploy new versions, and can scale based on HTTP traffic, events, CPU, memory, or KEDA-supported signals.
+Container Apps is a fully managed serverless platform for deploying and running containerized applications. You package your application code, dependencies, and runtime environment into a standard container image, and Azure manages the underlying Kubernetes infrastructure, container runtime scheduling, and networking details.
 
-The key word is container. Container Apps does not remove the need to build a good image. The image still needs the right startup command, target port, dependencies, and graceful shutdown behavior. If the image crashes locally, it will not become healthy just because Azure hosts it.
+The Container Apps architecture introduces three primary concepts: the Environment, the Container App, and the Revision. The Environment serves as a secure network and logging boundary, mapping to a dedicated virtual network subnet. Multiple related container apps (such as a front-end gateway, a processing API, and a background queue worker) run inside the same Environment, allowing them to communicate securely over a shared private network. The Container App represents the individual deployable service, defining the container image tag, exposed ports, ingress rules, and scaling bounds. A Revision is a read-only snapshot of a container app's template; when you update configuration settings or deploy a new image tag, Container Apps creates a new Revision and shifts traffic weight to it according to your release rules.
 
-Container Apps is a strong fit for a team that already builds images but does not want Kubernetes to be the first production lesson. It works well for APIs, background workers, microservices, and event-driven container jobs. The cost shape can also be attractive for workloads that scale down when idle, but there is a gotcha: not every scaling signal can go to zero. For example, CPU or memory based scaling needs a running instance to measure.
-
-If AWS is in your head, think "container service without managing the cluster first." Then stop and learn Azure's own nouns: environment, container app, revision, ingress, secret, identity, and scale rule.
+Container Apps is designed for teams that want the benefits of container packaging, dynamic scaling, and microservice structures without the operational complexity of managing Kubernetes manifests, ingress controllers, or node pool updates. It supports advanced features like scaling to zero when idle and event-driven scaling using KEDA (Kubernetes Event-driven Autoscaling).
 
 ## Functions
 
-Azure Functions is for code that starts because something happened. A request arrived. A queue message appeared. A blob changed. A timer fired. The trigger is not an afterthought; it is the front door of the runtime.
+Azure Functions is an event-driven serverless compute service that executes specialized handlers in response to platform events. Instead of keeping an HTTP listener active indefinitely, a function app remains idle until a configured trigger (such as a queue message, a database change, a blob upload, or a timer tick) invokes your code.
 
-That makes Functions a bad default for every backend and a very good fit for small event-shaped jobs. A receipt sender can be a function because each message is a unit of work. A nightly cleanup can be a timer-triggered function. A file processor can react when storage receives a new object.
+Every function app runs within the context of a dedicated hosting plan, which dictates the scaling behavior, virtual network integration, and billing structure of the runtime. The modern standard is Flex Consumption, which provides fast elastic scaling based on event concurrency, virtual network injection, and zero-idle cost. If your workload consists of rapid, independent tasks that can tolerate cold starts, the consumption plan scales out worker instances dynamically to process the backlog, charging you only for the exact execution duration of each invocation.
 
-The non-obvious part is that Functions still has a host. A function app groups functions together, carries settings, connects to Application Insights, and runs on a hosting plan. That plan affects cold starts, scaling, network integration, maximum duration, and cost. Serverless does not mean "no runtime details." It means Azure manages more of the runtime and asks you to design around triggers, retries, idempotency, timeouts, and dependencies.
-
-Functions are closest to AWS Lambda in the broad mental model, but Azure's triggers and bindings are more visible in the programming model. Use that strength for event work. Avoid turning a steady web service into a pile of functions just because the word "serverless" sounds smaller.
+Functions are highly effective for background processing, file transformations, scheduled tasks, and webhook handlers. However, they are a poor default for traditional, steady-state web applications. Forcing a monolithic API into dozens of small event-triggered functions can complicate local debugging, lead to database connection exhaustion, increase cold-start latency, and make log tracking difficult. Use Functions when the event trigger is the natural entryway for the workload.
 
 ## Virtual Machines
 
-Virtual Machines are the most familiar Azure compute shape: a cloud server with an operating system, disks, network interfaces, and processes you manage. You do not buy the physical hardware, but you still own much of the server's life.
+Virtual Machines represent the traditional Infrastructure as a Service (IaaS) model, where Azure provides virtualized hardware and your team manages the entire guest operating system, runtime installation, process supervision, security patches, and application deployments.
 
-That ownership is the point. A VM is useful when the workload needs control that managed app platforms do not expose. You might need a custom kernel module, a commercial agent, a specific daemon, a migration bridge, or a legacy process that assumes a traditional host. A VM can also be useful for learning because it makes the server boundary visible.
+Choosing a Virtual Machine means taking complete ownership of the server's lifecycle. You select the base operating system image, the virtual machine size (which determines the vCPU cores, RAM capacity, and disk throughput), the storage attachments (managed OS and data disks), and the network subnet placement. Inside the guest OS, you must install the runtime, configure process managers like systemd or Windows services to keep the app active on boot, write cron jobs for scheduled tasks, and configure log agents to forward files to a central workspace.
 
-The cost of that control is chores. Someone must patch the OS, configure the firewall and network security group, manage disks, rotate access, supervise the process, collect logs, back up state, and decide how the machine recovers when it fails. Azure gives you the virtualized server and supporting resources. It does not turn the operating system into a managed application platform by itself.
-
-This is where "use a VM because it is simple" can mislead. A VM is simple to understand, but not always simple to operate. It is the right choice when direct server control is a requirement, not when the team has not yet described the workload.
+Virtual Machines are the correct hosting choice when your workload requires strict control over the operating system, custom kernel extensions, third-party monitoring agents, direct disk volume mapping, or legacy applications that assume a traditional physical server environment. If your app is a standard web service, managed platforms like App Service or Container Apps remove the administrative burden of patching guest operating systems and managing disk volume lifecycles.
 
 ## AKS
 
-Azure Kubernetes Service, or AKS, is Azure's managed Kubernetes service. Azure manages much of the Kubernetes control plane for you. Your team still operates Kubernetes as the application platform: node pools, pods, deployments, services, ingress, upgrades, policies, identities, logs, and the application manifests that describe desired state.
+Azure Kubernetes Service (AKS) is a managed container orchestration platform that hosts Kubernetes clusters in Azure. Azure manages and maintains the Kubernetes control plane (including the API server, database store, scheduler, and controller managers) at no cost, while your team operates and manages the worker node virtual machine pools where your containers run.
 
-AKS is a different operating layer from Container Apps. Container Apps lets a team run containers through Azure-native container app resources. AKS gives a team Kubernetes primitives and expects the team to understand them. That can be exactly right when the organization already standardizes on Kubernetes or needs portable Kubernetes tooling across many services.
+AKS introduces standard Kubernetes primitives to your hosting model. You define workloads using pods (the smallest deployable container units), deployments (which manage pod replicas and update rollouts), services (which provide stable internal network addresses for pods), and ingress resources (which route external HTTP traffic to services). Because nodes are standard Azure VMs grouped in Virtual Machine Scale Sets, your team must configure node sizing, autoscale thresholds, network policy layers, and workload identity tokens to secure pod-to-Azure API communications.
 
-The first Kubernetes nouns matter:
-
-| AKS piece | Beginner meaning |
-| --- | --- |
-| Cluster | The Kubernetes environment where workloads are scheduled and managed. |
-| Control plane | The managed Kubernetes brain that stores desired state and coordinates the cluster. |
-| Node pool | A group of worker VMs where pods run. |
-| Pod | The smallest deployable unit, usually one app container plus its close companions. |
-| Deployment | The desired number and version of pods for a service. |
-| Service | A stable internal network name and address for changing pods. |
-| Ingress | The HTTP entry pattern that routes outside traffic into services. |
-
-AKS fits when Kubernetes is part of the architecture, not when a single API merely needs somewhere to run. The control plane may be managed, but the platform choices around nodes, upgrades, workload identity, network policy, ingress, and observability still belong to the team.
+AKS is an enterprise-scale platform designed for organizations that deploy dozens of microservices, require highly complex routing rules, or standardized their pipelines on Kubernetes tools across multiple cloud providers. If you only need to run a few APIs, Container Apps or App Service provides the benefits of container hosting, scaling, and private networking without requiring you to manage node pools, namespace isolations, network plugins, and cluster upgrade cycles.
 
 ## Sample Compute Map
 
-Return to the checkout system from the opener. A reasonable first Azure map might look like this:
+To organize these compute services during design reviews, construct a workload map. This map evaluates each application component against its primary runtime trigger, its deployment artifact, and the team's operational responsibility.
 
-| Workload | Runtime shape | Azure starting point | Why |
+| Workload Component | Runtime Shape | Azure Hosting Option | Operational Reason |
 | --- | --- | --- | --- |
-| Checkout HTTP API | Request-shaped web service | App Service or Container Apps | Needs steady HTTP entry, app settings, logs, identity, and health checks. |
-| Receipt sender | Event-shaped job | Functions | Runs per queue message and should retry per message. |
-| Monthly export | Batch or scheduled work | Container Apps job or Functions | Needs short bursts of compute rather than an always-on server. |
-| Legacy worker | Machine-shaped process | Virtual Machine | Needs OS-level customization that managed runtimes may not expose. |
-| Shared platform services | Kubernetes-shaped platform | AKS | Makes sense only if the team is intentionally operating Kubernetes. |
+| Public API Gateway | Request-Shaped | App Service or Container Apps | Needs continuous HTTP ingress, custom domains, and managed TLS certificates without cluster overhead. |
+| PDF Receipt Generator | Event-Shaped | Azure Functions (Flex Consumption) | Executes only when a message lands in a queue; scales to zero when empty to eliminate idle host costs. |
+| Daily Data Exporter | Scheduled Job | Container Apps Job or Functions | Runs once a day on a timer; requires high CPU for a short duration, then terminates completely. |
+| Legacy Inventory Engine | Machine-Shaped | Azure Virtual Machine | Requires custom Linux kernel modules and a local database engine that assumes local disk block controllers. |
+| Multi-Service System | Orchestration-Shaped | Azure Kubernetes Service (AKS) | Uses Helm charts, shared ingress proxies, and common network policies managed by a dedicated platform team. |
 
-This map is not a universal answer. It is a way to talk about responsibility. For each row, name what the team deploys, what starts the work, what must stay warm, what can scale to zero, where secrets live, how identity is assigned, and which logs prove the runtime is alive.
-
-The first safe choice is usually the smallest managed runtime that honestly fits the workload. Use App Service for a normal web app when you do not need container orchestration. Use Container Apps when the image and scale model are central. Use Functions when the trigger is the shape of the work. Use VMs when server control is a real requirement. Use AKS when Kubernetes is the platform, not because Kubernetes sounds more advanced.
+Use this map to select hosting services from the workload's requirements backward. Avoid standardizing on a single compute service for the entire architecture; choose the smallest managed option that matches each individual component's shape.
 
 ## Putting It All Together
 
-The opener had five pieces of work, and now each one has a clearer home.
+Evaluating Azure compute requires matching the workload's runtime behavior to the correct level of platform abstraction.
 
-The public API is a request-shaped runtime with traffic, health, settings, identity, logs, and scale. That points first to App Service or Container Apps, depending on whether the team is bringing app code or a container image.
+* **Abstracted Infrastructure**: Azure's physical hardware is isolated by customized Hyper-V hypervisors and coordinated by the distributed Fabric Controller.
+* **Managed Web Runtimes**: App Service isolates web processes inside an App Service Plan, which acts as a physical VM worker pool. Multiple applications on the same plan share these resources.
+* **Serverless Containers**: Container Apps wraps containerized applications in a managed Kubernetes environment, using Envoy proxies for network routing and KEDA for dynamic event-driven autoscaling.
+* **Event-Driven Execution**: Azure Functions scales out worker runtimes in response to queue sizes or storage changes managed by a dedicated platform Scale Controller.
+* **Virtualized Infrastructure**: Virtual Machines provide full guest OS access and direct hypervisor hardware allocations at the cost of manual operating system updates, process supervision, and patching.
+* **Orchestrator Clusters**: AKS hosts complex, multi-container microservice platforms, managing the Kubernetes control plane while exposing node VMSS scale units, pods, and network plugins.
 
-The receipt sender is not a smaller API. It is event-shaped work. Functions makes the trigger part of the runtime and keeps the unit of retry close to the unit of work.
-
-The monthly export is not a reason to keep a server warm all month. It can use compute that starts for the job and scales back down when the job is done.
-
-The legacy worker is allowed to be a VM if the server requirements are real. The tradeoff is that the team must own the operating system and process lifecycle.
-
-The Kubernetes question is separate. AKS is a good answer when the organization wants Kubernetes as the operating platform. It is extra burden when the team only needs one containerized service to run.
-
-That is the Azure compute mental model: choose from the workload backward, and make the ownership boundary visible before deployment.
+By designing from the trigger backward, you can select compute hosts that minimize operational chores while providing the performance, scale, and isolation your workloads demand.
 
 ## What's Next
 
-The next article starts with the most common managed web-app choice: App Service. We will separate the App Service plan from the web app, then look at runtime settings, managed identity, slots, logs, health, and scaling.
+In the next chapter, we will explore Azure App Service. We will separate the App Service Plan from the Web App, configure environment settings, establish system-assigned managed identities to securely retrieve Key Vault secrets, set up zero-downtime deployment slot swaps, and define scale-out rules.
 
 ---
 
 **References**
 
-- [Overview of Azure App Service](https://learn.microsoft.com/en-us/azure/app-service/overview)
-- [Azure Container Apps overview](https://learn.microsoft.com/en-us/azure/container-apps/overview)
-- [What is Azure Functions?](https://learn.microsoft.com/en-us/azure/azure-functions/functions-overview)
-- [Virtual machines in Azure](https://learn.microsoft.com/en-us/azure/virtual-machines/overview)
-- [What is Azure Kubernetes Service (AKS)?](https://learn.microsoft.com/en-us/azure/aks/what-is-aks)
+- [Azure App Service Overview](https://learn.microsoft.com/en-us/azure/app-service/overview) - Official guide to Azure's managed web hosting platform.
+- [Azure Container Apps Overview](https://learn.microsoft.com/en-us/azure/container-apps/overview) - Documentation covering serverless container environments, revisions, and scaling rules.
+- [Azure Functions Introduction](https://learn.microsoft.com/en-us/azure/azure-functions/functions-overview) - Guide to event-driven serverless runtimes and Flex Consumption plans.
+- [Virtual Machines in Azure](https://learn.microsoft.com/en-us/azure/virtual-machines/overview) - Introduction to Azure's Infrastructure as a Service hosting.
+- [Azure Kubernetes Service Documentation](https://learn.microsoft.com/en-us/azure/aks/intro-kubernetes) - Overview of managed cluster operations and control plane architecture.

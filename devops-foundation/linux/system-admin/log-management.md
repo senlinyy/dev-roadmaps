@@ -222,6 +222,10 @@ Each directive is doing something specific. `daily` rotates once per day. `rotat
 
 Why the reload? Because of how Unix files work. When an application opens `/var/log/myapp/app.log`, the kernel hands it a file descriptor (a numeric handle) bound to the underlying inode (the filesystem record for that file), not to the path. If `logrotate` renames `app.log` to `app.log.1` and creates a new empty `app.log`, the application is still happily writing to the old inode through its existing descriptor. The new file stays empty, the old file keeps growing, and no one notices until the disk fills up. Reloading the application forces it to close and reopen the path, picking up the new file. This is the single most common logrotate misconfiguration in the wild.
 
+![A logrotate infographic showing an app process continuing to write through an open file descriptor to the rotated app.log.1 file until reload reopens the new app.log path](/content-assets/articles/article-devops-foundation-linux-system-admin-log-management/logrotate-open-file.png)
+
+*Log rotation changes names on disk, but a running process writes through an already-open file descriptor until reload makes it reopen the path.*
+
 You can preview what logrotate will do without actually doing it:
 
 ```bash
@@ -303,6 +307,10 @@ auth,authpriv.* @@logserver.internal:514
 ```
 
 Whichever path you choose, two rules apply. First, ship the structured form whenever possible: a JSON line into Loki indexes far better than a free-form line. Second, do not rely on the local files as your only retention. Treat them as a short-term buffer; the system of record lives in the central store.
+
+![A six-tile Log Management summary infographic covering journal and syslog, log locations, severity levels, journalctl filters, logrotate, and shipping logs off-box](/content-assets/articles/article-devops-foundation-linux-system-admin-log-management/log-management-summary.png)
+
+*Use this as the log-management checklist: know which store holds the evidence, where files live, which severity matters, how to filter quickly, how rotation interacts with open files, and when logs must leave the host.*
 
 ---
 

@@ -12,147 +12,146 @@ aliases:
 
 ## Table of Contents
 
-1. [The Problem](#the-problem)
-2. [What Is App Service](#what-is-app-service)
-3. [App Service Plan](#app-service-plan)
-4. [Web App](#web-app)
-5. [Runtime Settings](#runtime-settings)
-6. [Managed Identity](#managed-identity)
-7. [Logs And Health](#logs-and-health)
-8. [Deployment Slots](#deployment-slots)
-9. [Scaling](#scaling)
-10. [Putting It All Together](#putting-it-all-together)
-11. [What's Next](#whats-next)
-
-## The Problem
-
-The previous article chose App Service as one possible home for a normal checkout API. The team does not want to patch servers, operate Kubernetes, or build a custom container platform yet. They want to deploy a web backend, give it settings, connect it to secrets, check whether it is healthy, and roll out changes without guessing.
-
-That sounds like one resource, but App Service quickly exposes several layers:
-
-- The web app exists, but nobody knows which compute capacity pays for it.
-- A deployment finishes, but the app is still returning 502s because the process never became healthy.
-- A staging slot looks safe, but a production-only setting follows the swap by mistake.
-- Scaling the app does not help because the real bottleneck is the shared plan underneath it.
-
-App Service is useful because it hides a lot of server work. It is also dangerous to treat it as magic. A good App Service mental model separates the plan, the web app, configuration, identity, health, release slots, and scale.
+1. [What Is App Service](#what-is-app-service)
+2. [App Service Plan](#app-service-plan)
+3. [Web App](#web-app)
+4. [Runtime Settings](#runtime-settings)
+5. [Managed Identity](#managed-identity)
+6. [Logs And Health](#logs-and-health)
+7. [Deployment Slots](#deployment-slots)
+8. [Scaling](#scaling)
+9. [Putting It All Together](#putting-it-all-together)
+10. [What's Next](#whats-next)
 
 ## What Is App Service
 
-Azure App Service is a managed platform for hosting web apps, REST APIs, and mobile backends. You bring application code or a custom container. Azure provides the web hosting environment around it: HTTPS entry, runtime support, app settings, managed identities, logging hooks, deployment options, custom domains, TLS, and scaling controls.
+Azure App Service is a managed Platform as a Service (PaaS) designed to host web applications, REST APIs, and background processes. It removes the operational chores of traditional infrastructure management. You do not need to configure virtual networks, install operating system patches, configure IIS or Nginx servers, set up systemd supervisors, write custom startup scripts, or coordinate manual SSL/TLS certificate renewals. You create the Web App, provide the application code or container image, and let Azure's platform controller wire the runtime environment.
 
-For a beginner Node API, App Service replaces a common hand-built server checklist. You do not start by provisioning a VM, installing Node, configuring Nginx, writing a systemd unit, wiring TLS renewal, and deciding how to restart the process. You create a web app on an App Service plan, deploy the code or image, and make the runtime contract visible.
+:::expand[Under the Hood: Front-End Pools and Noisy Neighbors]{kind="design"}
+The physical architecture of App Service is split into two primary layers: the Front-End pool and the Worker pool. The Front-End layer consists of redundant load-balancing routing nodes at the entry point of Azure's regional data centers. These Front-End gateways receive all inbound public HTTP/HTTPS requests, handle SSL/TLS decryption, and route the traffic over a private internal network to the specific WebWorkers hosting your code.
 
-That contract is still real:
+WebWorkers are virtual machine instances dedicated to running your chosen runtime environment. The scale and density of these WebWorkers are governed entirely by your App Service Plan (ASP). Web App resources are merely logical configuration boundaries, whereas the ASP represents the physical VM compute boundary. If you deploy multiple Web Apps to the same ASP, they are co-located on the same physical VM instances, sharing the same CPU schedulers, physical memory blocks, and network socket threads. Under high traffic, this multi-app co-location can lead to severe noisy neighbor resource contention, where a resource spike in one application starves the other apps of resources, causing latency spikes and socket timeouts.
+:::
 
-| App need | Where it appears in App Service |
+If you host applications on AWS, App Service solves a similar problem to AWS Elastic Beanstalk (for code-based deployments) or AWS App Runner (for containerized web applications). However, the underlying resource models differ: while AWS Elastic Beanstalk provisions standard EC2 instances directly under your AWS account (which you can SSH into and manage), Azure App Service abstracts the physical servers completely into managed container WebWorkers cabled to your App Service Plan.
+
+Treat App Service as a managed runtime that wraps your application process. Even though the platform is managed, you are responsible for process start commands, environment variables, database connection pools, memory utilization, and active health monitoring.
+
+| Platform Interface | Functional Role inside App Service |
 | --- | --- |
-| CPU and memory | App Service plan size and instance count |
-| HTTP entry | Web app hostname, custom domain, TLS, routing |
-| Runtime | Stack setting or custom container image |
-| Configuration | App settings and connection strings |
-| Secret access | Managed identity plus Key Vault or other protected service |
-| Release safety | Deployment slots and swap behavior |
-| Evidence | Logs, health checks, metrics, and diagnostics |
-
-The main habit is to read App Service as a managed runtime with a URL attached. A URL can respond while the wrong code is running. A deployment can succeed while required settings are missing. A healthy platform can host an unhealthy app. The runtime evidence matters.
+| Compute Capacity | App Service Plan instance count, VM SKU size, and regional placement |
+| Ingress Edge | Redundant Front-End routing gateways, managed TLS handshakes, and custom domains |
+| Runtime Stack | Pre-configured Node.js, Python, or .NET container engines, or custom Docker images |
+| Environment Configuration | App Settings injected as environment variables directly into the process |
+| Secure Entra ID Access | Managed Identity token exchanges with Key Vault or Azure SQL |
+| Safe Releases | Deployment slots utilizing isolated directories and logical routing swaps |
+| Performance Evidence | Application Insights telemetry, standard out log pipes, and active health checks |
 
 ## App Service Plan
 
-An App Service plan is the compute container for one or more App Service apps. It defines the pricing tier, region, operating system, VM size family, and scale limits. When an app runs on a plan, it uses that plan's workers.
+An App Service Plan (ASP) represents the physical compute host for your web applications. When you create an ASP, you are creating a Virtual Machine Scale Set (VMSS) managed by Azure's fabric, hidden behind the PaaS abstraction layer. The tier you choose (Basic, Standard, Premium v3, or Isolated) dictates the availability of advanced features, such as regional virtual network integration, deployment slots, custom domains, and autoscale rules.
 
-The plan is where many surprises hide. If several apps share one plan, they share capacity. One noisy app can affect another. If the plan is too small, every app on it can feel slow even when each web app's deployment is correct. If the plan is in the wrong region, moving the web app later is not the same as changing one label.
+Because the ASP provides the physical RAM and CPU allocations, you must monitor it using host-level metrics. If a Web App returns a gateway timeout or becomes unresponsive, inspect the App Service Plan's overall CPU and Memory utilization. Scaling up the ASP changes the size of the worker VMs (e.g., shifting from 2 cores and 8 GB of RAM to 4 cores and 16 GB of RAM), whereas scaling out increases the number of running VM instances.
 
-Think of the plan as the apartment building and the web apps as tenants. Each tenant has its own hostname, settings, deployment history, and identity. The building supplies the underlying workers. Upgrading or scaling the building changes what the tenants can use.
-
-For production systems, teams usually avoid mixing unrelated workloads on one plan just to save a little money. Sharing can be reasonable for small, low-risk apps, but it should be intentional. When a plan is shared, the operational question becomes "which apps share these workers?"
+For production workloads, isolate critical services on dedicated App Service Plans. Placing an internal administrative portal, a slow-running batch utility, and a high-throughput checkout API on the same plan introduces unnecessary operational risk. Dedicated plans ensure that resource consumption remains isolated and predictable.
 
 ## Web App
 
-The web app is the application resource users and deployment tools touch most often. It has the hostname, app settings, runtime stack, identity, deployment source, slots, logs, and health behavior for one application.
+The Web App is the logical configuration unit where your code, deployment artifacts, and runtime settings reside. It defines how the system starts and how traffic interacts with the process. For a standard Linux-based Node.js runtime, the platform executes a Kestrel or Nginx process that reverse-proxies requests directly to your application port. App Service uses a default port contract, typically mapping inbound traffic to port `8080` inside the container. Your code must bind to the environment-injected port variable or target the correct port to receive traffic.
 
-For a Node backend, the web app needs to know how the app starts and where it listens. App Service sets a port contract for its runtime environment, and your app must obey it. If the application ignores the expected port or takes too long to start, the platform can be fine while the app is unreachable.
+To maintain operational clarity during incidents, document a stable profile of each Web App. This avoids confusion when troubleshooting configuration issues or deployment failures.
 
-A useful first runtime record looks like this:
+| Profile Field | Practical Value |
+| --- | --- |
+| Web App Name | `devpolaris-orders-api` |
+| Parent App Service Plan | `asp-orders-prod-eus` |
+| Runtime Stack Version | `Node.js 20 LTS (Linux)` |
+| Physical Startup Command | `npm start` |
+| Ingress Health Endpoint | `/healthz` |
+| Entra ID Principal | `System-Assigned Managed Identity` |
 
-```text
-Web app: devpolaris-orders-api
-Plan: asp-orders-prod-eus
-Runtime: Node.js LTS
-Start: npm start
-Health: GET /healthz
-Identity: system-assigned managed identity
-Required settings:
-  NODE_ENV=production
-  ORDERS_DB_URL=<secret reference or protected setting>
-  RECEIPT_QUEUE_NAME=orders-receipts
-```
-
-This small record makes the app easier to reason about than a resource name alone. It tells a reviewer which plan pays for compute, which process should start, which endpoint proves readiness, and which settings must exist before traffic is trusted.
+When a deployment completes but the application remains unreachable, the issue is rarely the Azure control plane. The most common failures are process crashes caused by missing database settings, startup script errors, or the application process failing to bind to the port within the platform's startup timeout limit.
 
 ## Runtime Settings
 
-App settings are environment variables presented to the running app. They are the normal place to put runtime configuration such as feature flags, endpoint names, queue names, and references to protected secret sources. They keep deployment artifacts from hardcoding environment-specific values while the application still owns its configuration design.
+App Settings in App Service are environment variables injected directly into your application process. The platform ensures that these settings are encrypted at rest and dynamically loaded when the process boots. They allow you to maintain environment-specific configuration without baking connection strings, API URLs, or environment tags into your deployment package.
 
-The gotcha is that settings belong to the app or slot, not to a developer's shell. A backend that works locally because `.env` contains `DATABASE_URL` can fail in App Service if that setting was never configured. A deployment artifact can be perfect and still crash on boot because the runtime settings are incomplete.
+A critical systems behavior of App Settings is that saving a configuration change triggers an immediate restart of the Web App process. The platform controller recycles the application pool to inject the new environment variables. If you update three settings sequentially in a deployment script, you can trigger three consecutive process restarts, creating temporary downtime and database connection spikes. To prevent this, apply configuration updates in a single, atomic operation using deployment templates or CLI batch scripts.
 
-Some settings should be slot-specific. For example, a staging slot should usually keep its staging database or staging feature flag when swapped with production. If the setting follows the code during a slot swap, the staging configuration can leak into production behavior. Treat slot settings as part of release safety, not as an afterthought.
-
-The safe question before every deployment is simple: "Can the new code read every setting it needs in the slot where it will start?"
+Some settings must be marked as slot settings. When you create a deployment slot, you can check a box to stick the setting to the slot. This ensures that database connection strings, logging levels, and third-party webhook endpoints do not move when you perform a release swap.
 
 ## Managed Identity
 
-Managed identity gives the web app an Azure identity without storing a long-lived credential in the application code. The app can use that identity to request tokens for Azure services such as Key Vault, Storage, or databases that support Microsoft Entra authentication.
+Managed Identity eliminates the need to store long-lived credentials (like passwords, client secrets, or certificate files) inside your application code or App Settings. When you enable a system-assigned managed identity on a Web App, Azure's Fabric Controller registers a distinct cryptographic principal in Microsoft Entra ID and assigns it to your Web App resource.
 
-This is one of the clearest ways App Service changes the shape of secret handling. Instead of placing a database password or cloud credential directly inside source code, the app receives an identity from Azure. Azure role assignments or access policies then decide what that identity can read or call.
+Under the hood, the Web App accesses this identity through a local link-local endpoint. When your application code utilizes an Azure SDK to authenticate (such as `DefaultAzureCredential`), the SDK makes an HTTP request to the local Instance Metadata Service (IMDS) endpoint (`169.254.169.254`) on a specialized port. The hypervisor interceptor verifies that the socket request originates from the authorized Web App process, calls Entra ID to retrieve a cryptographically signed JSON Web Token (JWT), and returns it to your application code.
 
 The identity does not grant permission by itself. Creating a system-assigned managed identity only gives the app a principal. Someone still has to grant that principal the right access to the target resource. When a secret read fails, check both halves: does the app have an identity, and does the target service allow that identity?
 
 ## Logs And Health
 
-A deployment is not healthy just because the deployment command succeeded. App Service needs runtime evidence: process start logs, application logs, platform logs, metrics, and a health path that tells the platform whether the app can receive traffic.
+App Service captures standard output and standard error streams from your application process, piping them to a managed log stream. In Linux-based App Service containers, console logs are collected by a host docker daemon and can be streamed in real-time or forwarded directly to an Azure Log Analytics workspace. 
 
-A good health endpoint should be boring and honest. It should return success when the app can serve requests and failure when it should not receive traffic. It should not run an expensive database migration, call every downstream service, or hide startup failure behind a generic `200 OK`.
+An active Health Check is critical to prevent routing traffic to degraded worker instances. When you configure a Health Check path (such as `/healthz`), the platform's load balancers poll the endpoint on every running instance at regular intervals. The endpoint must verify that the process is warm, configurations are parsed, and core socket connections are established.
 
-For the checkout API, `/healthz` might check that the process started, configuration was loaded, and the HTTP server can answer. A deeper `/readyz` or diagnostic endpoint can check dependencies if the team needs that distinction. The exact design depends on the app, but the App Service lesson is stable: traffic decisions need a specific signal, not hope.
+```mermaid
+flowchart LR
+    Gateway["Front-End Load Balancer<br/>(TLS Decryption)"] --> Net["Internal Virtual Network"]
+    Net --> Worker1["ASP Worker Instance 1"]
+    Net --> Worker2["ASP Worker Instance 2"]
+```
 
-When App Service returns a bad gateway or the app never warms up, the first useful evidence is not the Azure resource list. It is the app's recent logs, startup errors, configured runtime, required settings, identity failures, health check result, and plan metrics.
+```mermaid
+flowchart TD
+    subgraph Workers["App Service Plan Workers"]
+        Worker1["Worker Instance 1"]
+        Worker2["Worker Instance 2"]
+    end
+    subgraph SharedStorage["Shared Storage Layer"]
+        CodeStorage["Shared Azure Storage Volume"]
+    end
+    Worker1 -- "SMB/NFS Mount" --> CodeStorage
+    Worker2 -- "SMB/NFS Mount" --> CodeStorage
+```
+
+If an instance fails to return a `200 OK` response multiple times, the load balancer marks the instance degraded and removes it from the active routing pool. If all instances become degraded, the load balancer falls back to returning a `502 Bad Gateway` error to public requests, protecting downstream database and message queues from failing connections.
 
 ## Deployment Slots
 
-Deployment slots are separate live app environments under the same App Service app. A common pattern is to deploy the next version to a staging slot, warm it up, verify it, and then swap staging with production.
+Deployment slots are fully functional, independent Web App instances that run under the same App Service parent resource. A slot has its own unique hostnames, environment configuration settings, and deployment history, but it shares the underlying worker VM resources of the App Service Plan by default.
 
-Slots reduce release risk because they let the new version start before it receives production traffic. They also make mistakes more visible. If the app cannot boot, cannot read a setting, or fails its health endpoint in staging, you can catch that before the production hostname moves.
+When you swap deployment slots (such as swapping `staging` with `production`), you are not moving your application code or files between physical directories. Instead, the swap is a logical routing table change executed at the Front-End load-balancing gateway. The gateway shifts the target routing IP mapping, swapping the public-facing URL path to point to the staging worker processes.
 
-The important detail is swap behavior. Some configuration moves with the code during a swap, and some settings can be marked as slot-specific so they stay with the slot. Database names, external endpoint flags, and secret references often need careful treatment. A slot swap is safe only when the team knows which values move and which values stay.
-
-Use slots when the release risk justifies the extra ceremony. For a production API, they often do. For a throwaway dev app, they may be unnecessary.
+This swap process avoids cold starts through an automated warmup sequence. The platform controller first updates the App Settings in the staging slot that are not slot-specific, using the production settings. It then warms up the staging worker process by sending HTTP requests to the configured health check path. Only after the staging processes respond successfully does the Front-End gateway update its routing table to swap the URL maps. If the staging process crashes during warmup, the swap aborts, protecting the production site from downtime.
 
 ## Scaling
 
-App Service scaling has two common meanings. Scale up means choose a larger pricing tier or worker size for the plan. Scale out means run more instances. Both affect the plan, and the web app runs on that capacity.
+App Service scaling operates at the App Service Plan level, providing two modes: vertical scaling (scaling up) and horizontal scaling (scaling out). Scaling up changes the CPU, memory, and performance tier of the VM instances. Scaling out provisions additional VM instances to distribute traffic across a larger resource pool.
 
-Scale is not a cure for every failure. If the app cannot start because a setting is missing, more instances will create more failing starts. If one dependency is slow, adding web workers may increase pressure on that dependency. If all apps share one plan, scaling the plan affects the shared pool rather than one isolated process.
+Horizontal autoscaling is governed by rules that monitor specific performance indicators, such as average CPU utilization, memory pressure, or TCP queue length. When a scaling threshold is breached, the scale controller tells the Fabric Controller to provision a new worker VM in the App Service Plan. 
 
-Use scaling after you know the signal. CPU pressure, memory pressure, request queueing, latency, and instance health point to different actions. A simple production setup should make the plan, instance count, autoscale rule, and health signal easy to find.
+Under the hood, provisioning a new instance does not require copying your application files onto the new VM's local drive. Instead, all worker VM instances mount your application files from a shared Azure Storage scale unit via secure internal SMB or NFS connections. The new VM boots, mounts this network volume, starts the runtime engine, executes your startup command, and registers its local IP address with the Front-End load balancer once the health probe validates readiness.
 
 ## Putting It All Together
 
-The opener had a web app, a mystery plan, a failed deployment, risky slot behavior, and unclear scaling. App Service gives each problem a place.
+Understanding the physical architecture of App Service prevents common deployment and operational assumptions.
 
-The App Service plan explains which workers and pricing tier the app uses. The web app explains the hostname, runtime, settings, identity, logs, and health. Runtime settings explain why code that worked locally may fail in Azure. Managed identity explains how the app calls protected Azure services without embedded credentials. Slots explain how a new version can start before production traffic moves. Scaling explains whether the team is changing worker size, worker count, or a shared capacity pool.
+* **Plan vs. Logical Isolation**: The App Service Plan is the physical VM compute boundary; the Web App is a logical configuration workspace.
+* **Slot Swapping Physics**: Deployment slot swaps represent logical routing updates at the Front-End gateway after an automated worker process warmup.
+* **Network-Mounted Code**: Scaling out VM instances relies on mounting a shared application code volume from an Azure Storage scale unit via internal SMB/NFS connections.
+* **Managed Credentials**: Managed Identities use link-local IMDS requests intercepting VM sockets to fetch Entra ID JWT tokens.
 
-App Service is a strong first home for many web backends because it removes server chores. The team still needs to own the application contract: start command, settings, identity, health, logs, release safety, and scale signals.
+By designing your applications around these physical realities, you can construct deployment slot configurations, autoscale thresholds, and resource plans that guarantee high performance and high availability.
 
 ## What's Next
 
-Next we will look at Container Apps, where the deployment unit is a container image and the important Azure nouns become environment, container app, revision, ingress, secrets, identity, and scale rules.
+In the next chapter, we will transition to Azure Container Apps. We will package our application as a Docker image, configure a serverless Container Apps Environment, inspect Envoy proxy routing edges, manage revisions, and configure KEDA-driven autoscaling.
 
 ---
 
 **References**
 
-- [Overview of Azure App Service](https://learn.microsoft.com/en-us/azure/app-service/overview)
-- [Azure App Service plan overview](https://learn.microsoft.com/en-us/azure/app-service/overview-hosting-plans)
-- [Monitor App Service instances using Health check](https://learn.microsoft.com/en-us/azure/app-service/monitor-instances-health-check)
-- [Set up staging environments in Azure App Service](https://learn.microsoft.com/en-us/azure/app-service/deploy-staging-slots)
+- [Azure App Service Overview](https://learn.microsoft.com/en-us/azure/app-service/overview) - Official overview of the App Service PaaS features.
+- [App Service Plan Details](https://learn.microsoft.com/en-us/azure/app-service/overview-hosting-plans) - Deep dive into physical hosting, sizes, and VM tier limits.
+- [Set up staging environments](https://learn.microsoft.com/en-us/azure/app-service/deploy-staging-slots) - Explanation of slot warmup, routing shifts, and slot settings.
+- [VNet Integration for App Service](https://learn.microsoft.com/en-us/app-service/web-sites-integrate-with-vnet) - Technical overview of regional subnet routing and port injection.

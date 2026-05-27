@@ -49,6 +49,10 @@ The first line is the **status line**: protocol version, a numeric status code (
 
 The mapping from your JavaScript to raw HTTP is direct. The `method` option becomes the first word of the request line. The `headers` object becomes the header block. The `body` option becomes the content after the blank line. Understanding this mapping is the key to debugging network issues, because error messages from servers reference HTTP concepts (status codes, headers, content types), not JavaScript API concepts.
 
+![An HTTP wire-format infographic showing a request split into request line, headers, and body, and a response split into status line, headers, and body](/content-assets/articles/article-devops-foundation-networking-http-tls/http-wire-anatomy.png)
+
+*HTTP is easier to debug when you can see its shape: clients send a request line plus metadata and optional body, and servers answer with a status line plus metadata and optional body.*
+
 ## Methods: What Your Request Is Asking For
 
 HTTP methods tell the server what kind of action you want. If you have used a REST API, you have already been using them, possibly without thinking about what each one formally means.
@@ -197,6 +201,10 @@ Total: 0.178s
 
 Each timing reveals a different phase. DNS is name resolution. Connect is the TCP handshake. TLS is the TLS handshake (zero for plain HTTP). Total is the complete round trip. If DNS is slow, check your resolver. If TLS is slow, you might have a long certificate chain or the server is negotiating an expensive cipher.
 
+![A curl timing waterfall infographic showing DNS, TCP connect, TLS, first byte, and total request time as separate troubleshooting phases](/content-assets/articles/article-devops-foundation-networking-http-tls/curl-timing-waterfall.png)
+
+*A request timing waterfall turns one slow HTTP call into separate questions: name lookup, port connection, TLS negotiation, server wait time, and total round trip.*
+
 ## TLS: The Encryption Layer
 
 When you type `https://` instead of `http://`, you are asking for TLS (Transport Layer Security). Without it, every byte of your HTTP conversation travels across the network in cleartext. Anyone sitting between you and the server, your ISP, the coffee shop's Wi-Fi router, a compromised network switch, can read your passwords, your cookies, your API tokens, everything. TLS encrypts that conversation so that only your client and the server can read it.
@@ -205,28 +213,11 @@ The way TLS works is elegant. Before any application data flows, the client and 
 
 Think of it like exchanging locked boxes. The server shows its ID card (a certificate signed by a trusted authority) and the client verifies the signature. Then they perform a key exchange: a clever mathematical protocol (usually Elliptic Curve Diffie-Hellman, or ECDHE) that lets both sides compute the same secret number without ever sending it over the network. Once they share that secret, they use it as a symmetric encryption key for the rest of the session. Symmetric encryption (where both sides use the same key) is fast, hundreds of times faster than the asymmetric cryptography used during the handshake. That is why TLS uses asymmetric crypto only to establish the key, then switches to symmetric for actual data.
 
-```mermaid
-sequenceDiagram
-    participant C as Client
-    participant S as Server
+![A TLS handshake infographic showing hello plus SNI, certificate chain validation, key exchange, and encrypted HTTP data flowing after the shared key is established](/content-assets/articles/article-devops-foundation-networking-http-tls/tls-handshake-map.png)
 
-    C->>S: ClientHello (supported cipher suites, TLS version, random)
-    S->>C: ServerHello (chosen cipher suite, TLS version, random)
-    S->>C: Certificate (server's X.509 certificate)
-    S->>C: ServerKeyExchange (DH/ECDH parameters)
-    S->>C: ServerHelloDone
-    C->>C: Verify certificate chain
-    C->>S: ClientKeyExchange (pre-master secret)
-    C->>S: ChangeCipherSpec
-    C->>S: Finished (encrypted)
-    S->>C: ChangeCipherSpec
-    S->>C: Finished (encrypted)
-    Note over C,S: Symmetric encryption established
-    C->>S: Application Data (HTTP request)
-    S->>C: Application Data (HTTP response)
-```
+*TLS first proves identity and agrees on shared keys. Only after that setup does HTTP data move through the encrypted channel.*
 
-This diagram shows TLS 1.2, which requires two round trips before any data can flow. TLS 1.3 (the current standard) reduces this to one round trip by combining several of these steps, and it supports 0-RTT resumption for repeat connections. That difference matters at scale: shaving one round trip off every new connection translates to measurably faster page loads for users across the globe, especially those on high-latency mobile networks.
+The exact handshake shape differs by TLS version. TLS 1.2 usually requires two round trips before any data can flow. TLS 1.3 (the current standard) reduces this to one round trip by combining several of these steps, and it supports 0-RTT resumption for repeat connections. That difference matters at scale: shaving one round trip off every new connection translates to measurably faster page loads for users across the globe, especially those on high-latency mobile networks.
 
 TLS 1.3 also dropped the old RSA key exchange entirely, and the reason is worth understanding. Under RSA key exchange, the client encrypted the session key with the server's public RSA key and sent it across the network. That worked, but it meant anyone who later stole the server's private key could decrypt every past session they had recorded, including ones from years ago. Modern key exchange (ECDHE, where the E stands for "ephemeral") generates a fresh key pair for every connection and throws it away when the session ends. Even if the server's long-term private key is compromised tomorrow, traffic recorded today is still safe because the keys that encrypted it no longer exist anywhere. This property is called **forward secrecy**, and TLS 1.3 enforces it by removing every cipher suite that does not provide it.
 
@@ -362,6 +353,10 @@ When the client and server cannot agree on a cipher suite or TLS version, the ha
 ### Clock Skew
 
 TLS validation checks the certificate's `notBefore` and `notAfter` against the local clock. A machine whose clock is wrong by more than the validity window's slack will reject every certificate as either "not yet valid" or "expired", even though the CA chain is fine. This is common on freshly booted VMs, IoT devices without a battery-backed RTC, and containers whose host has drifted. If `curl` works on one host and fails with cert errors on another against the same endpoint, run `date` and `timedatectl` on both before suspecting the certificate.
+
+![A six-part summary infographic for HTTP and TLS covering request shape, methods, status families, headers, curl timing, and TLS trust](/content-assets/articles/article-devops-foundation-networking-http-tls/http-tls-summary.png)
+
+*Use this as the short HTTP and TLS checklist: read the request shape, choose the method by intent, interpret status families first, inspect headers, time each request phase with `curl`, and verify the TLS trust chain before blaming the application.*
 
 ---
 

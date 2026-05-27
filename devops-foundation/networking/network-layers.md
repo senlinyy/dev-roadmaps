@@ -46,6 +46,10 @@ On a network, this is exactly what happens. Each layer adds a header (and someti
 
 This nesting is why a network engineer can swap out the physical cable (fiber instead of copper) without changing anything about your HTTP request. The inner envelopes are untouched. It is the same reason you can switch from HTTP to WebSockets without changing the underlying IP routing. Each layer is independent.
 
+![A networking encapsulation infographic showing an HTTP message wrapped with TCP ports, IP addresses, and next-hop MAC information before becoming a wire signal](/content-assets/articles/article-devops-foundation-networking-network-layers/encapsulation-cross-section.png)
+
+*Encapsulation is easier to reason about as packet wrapping: each layer adds one header on the way down, and the receiver removes those headers in reverse order.*
+
 ## The TCP/IP Model
 
 Two layer models come up in every networking conversation: TCP/IP and OSI. The TCP/IP model is the one that actually runs the internet, so we will start there. It has four layers, and each one maps to something you can point at in a real system.
@@ -98,6 +102,10 @@ This is also where the difference between a hub and a switch becomes interesting
 
 ARP (Address Resolution Protocol) is the glue between the Internet layer and this one. Your operating system has the destination's IP address, but the network card needs a MAC address to actually put a frame on the wire. So the machine effectively shouts into the local network: "Whoever has 192.168.1.1, tell me your MAC address." The device with that IP replies directly, and your machine caches the answer in its ARP table so it does not have to ask again for a few minutes. The shouting works because ARP requests are sent to a special broadcast MAC address that every device on the local segment listens to. You can inspect the cache anytime with `ip neigh show` (covered later in the debugging section). When ARP fails (wrong subnet mask, blocked broadcast, the destination is powered off), nothing on the IP layer above will work either, no matter how perfect the routing table looks.
 
+![A hop-by-hop networking infographic showing the same IP packet crossing multiple routers while the local MAC frame is rewritten at each hop](/content-assets/articles/article-devops-foundation-networking-network-layers/mac-hop-rewrite.png)
+
+*IP addressing stays meaningful from source to destination, but MAC addressing is local to one link. Each router unwraps the current frame and writes a new one for the next hop.*
+
 | OSI Layer | OSI Name | TCP/IP Layer | What lives here |
 |-----------|----------|-------------|-----------------|
 | 7 | Application | Application | HTTP, DNS, SMTP, SSH |
@@ -108,7 +116,7 @@ ARP (Address Resolution Protocol) is the glue between the Internet layer and thi
 | 2 | Data Link | Network Access | Ethernet frames, MAC addresses, switches |
 | 1 | Physical | Network Access | Cables, radio signals, NICs |
 
-The diagram above shows how the two models map to each other. The TCP/IP Application layer absorbs OSI layers 5, 6, and 7 because in practice, modern protocols handle session management and data encoding as part of the application itself (your TLS library, your HTTP/2 implementation). The TCP/IP Network Access layer combines OSI layers 1 and 2 because the physical medium and the local addressing scheme are tightly coupled; swapping Ethernet for Wi-Fi changes both simultaneously.
+The table above shows how the two models map to each other. The TCP/IP Application layer absorbs OSI layers 5, 6, and 7 because in practice, modern protocols handle session management and data encoding as part of the application itself (your TLS library, your HTTP/2 implementation). The TCP/IP Network Access layer combines OSI layers 1 and 2 because the physical medium and the local addressing scheme are tightly coupled; swapping Ethernet for Wi-Fi changes both simultaneously.
 
 ## The OSI Model as a Debugging Map
 
@@ -296,6 +304,10 @@ The connection succeeded at Layer 4 (TCP handshake completed), but the TLS hands
 DNS lives at Layer 7 too, and its failures have a distinctive shape. `NXDOMAIN` means the resolver answered authoritatively that the name does not exist (typo, missing record, wrong zone). `SERVFAIL` means the resolver tried but could not get an answer (broken upstream, DNSSEC validation failure). A name that resolves on one host but not another usually points at split-horizon DNS (the same name returns different answers depending on which resolver or VPC view asks) or a stale `/etc/resolv.conf` pointing at a dead server. Compare `dig @8.8.8.8 name` against `dig @internal-resolver name` to tell them apart before blaming the application.
 
 The layer model gives you a systematic approach: start at the bottom (is the link up?), work your way up (can I reach the host? can I connect to the port?), and by the time you reach Layer 7 you have already ruled out every infrastructure problem below it.
+
+![A six-part summary infographic for network layers covering app protocols, TCP or UDP, IP routing, MAC hops, wire signals, and layer-based debugging](/content-assets/articles/article-devops-foundation-networking-network-layers/network-layers-summary.png)
+
+*Use this as the short network-layers checklist: application protocols define meaning, TCP or UDP carries conversations, IP routes between networks, MAC addresses work one hop at a time, physical links carry signals, and debugging gets faster when you identify the failing layer first.*
 
 ---
 

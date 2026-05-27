@@ -30,6 +30,10 @@ The problem a package manager solves is the same one npm solves for Node or pip 
 
 The key difference from language-level package managers is scope. npm manages JavaScript libraries within a project. A Linux package manager manages everything on the entire system, from the kernel to the shell to the text editor you use to write config files.
 
+![A Linux package manager pipeline showing an install request flowing through a local index, dependency solver, trusted repository, local database, and system files](/content-assets/articles/article-devops-foundation-linux-linux-basics-package-management/package-manager-pipeline.png)
+
+*A Linux package manager is a system-level installer with memory: it resolves dependencies, trusts repositories, records installed packages, and places files into standard system locations.*
+
 ## Two Major Ecosystems: APT and DNF
 
 Linux distributions split into two main families when it comes to package management. Debian-based distributions (Debian, Ubuntu, Linux Mint) use `.deb` packages managed by APT. Red Hat-based distributions (RHEL, CentOS, Fedora, Rocky Linux, AlmaLinux) use `.rpm` packages managed by DNF. These extensions refer to the actual archive file formats: a `.deb` or `.rpm` file is a single archive containing compiled binaries, metadata, dependency declarations, and pre/post-installation scripts for one piece of software.
@@ -162,6 +166,10 @@ This breaks down as: `deb` means it is a binary package repository, the URL is t
 | `multiverse` | Software with licensing restrictions | Community |
 
 The trust model is important to understand. Each repository signs its Release file with a GPG key. GPG (GNU Privacy Guard) is a public-key cryptography tool. Repository maintainers sign their package indexes with a private GPG key, and your system verifies those signatures using the corresponding public key. This ensures that the packages you download genuinely came from the expected source and were not altered in transit. When you run `apt update`, APT downloads the Release file and verifies its signature against keys it already trusts. Then it checks that the SHA-256 hashes of individual package lists match what the Release file declares. Finally, when you install a package, it verifies the package's checksum against the package list. This chain of verification means that if any file was tampered with in transit, APT will reject it. This is why you sometimes need to add GPG keys when configuring new repositories.
+
+![A repository trust chain showing a GPG key validating a signed release, package index checksums, and the installed package](/content-assets/articles/article-devops-foundation-linux-linux-basics-package-management/repository-trust-chain.png)
+
+*Repository trust is a chain, not a vibe check: your system trusts a signed index, checks package fingerprints against that index, and rejects data that no longer matches.*
 
 ## Adding Third-Party Repositories
 
@@ -333,20 +341,11 @@ Version pinning is a double-edged sword. It protects you from unexpected changes
 
 ## Choosing Your Software Source
 
-When you need to install software, you have several options. This decision tree helps you choose the right one:
+When you need to install software, you have several options. This source ladder helps you choose the right one:
 
-```mermaid
-graph TD
-    A["Need to install\nsoftware"] --> B{"In default\nrepo?"}
-    B -- Yes --> C["Use apt install\nor dnf install"]
-    B -- No --> D{"Official vendor\nrepo available?"}
-    D -- Yes --> E["Add vendor repo\nand install"]
-    D -- No --> F{"Trusted PPA\nor EPEL?"}
-    F -- Yes --> G["Add community\nrepo and install"]
-    F -- No --> H{"Need custom\npatches?"}
-    H -- No --> I["Download official\nbinary or .deb/.rpm"]
-    H -- Yes --> J["Build from source\nwith checkinstall"]
-```
+![A software source ladder ranking default repositories, vendor repositories, trusted community repositories, official binaries, and building from source by increasing risk](/content-assets/articles/article-devops-foundation-linux-linux-basics-package-management/software-source-ladder.png)
+
+*Start from the lowest-risk source and move down only when the safer source cannot provide what you need. Each step gives you more control and more responsibility.*
 
 The default repository should always be your first choice. Vendor-maintained repositories (like Docker's or PostgreSQL's official repos) are the next best option because the software authors maintain them. Community repositories like EPEL and well-known PPAs are generally reliable. Building from source is the last resort, reserved for situations where no packaged version meets your needs.
 
@@ -389,6 +388,10 @@ Every package declares what it depends on, what it conflicts with, and what it p
 Most of the time this works seamlessly. When it does not, you get dependency conflicts. A common scenario: package A needs `libfoo >= 2.0` and package B needs `libfoo < 2.0`. These two packages cannot coexist because they need incompatible versions of the same library.
 
 This pain has a name: "dependency hell." It exists because of a structural choice Linux distributions made decades ago. On Linux, shared libraries are global: there is exactly one copy of `libssl.so.3` on the system, and every program that links against it uses that same copy. That choice is what makes security updates and disk usage manageable, as we saw earlier, but it also means that two programs cannot disagree about which version of a shared library to use. Contrast this with Node.js, where each package gets its own `node_modules` and two libraries can happily depend on different versions of `lodash` because each lives in its own folder. Linux's "one global copy" rule means transitive version conflicts cannot be resolved by duplicating the library; one of the constraints has to give. Newer ecosystems like Flatpak and Nix sidestep this by isolating each application's dependencies, which is essentially the same trick `node_modules` plays at the OS level.
+
+![A dependency conflict infographic showing two packages requiring incompatible versions of one shared system library, plus possible fixes like newer packages, different repositories, or separate containers](/content-assets/articles/article-devops-foundation-linux-linux-basics-package-management/dependency-conflict.png)
+
+*Linux packages often share one system copy of a library. When two packages demand incompatible versions of that same library, the solver needs a different package, source, or isolation boundary.*
 
 APT will tell you about conflicting constraints when this happens. This is the OS-level equivalent of npm's `ERESOLVE unable to resolve dependency tree` error, where two packages in your tree demand incompatible versions of the same shared library.
 
@@ -455,6 +458,10 @@ If you switch between Debian-based and Red Hat-based systems, this crosswalk sho
 | Pin/hold a version | `sudo apt-mark hold nginx` | `sudo dnf versionlock add nginx` |
 | Undo last transaction | *(not built-in)* | `sudo dnf history undo last` |
 | Find which package owns a file | `dpkg -S /path/to/file` | `dnf provides /path/to/file` |
+
+![A six-part summary infographic for Linux package management covering package bundles, APT or DNF, trusted repositories, version pins, source choice, and dependency solving](/content-assets/articles/article-devops-foundation-linux-linux-basics-package-management/package-management-summary.png)
+
+*Use this as the short package-management checklist: know the package format, choose APT or DNF by distro family, trust repositories deliberately, pin versions sparingly, choose software sources by risk, and read dependency plans before changing a system.*
 
 ---
 

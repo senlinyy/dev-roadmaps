@@ -36,23 +36,9 @@ They first call the closest thing DNS has to a switchboard operator: the **root 
 
 The technical names for the players in this chain: the bit of code on your machine that kicks things off is the **stub resolver**, the friend-with-connections in the middle is the **recursive resolver**, and the whole pattern of "ask one server, get a referral, ask the next" is called recursive resolution. The same dance happens for a `fetch()` call from a Node app, a `curl` from a CI runner, or a pod inside a Kubernetes cluster trying to reach `payments.default.svc.cluster.local` (in that last case the recursive resolver is CoreDNS running inside the cluster, and the authoritative answers come from the Kubernetes API).
 
-```mermaid
-sequenceDiagram
-    participant Client as Client (Stub Resolver)
-    participant Recursive as Recursive Resolver
-    participant Root as Root Server
-    participant TLD as .com TLD Server
-    participant Auth as example.com Authoritative
+![A DNS resolution chain infographic showing a stub resolver asking a recursive resolver, then root, TLD, and authoritative servers, with a resolver cache shortcut for repeat lookups](/content-assets/articles/article-devops-foundation-networking-dns-resolution/dns-resolution-chain.png)
 
-    Client->>Recursive: What is app.example.com?
-    Recursive->>Root: What is app.example.com?
-    Root-->>Recursive: Ask .com TLD servers
-    Recursive->>TLD: What is app.example.com?
-    TLD-->>Recursive: Ask example.com authoritative servers
-    Recursive->>Auth: What is app.example.com?
-    Auth-->>Recursive: 93.184.216.34 (TTL 300)
-    Recursive-->>Client: 93.184.216.34
-```
+*The recursive resolver does the walking for you. It follows referrals from root to TLD to authoritative servers, then caches the final answer so repeat lookups are fast.*
 
 The entire chain typically completes in under 100 milliseconds. Subsequent queries for the same domain resolve from cache in under 1 millisecond. This is why TTL values matter enormously during migrations: once a resolver caches an answer, it will not ask again until the TTL expires, no matter how urgently you need it to pick up a change.
 
@@ -159,6 +145,10 @@ Suppose your A record has a TTL of 3600 (one hour) and you change the IP address
 
 The fix is simple but requires planning ahead. Before any DNS migration, lower the TTL to 60 or 300 seconds **at least 24 hours in advance**. This matters because the old TTL is what resolvers worldwide have already cached. If the old TTL was 3600, it could take up to an hour for every resolver to expire its cached copy and pick up the new (lower) TTL. Once the lower TTL is active everywhere, make your IP change. Verify propagation. Then raise the TTL back to a reasonable production value (300 to 3600 seconds) once the migration is stable.
 
+![A DNS TTL migration timeline infographic showing old answers cached before a change, shorter cache windows after lowering TTL, and resolvers gradually moving to the new answer after the record switch](/content-assets/articles/article-devops-foundation-networking-dns-resolution/ttl-migration-timeline.png)
+
+*TTL is hidden state inside resolvers. Lower it before a migration so cached old answers age out quickly when you finally switch the record.*
+
 You can monitor propagation across multiple public resolvers with a simple loop:
 
 ```bash
@@ -225,6 +215,10 @@ Here is a diagnostic cheat sheet for quick triage:
 | Intermittent failures | `SERVFAIL` | Authoritative server issue or DNSSEC misconfiguration | Query the authoritative server directly |
 | Nothing loads, no error | Timeout | Firewall blocking port 53 or bad `/etc/resolv.conf` | Test with `dig @8.8.8.8 google.com` |
 | Some users see old site | `NOERROR` (stale IP) | Cached record from before migration | Check TTL; wait for expiry or verify TTL was lowered in advance |
+
+![A six-part summary infographic for DNS resolution covering name-to-address lookup, resolver cache, root TLD and authoritative servers, record types, dig evidence, and TTL migration](/content-assets/articles/article-devops-foundation-networking-dns-resolution/dns-resolution-summary.png)
+
+*Use this as the short DNS checklist: know which resolver answered, follow delegation when needed, choose the right record type, use `dig` as evidence, and treat TTL as a migration control rather than an afterthought.*
 
 ---
 
