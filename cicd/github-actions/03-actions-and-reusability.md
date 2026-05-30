@@ -299,6 +299,10 @@ Fifth, version your DRY references. Always pin custom action and reusable workfl
 
 Configuring DRY, reusable automation structures ensures our pipelines are clean and maintainable at scale. However, once our validated packages are compiled, we must deploy them to staging and production clouds securely. In the next chapter, **Environments and Security**, we will explore how to protect production deployments using environments, secret scoping, required reviewer approvals, and keyless OpenID Connect (OIDC) authentication.
 
+![GitHub Actions reuse summary showing duplicated YAML, custom actions, inputs, path resolution, and reusable workflows](/content-assets/articles/article-cicd-github-actions-reusability/actions-reuse-summary.png)
+
+*Use this as the reuse checklist: remove duplicated workflow blocks, choose the right abstraction, define clean inputs and outputs, resolve paths carefully, and use reusable workflows for organization policy.*
+
 ---
 
 **References**

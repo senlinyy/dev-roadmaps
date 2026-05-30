@@ -1,352 +1,218 @@
 ---
-title: "What Is Terraform"
-description: "Understand what Terraform does, how providers and resources work, and why plans and state matter before managing AWS infrastructure."
-overview: "Terraform turns infrastructure choices into configuration files that can be reviewed, planned, applied, and remembered. This article uses a small AWS S3 example to explain the model before the module moves into larger AWS resources."
-tags: ["terraform", "opentofu", "iac", "aws", "state"]
-order: 1
-id: article-infrastructure-as-code-terraform-what-is-terraform
-aliases:
-  - what-is-terraform
-  - what-is-iac
-  - why-infrastructure-as-code-exists
-  - infrastructure-as-code-fundamentals
-  - article-infrastructure-as-code-fundamentals-why-infrastructure-as-code-exists
-  - infrastructure-as-code/terraform/what-is-terraform.md
-  - infrastructure-as-code/fundamentals/what-is-iac.md
-  - infrastructure-as-code/fundamentals/why-infrastructure-as-code-exists.md
-  - cloud-providers/infrastructure-as-code/fundamentals/why-infrastructure-as-code-exists.md
+title: "What Is Terraform?"
+description: "Learn what Terraform is, how it is structured, and what happens step by step when you run your first terraform apply."
+overview: "Terraform is a tool that reads configuration files describing cloud resources and makes those resources exist. This article explains how Terraform is built, what the core commands do, how it talks to AWS and other cloud providers, and why the same tool works across dozens of different platforms."
+tags: ["terraform", "providers", "cli", "plan", "apply"]
+order: 2
+id: article-iac-terraform-foundations-what-is-terraform
 ---
 
 ## Table of Contents
 
-1. [Why Terraform Matters](#why-terraform-matters)
-2. [Infrastructure as Files](#infrastructure-as-files)
-3. [Providers](#providers)
-4. [Resources](#resources)
-5. [AWS S3 Hello World](#aws-s3-hello-world)
-6. [Plan](#plan)
-7. [State](#state)
-8. [OpenTofu](#opentofu)
-9. [Common First Mistakes](#common-first-mistakes)
+1. [What Terraform Actually Is](#what-terraform-actually-is)
+2. [The Two Parts: Core and Providers](#the-two-parts-core-and-providers)
+3. [The Three Commands You Use Every Time](#the-three-commands-you-use-every-time)
+4. [What Happens During terraform init](#what-happens-during-terraform-init)
+5. [What Happens During terraform plan](#what-happens-during-terraform-plan)
+6. [What Happens During terraform apply](#what-happens-during-terraform-apply)
+7. [Reading the Plan Output](#reading-the-plan-output)
+8. [How Terraform Knows What Already Exists](#how-terraform-knows-what-already-exists)
+9. [Terraform Supports Many Cloud Providers](#terraform-supports-many-cloud-providers)
 10. [Putting It All Together](#putting-it-all-together)
 11. [What's Next](#whats-next)
 
-## Why Terraform Matters
+## What Terraform Actually Is
 
-You need to create one private S3 bucket for a learning service. It sounds like a small change. Open the AWS console, choose a region, type a bucket name, add a tag, block public access, and the work is done.
+Terraform is a command-line tool that reads configuration files and creates, updates, or deletes cloud resources to match what those files describe. You write a file that says "I want an EC2 instance, a VPC, and a security group." You run Terraform. It talks to AWS and makes those things exist.
 
-That is a reasonable way to learn AWS. It becomes a weak operating model when the same choice has to be reviewed, repeated, or explained later. A console page can show the bucket that exists now, but it does not show the full story of why that bucket exists, which defaults were accepted, who approved the public access settings, or how the same shape should be rebuilt in another account.
+![Terraform compares configuration, state, and provider reality before proposing a plan.](/content-assets/articles/article-iac-terraform-foundations-what-is-terraform/desired-state-loop.png)
 
-The problem appears a week later when the same bucket needs to exist in staging, production, or a recovery account.
+*Terraform compares desired configuration, remembered state, and provider reality before changing infrastructure.*
 
-- The console shows the bucket that exists now, but it does not show the review that approved it.
-- A shell script can call AWS APIs, but reviewers have to imagine the final infrastructure from the command sequence.
-- A second environment needs the same pattern with a different name, region, tags, and credentials.
-- A teammate may change the bucket manually, leaving the files and the account with different stories.
+That is the core of it. The rest of this article fills in the details: how Terraform is structured internally, what each command does, and why understanding the sequence matters for using it correctly.
 
-Terraform was built for this kind of cloud-provisioning work. It lets the team describe AWS resources in files, ask for a plan before changing anything, apply the approved change through provider APIs, and keep state so future runs know which real objects the files manage.
+Terraform was created by HashiCorp and released in 2014. The Terraform CLI is free to download and use, and its current releases are published under HashiCorp's Business Source License. HashiCorp also offers managed and enterprise platforms around the workflow. For a beginner, the practical point is simple: you download the CLI as a single binary, put it somewhere on your PATH, and it is ready to use.
 
-The rest of this article follows that idea through one AWS S3 hello world. The example is small, but the same model is used for VPCs, subnets, route tables, security groups, IAM roles, EC2 instances, databases, and production platforms.
+The configuration language it uses is called HCL, which stands for HashiCorp Configuration Language. It is designed specifically to be readable by humans. The syntax looks like a cross between JSON and a simplified programming language, with blocks for defining resources, variables, and outputs. You will get comfortable with it quickly because it is intentionally straightforward.
 
-## Infrastructure as Files
+## The Two Parts: Core and Providers
 
-Terraform is an infrastructure as code tool. Infrastructure as code means the desired infrastructure is written in configuration files, kept in version control, reviewed like application code, and changed through a repeatable workflow.
+When you install Terraform, you get one program. But Terraform's architecture is divided into two logically separate pieces that work together: Core and Providers.
 
-Terraform configuration is declarative. You describe the result the infrastructure should have. Terraform compares that desired result with what it already knows and what the provider reports from the real platform. Then it proposes the actions needed to make the managed infrastructure match the files.
+**Core** is the program you download and run. It reads your configuration files, builds a picture of what you want, compares it to what currently exists, generates a plan of what needs to change, and then executes that plan. Core is the same regardless of whether you are working with AWS, Google Cloud, Azure, or any other service.
 
-For Terraform, the important shift is that cloud intent moves out of private console memory and into a root module. A VPC CIDR, an S3 public access block, an IAM policy attachment, and a database backup setting become text that can be reviewed before provider APIs touch the account. Git records who changed the intended shape. Terraform state records which remote objects belong to that shape.
+**Providers** are separate programs, also called plugins, that Core downloads and manages automatically. Each provider knows how to talk to a specific service. The AWS provider knows how to make API calls to create EC2 instances, S3 buckets, VPCs, and hundreds of other AWS resources. The Google Cloud provider knows how to create GCE instances, GCS buckets, and GKE clusters. The GitHub provider knows how to manage repositories and teams.
 
-A command script often reads like this:
+When you need to use AWS, you declare the AWS provider in your configuration. When you run `terraform init`, Core downloads the AWS provider plugin automatically. From that point on, whenever Terraform needs to create or update an AWS resource, Core sends instructions to the AWS provider plugin, which translates those instructions into actual AWS API calls.
 
-```bash
-aws s3api create-bucket --bucket dp-terraform-hello-123456
-aws s3api put-public-access-block --bucket dp-terraform-hello-123456 ...
-aws s3api put-bucket-tagging --bucket dp-terraform-hello-123456 ...
+This separation is why Terraform can support so many different platforms. HashiCorp builds and maintains Core. Individual teams — HashiCorp themselves, cloud providers like AWS and Google, and the open-source community — build and maintain providers. There are providers for hundreds of services. If you need to manage a resource type that does not have a provider, you can write your own.
+
+```mermaid
+flowchart LR
+    Config["Configuration Files\n(.tf)"] --> Core["Terraform Core"]
+    Core --> AWS["AWS Provider Plugin"]
+    Core --> GCP["GCP Provider Plugin"]
+    Core --> GitHub["GitHub Provider Plugin"]
+    AWS --> AWSAPI["AWS API"]
+    GCP --> GCPAPI["GCP API"]
+    GitHub --> GitHubAPI["GitHub API"]
 ```
 
-The commands are actions. They tell AWS what to do right now. A reader has to mentally run the sequence to understand the final shape.
+## The Three Commands You Use Every Time
 
-A Terraform configuration reads more like a description:
+There are many Terraform commands, but three form the core workflow you use for every infrastructure change.
 
-```text
-an S3 bucket named dp-terraform-hello-123456 should exist
-the bucket should have learning tags
-public bucket access should be blocked
-the bucket name and ARN should be available as outputs
+![Plan is the safe proposed change list, while apply is the step that changes real infrastructure.](/content-assets/articles/article-iac-terraform-foundations-what-is-terraform/plan-apply-boundary.png)
+
+*Plan explains what Terraform intends to do; apply is the point where infrastructure changes.*
+
+`terraform init` prepares the working directory for use. It reads your configuration files, figures out which providers you need, and downloads those provider plugins. You run this once when setting up a new project or when adding a new provider to an existing project.
+
+`terraform plan` shows you exactly what Terraform would do if you ran apply — without actually doing anything. It reads your configuration, reads the current state of your infrastructure (from the state file and from the cloud provider's API), and produces a human-readable diff. Green lines with a `+` are resources that would be created. Red lines with a `-` are resources that would be deleted. Lines with `~` are resources that would be modified in place.
+
+`terraform apply` runs the plan for real. By default, it generates a fresh plan and asks you to confirm before proceeding. You type `yes` and it starts making the changes. When it finishes, it prints a summary of what was created, modified, and destroyed.
+
+The typical flow for any change is:
+
+```
+1. Edit your .tf files
+2. terraform plan   — review what will change
+3. terraform apply  — make the changes
 ```
 
-That description is still precise. Terraform can turn it into API calls. The difference is where the review starts. A reviewer can ask, "Is this the bucket we want?" before thinking through every API operation.
+You repeat this cycle for every change: edit, plan, apply. The plan step is where you catch mistakes. If the plan shows you something unexpected — a resource being destroyed that you did not mean to destroy, an attribute being modified that should have stayed the same — you stop, fix the configuration, and plan again.
 
-The beginner model has five pieces:
+## What Happens During terraform init
 
-| Piece | What it means | Why it matters |
-| --- | --- | --- |
-| Configuration | The `.tf` files in a root module | The desired infrastructure written down |
-| Provider | A plugin for one platform or API | How Terraform talks to AWS |
-| Resource | One managed object | What Terraform may create, update, replace, or delete |
-| Plan | The proposed change | What reviewers inspect before apply |
-| State | Terraform's memory | How Terraform connects file addresses to real AWS objects |
+When you run `terraform init`, Terraform does three things.
 
-Terraform's main job is comparison. It reads configuration, reads state, asks providers about managed objects, builds a dependency graph, and creates a plan. That plan is the point where infrastructure changes become reviewable.
+First, it reads all the `.tf` files in the current directory and looks for `terraform` blocks that declare which providers are needed and which backend should be used for storing state. If you have declared `provider "aws"`, Terraform knows it needs the AWS provider.
 
-## Providers
+Second, it contacts the Terraform Registry (at `registry.terraform.io`) to find a provider version that satisfies your version constraints. On the first init, that is usually the newest matching version. After a `.terraform.lock.hcl` file exists, Terraform reuses the locked provider version unless you intentionally run init with upgrade behavior. It downloads the provider plugin binary and stores it in a hidden directory called `.terraform/providers/` inside your working directory.
 
-Terraform's core engine does not know what an S3 bucket is. It also does not know the arguments for an EC2 instance, the API for a VPC route table, or the behavior of an IAM role. That platform knowledge lives in providers.
+Third, it initializes the backend — the place where the state file will be stored. If you have not configured a remote backend, Terraform uses the local backend by default, which stores the state file on disk in the same directory.
 
-A provider is a plugin that teaches Terraform how to work with a platform. The AWS provider defines resource types such as `aws_s3_bucket`, `aws_vpc`, `aws_subnet`, and `aws_instance`. It also knows how to call AWS APIs, validate provider-specific arguments, read remote objects, and report attributes back to Terraform.
+After `init` finishes, the `.terraform/` directory contains everything Terraform needs to run. The `.terraform.lock.hcl` file records the exact provider versions that were downloaded. Committing this lock file to version control ensures every member of your team uses the same provider versions.
 
-A module declares its provider requirements in a `terraform` block:
+You do not need to run `terraform init` again unless you add a new provider, change the backend configuration, or delete the `.terraform/` directory. It is not part of the regular plan/apply cycle.
 
-```hcl
-terraform {
-  required_providers {
-    aws = {
-      source  = "hashicorp/aws"
-      version = "~> 6.0"
-    }
+## What Happens During terraform plan
+
+`terraform plan` is where Terraform figures out what it needs to do. The process has three steps.
+
+**Step one: Read configuration.** Terraform reads all the `.tf` files in the working directory. It parses the resource blocks, variable definitions, local values, and outputs. It builds an in-memory graph of all the resources and the dependencies between them.
+
+**Step two: Read current state.** Terraform reads the state file to see what resources it has created before. It then contacts the cloud provider's API to check whether those resources still exist and what their current attributes are. If a resource in the state file no longer exists in the cloud (because someone deleted it manually), Terraform notes the discrepancy.
+
+**Step three: Compute the diff.** Terraform compares what the configuration says should exist against what the state and the cloud provider say currently exists. For each resource in the configuration, it determines whether to create it (does not exist yet), update it (exists but attributes differ), replace it (exists but a required attribute changed that cannot be modified in place), or leave it alone (exists and matches the configuration exactly). It then prints this diff as the plan.
+
+The plan also shows the values of computed attributes — things that will only be assigned when the resource is actually created, like an EC2 instance's IP address or a security group's ID. These appear as `(known after apply)` in the plan output.
+
+## What Happens During terraform apply
+
+When you run `terraform apply`, one of two things happens depending on how you invoke it.
+
+If you run `terraform apply` with no arguments, Terraform generates a fresh plan and shows it to you. You type `yes` to confirm, and Terraform executes the plan.
+
+If you run `terraform plan -out=myplan.tfplan` first and save the plan to a file, then run `terraform apply myplan.tfplan`, Terraform executes the saved plan without generating a new one. This is important in automated pipelines because the approved operations are the operations Terraform attempts to apply. The apply can still fail if credentials expire, the provider API rejects a change, or the outside world changes in a way that makes the saved plan no longer valid.
+
+During apply, Terraform walks the dependency graph and creates, updates, or deletes resources in the correct order. Resources that do not depend on each other can be created in parallel, which speeds up large deployments. Resources that depend on each other are created in sequence — the VPC first, then the subnet (which needs the VPC's ID), then the server (which needs the subnet's ID).
+
+As each resource is created, updated, or deleted, Terraform writes the result to the state file. If the apply is interrupted — a network timeout, a provider API error, a crash — the state file reflects what completed successfully. When you run apply again, Terraform reads the state file and knows which resources were already created, picking up from where it left off.
+
+## Reading the Plan Output
+
+Understanding the plan output is essential for using Terraform safely. Here is what to look for.
+
+At the top, Terraform shows any data sources it refreshed and any resources it will change. Each resource change begins with the resource type and name:
+
+```
+# aws_instance.app will be created
++ resource "aws_instance" "app" {
+    + ami           = "ami-0c55b159cbfafe1f0"
+    + instance_type = "t3.small"
+    + id            = (known after apply)
+    + private_ip    = (known after apply)
+    + public_ip     = (known after apply)
   }
-}
 ```
 
-The local name `aws` is the name this module uses for the provider. The source address `hashicorp/aws` tells Terraform where the provider comes from. The version constraint keeps installation inside the provider version family the project expects.
+The `+` at the start of each line means the attribute will be set when the resource is created. `(known after apply)` means the value will be assigned by AWS after creation — you cannot know it in advance.
 
-Provider versions matter because providers are released separately from Terraform. A provider release can add a new resource, change validation, fix a bug, or adjust behavior for an AWS API. The selected provider version is recorded in `.terraform.lock.hcl` after initialization so the team can repeat the same dependency choice.
+For an update, you see a `~`:
 
-The provider also needs configuration. For AWS, the most visible setting is the region:
-
-```hcl
-provider "aws" {
-  region = "us-east-1"
-}
 ```
-
-Credentials usually do not belong in this file. The AWS provider can use the normal AWS credential chain: environment variables, shared config files, IAM Identity Center, instance profiles, web identity, or a CI identity. Keeping credentials outside Terraform files matters because those files are usually committed to Git.
-
-## Resources
-
-A resource block tells Terraform to manage one object.
-
-The syntax has a regular shape:
-
-```hcl
-resource "resource_type" "local_name" {
-  argument = value
-}
-```
-
-The first label is the resource type. The provider defines that type and decides which arguments it accepts. The second label is the local name inside this module. Together, the type and local name form a resource address.
-
-For an S3 bucket, the address can look like this:
-
-```hcl
-resource "aws_s3_bucket" "hello" {
-  bucket = "dp-terraform-hello-123456"
-}
-```
-
-The resource type is `aws_s3_bucket`. The local name is `hello`. The address is:
-
-```text
-aws_s3_bucket.hello
-```
-
-That address appears in plans, state, imports, references, and error messages. It is Terraform's stable name for the object inside the configuration. The real AWS object has its own identity, such as the S3 bucket name. State is what binds the Terraform address to the real object after apply.
-
-Resources have arguments and attributes. Arguments are values you set, such as `bucket` and `tags`. Attributes are values the provider reports, such as the bucket ARN. Other blocks can reference those values:
-
-```hcl
-output "bucket_arn" {
-  value = aws_s3_bucket.hello.arn
-}
-```
-
-The expression `aws_s3_bucket.hello.arn` means "read the `arn` attribute from the resource at address `aws_s3_bucket.hello`." This reference system becomes more important as infrastructure grows. A security group can reference a VPC ID. An EC2 instance can reference a subnet ID. An IAM policy can reference an S3 bucket ARN. Terraform uses those references to understand dependency order.
-
-## AWS S3 Hello World
-
-The smallest useful AWS example creates a private S3 bucket and blocks public bucket access. It is still real AWS infrastructure, so use a sandbox account and choose a bucket name that belongs to you. S3 bucket names must be globally unique across an AWS partition. Replace the example name before running it.
-
-Put this in `main.tf`:
-
-```hcl
-terraform {
-  required_providers {
-    aws = {
-      source  = "hashicorp/aws"
-      version = "~> 6.0"
-    }
+# aws_instance.app will be updated in-place
+~ resource "aws_instance" "app" {
+      id            = "i-0a1b2c3d4e5f6789"
+    ~ instance_type = "t3.small" -> "t3.medium"
   }
-}
+```
 
-provider "aws" {
-  region = "us-east-1"
-}
+The `~` shows the attribute is changing. The `->` shows the old value on the left and the new value on the right.
 
-resource "aws_s3_bucket" "hello" {
-  bucket = "dp-terraform-hello-123456"
+For a replacement (destroy the old resource and create a new one), you see both `-/+`:
 
-  tags = {
-    Name        = "terraform-hello"
-    Environment = "learning"
+```
+# aws_instance.app must be replaced
+-/+ resource "aws_instance" "app" {
+    ~ ami = "ami-0c55b159cbfafe1f0" -> "ami-0987654321abcdef0" # forces replacement
   }
-}
-
-resource "aws_s3_bucket_public_access_block" "hello" {
-  bucket = aws_s3_bucket.hello.id
-
-  block_public_acls       = true
-  block_public_policy     = true
-  ignore_public_acls      = true
-  restrict_public_buckets = true
-}
-
-output "bucket_name" {
-  value = aws_s3_bucket.hello.bucket
-}
-
-output "bucket_arn" {
-  value = aws_s3_bucket.hello.arn
-}
 ```
 
-Read the file from top to bottom once, then read it by role.
+The phrase `# forces replacement` tells you which attribute change triggered the replacement. Replacements are the most impactful changes because they cause brief downtime for the old resource. Pay careful attention to any `-/+` lines in the plan.
 
-The `terraform` block says this directory needs the AWS provider from `hashicorp/aws`. Terraform uses that during initialization to install the provider plugin and write the selected version to the lock file.
+At the bottom, the plan summarizes the total number of changes:
 
-The `provider "aws"` block says AWS API calls should target `us-east-1` unless another provider configuration overrides it. S3 bucket names are global within a partition, but the bucket still has a region. Later AWS examples use the same provider block for strongly regional resources such as VPCs, subnets, EC2 instances, and security groups.
-
-The `aws_s3_bucket.hello` resource describes the bucket. The `bucket` argument sets the real S3 bucket name. The `tags` argument records ownership and purpose. Tags are small, but they matter in real accounts because cost reports, cleanup scripts, dashboards, and humans all rely on them.
-
-The `aws_s3_bucket_public_access_block.hello` resource describes a guardrail attached to the bucket. Its `bucket` argument references `aws_s3_bucket.hello.id`. That reference tells Terraform the public access block depends on the bucket. Terraform can then create the bucket first and apply the guardrail after AWS returns the bucket identity.
-
-The outputs expose values a human or another workflow may need after apply. The bucket name comes from an argument. The bucket ARN comes from an attribute reported by the provider.
-
-Even in this small file, the main Terraform model is visible: provider, resource, reference, plan, apply, output, and state.
-
-## Plan
-
-Terraform does not change AWS the moment you save `main.tf`. The usual first steps are initialization and planning.
-
-```bash
-terraform init
-terraform plan
+```
+Plan: 3 to add, 1 to change, 0 to destroy.
 ```
 
-Initialization prepares the directory. It installs the AWS provider, creates Terraform working files under `.terraform`, and records dependency selections in `.terraform.lock.hcl`.
+## How Terraform Knows What Already Exists
 
-Planning asks Terraform to compare configuration, state, and provider data. For the S3 hello world, the first plan should propose bucket creation and public access block creation:
+Terraform uses a state file to track what it has created. After every successful apply, the state file is updated to record every resource that exists and its current attributes.
 
-```text
-Terraform will perform the following actions:
+When you run `terraform plan`, Terraform reads the state file to find the list of resources it previously created. It then contacts the cloud provider's API to verify those resources still exist and to get their current attributes. If you changed a setting in the console without going through Terraform, this API check will catch the discrepancy.
 
-  # aws_s3_bucket.hello will be created
-  + resource "aws_s3_bucket" "hello" {
-      + arn    = (known after apply)
-      + bucket = "dp-terraform-hello-123456"
-      + id     = (known after apply)
-      + tags   = {
-          + "Environment" = "learning"
-          + "Name"        = "terraform-hello"
-        }
-    }
+Without the state file, Terraform would have no memory of what it created. Every `terraform plan` would think all resources are new and propose to create them all over again. The state file is what makes Terraform idempotent — running it multiple times without any configuration changes produces no further changes, because Terraform can see that reality already matches the configuration.
 
-  # aws_s3_bucket_public_access_block.hello will be created
-  + resource "aws_s3_bucket_public_access_block" "hello" {
-      + block_public_acls       = true
-      + block_public_policy     = true
-      + bucket                  = (known after apply)
-      + ignore_public_acls      = true
-      + restrict_public_buckets = true
-    }
+This is why the state file is so important. Losing it means Terraform loses all memory of what it created. Getting it back requires manually telling Terraform about each existing resource using `terraform import`. Protecting the state file — by storing it in a remote backend with backups — is a critical practice for any team using Terraform.
 
-Plan: 2 to add, 0 to change, 0 to destroy.
-```
+## Terraform Supports Many Cloud Providers
 
-The `+` symbol means Terraform plans to create the resource. The phrase `(known after apply)` means Terraform cannot know the final value until the provider creates or reads something in AWS. The summary line is the first safety check. For this example, two creates are expected. In a shared account, an unexpected destroy count would stop the review.
+One of Terraform's major strengths is that it works the same way regardless of which cloud provider you are using. The commands are the same. The workflow is the same. The language is the same. Only the resource types in your configuration files differ.
 
-When the plan looks right, `terraform apply` performs the approved actions:
+For AWS, you write `resource "aws_instance"` and `resource "aws_s3_bucket"`. For Google Cloud, you write `resource "google_compute_instance"` and `resource "google_storage_bucket"`. For Azure, you commonly write resources such as `azurerm_linux_virtual_machine`, `azurerm_resource_group`, and `azurerm_storage_account`.
 
-```bash
-terraform apply
-```
+This consistency means skills transfer. An engineer who knows how to use Terraform with AWS can pick up Terraform for Google Cloud very quickly — the concepts, commands, and workflow are identical. Only the specific resource types and attribute names are different.
 
-Terraform shows a plan and asks for confirmation unless you give it a saved plan file. When you approve, the AWS provider calls AWS APIs. After a successful apply, Terraform writes state so future runs can connect `aws_s3_bucket.hello` to the real bucket.
+It also means Terraform can manage resources across multiple cloud providers in the same configuration. A configuration might create an AWS VPC and RDS database, a Cloudflare DNS record pointing at the load balancer, and a GitHub repository with the infrastructure code — all in one `terraform apply`.
 
-## State
-
-State is Terraform's memory of managed objects.
-
-After the S3 hello-world apply, state records that the address `aws_s3_bucket.hello` maps to the bucket named `dp-terraform-hello-123456`. It also records provider-reported attributes such as IDs, ARNs, and other values Terraform needs for future comparisons.
-
-That binding explains several beginner surprises.
-
-If the configuration contains `aws_s3_bucket.hello` but the state has no matching entry, Terraform may plan to create a bucket. If the state says the bucket exists but the AWS provider reports that it was deleted manually, Terraform may plan to recreate it. If you rename the resource address from `aws_s3_bucket.hello` to `aws_s3_bucket.orders` without moving state, Terraform can read that as one object removed and another object added.
-
-State can contain sensitive values. Cloud providers often return generated IDs, policy contents, connection information, or other data that should be protected. A single-user learning directory may start with local state in `terraform.tfstate`. A team project usually stores state in a remote backend with access control and locking so two applies do not race each other.
-
-State also gives Terraform a memory boundary. Terraform manages objects that are in its configuration and state. An existing S3 bucket created by hand is outside that boundary until the team imports it or recreates it through Terraform. This is why state becomes one of the central topics in any serious Terraform project.
-
-## OpenTofu
-
-OpenTofu is a separate infrastructure as code project that follows the same beginner model: configuration files, providers, resources, plans, applies, and state.
-
-The command names are familiar:
-
-| Terraform CLI | OpenTofu CLI | Same beginner idea |
-| --- | --- | --- |
-| `terraform init` | `tofu init` | Prepare the directory and install providers |
-| `terraform plan` | `tofu plan` | Preview the proposed change |
-| `terraform apply` | `tofu apply` | Make the approved change |
-| `terraform state` | `tofu state` | Inspect or adjust state bindings |
-
-OpenTofu keeps familiar language concepts, including the `terraform` settings block for compatibility. There are real differences in licensing, registry behavior, ecosystem choices, and version timelines. Those differences matter when a team chooses a production toolchain. For learning the core model, the same mental path carries across both tools.
-
-## Common First Mistakes
-
-The first S3 example is small enough that most mistakes are easy to understand.
-
-**Skipping initialization.** Terraform needs the provider plugin before it can understand `aws_s3_bucket`. Run `terraform init` when you start a directory and when provider, module, or backend settings change.
-
-**Using the example bucket name unchanged.** S3 bucket names must be globally unique. If another account already owns the name, AWS rejects the create call during apply.
-
-**Running in the wrong AWS account or region.** Terraform uses the credentials and region available to the provider. Check the active AWS identity before applying in any account that matters.
-
-**Reading `.tf` files like scripts.** Terraform reads the full module and builds a graph from references. The line order in a file rarely decides operation order. The reference from the public access block to the bucket is what creates the dependency.
-
-**Ignoring the plan summary.** The plan body is important, but the add, change, and destroy counts are the first alarm. A destroy or replacement in production deserves careful inspection.
-
-**Putting credentials in provider blocks.** Use the AWS credential chain or a managed automation identity. Long-lived access keys in Terraform files usually become long-lived secrets in Git.
-
-**Committing state.** State can contain sensitive data and ownership bindings. Keep local state out of Git and use a protected remote backend for team environments.
-
-**Forgetting cleanup.** A learning bucket is still a real AWS resource. Use the same directory and state when you destroy it, then verify the bucket is gone.
+There are over 3,000 providers available in the Terraform Registry. HashiCorp maintains the most popular ones (AWS, Azure, GCP, Kubernetes, GitHub). Cloud providers maintain their own official providers. The community maintains providers for everything else. If you need to manage a resource type that exists somewhere in the digital world, there is a good chance a provider exists for it.
 
 ## Putting It All Together
 
-The opening problem was simple: create one private S3 bucket in a way the team can repeat and review.
+Terraform is a command-line tool split into two parts: Core, which handles the planning and state logic, and Providers, which handle the API communication with each specific service. You write configuration files that describe what you want to exist. Terraform compares those files against what currently exists and proposes a plan. You review the plan, confirm it, and Terraform makes the changes.
 
-Terraform solves that by changing where the infrastructure story lives. The `.tf` file records the desired bucket, tags, public access guardrail, and outputs. The AWS provider supplies the platform knowledge. Resource addresses give Terraform stable names for managed objects. The plan shows proposed AWS actions before they happen. Apply performs the approved actions. State remembers which real AWS objects belong to which resource addresses.
+The workflow is always the same: `terraform init` to set up the providers, `terraform plan` to see what will change, `terraform apply` to make the changes. The state file records what Terraform created, which is what allows Terraform to detect changes and avoid creating duplicates.
 
-The example is deliberately small. The structure is the same when the managed objects become VPCs, subnets, security groups, EC2 instances, IAM roles, load balancers, and databases. Terraform still reads files, providers, and state; builds a graph; proposes a plan; applies through provider APIs; and records the result.
+The consistency of this workflow across hundreds of cloud providers is why Terraform has become the standard tool for infrastructure management. Learn it once with AWS, and the knowledge transfers directly to every other platform it supports.
 
 ## What's Next
 
-The next article turns this model into a daily workflow. It follows a small AWS environment through `init`, `fmt`, `validate`, `plan`, `apply`, verification, and `destroy`, so the commands have a clear job instead of feeling like a memorized sequence.
+Now that you understand what Terraform is and how it works, the next article goes deeper into providers: how to configure them, how to use multiple providers in the same configuration, and what happens when you need to deploy to multiple regions or accounts simultaneously.
+
+![A six-part summary infographic for Terraform covering configuration, providers, state, plan, apply, and drift.](/content-assets/articles/article-iac-terraform-foundations-what-is-terraform/terraform-summary.png)
+
+*Use this summary as the quick Terraform mental checklist before reading a plan or running apply.*
+
 
 ---
 
 **References**
 
-- [What is Terraform?](https://developer.hashicorp.com/terraform/intro) - Overview of Terraform as infrastructure as code for cloud and on-premises resources.
-- [HashiCorp Terraform announcement](https://www.hashicorp.com/en/blog/terraform-announcement) - Historical context for Terraform's 2014 release and multi-provider design.
-- [Terraform language overview](https://developer.hashicorp.com/terraform/language) - Core language concepts, including blocks, arguments, expressions, providers, resources, and dependencies.
-- [Terraform configuration syntax](https://developer.hashicorp.com/terraform/language/syntax/configuration) - Syntax rules for blocks, labels, arguments, identifiers, and expressions.
-- [Provider requirements](https://developer.hashicorp.com/terraform/language/providers/requirements) - Provider source addresses, local names, and version constraints.
-- [AWS provider documentation](https://registry.terraform.io/providers/hashicorp/aws/latest/docs) - Terraform Registry documentation for configuring and using the AWS provider.
-- [aws_s3_bucket resource](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/s3_bucket) - Resource reference for managing S3 buckets with the AWS provider.
-- [aws_s3_bucket_public_access_block resource](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/s3_bucket_public_access_block) - Resource reference for managing S3 public access block settings with the AWS provider.
-- [Amazon S3 bucket naming rules](https://docs.aws.amazon.com/AmazonS3/latest/userguide/bucketnamingrules.html) - AWS rules for globally unique S3 bucket names.
-- [Terraform plan command](https://developer.hashicorp.com/terraform/cli/commands/plan) - CLI reference for previewing changes from configuration, state, and provider data.
-- [Terraform state](https://developer.hashicorp.com/terraform/language/state) - Explanation of state as the binding between configuration and real objects.
-- [OpenTofu settings](https://opentofu.org/docs/language/settings/) - OpenTofu settings documentation, including compatibility with the `terraform` block.
-- [OpenTofu state](https://opentofu.org/docs/language/state/) - OpenTofu state model and state file behavior.
+- [Terraform Introduction (HashiCorp Documentation)](https://developer.hashicorp.com/terraform/intro) — Official introduction to Terraform, its use cases, and the core workflow.
+- [How Terraform Works with Plugins (HashiCorp Documentation)](https://developer.hashicorp.com/terraform/plugin/how-terraform-works) — A more detailed explanation of the Core/Provider architecture.
+- [Terraform CLI Commands (HashiCorp Documentation)](https://developer.hashicorp.com/terraform/cli/commands) — Complete reference for all Terraform CLI commands, including init, plan, apply, and destroy.
+- [Terraform on Azure Overview (Microsoft Learn)](https://learn.microsoft.com/en-us/azure/developer/terraform/overview) — Microsoft's overview of using Terraform with Azure.
+- [Create an Azure Resource Group with Terraform (Microsoft Learn)](https://learn.microsoft.com/en-us/azure/developer/terraform/azurerm/create-resource-group) — Beginner AzureRM example using Terraform.

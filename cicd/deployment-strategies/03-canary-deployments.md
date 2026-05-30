@@ -150,6 +150,10 @@ Applying progressive traffic splits, weight-based ingress controls, side-by-side
 
 Canary deployments represent the pinnacle of automated, telemetry-driven release safety inside production. However, regardless of whether you choose Rolling, Blue-Green, or Canary deployments, releases will eventually encounter failures that require immediate decision-making under pressure. When an outage occurs, how do we decide whether to execute an instant rollback or attempt to compile a hotfix patch on the fly? Let's move to **Rollback vs. Roll-Forward** to study the operational frameworks, MTTR rules, and backwards-compatible database schema gates needed to manage failures safely.
 
+![Canary deployment summary showing small traffic slice, weighted routing, baseline comparison, rollback thresholds, and ramp up](/content-assets/articles/article-cicd-deployment-strategies-canary-deployments/canary-summary.png)
+
+*Use this as the canary checklist: start with a small traffic slice, route by weights, compare stable and new telemetry side by side, set rollback thresholds, and ramp only when signals stay healthy.*
+
 ---
 
 **References**

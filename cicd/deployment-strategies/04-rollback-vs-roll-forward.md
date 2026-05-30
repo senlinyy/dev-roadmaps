@@ -133,6 +133,10 @@ By prioritizing MTTR, enforcing the 10-minute revert rule, and designing backwar
 
 Executing safe rollbacks and migrations requires a highly reliable, standardized pipeline promotion flow. If the compiled code binary or container image is not identical across staging and production, environment drift will introduce new, unexpected variables that make rollbacks unpredictable. Let's move to **Environment Promotion** to learn how to enforce the "Build Once, Run Everywhere" golden rule and design progressive quality gates across staging and production.
 
+![Rollback versus roll-forward recovery summary showing revert path, patch path, MTTR pressure, schema trap, and compatible migrations](/content-assets/articles/article-cicd-deployment-strategies-rollback-vs-roll-forward-decisions/recovery-decision-summary.png)
+
+*Use this as the recovery checklist: compare revert and patch paths under MTTR pressure, identify schema traps, design compatible migrations, and choose the fastest safe recovery path.*
+
 ---
 
 **References**

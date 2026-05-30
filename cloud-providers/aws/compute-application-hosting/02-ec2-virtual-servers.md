@@ -38,13 +38,13 @@ To survive and operate virtual machines safely in the cloud, you must stop treat
 
 Amazon Elastic Compute Cloud, commonly known as EC2, is the baseline AWS service for provisioning virtual servers, which AWS calls instances. When you launch an EC2 instance, AWS does not allocate a dedicated physical server to you; instead, it uses a hypervisor to slice a massive, physical host computer into isolated virtual machines (VMs) sharing the physical CPU, memory, and hardware interfaces.
 
-From your application team's perspective, EC2 feels close to renting a private Linux server because you get absolute guest operating system control and administrative root privileges. This dedicated environment is exactly what specialized, host-shaped workloads demand. With EC2, you can:
+From your application team's perspective, EC2 feels close to renting a private Linux server because you get broad guest operating system control and administrative root privileges. This server-shaped environment is exactly what specialized, host-shaped workloads demand. With EC2, you can:
 * Load proprietary Linux kernel modules (`.ko` binary drivers via `insmod`/`modprobe`) to capture low-level kernel event loops or audit raw network socket buffers.
-* Interact directly with physical CPU Performance Monitoring Units (PMUs) to trace instruction-level application performance.
-* Run software packages utilizing node-locked enterprise licenses tied strictly to the virtual host's motherboard GUID, boot volume hardware serial numbers, or a static MAC address.
+* Run host-level agents, tracing tools, or operating system tunings that require administrative control of the guest OS.
+* Run software packages that depend on stable virtual host attributes, dedicated hosts, fixed ENIs, or licensing models that do not tolerate short-lived container task identities.
 * Run nested virtualization hypervisors or custom operating system configurations that container runtimes cannot accommodate.
 
-Because your guest operating system runs on shared physical hardware managed entirely by AWS, physical host failures, hypervisor upgrades, and network maintenance events are normal, expected occurrences. AWS can and will terminate your instance for system maintenance or hardware recovery. If your application stores persistent files, custom logs, or unique configurations on that single machine's local disk, you have constructed a dangerous single point of failure. You must design and operate your EC2 servers under the absolute assumption that they can disappear at any second, treating the virtual instance as a purely disposable processing node cabled to external regional storage and APIs.
+Because your guest operating system runs on physical hardware managed by AWS, host failures, hypervisor upgrades, and network maintenance events are normal, expected occurrences. AWS can stop, retire, or require replacement of instances for system maintenance or hardware recovery. If your application stores persistent files, custom logs, or unique configurations only on that single machine's local disk, you have constructed a dangerous single point of failure. You must design and operate EC2 servers as replaceable processing nodes cabled to external regional storage and APIs.
 
 The key to operating EC2 is understanding the division of responsibility between your team and AWS:
 
@@ -81,7 +81,7 @@ Second, control traffic using security groups, which act as stateful, host-level
 
 Finally, eliminate the public SSH entry point completely. Instead of opening port `22` and managing fragile SSH key pairs, utilize AWS Systems Manager Session Manager (SSM). Session Manager allows operators to open a secure shell session directly to the instance guest OS via the AWS Console or CLI. 
 
-This access path operates entirely over a secure, outbound HTTPS channel managed by the local SSM Agent. You do not need to open any inbound firewall ports, and every shell command is authenticated, logged, and audited.
+This access path operates over a secure, outbound HTTPS channel managed by the local SSM Agent. You do not need to open any inbound firewall ports. Session access is authenticated through IAM, and you can configure session logging to CloudWatch Logs or S3 so shell activity is auditable.
 
 ```mermaid
 flowchart TD
@@ -90,6 +90,10 @@ flowchart TD
     Ops[Operator Terminal] -->|SSM API Gateway| SSMAgent[Outbound SSM Agent]
     SSMAgent --> PrivateInstance
 ```
+
+![Replaceable EC2 server boot path with AMI, user data, S3 artifact, private subnet, SSM, systemd, instance profile, ALB, and logs](/content-assets/articles/article-cloud-providers-aws-compute-application-hosting-ec2-virtual-servers/replaceable-ec2-server.png)
+
+*A safe EC2 server is built from repeatable inputs, not hand repair. The AMI, bootstrap script, artifact store, private network path, SSM access channel, instance profile, supervisor, and log stream together make the instance replaceable.*
 
 To enable this secure SSM connection and authorize your application code to call AWS APIs, you attach an IAM Role to your instance using an Instance Profile. The instance profile acts as the bridge that delivers dynamic, temporary credentials to the server without storing static access keys on the filesystem.
 
@@ -176,7 +180,7 @@ When a root volume reaches 100% capacity, systemd cannot write cache files, shel
 
 Disk and Patching Best Practices:
 
-* **Aggregate Your Logs**: Never treat local server disks as the permanent home for application logs. Configure log shippers (like the CloudWatch Logs Agent) to sweep local logs and stream them immediately to a central cloud vault, and use logrotate to clean local files hourly.
+* **Aggregate Your Logs**: Never treat local server disks as the permanent home for application logs. Configure log shippers (like the CloudWatch Agent) to sweep local logs and stream them immediately to a central cloud destination, and use logrotate to clean local files on a schedule that matches your log volume.
 * **Avoid Live Server Patching**: Do not establish a habit of running `yum update` or live library installations on active production servers. This introduces configuration drift and breaks reproducibility.
 * **Immutable OS Patching**: When security patches arrive, do not update a running server in place. Update your baseline bootstrap script or build a new gold-standard AMI, launch fresh replacement instances, verify their health behind the load balancer, and terminate the old, unpatched instances.
 
@@ -196,6 +200,10 @@ By automating your bootstrap lifecycle, protecting your network gates, and super
 ## What's Next
 
 We now understand what it means to own and operate a server-shaped runtime using EC2 virtual machines. However, as our application footprint grows, managing individual host patching, systemd units, and EBS disk volumes can introduce massive operational overhead. In the next article, we will explore ECS and Fargate container hosting, deconstructing how container images are orchestrated as services, cabled with dynamic VPC networking, and run without managing virtual servers.
+
+![Six-tile EC2 operations checklist covering private subnet, AMI bootstrap, instance profile, systemd, logs and disk hygiene, and replacement patching](/content-assets/articles/article-cloud-providers-aws-compute-application-hosting-ec2-virtual-servers/ec2-operations-checklist.png)
+
+*Use this as the EC2 operations checklist: keep the instance private, bootstrap from a known image and script, grant AWS access through an instance profile, supervise the app with systemd, ship logs before disks fill, and patch by replacing hosts.*
 
 ---
 

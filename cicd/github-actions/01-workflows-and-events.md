@@ -35,6 +35,10 @@ GitHub Actions resolved this fragmentation by integrating the automation engine 
 
 Because the automation engine is co-located with the code, any eligible event can instantly trigger a workflow. Webhooks are handled natively, without custom endpoint configurations or secret sharing. When an event matches your declared trigger rules, the platform schedules a run, allocates a runner environment, and executes your automation. This event-driven model forms the operational core of modern development workflows, allowing pipelines to react dynamically to collaborative decisions.
 
+![GitHub Actions event run map showing events, filters, workflow structure, runner allocation, and concurrency](/content-assets/articles/article-cicd-github-actions-workflows-and-events/actions-event-run-map.png)
+
+*A GitHub Actions run begins with an event, but filters, workflow structure, runner assignment, step execution, and concurrency rules decide what actually runs.*
+
 ## The Structural Anatomy: Workflows, Jobs, and Steps
 
 An automation pipeline inside GitHub Actions is declared in a YAML configuration file. To be recognized by the orchestrator, these manifests must reside inside a specific directory at the root of the repository: `.github/workflows/`. If you place a YAML file outside this directory, the platform treats it as plain text and ignores its instructions.
@@ -348,6 +352,10 @@ Fifth, manage parallel queue resources. Define concurrency groups with cancel-in
 ## What's Next
 
 Configuring precise event triggers and workflow paths guarantees that our automation starts at the correct moment. However, once a job is scheduled, it must run on virtual or physical compute hardware. In the next chapter, **Runners and Execution**, we will explore the physical reality of hosted versus self-hosted executors, isolate steps using Docker container contexts, manage workspace filesystems, and evaluate system dependencies safely.
+
+![GitHub Actions workflows and events summary showing triggers, workflow YAML, jobs, filters, contexts, and concurrency](/content-assets/articles/article-cicd-github-actions-workflows-and-events/workflows-events-summary.png)
+
+*Use this as the workflows-and-events checklist: start with events, read the workflow YAML, follow jobs and steps, apply filters, understand contexts, and control matrix/concurrency behavior.*
 
 ---
 

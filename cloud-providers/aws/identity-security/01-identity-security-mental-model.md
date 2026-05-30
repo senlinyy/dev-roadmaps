@@ -31,13 +31,13 @@ aliases:
 
 When you run a web application on a personal laptop, security is rarely a boot-time obstacle. Your laptop is an environment built on local trust. The database running on localhost accepts connections because you configured a local password in a dot-environment file, and your application code reads and writes local files because your laptop operating system automatically trusts the logged-in user session. If you need to make an API call to a cloud provider from your local terminal, the local command-line interface simply reads a static, administrative access key from a hidden credentials file in your home directory.
 
-However, once that same application moves to a professional cloud provider like AWS, this expectation of automatic local trust completely breaks down. The application container boots in an isolated virtual cluster, attempt to retrieve its database credentials from a vaulted storage system, and immediately crashes with an Access Denied error. The team is left with several confusing questions:
+However, once that same application moves to a professional cloud provider like AWS, this expectation of automatic local trust completely breaks down. The application container boots in an isolated virtual cluster, attempts to retrieve its database credentials from a vaulted storage system, and immediately crashes with an Access Denied error. The team is left with several confusing questions:
 
 * Why did the deployment pipeline report success when the running application cannot perform its basic startup duties?
 * Why does the S3 upload work perfectly from the developer's laptop terminal, but fail when run inside the cloud container?
 * How does the system distinguish between a human developer, a deployment script, and a running container when they all try to touch the same database?
 
-These are not general security problems. They are specific authorization questions. In the cloud, there is no automatic trust based on physical proximity or user logins. Every single interaction, including database queries, file reads, and configuration fetches, is a formal web request. To survive and operate safely in this environment, you need to understand the request-level authorization system that evaluates every single packet before any work can begin.
+These are not general security problems. They are specific authorization questions. In the cloud, there is no automatic trust based on physical proximity or user logins. Calls to AWS services, such as fetching a secret, uploading to S3, or writing logs, become signed API requests with an exact caller and an exact action. IAM evaluates those AWS API requests. Database queries, operating system file reads, and raw network packets still have their own controls, such as database users, Linux permissions, security groups, and NACLs. To operate safely, you need to understand which requests IAM evaluates and which layer protects the rest.
 
 ## What Is IAM
 
@@ -64,6 +64,10 @@ flowchart TD
     AllowCheck -- Yes --> Allowed[Request Allowed]
     AllowCheck -- No --> Denied
 ```
+
+![IAM request gate infographic showing principal, action, resource, context, explicit deny, default deny, and least privilege](/content-assets/articles/article-cloud-providers-aws-identity-security-identity-security-mental-model/iam-request-gate.png)
+
+*Every AWS API call enters IAM as a request with a caller, action, target resource, and context. The safest mental model is a narrow gate: explicit denies win, and anything without a written allow is denied by default.*
 
 By mapping every Access Denied error to these coordinates, debugging becomes an operational checklist rather than a guessing game. If your container cannot write to an S3 bucket, you do not broad-stroke the permissions of the entire account. You identify the exact principal of the running container, the specific write action it attempted, the unique ARN of the bucket, and the exact policy that failed to authorize the path.
 
@@ -97,7 +101,7 @@ If Maya uses her personal developer credentials to run a local script that write
 
 Once IAM authenticates the principal, it evaluates what that caller is trying to do and where they are trying to do it. These are represented by actions and resources. 
 
-An action is a specific API operation exposed by an AWS service, written in a lowercase, service-prefixed format. A resource is the target object, identified by a standardized Amazon Resource Name (ARN) that guarantees absolute uniqueness across the global cloud footprint.
+An action is a specific API operation exposed by an AWS service, written in a lowercase, service-prefixed format. A resource is the target object, often identified by a standardized Amazon Resource Name (ARN). ARNs give AWS a precise way to name resources across partitions, services, regions, accounts, and resource paths, though each service has its own exact ARN shape.
 
 Common Application Actions and Resources:
 
@@ -170,6 +174,10 @@ By treating security as a structured request evaluation, you convert mysterious 
 ## What's Next
 
 We now have a clean mental model of how AWS evaluates API requests against principals, actions, and resources. However, a major practical question remains: How does our running application container securely prove its identity to AWS without carrying permanent access keys baked into our codebase or environment configurations? In the next article, we will explore Workload Roles, temporary security sessions, and how the AWS SDK automatically retrieves and refreshes credentials without developer intervention.
+
+![Identity security summary infographic showing localhost trust, IAM request gates, principals, actions and resources, explicit deny, and least privilege](/content-assets/articles/article-cloud-providers-aws-identity-security-identity-security-mental-model/identity-security-summary.png)
+
+*Use this as the identity-security checklist: stop relying on localhost trust, model every cloud call as an IAM request, identify the exact principal, bind actions to resources, respect explicit denies, and grant only the narrow path the workload needs.*
 
 ---
 

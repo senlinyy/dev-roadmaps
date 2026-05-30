@@ -253,6 +253,10 @@ Now that we have abstracted our pipeline configurations into reusable code and g
 
 To solve this, we define the entire controller's configuration as code. Let's move to **Plugins and Configuration** to learn how to manage Jenkins Configuration as Code (JCasC) and package immutable, Docker-baked controllers.
 
+![Jenkins shared library summary showing duplicated pipeline code, library folders, vars steps, trust boundary, and version pinning](/content-assets/articles/article-cicd-jenkins-shared-libraries/shared-library-summary.png)
+
+*Use this as the shared-library checklist: remove duplicated pipeline logic, keep the library structure clear, expose `vars` steps and wrappers, understand sandbox trust, and pin library versions.*
+
 ---
 
 **References**

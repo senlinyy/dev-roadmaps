@@ -32,7 +32,7 @@ A common and highly insecure habit is to copy these values directly into the dep
 * **Accidental console leaks**: If an engineer inspects the environment configuration of a running container to debug a minor issue, the database password is displayed in plain text on their screen.
 * **No dynamic lifecycle**: Because the secrets are hardcoded in the deployment configuration, rotating a database password requires editing your deployment scripts, regenerating your task definitions, and running a complete CI/CD deployment pipeline, increasing the risk of downtime.
 
-To eliminate these vulnerabilities, you need to store your sensitive configuration in a vaulted, encrypted storage system in the cloud, dynamically inject the values directly into the container's memory at boot time, and keep them completely out of your deployment scripts, console screens, and build histories.
+To eliminate these vulnerabilities, you need to store your sensitive configuration in a vaulted, encrypted storage system in the cloud, deliver the value only to authorized workloads at startup or runtime, and keep it out of your deployment scripts, console screens, and build histories.
 
 ## What Counts as a Secret
 
@@ -94,11 +94,11 @@ flowchart TD
     SecretARN --> ECSAgent[ECS Agent boots container task]
     ECSAgent --> Fetch[Fetch secret from Secrets Manager]
     Fetch --> Decrypt[Decrypt secret value via KMS]
-    Decrypt --> Inject[Inject plaintext secret into container RAM]
-    Inject --> App[Application reads memory variable]
+    Decrypt --> Deliver[Deliver plaintext to authorized workload]
+    Deliver --> App[Application reads environment variable or SDK result]
 ```
 
-At container boot, the ECS agent reads the secret ARN from the task definition, calls the Secrets Manager API to retrieve the value, and injects it as an environment variable directly into the container's memory space. The developer writes standard code to read the environment variable, but the secret never touches the code repository, build system, or deploy files. It remains securely vaulted in AWS, cabled directly into memory.
+At container boot, the ECS agent can read the secret ARN from the task definition, call the Secrets Manager API to retrieve the value, and place it into the container as an environment variable. Some applications instead call Secrets Manager through the AWS SDK at runtime and cache the result carefully in memory. In both patterns, the secret value stays out of the code repository, build system, and deployment files.
 
 ## KMS and Envelope Encryption
 
@@ -112,12 +112,12 @@ Envelope Encryption is the practice of encrypting your sensitive data with a tem
 
 To manage this process, you must choose between two distinct categories of master keys, known as Key Management styles:
 
-* **AWS Managed Keys**: Default encryption keys created and managed automatically by AWS on your behalf (such as `aws/secretsmanager` or `aws/ssm`). These keys are free and require zero configuration, but they have a massive operational limitation: you cannot edit their key policies. This means they cannot be used to authorize cross-account access, preventing a developer or deployment role in a separate AWS staging account from reading production secrets encrypted under the default key.
-* **Customer Managed Keys (CMKs)**: Persistent keys that you create, own, and configure within your organization. CMKs give you absolute control over key policies, IAM grants, and auto-rotation schedules. They are mandatory for secure, multi-account enterprise systems because they let you write custom permission policies to authorize exact workload roles across account boundaries.
+* **AWS Managed Keys**: Default encryption keys created and managed automatically by AWS on your behalf (such as `aws/secretsmanager` or `aws/ssm`). These keys are simple and require almost no configuration, but you cannot edit their key policies. That makes them a good default for many single-account workloads and a poor fit when you need custom key policies, external key grants, or carefully controlled cross-account access.
+* **Customer Managed Keys**: Persistent keys that you create, own, and configure within your organization. Customer managed keys give you direct control over key policies, IAM grants, and rotation settings. They are commonly used for multi-account production systems because they let you authorize exact workload roles across account boundaries and audit key use more deliberately.
 
 The architectural elements of this envelope pattern include:
 
-* **Customer Managed Key (CMK)**: The persistent Master Key, stored securely inside the hardware boundary of KMS. It never leaves KMS.
+* **KMS Key**: The persistent master key, stored securely inside the KMS boundary. It never leaves KMS.
 * **Data Key**: A unique, short-lived 256-bit symmetric key generated dynamically by KMS for the specific secret.
 * **Encrypted Data Key**: The Data Key after being encrypted by the Master Key. It is stored directly alongside the encrypted secret payload on disk.
 
@@ -125,21 +125,21 @@ The operational lifecycle of envelope encryption is divided into two distinct ph
 
 ### The Encryption Phase (When you save a secret)
 
-* **Step 1: Request Data Key**: Secrets Manager requests a new Data Key from KMS, passing the ARN of your Customer Managed Key (CMK) as the master authority.
-* **Step 2: Generate Keys**: KMS generates a new 256-bit symmetric Data Key in memory. It makes two copies: a plaintext Data Key and an encrypted Data Key (encrypted using your CMK master key).
-* **Step 3: Deliver Keys**: KMS returns both copies to Secrets Manager over a secure network channel. The CMK remains locked inside KMS.
+* **Step 1: Request Data Key**: Secrets Manager requests a new Data Key from KMS, using the selected KMS key for the secret.
+* **Step 2: Generate Keys**: KMS generates a new 256-bit symmetric Data Key in memory. It makes two copies: a plaintext Data Key and an encrypted Data Key encrypted under the KMS key.
+* **Step 3: Deliver Keys**: KMS returns both copies to Secrets Manager over a secure network channel. The KMS key remains inside KMS.
 * **Step 4: Encrypt Payload**: Secrets Manager uses the plaintext Data Key in memory to encrypt your raw secret string.
 * **Step 5: Discard Plaintext**: Secrets Manager immediately scrubs the plaintext Data Key from its memory.
 * **Step 6: Write to Disk**: Secrets Manager writes the encrypted secret payload and the encrypted Data Key side by side to its persistent disk storage.
 
-### The Decryption Phase (When a container task boots)
+### The Decryption Phase (When a workload reads the secret)
 
-* **Step 1: Load Payload**: The ECS agent starts your container and requests the secret. Secrets Manager reads the encrypted payload and the encrypted Data Key from its disk.
+* **Step 1: Load Payload**: An authorized caller, such as the ECS agent at task startup or the application through the AWS SDK, requests the secret. Secrets Manager reads the encrypted payload and the encrypted Data Key from its storage layer.
 * **Step 2: Decrypt Request**: Secrets Manager sends only the encrypted Data Key to KMS, asking for decryption.
-* **Step 3: Hardware Decryption**: KMS reads the encrypted Data Key, decrypts it inside its highly secure HSM boundary using your CMK master key, and returns the plaintext Data Key to Secrets Manager.
+* **Step 3: Hardware Decryption**: KMS reads the encrypted Data Key, decrypts it inside its secure boundary using the selected KMS key, and returns the plaintext Data Key to Secrets Manager.
 * **Step 4: Decrypt Payload**: Secrets Manager uses the plaintext Data Key in memory to decrypt the encrypted secret payload.
 * **Step 5: Scrub Memory**: Secrets Manager immediately discards the plaintext Data Key, never writing it to disk.
-* **Step 6: Deliver Secret**: Secrets Manager returns the plaintext secret to the ECS agent, which injects it directly into your container's environment RAM.
+* **Step 6: Deliver Secret**: Secrets Manager returns the plaintext secret to the authorized caller. ECS can then place it into a container environment variable at startup, or application code can receive it through an SDK call at runtime.
 
 ```mermaid
 flowchart TD
@@ -152,13 +152,17 @@ flowchart TD
     DecryptSecret --> ReturnSecret[Return plaintext secret to application task]
 ```
 
-This envelope design enforces absolute administrative control. To retrieve the database password, your application's workload role must have authorization to call both `secretsmanager:GetSecretValue` on the secret ARN, and `kms:Decrypt` on the specific Customer Managed Key (CMK) ARN. If a developer accidentally grants your container permission to read the secret vault but excludes the KMS key permission, the decryption fails, and the secret remains protected.
+This envelope design gives you two useful authorization layers. To retrieve a database password, your application's workload role must be allowed to call `secretsmanager:GetSecretValue` on the secret ARN. If the secret uses a customer managed KMS key, the role also needs permission to use that key for decryption through the key policy or an IAM grant. If a developer grants access to the secret but forgets the custom KMS key permission, the decryption fails and the secret remains protected.
+
+![Secrets runtime path infographic showing a secret ARN, Secrets Manager, KMS data key decryption, container memory, and CloudTrail evidence without secret values in logs](/content-assets/articles/article-cloud-providers-aws-identity-security-secrets-encryption-basics/secrets-runtime-path.png)
+
+*The deployment stores a secret ARN, not the secret value. At runtime, Secrets Manager and KMS decrypt the value just in time for container memory, while CloudTrail records access evidence without printing the plaintext secret.*
 
 ## Auditing with CloudTrail and Safe Logging
 
 Storing your secrets in a vaulted system and encrypting them via KMS resolves the storage risk, but it leaves an operational question open: How do you prove that only authorized workloads are reading your secrets, and how do you prevent developers from accidentally printing those secrets during system incidents?
 
-To gather evidence without exposing the secret payload, AWS implements AWS CloudTrail. CloudTrail acts as an immutable flight recorder for your AWS account, logging every single API request made to your resources:
+To gather evidence without exposing the secret payload, AWS implements AWS CloudTrail. CloudTrail records management events for your AWS account and can also record selected data events when you configure them. It is not a packet capture system or a full application log, but it gives you a strong audit trail for sensitive AWS API activity:
 
 * **Identifiable caller**: CloudTrail records the exact assumed workload role session principal that requested the secret.
 * **Precise action**: It logs the exact operation, such as `GetSecretValue` or `Decrypt`.
@@ -183,7 +187,7 @@ Log Scrubbing and Exception Safety Rules:
   * Safe Habit: `console.log("Container boot complete: checked required config keys")`
   * Rationale: Printing the entire environment dump dumps every injected secret, database host, and token to console logs.
 
-By combining AWS CloudTrail audits with safe, explicit application logging, you establish an ironclad security pipeline. You can easily prove which workload accessed your secrets while ensuring that your operational scrollback remains free of sensitive credentials.
+By combining AWS CloudTrail audits with safe, explicit application logging, you establish a much stronger security pipeline. You can prove which workload accessed your secrets while keeping operational scrollback free of sensitive credentials.
 
 ## Putting It All Together
 
@@ -191,10 +195,14 @@ Securing your runtime credentials is the final layer of your application's secur
 
 * **Isolate Secrets from Config**: Keep port numbers, debug levels, and URLs in ordinary environment variables. Reserve secure vaults strictly for database passwords and signing keys.
 * **Inject via ARNs**: Never copy raw secrets into your codebase, container images, or deployment tasks. Reference the secret ARN in your container configuration and let the ECS agent inject it at boot.
-* **Leverage Envelope Encryption**: Use customer-managed KMS keys to protect your data keys, dividing access control between vault permissions and key decryption permissions.
+* **Leverage Envelope Encryption**: Understand how Secrets Manager uses KMS-backed envelope encryption, and use customer managed keys when you need custom key policy control.
 * **Scrub Your Output Logs**: Never log entire error objects, response payloads, or environment dumps to stdout. Keep your console scrollback clean of credentials.
 
 By implementing vaulted secrets, envelope encryption, and safe logging, you build a cloud system that is highly secure at rest, protected during delivery, and fully audited at runtime.
+
+![Secrets and encryption summary infographic showing plaintext traps, secret versus config, Secrets Manager, Parameter Store, envelope encryption, and audit evidence](/content-assets/articles/article-cloud-providers-aws-identity-security-secrets-encryption-basics/secrets-encryption-summary.png)
+
+*Use this as the secrets checklist: keep plaintext out of deployment files, separate secrets from normal config, choose the right store, understand envelope encryption, and prove access through audit evidence without exposing values in logs.*
 
 ---
 

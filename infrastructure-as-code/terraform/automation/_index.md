@@ -1,6 +1,6 @@
 ---
-title: "Automation"
-description: "Run Terraform through CI, short-lived AWS roles, reviewable plan artifacts, and protected apply workflows."
-tags: ["terraform", "automation", "ci", "aws", "apply"]
-order: 10
+title: "Automation and Scale"
+description: "Take Terraform to production by integrating it into CI/CD pipelines, writing automated tests, and enforcing security policies."
+tags: ["terraform", "ci-cd", "testing", "opa"]
+order: 8
 ---

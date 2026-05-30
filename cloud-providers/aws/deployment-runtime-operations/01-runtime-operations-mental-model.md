@@ -38,6 +38,10 @@ However, once you move into the production environment, the most critical operat
 
 An artifact proves that something was built. It does not prove that a customer can actually use it. Runtime operations is the collection of architectural boundaries, configurations, permissions, and feedback loops that turn a static build artifact into a safe, running production service.
 
+![Runtime operations infographic showing a build artifact becoming a running service only after task definition, config, roles, health, capacity, and rollback are supplied](/content-assets/articles/article-cloud-providers-aws-deployment-runtime-operations-runtime-operations-mental-model/runtime-contract.png)
+
+*A container image is a candidate, not the live service. The runtime contract around it supplies the task definition, configuration, IAM roles, health signals, capacity rules, and rollback path that make production traffic safe.*
+
 ## What Is Runtime Operations
 
 Runtime operations is the practice of keeping a deployed application running correctly after its build artifact is created. It bridges the gap between automated pipelines and day-to-day incident response, establishing the operational guardrails that protect live systems.
@@ -77,7 +81,7 @@ flowchart TD
     TaskB --> SQS
 ```
 
-Customers never send network packets directly to container tasks. They connect to a public Application Load Balancer (ALB). The ALB terminates SSL and routes requests to healthy container tasks. 
+In the standard production design, customers do not send network packets directly to container tasks. They connect to a public Application Load Balancer (ALB). The ALB usually terminates TLS on an HTTPS listener and routes requests to healthy container tasks through private target groups.
 
 The ECS Service Controller acts as the operational supervisor. Its primary job is to maintain the desired count of active containers, known as tasks. If a physical hardware node fails or an application process crashes due to an out-of-memory error, the service controller detects the loss and launches a replacement task automatically, maintaining system availability without human intervention.
 
@@ -173,6 +177,10 @@ A green build pipeline is only the first step in a software release. To run a st
 ## What's Next
 
 We have established the foundational mental model of runtime operations, separating build candidates from live running services. In the next article, we will follow the most critical operational event: an ECS rolling deployment. We will detail how to compile task definition revisions, execute service updates, configure rolling update percentages, analyze target group connection draining, and inspect deployment evidence from the terminal.
+
+![Runtime operations checklist covering image, task definition, config, roles, health checks, capacity, and rollback](/content-assets/articles/article-cloud-providers-aws-deployment-runtime-operations-runtime-operations-mental-model/runtime-ops-checklist.png)
+
+*Use this as the runtime operations checklist: anchor the image, version the task definition, separate config, split roles, keep health checks lightweight, size capacity deliberately, and preserve a known-good rollback path.*
 
 ---
 

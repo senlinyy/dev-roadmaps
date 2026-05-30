@@ -26,11 +26,11 @@ aliases:
 Azure Managed Disks and Azure Files provide operating-system-attached cloud storage for virtual machine workloads. Managed Disks represent persistent, virtualized block storage volumes that are cabled directly to virtual machine hypervisors, allowing a single guest operating system to partition, format, and mount the drive. Azure Files represents a managed network file share that allows multiple distinct compute hosts to mount the same shared directory concurrently over local virtual networks. Both resources decouple machine-level storage from the physical server blade hardware, ensuring that local directories and operating system volumes survive physical blade failures.
 
 :::expand[Under the Hood: Host Caching Physics and SMB/NFS Protocol Locking]{kind="design"}
-Managed Disk block storage performance is governed by strict IOPS and throughput ceilings. Under high traffic, the virtual disk controller enforces limits using a Token Bucket algorithm for storage bursting, allowing temporary IOPS bursts that drain a performance credit pool. To accelerate disk reads and writes without saturating network bandwidth, configure VM Host Caching:
-* **Read-Only Caching**: Stores frequently read blocks directly in the physical host blade's RAM and local NVMe SSDs. If a read request hits the host cache, the hypervisor returns the data instantly, bypassing network round-trips to the storage cluster.
-* **Read-Write Caching**: Intercepts guest OS write block requests and writes them to local host NVMe cache buffers before flushing them asynchronously to remote storage. While highly performant, this write-back mechanism introduces a structural write-safety risk; if the host blade experiences sudden power loss before the NVMe cache buffer flushes, uncommitted blocks are lost, potentially corrupting guest filesystems.
+Managed Disk block storage performance is governed by disk type, disk size, provisioned IOPS, throughput limits, VM size limits, and optional bursting behavior. VM host caching can improve some workloads by keeping frequently accessed data closer to the VM host:
+* **Read-Only Caching**: Helps read-heavy workloads by serving repeated reads from the host cache when the workload pattern benefits from it.
+* **Read-Write Caching**: Can improve throughput for carefully chosen workloads, but it is not appropriate for every disk. Use it only when the application and disk role can tolerate the caching semantics documented for Azure VMs.
 
-Azure Files network shares handle concurrent mounts using protocol-level active file-locking tables. Under the SMB protocol, when a VM process opens a file for writing, the share engine registers an exclusive file-locking lease in its central metadata index. Any other compute node attempting to write to the same file receives a sharing violation error from the filesystem API. NFS, conversely, implements stateless network locking, which requires application-level lock coordination to prevent data corruption when multiple Linux containers write to the same network share.
+Azure Files network shares handle concurrent mounts through the file protocol you choose. SMB supports Windows-style file sharing behavior, leases, and integration with Active Directory based identity options. NFS 4.1 supports Linux-oriented POSIX permissions and must be accessed through private networking. In both cases, applications still need a safe concurrency model when multiple compute instances write the same files.
 :::
 
 If you run operating system volumes on AWS, Azure Managed Disks are the direct equivalent of AWS EBS (Elastic Block Store) volumes, and Azure Files is the equivalent of AWS EFS (Elastic File System). Contrast their configuration models: while AWS EBS relies on custom AWS task execution fabrics, Azure Managed Disks offer Premium SSD v2 options that allow you to scale IOPS and throughput independently of disk size, whereas AWS EBS GP3 provides similar independent scaling but cabled to different performance limits.
@@ -39,7 +39,7 @@ Decouple your application data from your machine OS disks. If your application c
 
 | Storage Option | Access Protocol | Concurrency Bound | Systems Use Case |
 | --- | --- | --- | --- |
-| Managed Disk | Block I/O (FC / iSCSI) | Single VM mount only | Operating system boot drives, local databases, and raw scratch directories |
+| Managed Disk | Azure-managed virtual block disk | Usually attached to one VM; shared disk is a specialized clustered workload option | Operating system boot drives, local databases, and raw scratch directories |
 | Azure Files Share | SMB (v2.1/v3.0) or NFS (v4.1) | Concurrent multi-node mounts | Shared legacy templates, central configurations, and migration directory bridges |
 
 ## Managed Disks
@@ -57,20 +57,55 @@ Selecting the correct Managed Disk tier is key to preventing I/O bottleneck dela
 * **Premium SSD (v2)**: The modern standard. It allows you to provision disk size, IOPS, and throughput independently, optimizing costs for high-transaction, low-capacity databases.
 * **Ultra Disk**: Designed for extremely performance-critical databases. It supports sub-millisecond write latencies and allows you to adjust IOPS and throughput dynamically while the disk remains online.
 
+![An infographic showing disk IOPS, throughput, latency, cache, and size limits around a VM workload](/content-assets/articles/article-cloud-providers-azure-storage-databases-disks-file-shares/disk-performance-envelope.png)
+
+*Disk performance is an envelope of IOPS, throughput, latency, cache behavior, and VM limits, not just capacity.*
+
 If your database experiences read/write latency spikes, inspect the host-level Disk Queue Depth metric. A high queue depth indicates that the guest OS is submitting block requests faster than the disk's IOPS limit can process, causing requests to stack up in hypervisor buffers. Upgrading the disk to a Premium SSD v2 or scaling IOPS independently resolves this bottleneck.
+
+:::expand[Over-Provisioning Disk Size for IOPS]{kind="pitfall"}
+On legacy **Premium SSD v1 (P-Series)** disks, performance is hard-locked to capacity. A 128 GB P10 disk is capped at 500 IOPS, whereas a 1 TB P30 disk provides 5,000 IOPS. Database teams frequently buy a 1 TB disk when they only have 50 GB of data, purely to secure the 5,000 IOPS performance budget, paying for 950 GB of useless, empty storage.
+
+This matches the old **AWS EBS gp2** behavior, which locked baseline performance to 3 IOPS per GB with a minimum of 100 IOPS. Teams similarly over-provisioned volume sizes to bypass the performance ceiling. Both Azure's transition to **Premium SSD v2** and AWS's shift to **gp3** decoupled these parameters, letting you scale size, IOPS, and throughput independently.
+
+Consider this cost comparison for a high-performance 50 GB database:
+
+*   **Before (Over-Provisioned Premium SSD v1):** Provisioning a 1 TB P30 disk solely for performance:
+    *   *Storage:* 1,024 GB (90% wasted capacity)
+    *   *Performance:* 5,000 IOPS (Hard-locked)
+    *   *Cost:* **~$135 / month**
+*   **After (Optimized Premium SSD v2):** Provisioning a right-sized 128 GB disk with custom IOPS:
+    *   *Storage:* 128 GB (Plenty of database headroom)
+    *   *Performance:* 5,000 IOPS (Provisioned independently)
+    *   *Cost:* ~$10 base storage + ~$30 custom IOPS = **~$40 / month** (70% savings)
+
+To verify if your current VM disk is experiencing an I/O bottleneck before sizing up, monitor this Azure Monitor metric:
+
+```text
+Disk Queue Depth > 1 (sustained over 5 minutes)
+```
+
+A queue depth greater than one signals that your guest OS is submitting read/write requests faster than the storage LUN can process them, causing threads to block in hypervisor I/O queues.
+
+**Rule of thumb:** Standardize all stateful virtual machines on Premium SSD v2 (or gp3 in AWS) to right-size capacity and performance separately. Never pay for empty, wasted storage blocks just to purchase IOPS.
+:::
 
 ## Host Caching
 
-Host Caching leverages the physical RAM and local NVMe solid-state drives cabled directly to the VM's host hypervisor blade to accelerate disk operations:
-* **None**: Bypasses all local cache buffers. Every read and write block request traverses the network to the Azure Storage scale units. This is the mandatory configuration for transaction log drives (such as SQL Server `.ldf` files) to guarantee that commits are immediately written to durable storage.
+Host Caching uses cache resources on the VM host to accelerate supported disk operations:
+* **None**: Disables host caching. This is the standard choice for transaction log drives (such as SQL Server `.ldf` files) where the workload needs writes to follow the database engine's durability expectations.
 * **Read-Only**: Caches read operations. This is highly effective for read-heavy database data paths (`.mdf` files) and static template directories.
 * **Read-Write**: Caches both reads and writes. This provides maximum throughput but must be used with extreme caution. It is only safe for applications that manage their own transactional flush rules or handle volatile temporary scratch data.
+
+![An infographic showing why a disk snapshot can capture disk blocks while recent writes remain in memory](/content-assets/articles/article-cloud-providers-azure-storage-databases-disks-file-shares/snapshot-consistency-window.png)
+
+*Snapshots capture storage at a moment in time, so databases need flush or application-consistent coordination for safe recovery.*
 
 ## Azure Files And File Shares
 
 Azure Files provides fully managed serverless file shares accessible over industry-standard SMB and NFS protocols. It removes the administrative burden of running dedicated Windows File Servers or Linux Samba VMs inside your virtual networks.
 
-Azure Files shares support two primary performance tiers: Standard (hosted on shared hard-disk scale units, designed for general-purpose files) and Premium (hosted on dedicated SSD hardware, designed for high-throughput, low-latency concurrent mounts). 
+Azure Files shares support two primary performance tiers: Standard (hosted on shared hard-disk scale units, designed for general-purpose files) and Premium (hosted on dedicated SSD hardware, designed for high-throughput, low-latency concurrent mounts).
 
 When mounting an Azure Files share to an App Service container or an AKS pod, the integration utilizes secure internal network mounts. If your containerized API needs to read shared document templates, the platform mounts the share as a local directory path, allowing your standard Node.js or Python code to read and write files using ordinary filesystem libraries.
 
@@ -85,7 +120,7 @@ When provisioning an Azure Files share, you must select either the SMB or the NF
 | OS Compatibility | Windows and Linux | Linux only |
 | Security Integration | Active Directory Domain Services ACLs | POSIX permissions mapped to UID/GID |
 | Transport Encryption | In-transit encryption over port 445 | Relies on private virtual network subnets |
-| Concurrency Model | Strict stateful lease file-locking | Stateless network locking |
+| Concurrency Model | SMB leases and file sharing semantics | NFS 4.1 locking and POSIX-oriented semantics |
 
 For modern cloud architectures, avoid using mounted file shares as a generic storage backplane. If your application code can be written to use the Azure Storage SDK, prefer Blob Storage for object operations. Object storage is more portable, scales infinitely, and avoids the file-locking performance bottlenecks of network file shares.
 
@@ -93,14 +128,19 @@ For modern cloud architectures, avoid using mounted file shares as a generic sto
 
 Virtual machine and shared folder storage require matching performance limits to your physical access patterns.
 
-* **SCSI Block Translations**: Guest OS block reads and writes on Managed Disks are converted by hypervisor virtual controllers into network packets, streaming over dark fiber to triple-replicated remote LUN volumes.
-* **Host Caching write safety**: Host Caching leverages hypervisor host RAM and local NVMe drives. Read-Write caching provides maximum performance but introduces write-safety risks under host power failure.
+* **Managed Block Storage**: Guest operating systems see Managed Disks as attached block devices, while Azure manages the backing storage, durability, and disk redundancy options.
+* **Host Caching write safety**: Host caching can improve selected disk workloads, but read-write caching must match the application's durability requirements and the documented VM caching guidance.
 * **Premium SSD v2 Scaling**: Modern Premium SSD v2 volumes allow developers to scale disk capacity, IOPS, and throughput independently, avoiding unnecessary disk over-provisioning.
-* **Network SMB/NFS Shares**: Azure Files manages shared directory mounts over SMB and NFS protocols, utilizing stateful metadata lease tables to coordinate concurrent file-system write locks.
+* **Network SMB/NFS Shares**: Azure Files manages shared directory mounts over SMB and NFS protocols, while your application design still owns safe concurrent writes.
 
 ## What's Next
 
 In the next chapter, we will look at Azure SQL Database. We will explore managed relational database engines, contrast General Purpose and Business Critical storage structures, and inspect synchronous transaction log write architectures.
+
+![An infographic comparing managed disks attached to one VM with Azure Files shared by multiple clients over SMB or NFS](/content-assets/articles/article-cloud-providers-azure-storage-databases-disks-file-shares/disk-vs-file-share.png)
+
+*Use this as the storage boundary: a managed disk is private block storage for one machine, while Azure Files is a shared network filesystem for multiple clients.*
+
 
 ---
 

@@ -200,6 +200,10 @@ Now that we have automated the system configurations and locked down the plugin 
 
 Let's move to **Credentials and Security** to learn how to store secrets securely inside the encrypted Jenkins vault, safely inject them using log-redacted blocks, and secure the controller's filesystem using the Master-Agent security gateway.
 
+![Jenkins controller configuration summary showing JCasC, plugin versions, immutable image build, local test, and restore path](/content-assets/articles/article-cicd-jenkins-plugins-and-configuration/controller-configuration-summary.png)
+
+*Use this as the controller-configuration checklist: avoid snowflake controllers, manage JCasC as code, lock plugin versions, build immutable images, and prove recovery with restore tests.*
+
 ---
 
 **References**

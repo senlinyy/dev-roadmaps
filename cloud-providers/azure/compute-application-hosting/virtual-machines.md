@@ -27,15 +27,15 @@ aliases:
 
 An Azure Virtual Machine (VM) is a cloud-based guest operating system instance executed by a physical hypervisor using software-defined virtualized hardware allocations. Azure manages the physical datacenter facilities, server blade hardware, hypervisor scheduling, and cooling infrastructure. Your team, however, retains full administrative control and operational ownership over everything inside the guest operating system boundary.
 
-:::expand[Under the Hood: Hypervisor CPU Scheduling and NUMA Latency]{kind="design"}
-The customized Hyper-V hypervisor controls physical processor cores and coordinates execution schedules. The hypervisor partitions the physical CPU into virtual processor units (vCPUs) and assigns them to guest operating systems. To guarantee high performance, the hypervisor coordinates CPU scheduling by pinning virtual threads directly to physical hardware threads (Hyper-Threading).
+:::expand[Under the Hood: VM Sizing and Host Isolation]{kind="design"}
+Azure VMs run as guest operating systems on Azure-managed physical hosts. The VM size you choose defines the virtual CPU count, memory amount, disk throughput limits, network throughput limits, and sometimes the local temporary storage available to the guest.
 
-A critical performance constraint in this virtualized scheduling is the boundary of physical NUMA (Non-Uniform Memory Access) nodes. A physical server blade contains multiple CPU sockets, each directly cabled to its own local blocks of RAM. The combination of a CPU socket and its local memory is a NUMA node. When the hypervisor allocates a guest VM's vCPUs and RAM, it attempts to fit the entire allocation within a single physical NUMA node. If a guest VM's RAM allocation is split across multiple NUMA nodes, or if the hypervisor schedules a vCPU thread on CPU Socket 1 that must fetch data from RAM wired to CPU Socket 2, the data must travel across the slow inter-socket bus (such as Intel UPI or AMD Infinity Fabric). This cross-NUMA socket traversal increases memory retrieval latency, causing L3 cache misses and degrading application throughput under high performance loads.
+The important operational constraint is that the VM size is a hard ceiling. Attaching a faster managed disk does not help if the VM size has a lower disk throughput cap. Moving a memory-hungry process onto a VM with too little RAM causes paging or crashes no matter how healthy the Azure host is. Choosing a VM is therefore a capacity-planning decision, not only an operating system preference.
 
-Memory isolation between the guest virtual machine and the physical host is enforced directly at the silicon processor tier. The physical host CPU utilizes hardware Second Level Address Translation (SLAT), specifically Extended Page Tables (EPT) on Intel processors or Nested Page Tables (NPT) on AMD chips. The guest operating system manages its own virtual-to-physical memory page tables, assuming it has direct access to hardware. However, the EPT hardware interceptor translates the guest's physical memory references into the actual host physical RAM addresses. This hardware-assisted translation guarantees that a virtual machine can never read or overwrite memory blocks belonging to the host OS or other guest virtual machines, ensuring raw hardware-enforced isolation.
+Azure isolates guests from each other at the virtualization layer and manages the physical host, but your team owns everything inside the guest OS. That includes users, packages, kernel settings, service supervisors, firewall rules, data mounts, and application recovery behavior.
 :::
 
-If you operate servers on AWS, Azure VMs are the direct equivalent of AWS EC2 instances. Both provide raw, unmanaged virtual guest servers in the cloud. However, they integrate differently with adjacent cloud resources. In AWS, persistent storage block attachments utilize Elastic Block Store (EBS) cabled directly to your instances, whereas in Azure, persistent volumes use Managed Disks cabled over Microsoft's high-speed distributed storage networks. Furthermore, while AWS EC2 relies on IMDS metadata queries wired directly to local hypervisor sockets, Azure integrates the VM Agent (`waagent`) dynamically cabled to the Azure Resource Manager to manage guest setups.
+If you operate servers on AWS, Azure VMs are the direct equivalent of AWS EC2 instances. Both provide raw virtual guest servers in the cloud. However, they integrate differently with adjacent cloud resources. In AWS, persistent block storage commonly uses Elastic Block Store (EBS), whereas in Azure, persistent volumes use Managed Disks. Azure VMs also commonly run a guest VM Agent and can use the Instance Metadata Service (IMDS) for instance metadata and managed identity token requests.
 
 Choosing a Virtual Machine is a deliberate engineering tradeoff. You accept the operational overhead of server patching, security compliance audits, backup policies, and process monitoring in exchange for the absolute runtime freedom required by specialized systems.
 
@@ -50,7 +50,7 @@ Choosing a Virtual Machine is a deliberate engineering tradeoff. You accept the 
 
 ## Image
 
-The image is the template file that contains the pre-configured operating system, kernel version, default libraries, and system configurations used to boot the virtual machine. When you provision a VM, the Azure Fabric Controller copies this image payload from the regional marketplace repository to your VM's OS disk.
+The image is the template file that contains the pre-configured operating system, kernel version, default libraries, and system configurations used to boot the virtual machine. When you provision a VM, Azure uses that image to create the VM's OS disk.
 
 Relying on raw marketplace images can introduce configuration drift over time. If a developer boots a generic Ubuntu image and manually installs packages, updates libraries, and edits system files, the machine cannot be easily reproduced. If the VM's host hardware fails and the platform migrates the workload to a new node, recreating the configuration by hand creates serious recovery latency.
 
@@ -71,10 +71,14 @@ The VM Size also imposes strict, non-adjustable hardware limits on network inter
 
 An Azure Virtual Machine normally utilizes two distinct categories of storage: managed disks (durable, network-attached storage) and temporary local disks (ephemeral, physically attached SSDs).
 
+![An infographic showing a VM attached to disks and a network interface](/content-assets/articles/article-cloud-providers-azure-compute-application-hosting-azure-virtual-machines/disk-nic-attachment.png)
+
+*VM behavior is shaped by attached resources: disks hold state and the network interface controls where traffic can flow.*
+
 ```mermaid
 flowchart LR
-    OSFS["Guest OS Block I/O<br/>(/dev/sda)"] --> VController["Virtual SCSI Controller"]
-    VController -- "SCSI packets over fiber" --> ManagedDisk["Azure Storage Managed Disk LUN"]
+    OSFS["Guest OS Block I/O<br/>(/dev/sda)"] --> VController["Virtual Disk Controller"]
+    VController -- "Azure-managed block storage path" --> ManagedDisk["Azure Managed Disk"]
 ```
 
 ```mermaid
@@ -82,9 +86,33 @@ flowchart LR
     TempFS["Temporary Mount<br/>(/dev/sdb)"] --> LocalSSD["Physical Local NVMe SSD<br/>(on Hypervisor Host Blade)"]
 ```
 
-Managed disks represent software-defined virtual disk drives hosted on Azure's distributed storage cluster. Under the hood, when your guest operating system performs a file write, the virtual SCSI or NVMe controller in the hypervisor intercepts the block I/O requests. It converts the block requests into TCP packets and streams them over a dedicated high-speed storage network to the physical storage scale units. The storage fabric writes the data across three separate physical disk arrays in the datacenter to guarantee durability before returning a success signal to the hypervisor.
+Managed disks represent Azure-managed block storage attached to your VM. The guest operating system sees a disk device, while Azure handles the storage account placement, redundancy option, durability, and disk resource lifecycle behind the scenes. The exact redundancy and performance behavior depends on the disk type, SKU, size, and regional features you choose.
 
-Temporary disks, conversely, are physically attached to the server blade hosting the hypervisor. On Linux VMs, this drive is typically mounted at `/mnt` or `/mnt/resource`. Because this disk is physically cabled to the local server blade, I/O latency is extremely low. However, this storage is fully ephemeral. If the underlying server blade hardware fails, or if you stop (deallocate) the VM, the Fabric Controller migrates your VM to a healthy blade in a different rack. Because the local SSD stays with the physical host blade, all data stored on the temporary disk is permanently lost. Never store database logs, source code, application state, or critical files on the temporary disk; restrict its use to system swap space and volatile caches.
+Temporary disks, conversely, are local temporary storage exposed by many VM sizes. On Linux VMs, this drive is typically mounted at `/mnt` or `/mnt/resource`. This storage is ephemeral. Data on the temporary disk can be lost during stop/deallocate, resize, redeploy, maintenance, or host recovery events. Never store database logs, source code, application state, or critical files on the temporary disk; restrict its use to system swap space and volatile caches.
+
+:::expand[Writing to the Temporary Disk]{kind="pitfall"}
+Many Azure VM sizes include a temporary local disk (`/dev/sdb` or `/dev/disk/cloud/azure_resource` on Linux, `D:` on Windows). This disk is designed for temporary data. If the VM is stopped (deallocated), resized, redeployed, or moved during maintenance, data written to the temporary drive can be lost.
+
+This matches the behavior of AWS **EC2 Instance Store** volumes, which provide high-speed, local ephemeral block storage that is wiped clean the moment the EC2 instance is stopped, terminated, or undergoes hardware retirement.
+
+Common victims of this behavior include application log directories, local session caches, SQLite databases, and cron configuration templates that developers accidentally write to `/mnt` or `D:\`. The files are perfectly readable for days, creating a false sense of security, until the next host maintenance event triggers a reboot and wipes the drive clean.
+
+Consider this before-and-after storage architecture:
+
+*   **Before (The Volatile Trap):** Storing active log files on the local temp disk:
+    ```bash
+    # App config targets the volatile ephemeral mount
+    LOG_DIR="/mnt/app-logs/"
+    ```
+*   **After (The Durable Pattern):** Write persistent logs to a network-attached Azure Managed Disk, or stream them off-box to a central workspace:
+    ```bash
+    # Mount durable Managed Disk partition
+    mount /dev/sdc1 /data/app-logs
+    LOG_DIR="/data/app-logs/"
+    ```
+
+**Rule of thumb:** Treat the temporary local disk exactly like system RAM—it is completely volatile by design. Use it strictly for transient swap files, sorting buffers, or short-lived build artifact caches where data loss is fully expected and has zero impact on application durability.
+:::
 
 ## Network Interface
 
@@ -96,9 +124,13 @@ Accelerated Networking utilizes Single Root I/O Virtualization (SR-IOV) technolo
 
 ## Startup
 
-The VM startup path represents the bridge between virtual machine creation and application process readiness. When the Fabric Controller boots the guest OS, the system must parse configuration metadata to set hostnames, wire network routing, retrieve secrets, and install runtimes.
+The VM startup path represents the bridge between virtual machine creation and application process readiness. When the guest OS boots, the system must parse configuration metadata to set hostnames, wire network routing, retrieve secrets, and install runtimes.
 
-To automate this provisioning flow without manual SSH commands, rely on the guest VM Agent (`waagent`) and cloud-init. During the boot sequence, the guest OS system systemd services start the VM Agent daemon. The agent makes a link-local HTTP request to the Instance Metadata Service (IMDS) at the private IP `169.254.169.254`. The hypervisor intercepts this packet, validates the VM's hardware identity, and returns a JSON payload containing the VM's resource group, subscription, private IP, and user-provided custom data scripts.
+![An infographic showing a VM boot path from image to OS to agent to application process](/content-assets/articles/article-cloud-providers-azure-compute-application-hosting-azure-virtual-machines/vm-boot-path.png)
+
+*A VM has a startup chain, and any broken step before the app process can make the service appear down.*
+
+To automate this provisioning flow without manual SSH commands, rely on the guest VM Agent (`waagent`) and cloud-init. During the boot sequence, the guest OS starts the VM Agent daemon. The agent can use the Instance Metadata Service (IMDS) at the private IP `169.254.169.254` to retrieve metadata such as the VM's resource group, subscription, private IP, and user-provided custom data scripts.
 
 The VM Agent parses this metadata, configures the local network interfaces, writes host files, and executes your cloud-init shell scripts. A production-ready VM should utilize these scripts to pull configuration files from private repositories, register the machine with configuration engines (like Ansible or Chef), mount persistent data disks, retrieve database secrets via managed identity tokens, and start your application processes automatically.
 
@@ -131,7 +163,7 @@ Using a systemd service ensures that if your Node.js or Python application crash
 
 ## Patching And Logs
 
-Virtual Machines do not patch themselves. As operating system kernels, SSL/TLS libraries, runtime engines, and system daemons age, they accumulate security vulnerabilities. Your team must implement an automated patching policy using tools like Azure Update Manager to orchestrate monthly package updates and schedule guest OS reboots.
+Virtual Machines do not become safe just because Azure manages the host. As operating system kernels, SSL/TLS libraries, runtime engines, and system daemons age, they accumulate security vulnerabilities. Your team must implement an automated patching policy, using tools such as Azure Update Manager or automatic VM guest patching where appropriate, and schedule guest OS reboots in a controlled way.
 
 Logging requires the same active ownership. Application logs written only to local files inside the VM are highly volatile. If a disk controller fails or a developer deallocates the machine, those logs are lost. Furthermore, logging into active production servers via SSH to run `tail -f` or `grep` commands is slow and creates operational security risks.
 
@@ -141,10 +173,10 @@ To secure your telemetry, install a centralized log collector agent (such as the
 
 Virtual Machines provide low-level guest OS access at the cost of high operational overhead.
 
-* **Hypervisor CPU and NUMA scheduling**: Virtual machines run on guest processors isolated by the Hyper-V hypervisor.
-* **Extended Page Tables (EPT)**: Hardware-nested page tables translate guest physical addresses directly to host RAM blocks, ensuring secure memory isolation.
-* **Network-Attached Managed Disks**: Managed disks translate block I/O requests into network packets, streaming them over dedicated networks to triple-replicated distributed storage fabrics.
-* **Temporary Disk Volatility**: Ephemeral local SSDs are physically attached to host server blades. Their data is lost permanently when a VM deallocates or migrates due to host hardware failure.
+* **VM Size Limits**: Virtual machines run inside Azure-managed virtualization boundaries, and the VM size defines hard CPU, memory, disk, and network ceilings.
+* **Guest OS Ownership**: Azure manages the host, while your team manages users, packages, patches, services, and local security inside the guest.
+* **Managed Disks**: Managed disks provide Azure-managed durable block storage, with performance and redundancy determined by disk type, size, and SKU.
+* **Temporary Disk Volatility**: Temporary local disks are designed for disposable data, and their contents can be lost during deallocation, resize, redeploy, maintenance, or host recovery.
 * **VM Agent Provisioning**: The guest `waagent` fetches custom data scripts from link-local IMDS requests (`169.254.169.254`), orchestrating automated package installations via cloud-init.
 
 By managing guest operating systems, process supervisors, and storage mounts systematically, you can run highly customized workloads that require absolute runtime control.
@@ -152,6 +184,11 @@ By managing guest operating systems, process supervisors, and storage mounts sys
 ## What's Next
 
 In the next chapter, we will go up the compute abstraction ladder to explore Azure Kubernetes Service (AKS). We will analyze managed control plane architectures, contrast Kubenet with Azure CNI overlay networks, and inspect Entra ID Workload Identity cryptographic token exchanges.
+
+![An infographic showing the Azure virtual machine responsibility stack from Azure host and managed disk up to NIC, OS image, processes, patching, backup, monitoring, and hardening](/content-assets/articles/article-cloud-providers-azure-compute-application-hosting-azure-virtual-machines/vm-responsibility-stack.png)
+
+*Use this as the VM responsibility stack: Azure supplies the virtual hardware, but the team still owns the operating system, processes, patching, backups, monitoring, and hardening.*
+
 
 ---
 

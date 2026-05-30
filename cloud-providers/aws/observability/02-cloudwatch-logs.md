@@ -239,6 +239,10 @@ To prevent this fragmentation, you must enforce structured logging at the framew
 
 If structured logging cannot be implemented immediately in legacy VM environments, you must configure the Unified CloudWatch Agent's file watcher with explicit `multi_line_start_pattern` rules (utilizing regular expressions like `^[A-Za-z0-9_]`) to force the daemon to buffer subsequent indented lines into a single, cohesive log event before shipping it to the regional vault.
 
+![CloudWatch Logs multiline stack trace trap showing fragmented request lines becoming one searchable structured event](/content-assets/articles/article-cloud-iac-observability-logs-traces/multiline-stack-trace-trap.png)
+
+*The stack trace problem is not just messy formatting. If each traceback line becomes a separate log event, the evidence loses its request context; structured JSON keeps the whole failure searchable as one event.*
+
 ## Retention, Governance, and Cost Controls
 
 Centralizing logs is a significant cost and compliance vector. A common cloud operations failure is leaving all production and staging Log Groups configured with the default retention setting: `Never Expire`. This causes log volumes to accumulate permanently, resulting in massive, compounding storage fees for telemetry that engineers will never read again.
@@ -253,8 +257,8 @@ Logs Ingest Matrix:
 
 | Log Class | Feature Set | Ingestion Cost | Storage Cost | Primary Use Case |
 | :--- | :--- | :--- | :--- | :--- |
-| **Standard** | High-performance Insights queries, real-time metric filters, automated alarms. | Standard | Standard | Active production APIs, real-time security logs, and microservice ingress channels. |
-| **Infrequent Access** | Stored inside CloudWatch, but lacks Insights query engines and real-time metric filters. | Lower | Standard | High-volume debug logs, staging environments, and quiet background worker streams. |
+| **Standard** | Full CloudWatch Logs feature set, including Logs Insights, metric filters, subscription filters, and direct event retrieval APIs. | Standard | Standard | Active production APIs, real-time security logs, and microservice ingress channels. |
+| **Infrequent Access** | Lower-ingestion-cost log class that still supports Logs Insights queries for many investigation workflows, but does not support every feature available to Standard, such as metric filters, subscription filters, `GetLogEvents`, or `FilterLogEvents`. | Lower | Standard | High-volume logs that need occasional investigation but do not drive real-time alarms or subscriptions. |
 
 ## Putting It All Together
 
@@ -269,6 +273,10 @@ Operating a resilient centralized logging system requires rigorous design of fil
 ## What's Next
 
 Configuring structured logs and Logs Insights queries provides high-resolution evidence for detailed incident investigations. However, logs are too heavy and expensive to monitor constantly in real time. To monitor system-wide trends, aggregate performance onto shared screens, and trigger automated on-call escalations, we need compressed numeric telemetry. In the next article, we will go deep into CloudWatch Metrics and Alarms, percentiles, cockpit dashboard design, and SNS-decoupled alert loops.
+
+![Six-tile CloudWatch Logs checklist covering log group, log stream, JSON event, Insights query, metric filter, and retention](/content-assets/articles/article-cloud-iac-observability-logs-traces/logs-checklist.png)
+
+*Use this as the CloudWatch Logs checklist: search at the log group level, keep source streams separate, write JSON events, query with Logs Insights, extract metrics carefully, and set retention before storage cost grows unnoticed.*
 
 ---
 

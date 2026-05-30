@@ -22,6 +22,10 @@ aliases:
 
 Cloud observability is the operational capability to infer the internal states, performance characteristics, and execution behaviors of a running distributed system by analyzing the external telemetry data it emits. While traditional infrastructure monitoring focuses on raw resource availability—evaluating simple binary states such as whether a virtual machine is online, a database is running, or a port is responsive—observability addresses the health of active user-facing workflows. A container runtime or database can report positive health checks and normal CPU usage while still actively failing to execute critical workflows due to identity permission errors, network security rules, or downstream dependency timeouts.
 
+![An infographic showing app telemetry streams answering what changed, where, how bad, and who is affected](/content-assets/articles/article-cloud-providers-azure-observability-azure-observability-mental-model/telemetry-question-map.png)
+
+*Observability turns raw signals into questions an operator can answer during design reviews and incidents.*
+
 If you are experienced with AWS, the Azure observability platform operates under a consolidated brand umbrella called Azure Monitor. While AWS partitions monitoring across distinct tools—CloudWatch Logs for logs, CloudWatch Metrics for time-series data, AWS X-Ray for tracing, and SNS for alert notifications—Azure Monitor integrates all telemetry channels into a single, shared platform infrastructure.
 
 The core mapping between the two platforms is clear:
@@ -31,14 +35,13 @@ The core mapping between the two platforms is clear:
 * **Application Insights** operates as the application performance monitoring (APM) and distributed tracing layer, serving the same role as AWS X-Ray combined with CloudWatch ServiceLens.
 * **Alert Rules and Action Groups** map directly to CloudWatch Alarms and SNS notification paths, evaluating conditions and routing alerts.
 
-:::expand[Under the Hood: The Azure Monitor Ingestion Pipeline and Storage Telemetry Fabric]{kind="design"}
-Azure Monitor runs on a dedicated, globally distributed telemetry collection fabric isolated from the primary customer application control planes:
+:::expand[Under the Hood: The Azure Monitor Data Platform]{kind="design"}
+Azure Monitor is a data platform for telemetry, not just a dashboard surface. Different telemetry shapes go to different stores because they answer different operational questions:
 
-* **Host Blade Collection**: Within each Azure datacenter scale unit, physical host blades run lightweight hypervisor agents. These agents extract system-level telemetry, kernel execution logs, and physical network utilization metrics from guest environments without consuming guest CPU cycles.
-* **Ingestion Gateways and Buffering**: Telemetry streams are pushed over high-speed physical storage networks to Regional Ingestion Gateways. These gateways act as high-throughput endpoints that validate incoming schemas, apply rate-limiting controls, and buffer incoming data using internal Event Hub structures to protect downstream indexers from traffic spikes.
-* **Decoupled Storage Tiers**: Once validated, Azure Monitor splits the telemetry stream based on the data shape:
-    * **Time-Series Engine**: Metrics are routed to an in-memory, highly compressed time-series database grid. This grid is optimized for high-speed write operations and sub-second query retrievals, powering real-time portal graphs and alert evaluation loops.
-    * **Log Search Index**: Resource logs, audit events, and application traces are written to the Azure Data Explorer columnar storage engine (the core engine behind Log Analytics). This storage engine writes data in highly compressed columnar arrays, organizing them into timed shards and indexing them to allow rapid parallel Kusto query execution.
+* **Metrics**: Azure resources, applications, and agents emit numeric time-series values. Azure Monitor Metrics stores these values in an optimized time-series database so charts and metric alerts can evaluate recent resource behavior quickly.
+* **Logs**: Resource logs, activity logs, application traces, and custom logs are routed into Azure Monitor Logs and Log Analytics workspaces. The workspace stores structured records in tables that you query with Kusto Query Language (KQL).
+* **Traces**: Application Insights collects request, dependency, exception, and trace telemetry from instrumented applications. When workspace-based, those records land in Log Analytics tables and can be correlated by operation identifiers.
+* **Alerts**: Alert rules evaluate metrics or log query results on a schedule. They can be stateful or stateless, and action groups handle notification routing to humans or automation.
 :::
 
 Rather than viewing observability as a menu of separate Azure products, think of it as a single pipeline designed to answer operational questions. You decide what telemetry your applications and resources must emit, route it through Diagnostic Settings to a central workspace, and use queries and alerts to make the system's behavior fully transparent.
@@ -61,9 +64,44 @@ flowchart TD
     AlertEngine -->|"Trigger Notifications"| ActionGroup["Action Group (SMS/Email/Webhook)"]
 ```
 
+:::expand[Pitfall: Resource Health Does Not Equal User Workflow Health]{kind="pitfall"}
+A dangerous monitoring trap is assuming that healthy system-level metrics (such as CPU, RAM, disk space, and VM availability) guarantee a healthy application experience for your users. A VM or App Service container can run smoothly at 12% CPU usage with 100% infrastructure availability, while every single customer attempt to check out is silently crashing due to a misconfigured Key Vault role assignment or a blocked database network rule.
+
+Relying exclusively on infrastructure metrics creates a massive blind spot where operational dashboards are green, but the business is completely down. In these scenarios, the application is technically online and reachable, so the platform-level health checks return success. However, the logical transactions are failing. Without application-level telemetry (such as tracking HTTP 5xx responses, failed database transactions, or logical auth drops), your team will only learn about the outage from frustrated customer support tickets.
+
+This exact blind spot exists in AWS. If you monitor your Amazon EC2 instances or ECS tasks using only the standard `CPUUtilization` and `StatusCheckFailed` metrics, you will miss catastrophic failures caused by your instance's IAM role lacking permissions to decrypt a KMS key or fetch from DynamoDB. In both clouds, you must supplement resource-level monitoring with synthetic canaries, structured application error logs, and custom metrics representing actual user success rates.
+
+The top-down diagram below illustrates how infrastructure metrics mask application-level outages:
+
+```mermaid
+flowchart TD
+    Request["User Request: POST /checkout"] --> Gateway["App Service Gateway"]
+    Gateway -->|"CPU: 12% (Healthy)<br/>RAM: 45% (Healthy)"| AppInstance["Running Application Host"]
+
+    subgraph ResourceMetrics["Resource Monitoring Dashboard"]
+        VMCPU["VM CPU Metric: 🟢 OK"]
+        VMRAM["VM RAM Metric: 🟢 OK"]
+    end
+
+    AppInstance -->|"1. Decryption call failed"| KeyVault["Key Vault (Missing RBAC)"]
+    KeyVault -->|"2. 403 Forbidden"| AppInstance
+    AppInstance -->|"3. Returns HTTP 500"| Request
+
+    subgraph LogicalMetrics["Application Observability (Missing)"]
+        HTTPError["HTTP 500 Error Count: 🔴 Critical"]
+    end
+```
+
+**Rule of thumb:** Never design dashboards around resources alone; monitor user workflows. Always pair resource-level monitoring with application-level telemetry (such as tracking HTTP error rates, transaction execution traces, and database exceptions) to capture the true health of your running system.
+:::
+
 ## The Four Pillars of Telemetry
 
 To diagnose system failures, you must gather enough evidence to reconstruct the timeline of an incident. The Azure Monitor telemetry model organizes this evidence into four primary signals: logs, metrics, traces, and alerts. Each signal represents a different data structure optimized to answer a specific operational question.
+
+![An infographic showing logs, metrics, traces, and alerts stored outside the running app runtime](/content-assets/articles/article-cloud-providers-azure-observability-azure-observability-mental-model/signal-boundary-map.png)
+
+*Telemetry should outlive the failed process so the team can inspect what happened after the runtime stops.*
 
 ### 1. Logs (What Happened in This Moment?)
 A log is a discrete, timestamped text record describing an isolated event within the system. Unlike unstructured legacy logs that record arbitrary strings, modern cloud logging relies on structured logs formatted as queryable JSON documents. Structured logs include rich context fields—such as the service role, active operation, associated request ID, targeted dependency, and specific error codes—to ensure that engineers can search, filter, and aggregate logs across thousands of active processes.
@@ -113,7 +151,7 @@ Transaction: op_6f2a91 (POST /checkout) - Total Duration: 1840ms
 Distributed tracing connects isolated logs and metrics into a unified timeline, revealing exactly which dependency caused a slow response or triggered an execution failure.
 
 ### 4. Alerts (Should Someone Look Now?)
-An alert is a rule that continuously evaluates metrics or log query results against configured conditions to determine if human attention or automated self-healing is required. 
+An alert is a rule that continuously evaluates metrics or log query results against configured conditions to determine if human attention or automated self-healing is required.
 
 Alerting is not a separate form of telemetry; it is an active evaluation loop. A robust alerting rule defines a strict threshold (e.g., "checkout failure rate exceeds 5% over a 10-minute window") and links to an Action Group to route the alert to the appropriate channel (such as SMS, email, PagerDuty, or an automated webhook).
 
@@ -125,8 +163,8 @@ The following table maps common AWS observability concepts to their Azure Monito
 | --- | --- | --- | --- |
 | **Log Storage & Query** | CloudWatch Logs | Log Analytics Workspace | Centralized columnar repository that compresses, indexes, and queries structured operational logs. |
 | **Log Query Language** | CloudWatch Insights | Kusto Query Language (KQL) | Piping query language used to filter, aggregate, and join database records. |
-| **Time-Series Metrics** | CloudWatch Metrics | Azure Monitor Metrics | Lightweight, in-memory numeric database for tracking system utilization and rate trends. |
-| **Performance Alerts** | CloudWatch Alarms | Azure Monitor Alert Rules | Stateless background evaluators that trigger when metrics or log counts cross configured thresholds. |
+| **Time-Series Metrics** | CloudWatch Metrics | Azure Monitor Metrics | Optimized time-series database for tracking system utilization and rate trends. |
+| **Performance Alerts** | CloudWatch Alarms | Azure Monitor Alert Rules | Scheduled evaluators that can be stateful or stateless, triggering when metrics or log counts cross configured thresholds. |
 | **Alert Routing** | Simple Notification Service (SNS) | Action Groups | Unified routing layer that dispatches alert payloads to email, SMS, voice, or webhook automations. |
 | **Distributed Tracing** | AWS X-Ray | Application Insights | Application Performance Monitoring (APM) engine that traces distributed request context across networks. |
 
@@ -136,7 +174,7 @@ Understanding this structural mapping ensures that your cloud teams can transfer
 
 Observability is the practice of designing your systems to emit clear evidence so that operators can understand and resolve production failures from the outside.
 
-* **Decoupled Architecture**: Azure Monitor runs on a dedicated, regional telemetry collection fabric isolated from your primary compute workloads, leveraging fast time-series engines and columnar indexes.
+* **Decoupled Architecture**: Azure Monitor separates metrics, logs, traces, and alerts into data stores and evaluators optimized for each telemetry shape.
 * **Structured Logs**: Structure your logs as JSON documents with consistent context fields (`requestId`, `operation`, `errorCode`) to ensure they are highly searchable across processes.
 * **Trend Analysis**: Monitor time-series metrics to track high-level throughput trends and resource utilization patterns over time.
 * **Context Propagation**: Leverage distributed tracing and correlated spans to reconstruct the chronological timeline of a single user transaction.
@@ -145,6 +183,11 @@ Observability is the practice of designing your systems to emit clear evidence s
 ## What's Next
 
 Now that we have established the core observability model, we will explore Logs and Workspaces. We will configure Azure Diagnostic Settings, provision a Log Analytics workspace, establish log retention rules, and learn to write Kusto Query Language (KQL) queries.
+
+![An infographic showing an application sending logs, metrics, traces, and alerts through Azure Monitor into Log Analytics and Application Insights](/content-assets/articles/article-cloud-providers-azure-observability-azure-observability-mental-model/azure-observability-map.png)
+
+*Use this as the Azure observability map: collect separate evidence streams, route them into the right stores, and use them together to answer what changed, where it happened, and how bad it is.*
+
 
 ---
 

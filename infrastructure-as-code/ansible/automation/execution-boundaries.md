@@ -1,243 +1,307 @@
 ---
 title: "Execution Boundaries"
-description: "Define who can run Ansible, which inventory they can target, which credentials they receive, and how approval limits blast radius."
-overview: "Automation is safe when authority is explicit across control nodes, inventories, credentials, approvals, host limits, batches, and run evidence."
-tags: ["ansible", "automation", "credentials"]
-order: 2
+description: "Define the operational boundaries between local execution on the control node and remote execution on managed targets."
+overview: "Ansible playbooks normally execute tasks on remote hosts over SSH, but developers can bypass this transport layer to execute tasks directly on the control plane using local execution and delegation."
+tags: ["ansible", "automation", "local", "delegation"]
+order: 1
 id: article-infrastructure-as-code-ansible-execution-boundaries
+aliases:
+  - ansible-execution-boundaries
+  - infrastructure-as-code/ansible/execution-boundaries.md
 ---
 
 ## Table of Contents
 
-1. [What Is an Execution Boundary?](#what-is-an-execution-boundary)
-2. [Control Nodes](#control-nodes)
-3. [Inventories](#inventories)
-4. [Credentials](#credentials)
-5. [Approval Gates](#approval-gates)
-6. [Limits and Batches](#limits-and-batches)
-7. [Run Evidence](#run-evidence)
-8. [Where Boundaries Break](#where-boundaries-break)
-9. [Putting It All Together](#putting-it-all-together)
+1. [The Problem: Orchestrating the Control Plane and Targets](#the-problem-orchestrating-the-control-plane-and-targets)
+2. [Ansible's Default Execution Boundary](#ansibles-default-execution-boundary)
+3. [Bypassing the SSH Transport: Local Connection Mode](#bypassing-the-ssh-transport-local-connection-mode)
+4. [Under the Hood: Subprocess Spawning on the Control Node](#under-the-hood-subprocess-spawning-on-the-control-node)
+5. [Target Delegation: Running Tasks on Sibling Hosts](#target-delegation-running-tasks-on-sibling-hosts)
+6. [Delegate Facts and the Fact Assignment Boundary](#delegate-facts-and-the-fact-assignment-boundary)
+7. [Local Process Exhaustion and Throttling Boundaries](#local-process-exhaustion-and-throttling-boundaries)
+8. [The Shorthand Legacy: local_action versus delegate_to](#the-shorthand-legacy-local_action-versus-delegate_to)
+9. [Environmental Inheritance and Path Resolution Differences](#environmental-inheritance-and-path-resolution-differences)
+10. [Security Boundaries and the Risks of Local Actions](#security-boundaries-and-the-risks-of-local-actions)
+11. [Local and Remote Execution Scenarios](#local-and-remote-execution-scenarios)
+12. [Putting It All Together](#putting-it-all-together)
+13. [What's Next](#whats-next)
 
-## What Is an Execution Boundary?
+## The Problem: Orchestrating the Control Plane and Targets
 
-Ansible files do not change servers by themselves. A playbook can sit in a repository for months and do nothing. Change happens when someone or something runs Ansible from a control node with an inventory, credentials, configuration, and a path to the managed hosts.
+When automating the deployment of a secure customer notification system, system engineering teams must coordinate tasks across different physical environments. The notification service package is compiled as a compressed software tarball on a centralized integration server or resides in a local build directory on the control machine. The target production fleet consists of several remote virtual machines situated behind strict network firewalls.
 
-An execution boundary is the line around that authority. It answers a simple question: what is this Ansible run allowed to reach and change?
+To deploy the update successfully, the playbook cannot start by modifying the remote servers. It must execute a series of preparatory tasks first:
+- Check for the existence of the compiled tarball on the local build filesystem.
+- Calculate the SHA256 checksum of the local software archive.
+- Read a version manifest file to determine which target version to deploy.
+- Query a central configuration database or key-value store to retrieve active deployment routing rules.
 
-For the orders service, a deployment command may look small:
+If the playbook attempts to execute these tasks using the standard SSH connection pipeline, the tasks will run on the remote target nodes. The remote nodes do not have access to the local build directory on the control plane, resulting in task failures.
 
-```bash
-ansible-playbook -i inventories/prod.ini playbooks/orders.yml \
-  --vault-id prod@.vault-pass-prod \
-  --limit orders-web-01
-```
+Conversely, if developers write separate, custom Bash scripts to handle the local build audits before launching Ansible, they lose the benefits of a single, unified orchestration codebase. The engineering team needs a mechanism within Ansible to define explicit execution boundaries, directing some tasks to run locally on the control node and others to execute on the remote production targets.
 
-The command is short, but it carries several decisions. The runner can read `inventories/prod.ini`. It has a password source for the `prod` Vault identity. It has credentials that can connect to `orders-web-01`. It can probably become a privileged user on that host. It has network access from the control node to the server.
+## Ansible's Default Execution Boundary
 
-The boundary is not one setting. It is the combination of those pieces. A safe automation design makes each piece visible and gives each environment only the authority it needs.
+By default, Ansible playbooks establish an execution boundary that separates the control plane (the machine running the `ansible-playbook` command) from the managed hosts (the target systems listed in the inventory).
 
-## Control Nodes
+When you execute a standard task, such as creating a directory, the control plane performs the following actions:
+1. **Module Payload Preparation**: It gathers the code path for the selected module (e.g. `ansible.builtin.file`) and prepares the task parameters for the connection plugin.
+2. **SFTP/SCP Transport**: With the common SSH connection, it opens a secure shell connection to the target host and transfers a module payload to a remote temporary directory, typically under `/tmp/ansible-tmp-...`.
+3. **Remote Execution**: It executes the module using the target host's supported interpreter or execution path.
+4. **Clean Up**: It deletes the temporary remote files and reads the JSON return string over the SSH socket connection to report success or failure.
 
-The control node is the machine where Ansible runs. It may be a developer laptop, a CI runner, a bastion host, or an automation controller. The managed nodes are the machines Ansible connects to and changes.
+While this default boundary keeps managed hosts isolated and standardizes target configurations, it is highly inefficient when a task needs to query resources that reside exclusively on the control node itself.
 
-This distinction matters because authority begins at the control node. If a laptop has the production SSH key, the production Vault password, and network access to the orders production hosts, then that laptop has production authority. Calling it a development laptop does not make it safe. The reach of the machine is what matters.
+## Bypassing the SSH Transport: Local Connection Mode
 
-A useful boundary starts by naming the control points and their purpose.
+To execute tasks directly on the control plane without opening an SSH socket connection to a remote host, you can override the connection parameter. Ansible provides the `connection: local` directive to instruct the execution engine to use the local connection plugin.
 
-| Control node | Normal purpose | Expected reach |
-| --- | --- | --- |
-| Developer laptop | Build roles and test local changes | Lab or development hosts |
-| Pull request runner | Parse, list, and preview changes | CI or staging only |
-| Protected deployment runner | Apply approved changes | Production after approval |
-| Break-glass host | Emergency operations | Restricted production access |
-
-The table is only documentation unless access rules match it. A pull request runner should not have a route to production hosts. A developer laptop should not silently share the same Vault password as the production deploy job. A break-glass host should be rare, logged, and more tightly controlled than a normal deploy path.
-
-Before a run, record which control node view Ansible is using:
-
-```bash
-ansible --version
-```
-
-The output shows the Ansible version and active configuration file. That matters because configuration can change behavior before the playbook reads its first task. Ansible searches for configuration in a defined order, including `ANSIBLE_CONFIG`, a local `ansible.cfg`, a home-directory config, and `/etc/ansible/ansible.cfg`. Two control nodes can run the same command and behave differently if they load different configuration.
-
-## Inventories
-
-Inventory is the map from Ansible names to real managed hosts. A play can say `hosts: orders_web`, but the inventory decides which machines belong to that group today. Inventory can be a static file, several files, a directory, or a dynamic source.
-
-For a simple orders setup, separate inventories make the environment boundary visible:
-
-```text
-inventories/
-  ci.ini
-  staging.ini
-  prod.ini
-```
-
-That layout helps humans avoid mistakes, but the file names are not the boundary by themselves. The boundary comes from which jobs can read which files, which variables each inventory loads, and which credentials are paired with each environment.
-
-Ansible's inventory guide recommends defining only one environment in each inventory when you manage multiple environments. That reduces the chance that a command meant for staging changes a production node. It also makes review output clearer because `-i inventories/staging.ini` and `-i inventories/prod.ini` are different decisions.
-
-Inventory can surprise teams in two ways. First, a group name can select more hosts than expected when dynamic inventory, cloud tags, or group membership changes. Second, multiple inventory sources can merge variables, and load order can decide which value wins. A production inventory accidentally combined with a staging source can produce a target set or variable set that nobody intended.
-
-Before applying the orders playbook, record the resolved host list:
-
-```bash
-ansible-playbook -i inventories/prod.ini playbooks/orders.yml \
-  --list-hosts \
-  --limit orders-web-01
-```
-
-The useful result is small:
-
-```text
-hosts (1):
-  orders-web-01
-```
-
-That output is the inventory boundary made visible. It does not change anything, but it shows what the later command would be able to target with the same inventory and limit.
-
-## Credentials
-
-Credentials turn a map into access. Inventory can name `orders-web-01`, but Ansible still needs a way to connect to that host and a way to perform privileged changes when the playbook requires them.
-
-For server automation, the main credential types are ordinary connection credentials, privilege escalation credentials, Vault passwords, and any external tokens used by tasks.
-
-| Credential | What it allows |
-| --- | --- |
-| SSH key or connection password | Log in to managed hosts |
-| Become permission or password | Run privileged tasks on managed hosts |
-| Vault password or Vault ID source | Decrypt encrypted variables and files |
-| Package, registry, or cloud token | Let tasks call external systems |
-
-Separate these by environment. A staging SSH key should not also log in to production. A production Vault password should not be available to pull request jobs. Generic names such as `ANSIBLE_SSH_KEY` hide authority. Names such as `ANSIBLE_SSH_KEY_PROD` and `ANSIBLE_VAULT_PASSWORD_PROD` are longer, but they make the environment visible in the job definition.
-
-Vault deserves special care. A Vault ID is a label that helps Ansible and humans choose the right password source. The common pattern is `label@source`.
-
-```bash
-ansible-playbook -i inventories/prod.ini playbooks/orders.yml \
-  --vault-id prod@.vault-pass-prod \
-  --limit orders-web-01
-```
-
-In that command, `prod` is the label and `.vault-pass-prod` is the source. The label is useful, but it is not a full access-control system by itself. Ansible documentation explains that Vault ID labels are hints unless matching is enforced with configuration, and even with matching enabled, Ansible does not enforce that the same label always uses the same password. The operational boundary should still come from secret storage, job permissions, and environment-specific password sources.
-
-When a CI job writes a password source to disk, treat that file as a secret file:
-
-```bash
-install -m 0600 /dev/null .vault-pass-prod
-printf "%s" "$ANSIBLE_VAULT_PASSWORD_PROD" > .vault-pass-prod
-```
-
-The file should be removed after the run, including after failure. Also remember that Vault keeps content encrypted at rest, but when encrypted files are copied or templated to target hosts with the right password, the result on the target can be decrypted by design. Vault protects repository content and secret transport through the control flow. It does not mean every file on the managed host remains encrypted.
-
-## Approval Gates
-
-Approval is the point where a protected job receives authority it did not have before. A pull request review approves the code change. A production environment approval allows a runner to receive production inventory, production credentials, and a network path to production hosts. Those gates should be separate because they answer different questions.
-
-For the orders service, a pull request reviewer might approve the Nginx port change after seeing a staging diff. That does not mean the reviewer has approved an immediate restart of every production web node. The deployment approval should happen at the point where the production job is about to receive production secrets.
-
-A good approval gate is narrow and visible:
-
-```text
-job: deploy-orders-production
-requires: production approval
-inventory: inventories/prod.ini
-vault-id: prod
-initial limit: orders-web-01
-```
-
-The approval does not make the playbook safe by itself. It only releases the authority to run. The job still needs a narrow limit, a known batch size, health checks, and evidence.
-
-## Limits and Batches
-
-Ansible has two controls that people often mix together: host selection and batching.
-
-Host selection decides which hosts are eligible for the run. The inventory and play's `hosts:` value create the first selection. The command-line `--limit` narrows that selection further.
-
-Batching decides how many selected hosts Ansible handles at a time. The `serial` keyword controls batch size for a play. By default, Ansible can run tasks across all hosts affected by the play using its normal forks behavior. With `serial`, it completes the play on one batch before moving to the next batch.
-
-For the first orders production run, host selection should be one host:
-
-```bash
-ansible-playbook -i inventories/prod.ini playbooks/orders.yml \
-  --vault-id prod@.vault-pass-prod \
-  --limit orders-web-01
-```
-
-After the canary passes, host selection can widen:
-
-```bash
-ansible-playbook -i inventories/prod.ini playbooks/orders.yml \
-  --vault-id prod@.vault-pass-prod \
-  --limit orders_web
-```
-
-If the playbook contains `serial: 1`, the wider run still moves one host at a time:
+The following playbook demonstrates how to use `connection: local` to audit local software tarballs on the control node before pushing them to production web hosts:
 
 ```yaml
-- name: Deploy orders web nodes
-  hosts: orders_web
-  serial: 1
+- name: Audit local application assets
+  hosts: localhost
+  gather_facts: false
+  connection: local
   tasks:
-    - name: Render Nginx site
-      ansible.builtin.template:
-        src: orders.nginx.conf.j2
-        dest: /etc/nginx/conf.d/orders.conf
+    - name: Verify build tarball exists on the control node
+      ansible.builtin.stat:
+        path: "/opt/builds/checkout/checkout-api-latest.tar.gz"
+      register: local_tarball_status
+
+    - name: Calculate local build checksum
+      ansible.builtin.stat:
+        path: "/opt/builds/checkout/checkout-api-latest.tar.gz"
+        checksum_algorithm: sha256
+      register: local_tarball_checksum
+      when: local_tarball_status.stat.exists
 ```
 
-The practical surprise is that `--limit orders_web` and `serial: 1` do different jobs. The limit says the run may touch the `orders_web` group. The serial setting says the play should move through that selected group one host at a time. If the group has eight hosts, the authority covers eight hosts even though the batch size is one.
+Inside this play, the target host is set to the symbolic name `localhost`. Because `connection: local` is active, the tasks run directly on the filesystem of the machine executing the playbook. No SSH keys are required, no network handshakes occur, and no remote processes are spawned. The control plane reads the local file metadata, calculates the SHA256 checksum, and registers the values in the active play context.
 
-## Run Evidence
+For local plays, set the Python interpreter deliberately when needed. Official Ansible guidance often uses `ansible_python_interpreter: "{{ ansible_playbook_python }}"` so local tasks run under the same Python environment that launched `ansible-playbook`, rather than accidentally using a different system Python.
 
-Every meaningful run should leave a record that answers operational questions later. The record should be boring and specific. Which commit ran? Which control node configuration did it use? Which inventory and limit selected the hosts? Which Vault label was supplied? What did the recap say? Did the health check pass?
+## Under the Hood: Subprocess Spawning on the Control Node
 
-For the orders canary, a useful record might look like this:
+When you configure `connection: local`, the execution engine executes a low-level process bypass within the Python runtime on the control node.
+
+Normally, the connection plugin manager loads `ansible.plugins.connection.ssh` to spawn a persistent SSH process. When `connection: local` is active, the manager loads `ansible.plugins.connection.local` instead.
+
+This local connection plugin performs the following systems actions:
+1. **Local Temporary Directory Creation**: It creates a secure temporary directory directly on the control node filesystem, typically under `$TMPDIR`, `/var/tmp/`, or `/tmp/`.
+2. **Payload Preparation**: It writes the local module payload and JSON arguments to this local temporary directory.
+3. **Subprocess Spawning**: Using Python's standard `subprocess.Popen` library, the local connection plugin forks a new child process on the control node:
+   ```python
+   # Simplified Python representation inside the connection plugin
+   proc = subprocess.Popen(
+       [sys.executable, local_zip_path],
+       stdin=subprocess.PIPE,
+       stdout=subprocess.PIPE,
+       stderr=subprocess.PIPE
+   )
+   ```
+4. **Execution and Deserialization**: The child process runs using the control plane's active Python interpreter (`sys.executable`). It executes the module, writes its JSON outcomes to the stdout descriptor pipe, and exits. The parent Ansible process reads the pipe, deletes the local temporary files, and deserializes the JSON payload back into memory.
+
+This local connection path avoids the remote SSH daemon (`sshd`), firewall path, and SSH key validation for that task. It can be faster for local filesystem work, but performance still depends on the module, local disk, Python startup, and any external APIs the task calls.
+
+```mermaid
+graph TD
+    subgraph SSHFlow ["Standard Remote Transport (SSH)"]
+        ControlNodeSSH["Control Plane Memory"]
+        SshdRemote["Remote SSH Daemon (sshd)"]
+        PythonRemote["Remote Python Interpreter"]
+        ControlNodeSSH -->|SFTP / TCP Port 22| SshdRemote
+        SshdRemote -->|Spawns Process| PythonRemote
+    end
+
+    subgraph LocalFlow ["Local Connection Bypass (Native Subprocess)"]
+        ControlNodeLocal["Control Plane Memory"]
+        ForkProcess["Direct OS Fork: subprocess.Popen()"]
+        PythonLocal["Control Plane Resident Python"]
+        ControlNodeLocal -->|Local Filesystem Write| ForkProcess
+        ForkProcess -->|Native Execution| PythonLocal
+    end
+```
+
+## Target Delegation: Running Tasks on Sibling Hosts
+
+While setting `hosts: localhost` with `connection: local` is excellent for dedicated local plays, developers often need to execute a single local task in the middle of a play that targets remote servers. For example, while deploying to a database server, the playbook might need to update a DNS record on a separate corporate DNS host.
+
+To redirect a single task to a different host without changing the scope of the play, you can use the `delegate_to` directive.
+
+The following playbook targets the production database servers but delegates a configuration snapshot backup task to the local control machine:
+
+```yaml
+- name: Deploy Database Schema Updates
+  hosts: databases
+  become: true
+  tasks:
+    - name: Record deployment metadata locally
+      ansible.builtin.lineinfile:
+        path: "/var/log/deployments/database_runs.log"
+        line: "Deploying schema version {{ schema_version }} to {{ inventory_hostname }}"
+        create: true
+        mode: "0640"
+      delegate_to: localhost
+      become: false
+
+    - name: Run database schema migration
+      ansible.builtin.command: "/opt/db/bin/migrate.sh"
+```
+
+The execution flow of this delegated task behaves as follows:
+- **`delegate_to: localhost`**: Directs the control plane to execute the `lineinfile` task on the control machine itself rather than on the active remote database host.
+- **`become: false`**: Overrides the play-level `become: true` setting. This prevents the local connection plugin from attempting to run `sudo` on the control node, which would fail if the local running user lacks administrator privileges.
+- **`inventory_hostname`**: Even though the task executes locally, the variable `{{ inventory_hostname }}` still evaluates to the name of the active database host currently being processed by the play thread. This allows you to record host-specific metadata directly to a centralized log file.
+
+You can also use `delegate_to` to point to sibling hosts in the inventory, such as delegating a target deregistration task to your active F5 load balancer node before upgrading a web host.
+
+## Delegate Facts and the Fact Assignment Boundary
+
+When executing delegated tasks that gather operating system status or host metrics, you must decide which host should own the gathered facts.
+
+By default, facts gathered by a delegated task are assigned to the current inventory host, not to the delegated host. This surprises people who delegate a `setup` task to a different machine and expect those facts to appear under the delegated host's `hostvars`.
+
+To assign gathered facts to the delegated host instead, set `delegate_facts: true`:
+
+```yaml
+- name: Gather facts from the database host while processing a web host
+  ansible.builtin.setup:
+  delegate_to: db-server-01.internal
+  delegate_facts: true
+```
+
+By adding `delegate_facts: true`, Ansible stores the gathered facts under `hostvars["db-server-01.internal"]` instead of attaching them to the web host currently being processed.
+
+## Local Process Exhaustion and Throttling Boundaries
+
+While running delegated tasks locally can be efficient, it introduces a process scheduling risk when targeting large fleets. If your inventory contains 100 remote web servers, and the playbook includes a task delegated to `localhost` without serialization controls, Ansible can run multiple copies of that delegated task in parallel up to the active fork and strategy limits.
+
+Because `delegate_to: localhost` runs the work on the control plane, those parallel task copies consume local CPU, memory, file descriptors, API quota, and credentials.
+
+This sudden process spike can exhaust the control plane's operating system process table, saturate its CPU cores, and trigger out-of-memory crashes:
 
 ```text
-job: deploy-orders-production
-commit: 8f3c2ad
-ansible: core 2.16.4
-config: /workspace/ansible.cfg
-inventory: inventories/prod.ini
-limit: orders-web-01
-vault-id: prod
-mode: apply
-recap: ok=14 changed=3 unreachable=0 failed=0
-health: orders-web-01 /healthz 200
+OSError: [Errno 12] Cannot allocate memory
 ```
 
-That record is enough to reconstruct the run without exposing secrets. It does not include the private key. It does not include the Vault password. It does not include a rendered secret environment file.
+To protect the control plane from local process exhaustion, you must apply throttling boundaries to delegated tasks. Ansible provides two parameters to control this load:
+- **`run_once: true`**: Instructs the engine to execute the task on one host in the active play context and share the result with other hosts in that context. With `serial`, remember that `run_once` can run once per batch, so design global API calls carefully.
+- **`throttle: 1`**: Restricts the maximum number of parallel processes for that specific task. Setting `throttle: 1` ensures that the local subprocesses are executed sequentially, one after another, protecting the control plane's RAM and CPU allocation.
 
-Logging has its own boundary. Ansible can print task arguments and output to the control node. If logs are saved, tasks that expose sensitive values should use `no_log: true`. That prevents many normal task values from appearing in output, but debugging output can still be dangerous. Production jobs should avoid debug tasks that print secret-bearing variables.
+```yaml
+- name: Query cloud target group status
+  ansible.builtin.command:
+    argv:
+      - aws
+      - elbv2
+      - describe-target-health
+      - --target-group-arn
+      - "{{ checkout_target_group_arn }}"
+  delegate_to: localhost
+  run_once: true
+  changed_when: false
+  register: global_target_status
+```
 
-## Where Boundaries Break
+## The Shorthand Legacy: local_action versus delegate_to
 
-Boundaries break when one credential works everywhere. A shared SSH key and a shared Vault password make job definitions shorter, but they make environment mistakes easier. If the staging job can use the production password by accident, the staging boundary is weak.
+In older Ansible playbooks, developers often used a shorthand legacy notation called `local_action` to run individual tasks locally on the control machine.
 
-They break when inventory names are trusted more than resolved hosts. `orders_web` is a label. The host list behind it can change. A saved `--list-hosts` artifact shows what the run actually selected.
+A comparison of the two syntax formats illustrates the architectural differences:
 
-They break when `--limit` is treated as the only safety control. A narrow limit is useful, but the job may still hold broad production credentials. If the command is edited, retried with a different limit, or run from the wrong branch, the authority is still present. Approval, secret release, inventory access, and network access need to match the intended boundary.
+```yaml
+# The legacy shorthand format (local_action)
+- name: Verify build archive locally
+  local_action: ansible.builtin.stat path=/opt/builds/archive.tar.gz
 
-They break when configuration is invisible. A changed `ansible.cfg`, a different `ANSIBLE_CONFIG`, or altered host key checking can change behavior across control nodes. Record the Ansible version and configuration path so the run can be explained later.
+# The modern standard format (delegate_to)
+- name: Verify build archive locally
+  ansible.builtin.stat:
+    path: /opt/builds/archive.tar.gz
+  delegate_to: localhost
+```
 
-They also break during cleanup. A failed job can stop after writing `.vault-pass-prod` and before removing it. Cleanup should run after both success and failure, and workspaces that held secrets should not be reused casually.
+Both formats can run work locally, but the `delegate_to: localhost` format is usually easier to read and review.
+
+The `local_action` syntax often encourages dense one-line key-value notation, which is harder to read in reviews.
+
+Furthermore, `delegate_to: localhost` preserves standard YAML block dictionary syntax and makes Fully Qualified Collection Names (FQCNs) easy to use cleanly.
+
+## Environmental Inheritance and Path Resolution Differences
+
+When you bypass the remote execution boundary, the operating system context changes completely. Developers must understand these differences to prevent path resolution and variable failures.
+
+### Path Resolution
+
+When executing remote tasks, relative path behavior depends on the module and remote execution context. Avoid ambiguity by using absolute paths for files you manage.
+
+When executing local tasks via `connection: local` or `delegate_to: localhost`, relative paths can resolve on the control node instead of the managed host. If you run the playbook from `/srv/ansible/`, a task writing to `output.txt` may write under the local working directory. Use absolute paths or `playbook_dir`-anchored paths for predictable local behavior.
+
+### Environmental Variables
+
+Remote tasks usually run in a non-interactive environment shaped by the connection plugin, become settings, remote user, and any `environment` keyword you set.
+
+Local tasks can inherit environment from the user running the `ansible-playbook` command. If your local terminal session has loaded AWS API credentials (`AWS_ACCESS_KEY_ID`), active Git configuration parameters, or system proxies, local tasks may see values that are missing in CI/CD.
+
+When running local connection tasks with facts gathered, you can query the control plane's local environment using the `ansible_env` dictionary:
+
+```yaml
+- name: Resolve local builder workspace path
+  ansible.builtin.debug:
+    msg: "The local workspace path is {{ ansible_env.WORKSPACE | default('/srv/builds') }}"
+```
+
+While this inheritance is highly convenient for cloud integrations, it can introduce inconsistencies if a playbook succeeds locally because of environmental variables that are missing when the playbook runs inside an automated CI/CD runner.
+
+## Security Boundaries and the Risks of Local Actions
+
+Bypassing the SSH transport layer introduces significant security considerations. When a playbook runs a task locally on the control plane, the control plane is directly exposed to the task's inputs and outputs.
+
+First, **Command Injection Risks** are highly severe. If a local task executes a shell module using variables gathered from remote, untrusted hosts (such as host facts), a malicious actor who has compromised a remote host can manipulate their facts to inject malicious commands into the local shell. If the control node runs with high privileges, these commands will execute with administrator authority on your orchestration control plane, compromising the root of your entire infrastructure.
+
+Second, **Accidental Filesystem Destructions** can occur if local tasks use empty or misconfigured path variables:
+
+```yaml
+- name: Clean up temporary build files (Dangerous)
+  ansible.builtin.file:
+    path: "{{ local_build_directory }}/tmp"
+    state: absent
+  delegate_to: localhost
+```
+
+If the `local_build_directory` variable is undefined or resolves to an empty string, the path evaluates to `/tmp`. The task will attempt to delete the control plane's entire system temporary directory, crashing active running processes and corrupting local databases. You should always use assertions to validate that path variables are defined and non-empty before executing local deletions.
+
+## Local and Remote Execution Scenarios
+
+Deciding where to establish your task execution boundary is a key architectural decision. You must select the transport mode that matches the responsibility of the task.
+
+The table below outlines common operations scenarios and the recommended connection boundaries:
+
+| Operations Task | Connection Boundary | Recommended Module / Pattern | Rationale |
+| :--- | :--- | :--- | :--- |
+| **Audit Local Build Files** | Local Control Plane | `ansible.builtin.stat` with `connection: local` | Verifies build tarball integrity and version metadata before starting network deployment. |
+| **Cloud Infrastructure API Calls** | Local Control Plane | Provider collection module or CLI delegated to localhost | Calls cloud provider endpoints over HTTPS using the control plane's local IAM role credentials. |
+| **Deregister Load Balancer Targets** | Local Control Plane or Sibling Delegation | Provider-specific target registration/drain task | Gracefully drains traffic from a specific web host before applying configurations. |
+| **Modify Remote Configurations** | Remote Managed Host | `ansible.builtin.template` over standard SSH | Renders and secures configuration templates directly on the target operating system. |
+| **Audit Service Health** | Remote Managed Host | `ansible.builtin.uri` executing locally on the target | Confirms the application process is answering local requests correctly. |
 
 ## Putting It All Together
 
-The orders deployment boundary is made from several pieces. The protected deployment runner is the control node. `inventories/prod.ini` is the production map. The SSH key, become permission, and `prod` Vault password source make that map usable. Approval releases those pieces to the job. `--limit` starts with one host. `serial` controls the rollout batch when the limit later widens. Artifacts show the version, config, inventory, selected hosts, recap, and health result.
+Ansible playbooks are highly effective because they allow developers to coordinate complex tasks across physical execution boundaries. While standard remote tasks commonly prepare module payloads and transfer them over SSH sockets, you can use local connection modes and delegation to run tasks directly on the control plane or sibling nodes.
 
-That is the operating model for Ansible automation. Playbooks describe work. Execution boundaries decide who can aim that work at real systems, which systems are in reach, how quickly the run moves, and what evidence remains afterward.
+Enforcing these execution boundaries relies on three main principles:
+- **Transport Choices**: Using `connection: local` swaps the remote SSH path for local execution on the control node.
+- **Task Delegation**: Using `delegate_to: localhost` redirects single tasks to the control machine, allowing you to audit build files or register cloud assets mid-play.
+- **Safety Boundaries**: Enforcing strict input validations and avoiding raw shell command execution prevents local command injection risks and accidental filesystem corruptions.
+
+By matching the execution boundary to the requirements of each task, you build a robust deployment pipeline that coordinates build artifacts, cloud controllers, network balancers, and target hosts within a single automation codebase.
 
 ---
 
 **References**
 
-- [ansible-playbook command line reference](https://docs.ansible.com/ansible/latest/cli/ansible-playbook.html)
-- [How to build your inventory](https://docs.ansible.com/ansible/latest/inventory_guide/intro_inventory.html)
-- [Managing vault passwords](https://docs.ansible.com/ansible/latest/vault_guide/vault_managing_passwords.html)
-- [Using encrypted variables and files](https://docs.ansible.com/ansible/latest/vault_guide/vault_using_encrypted_content.html)
-- [Ansible configuration settings](https://docs.ansible.com/ansible/latest/reference_appendices/config.html)
-- [Controlling playbook execution: strategies and more](https://docs.ansible.com/ansible/latest/playbook_guide/playbooks_strategies.html)
-- [Logging Ansible output](https://docs.ansible.com/ansible/latest/reference_appendices/logging.html)
+- [Ansible Documentation: Local Connection Mode](https://docs.ansible.com/ansible/latest/playbook_guide/playbooks_delegation.html#local-playbooks-and-connection-local)
+- [Python Subprocess Management Library](https://docs.python.org/3/library/subprocess.html)
+- [Delegating Task Execution in Playbooks](https://docs.ansible.com/ansible/latest/playbook_guide/playbooks_delegation.html)
+- [Ansible Configuration Settings and Paths](https://docs.ansible.com/ansible/latest/reference_appendices/config.html)

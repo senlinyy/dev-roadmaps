@@ -202,6 +202,10 @@ By combining the cryptographic credentials vault, log-redacted binding blocks, t
 * **Compromised Agent Intrusions**: The Agent-to-Controller Security Gateway blocks compromised agents from requesting arbitrary Java execution or accessing the controller's `$JENKINS_HOME` directory. The master's configurations, plugin classpaths, and vault keys remain fully protected.
 * **Cross-Project Secret Leaks**: Utilizing typed SSH keys and Secret File bindings ensures that large credentials payloads are written only to temporary, read-only files that are forcefully wiped from the agent's workspace the moment the step exits, preventing subsequent builds from stealing credentials.
 
+![Jenkins credentials security summary showing encrypted vault, credentials binding, masking, secret schemas, and controller-agent boundary](/content-assets/articles/article-cicd-jenkins-credentials-and-security/jenkins-credentials-summary.png)
+
+*Use this as the credentials checklist: know what the encrypted vault protects, bind secrets only for the step that needs them, rely on masking without trusting it blindly, choose the right schema, and preserve the controller-agent boundary.*
+
 ---
 
 **References**

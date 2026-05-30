@@ -57,6 +57,10 @@ flowchart TD
     Agent2 --> Executor3
 ```
 
+![Jenkins controller and agent boundary showing durable controller state, queued work, labels, connection modes, and disposable workspaces](/content-assets/articles/article-cicd-jenkins-architecture-and-agents/jenkins-controller-agent-boundary.png)
+
+*The controller owns durable state and scheduling decisions; agents provide disposable execution workspaces selected by labels and connected through SSH or WebSocket.*
+
 ### The $JENKINS_HOME File Structure
 
 The controller preserves all system state, job definitions, credentials, and build logs within a single root folder known as `$JENKINS_HOME` (typically located at `/var/lib/jenkins` on Linux systems). It is critical to understand what lives inside this directory:
@@ -266,6 +270,10 @@ By separating the control center from the execution engine, we solve the stabili
 ## What's Next
 
 Now that we have established a secure and distributed master-agent architecture, the next challenge is representing the build instructions as version-controlled code. Rather than manually clicking through job forms in the Jenkins web UI, we declare our entire build workflow inside a `Jenkinsfile` stored alongside our application code. Let's move to **Pipelines and Jenkinsfile** to learn how to author, lint, and coordinate structured Groovy declarative pipelines.
+
+![Jenkins architecture summary showing controller state, agents, connections, labels, dynamic agents, and workspace cleanup](/content-assets/articles/article-cicd-jenkins-architecture-and-agents/jenkins-architecture-summary.png)
+
+*Use this as the Jenkins architecture checklist: separate controller state from agent execution, protect `$JENKINS_HOME`, choose connection modes deliberately, route by labels, and use dynamic agents for disposable work.*
 
 ---
 

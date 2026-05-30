@@ -34,7 +34,7 @@ Then production checkout fails.
 - The candidate version works in a staging slot, but production traffic still reaches the old slot.
 - The new Container Apps revision receives 10 percent of traffic, fails real checkout requests, and nobody knows which older revision is the rollback target.
 
-This module is about the operating work around an Azure release. A deployment moves code into a place where it can run. A release is larger. It moves a known artifact, runtime settings, secret access, traffic, monitoring attention, and rollback responsibility.
+This module is about the operating work around an Azure release. A deployment moves code into a place where it can run. A release is larger. It moves a known artifact, runtime settings, secret access, traffic, monitoring attention, and rollback responsibility. In Azure, that usually means naming the App Service slot, Container Apps revision, Function App package, VM image, or AKS deployment that changed, then naming the configuration, identity, traffic, health, and rollback target attached to that change.
 
 The beginner habit is simple: before users depend on a change, know what version is running, what values it receives, how traffic reaches it, how health will be judged, and how users return to a known working path if the release is bad.
 
@@ -42,9 +42,13 @@ The beginner habit is simple: before users depend on a change, know what version
 
 A release is the controlled movement of a change into a live system. The change may be application code, a container image, an App Service package, an environment variable, a Key Vault reference, a scaling setting, or a traffic split. The user does not care which file changed. The user cares whether checkout still works.
 
+![An infographic showing artifact, runtime, configuration, traffic, and health as parts of a release contract](/content-assets/articles/article-cloud-providers-azure-deployment-runtime-operations-mental-model/artifact-config-traffic-split.png)
+
+*A release is the moment artifact, runtime, config, traffic, and health checks line up around the same version.*
+
 That is why "deployment succeeded" gives incomplete evidence. A deployment can succeed while the release fails. Azure accepted the package or image. The app may even be running. But the runtime can still be wrong for production: wrong secret reference, wrong identity, wrong database, wrong traffic target, wrong health path, or no rollback plan.
 
-Think of a release as five connected promises:
+Think of a release as six connected promises:
 
 | Promise | Question it answers |
 | --- | --- |
@@ -53,6 +57,7 @@ Think of a release as five connected promises:
 | Configuration | What values and secret access does it receive? |
 | Traffic | Which users can reach it now? |
 | Evidence | What proves the release is healthy or unsafe? |
+| Rollback | Which known working path can users return to? |
 
 Those promises are separate on purpose. If checkout breaks after a release, you need to know whether the code changed, the runtime changed, the config changed, or only the traffic path changed.
 
@@ -85,6 +90,39 @@ release owner: platform-api
 ```
 
 This does not make the release safe by itself. It makes the version knowable. When you later compare the old and new behavior, you are not guessing which code ran.
+
+:::expand[Design: Why Mutable Tags Exist Despite Their Risks]{kind="design"}
+In modern container operations, referencing mutable image tags like `:latest` or `:prod` in production is widely considered an anti-pattern. Yet, container registries and orchestration engines continue to support mutable tags as standard features. Differentiating the design pressure that created mutable tags from the operational safety that demands immutable digests reveals a fundamental tradeoff between developer convenience and runtime predictability.
+
+Mutable tags exist to simplify early-stage development loops. By utilizing a stable, reusable tag like `:latest`, developers can push updated container images to the registry without needing to modify, compile, and re-commit Bicep templates or Kubernetes manifests on every single change. The runtime hosting environment simply queries the registry and pulls whichever bytes are currently mapped to that tag, making continuous integration fast and lightweight.
+
+However, this simplicity introduces severe scale-out risks in production. A container registry is a mutable directory: anyone with write access can overwrite the `:latest` tag at any moment. If an Azure Container App or AKS cluster scales out to handle a traffic surge after the tag is overwritten but before a formal release, the newly provisioned replicas will pull the new image, while existing replicas continue to run the old image. This results in mixed-version replicas serving production traffic concurrently.
+
+This risk is identical on AWS. In Amazon ECS or EKS, referencing mutable tags in your task definitions will lead to replica skew during auto-scaling sweeps on Fargate or EC2. The correct design pattern in both clouds is to restrict mutable tags strictly to local development, while utilizing immutable, Git-SHA-based tags or explicit SHA-256 image digests for all production releases.
+
+The top-down diagram below compares mutable convenience with immutable safety:
+
+```mermaid
+flowchart TD
+    subgraph Mutable["Mutable Tag (myapp:latest)"]
+        RegistryA["Registry: latest maps to Version 2"]
+        ScaleOutA["Scale Event: Pod 2 Boots"] -->|"Pulls latest"| RegistryA
+        Pod1["Pod 1 runs Version 1"]
+        Pod2["Pod 2 runs Version 2"]
+        Pod1 ---|"Mixed version skew!"| Pod2
+    end
+
+    subgraph Immutable["Immutable Tag (myapp:git-a3f82b)"]
+        RegistryB["Registry: git-a3f82b maps to Version 1"]
+        ScaleOutB["Scale Event: Pod 2 Boots"] -->|"Pulls git-a3f82b"| RegistryB
+        Pod3["Pod 3 runs Version 1"]
+        Pod4["Pod 4 runs Version 1"]
+        Pod3 ---|"Guaranteed consistency!"| Pod4
+    end
+```
+
+**Rule of thumb:** Treat mutable tags like local scratch space. For all production environments, enforce a strict deployment pipeline policy that tags images with unique git commit SHAs and references the immutable digest, guaranteeing that all running replicas remain perfectly synchronized.
+:::
 
 ## Runtime
 
@@ -159,6 +197,10 @@ The previous observability module taught logs, metrics, traces, and alerts. A re
 
 Rollback means returning users to a known working path. That path might be the previous App Service slot, the older Container Apps revision, a previous app setting value, a disabled feature flag, or an older package.
 
+![An infographic showing a health check gate deciding whether a new version continues or rolls back](/content-assets/articles/article-cloud-providers-azure-deployment-runtime-operations-mental-model/health-rollback-gate.png)
+
+*Rollback decisions are safer when they are driven by health evidence instead of guesswork.*
+
 Rollback works when the team knows what to return to and what else changed. A release that changes both code and configuration may need both restored. A release that changed a database schema may not be safely reversible without a data plan. A release that changed a Key Vault secret reference may require identity and secret checks.
 
 A useful rollback note is concrete:
@@ -172,6 +214,31 @@ Rollback target:
 ```
 
 Sometimes fixing forward is faster and safer than rolling back. The decision should be based on evidence and a known recovery path, not panic.
+
+:::expand[Pitfall: Rollback Without Configuration Cleanup]{kind="pitfall"}
+A dangerous release mistake is executing a "code-only" rollback while leaving new or modified configuration settings active in production. Imagine a release that deploys a new container image along with a modified environment variable `PAYMENT_GATEWAY_URL=https://api.stripe.com` to replace a legacy PayPal endpoint. The release fails smoke tests, and the team quickly rolls back by routing 100% of traffic back to the previous Container Apps revision or App Service slot. However, because environment settings are often shared at the application resource scope, the old code remains cabled to the new Stripe URL—which it has no logic to handle—causing immediate system crashes.
+
+A complete rollback must treat code, configuration, and secrets as a unified transaction. If you swap slots or revisions back to an older version, you must audit whether your environment variables, Key Vault secret references, database schemas, and feature flags must also be restored to their previous states. Leaving "dirty" or orphaned configurations active in production after a code rollback leads to subtle runtime bugs that are highly difficult to diagnose because the codebase itself appears to be in a known working historical snapshot.
+
+This identical mismatch occurs on AWS. If you update an AWS Secrets Manager credential or an AWS Systems Manager (SSM) Parameter Store value during a release, and subsequently roll back your ECS Task Definition or Lambda function to a previous version, the older code will ingest the new secret structure. If the older code cannot parse the new format, the system will experience runtime exceptions.
+
+The top-down diagram below illustrates how an incomplete configuration rollback creates mismatched state:
+
+```mermaid
+flowchart TD
+    subgraph SwappedCode["1. Application Code Swapped Back (Rollback)"]
+        Active["Active Compute (Old Revision)"] -->|"Reads Configuration"| ConfigStore["Azure App Service Settings"]
+    end
+
+    subgraph DirtyConfig["2. Configuration Left Dirty (Failure)"]
+        ConfigStore ---|"Orphaned Setting"| Dirty["PAYMENT_GATEWAY_URL=stripe (New Value)"]
+    end
+
+    Active -->|"Attempts to parse Stripe using PayPal logic"| Crash["🔴 Runtime Crash: InvalidPaymentFormat"]
+```
+
+**Rule of thumb:** Never treat a rollback as a simple code-only swap. Document your rollback sequences as unified transactions, and verify that environment variables, Key Vault references, and feature flags are reverted alongside your application code.
+:::
 
 ## Putting It All Together
 
@@ -189,6 +256,11 @@ The release is the operating event around the deploy. When you can name each par
 ## What's Next
 
 The next article focuses on those control points. It explains how App Service deployment slots and Container Apps revisions help a team test a candidate version, move traffic, and recover from a bad rollout.
+
+![An infographic showing a release runtime contract across artifact, configuration, traffic, health, rollback, and runtime](/content-assets/articles/article-cloud-providers-azure-deployment-runtime-operations-mental-model/release-runtime-contract.png)
+
+*Use this as the release contract: a production change is the artifact plus its configuration, traffic exposure, health evidence, and rollback path, not just a build number.*
+
 
 ---
 

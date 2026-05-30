@@ -180,6 +180,10 @@ Enforcing the Build Once, Run Everywhere rule, progressive promotion gates, and 
 
 Now that we have automated the progressive promotion of stateless, immutable artifacts across gated environments, we face the final operational hurdle: **Human Execution Coordination**. While our CI/CD pipelines automate code packaging and environment gates, complex release windows often involve manual database checks, external API coordination, and post-deployment manual verification loops. Let's move to **Deployment Runbooks** to learn how to capture, version-control, and automate release procedures using executable, idempotent runbooks.
 
+![Environment promotion summary showing one artifact moving through dev, staging, approval, production, and registry promotion](/content-assets/articles/article-cicd-deployment-strategies-environment-promotion-and-release-gates/environment-promotion-summary.png)
+
+*Use this as the promotion checklist: move one artifact through environments, inject runtime config, gate dev and staging, require production approval, and promote through registries without rebuilding.*
+
 ---
 
 **References**

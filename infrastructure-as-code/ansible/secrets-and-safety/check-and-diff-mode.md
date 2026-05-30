@@ -1,197 +1,303 @@
 ---
-title: "Check and Diff Mode"
+title: "Dry Runs and Diff Mode"
 description: "Use Ansible check mode and diff mode as review evidence while knowing which predictions can be incomplete."
-overview: "Check mode and diff mode help teams inspect planned Ansible changes before they touch hosts, while still treating preview output as evidence rather than a guarantee."
+overview: "Check mode and diff mode help teams inspect planned Ansible changes before they touch hosts, while still treating preview output as evidence rather than certainty."
 tags: ["ansible", "check-mode", "diff"]
 order: 3
 id: article-infrastructure-as-code-ansible-check-diff-mode
+aliases:
+  - check-diff-mode
+  - infrastructure-as-code/ansible/check-and-diff-mode.md
 ---
 
 ## Table of Contents
 
-1. [Why Preview Matters](#why-preview-matters)
-2. [Check Mode](#check-mode)
-3. [Diff Mode](#diff-mode)
-4. [Reading Preview Output](#reading-preview-output)
-5. [Where Preview Is Weak](#where-preview-is-weak)
-6. [Safe Review Evidence](#safe-review-evidence)
-7. [Putting It All Together](#putting-it-all-together)
-8. [What's Next](#whats-next)
+1. [The Problem: Blind Execution Risks](#the-problem-blind-execution-risks)
+2. [Check Mode: The Dry-Run Boundary](#check-mode-the-dry-run-boundary)
+3. [Under the Hood: How Modules Predict Desired States](#under-the-hood-how-modules-predict-desired-states)
+4. [Third-Party Module Support and the Safety Gate](#third-party-module-support-and-the-safety-gate)
+5. [Diff Mode: Line-by-Line System Comparisons](#diff-mode-line-by-line-system-comparisons)
+6. [Under the Hood: Module-Supported Diff Generation](#under-the-hood-module-supported-diff-generation)
+7. [The Fragility of Check Mode: Sequential Cascades](#the-fragility-of-check-mode-sequential-cascades)
+8. [Managing Dependency Breakdowns with check_mode Overrides](#managing-dependency-breakdowns-with-check_mode-overrides)
+9. [Under the Hood: Handlers and Change Notifications in Dry Runs](#under-the-hood-handlers-and-change-notifications-in-dry-runs)
+10. [Auditing Diffs Safely: The Secret Boundary Collision](#auditing-diffs-safely-the-secret-boundary-collision)
+11. [Putting It All Together](#putting-it-all-together)
+12. [What's Next](#whats-next)
 
-## Why Preview Matters
+## The Problem: Blind Execution Risks
 
-Ansible can change a host quickly. That is useful when the playbook is correct and the target set is right. It is risky when a variable points at the wrong port, a template renders a secret into output, or the run includes more hosts than expected.
+In a fast-moving operations team, automated infrastructure tools are highly efficient but carry a severe risk. When a developer runs a playbook designed to update network interfaces, modify secure socket layer configurations, or migrate system services, the changes are applied immediately to target nodes. If a port variable is mistyped, a security group config is misconfigured, or a template maps to the wrong target directory, a single execution run can bring down the entire web cluster.
 
-The `orders` service is about to move `orders-api` from local port `8080` to `8081`. Nginx must proxy to the new port. The systemd unit or environment file must start the process on the new port. The health check must follow the same value. Before the team applies the change to production, they want to answer a few plain questions:
+Before executing modifications in production, system administrators need to answer several critical operational questions:
+- Which target hosts will this run actually connect to and modify?
+- Which specific tasks will predict a change on the operating systems?
+- What exact text modifications will occur inside configuration files?
+- Are any sensitive credentials or secrets at risk of appearing in the output?
 
-- Which hosts would this playbook touch?
-- Which tasks believe they would change something?
-- Which text files would have different content?
-- Would any secret-bearing file appear in the output?
-- Which checks are skipped because the service is not actually changed yet?
+Without a reliable dry-run and auditing mechanism, applying infrastructure changes is blind and dangerous. Teams are forced to hope that their variables are correctly mapped, which often leads to outages during maintenance windows.
 
-Check mode and diff mode help answer those questions. Check mode asks supported modules what they would do without making changes. Diff mode asks supported modules to show before-and-after content. They can be used separately, but they are often most useful together.
+To solve this, Ansible provides two distinct auditing modes: Check Mode and Diff Mode. These modes allow you to preview likely task changes and inspect configuration diffs before modifying your systems.
 
-The preview is evidence, not a promise. It tells you what Ansible can predict from the current host state, the current variables, and the modules involved. The real run can still fail because a service restart behaves differently, a command task has side effects, a dependency is unavailable, or a later task depends on state that check mode did not create.
+## Check Mode: The Dry-Run Boundary
 
-## Check Mode
+Check Mode is Ansible's dry-run mode. When you execute a playbook with the `--check` command-line flag, Ansible still evaluates variables and may connect to target hosts, but modules that support check mode predict their result without making the normal state-changing updates.
 
-Check mode is Ansible's dry-run mode. In check mode, Ansible still reads inventory, loads variables, evaluates tasks, connects to managed hosts, and asks modules that support check mode what would change. Those modules report predicted change without applying it.
-
-For the `orders` port change, the team first wants a preview against one host:
+The following command executes a system configuration playbook in Check Mode, limiting the canary run to a single web host to preview changes:
 
 ```bash
-ansible-playbook -i inventories/prod.ini playbooks/orders.yml \
+ansible-playbook -i inventory/prod.ini playbooks/web_config.yml \
   --check \
-  --limit orders-web-01
+  --limit web-server-01.internal
 ```
 
-A useful result might look like this:
+Running this command produces standard execution output, displaying which tasks would report a `changed` state or a `skipped` state. Treat that output as a prediction, especially if the playbook contains modules without check-mode support or tasks forced to run with `check_mode: false`.
+
+The recap block at the end summarizes these predictions:
 
 ```text
-TASK [Render orders-api environment] changed: [orders-web-01]
-TASK [Render nginx site] changed: [orders-web-01]
-TASK [Restart orders-api] skipping: [orders-web-01]
-TASK [Check local orders-api health] skipping: [orders-web-01]
-
-PLAY RECAP
-orders-web-01 : ok=9 changed=2 unreachable=0 failed=0 skipped=2
+web-server-01.internal : ok=12 changed=3 unreachable=0 failed=0 skipped=2
 ```
 
-The recap says two tasks predict changes. That is plausible for a port change: the service environment and Nginx site should change. The restart and health check may skip because the playbook is in check mode and the new service state does not exist yet.
+While Check Mode is highly useful, it is important to treat this preview as evidence rather than certainty. Check Mode operates by querying the current host state and predicting the outcome of each task in isolation.
 
-Check mode is strongest when the task uses a module that understands desired state. Template, file, package, service, user, and many other modules can often compare current state with desired state. A raw command is different. Ansible cannot know what an arbitrary script will change unless the task gives it more information.
+The real execution run can still fail if a system service crashes during restart, a command-line tool has unexpected side effects, or a network interface lock is blocked.
 
-This command task is hard to preview:
+## Under the Hood: How Modules Predict Desired States
 
-```yaml
-- name: Run orders migration
-  ansible.builtin.command: /opt/orders/bin/migrate
+To understand why Check Mode is useful but imperfect, we must look at how supported modules branch inside their execution logic.
+
+When you pass `--check` on the command line, the control plane exposes `ansible_check_mode` as `True` in the task context. Supported modules also receive check-mode state through Ansible's module utility layer.
+
+Inside the remote Python process, the module initialization phase loads the standard `AnsibleModule` utility library. This library reads the incoming JSON context and configures an internal flag: `module.check_mode = True`.
+
+When a module runs, its internal execution path branches based on this flag:
+1. **State Inspection**: The module queries the target host operating system using read-only system calls. For example, the `file` module runs `stat()` on `/etc/nginx/nginx.conf` to check ownership, permissions, and timestamps.
+2. **Comparison**: The module compares the retrieved system facts against the desired task parameters.
+3. **Branching**:
+   - **Normal Apply Mode**: If a discrepancy exists, the module runs state-altering system calls, such as `os.chmod()` or `os.chown()`, to align the system, returning `changed=True`.
+   - **Check Mode**: If a discrepancy exists, the module skips the state-altering system calls entirely. It writes a warning log in Python memory and returns `changed=True` to indicate that a change would have occurred.
+4. **JSON Return**: The module writes the final outcome dictionary back to the SSH pipe as a JSON stream, allowing the control plane to display the results.
+
+```mermaid
+graph TD
+    subgraph ControlPlane ["Control Node"]
+        CliCheck["ansible-playbook --check"]
+        TaskExec["Task Executor: ansible_check_mode = True"]
+    end
+
+    subgraph ManagedNode ["Remote Host: Python Process"]
+        ModulePayload["Module Execution Payload"]
+        ModuleInit["AnsibleModule: check_mode = True"]
+        OSInspect["OS Read-Only Inspection: stat()"]
+        CheckBranch{"check_mode == True?"}
+        SimOutput["Simulate Change: changed = True"]
+        WriteOS["State-Altering Write: chmod()"]
+    end
+
+    CliCheck --> TaskExec
+    TaskExec -->|Connection Payload| ModulePayload
+    ModulePayload --> ModuleInit
+    ModuleInit --> OSInspect
+    OSInspect --> CheckBranch
+    CheckBranch -->|Yes| SimOutput
+    CheckBranch -->|No| WriteOS
 ```
 
-Ansible can run or skip the command depending on task settings, but it cannot infer what database rows the script would change. If a command has a clear filesystem guard, use `creates` or `removes`. If the command should report changed only under a known condition, use `changed_when`. Those settings do not make every command safe, but they give Ansible a clearer contract.
+## Third-Party Module Support and the Safety Gate
 
-## Diff Mode
+What happens when a playbook executes a custom or third-party community module in Check Mode? This is a critical security boundary.
 
-Check mode tells you that something would change. Diff mode helps explain the text change. For the `orders` service, a plain `changed` line is less useful than seeing that Nginx moves from one local port to another.
+When a developer creates a custom Python module, they must explicitly declare to the standard execution library that the module is capable of running safely in dry-run mode. This is done by setting `supports_check_mode=True` inside the `AnsibleModule` constructor:
 
-Run diff mode with check mode when you want a preview artifact:
+```python
+# Inside library/custom_dns_record.py
+module = AnsibleModule(
+    argument_spec=dict(
+        name=dict(type='str', required=True),
+        value=dict(type='str', required=True)
+    ),
+    supports_check_mode=True
+)
+```
+
+If a community module does *not* declare this support, Ansible's execution engine enforces a safety gate. When the control plane runs a playbook with `--check`, and encounters a task using a module that lacks the `supports_check_mode` flag, it skips the task automatically.
+
+The console output logs a warning:
+
+```text
+skipping: [web-server-01.internal] => {"skipped": true, "msg": "remote module (custom_dns_record) does not support check mode"}
+```
+
+This safety gate prevents arbitrary community modules from making unexpected, state-altering API calls or filesystem changes during what the operator believed was a safe, read-only dry run.
+
+## Diff Mode: Line-by-Line System Comparisons
+
+While Check Mode tells you *whether* a supported task predicts a change, it cannot show you *what* will change inside the file. To inspect text changes, combine Check Mode with Diff Mode using the `--diff` command-line flag.
+
+Diff Mode instructs text-processing modules (like `template`, `copy`, and `lineinfile`) to generate line-by-line unified diff comparisons before making changes.
+
+The following command runs a configuration playbook in both Check and Diff modes:
 
 ```bash
-ansible-playbook -i inventories/prod.ini playbooks/orders.yml \
+ansible-playbook -i inventory/prod.ini playbooks/web_config.yml \
   --check \
   --diff \
-  --limit orders-web-01
+  --limit web-server-01.internal
 ```
 
-For a public Nginx template, the output might include:
+When Nginx configuration templates are updated, the resulting diff output can show the routing modifications:
 
 ```diff
-- proxy_pass http://127.0.0.1:8080;
-+ proxy_pass http://127.0.0.1:8081;
+--- /etc/nginx/nginx.conf (existing)
++++ /etc/nginx/nginx.conf (new)
+@@ -12,4 +12,4 @@
+-    listen 8080;
++    listen 8443 ssl;
 ```
 
-That small diff carries a lot of meaning. It proves the variable reached the Nginx template. It shows the old and new values. It gives a reviewer something specific to approve or reject.
+This output provides excellent review evidence for systems engineers and auditors. They can verify that the variable mappings are correct and that Nginx is configured to listen on the correct secure port before applying the change in production.
 
-Diff mode should be selective. A diff is useful when the file is text, stable, and safe to read. It is weak or unsafe when the file is binary, generated with timestamps, very large, or full of secrets. The `orders.env` file contains `DATABASE_PASSWORD` and `SESSION_SECRET`, so it should suppress diff output even when the playbook is run with `--diff`.
+## Under the Hood: Module-Supported Diff Generation
+
+Diff mode is implemented by modules that support it. For text-oriented file modules, Ansible compares the current content with the candidate content and returns a diff structure for the display callback to render.
+
+When a text-altering module detects a discrepancy between the existing file and the desired content, the broad flow looks like this:
+1. **Read Existing State**: The module inspects the current file or metadata.
+2. **Build Candidate State**: The module renders or receives the desired content.
+3. **Generate Diff Data**: If diff mode is supported and enabled, the module returns a structured diff showing before and after content or metadata.
+4. **Display Callback Rendering**: The control node's stdout callback reads the returned diff data and renders it in the terminal.
+
+If a file is binary or a module does not provide useful diff support, Ansible may omit the text diff or return a limited diff response. This is another reason to treat diff mode as review evidence rather than a perfect simulator.
+
+On the control plane, the display callback plugin formats diff additions and deletions for readability when the terminal supports it.
+
+## The Fragility of Check Mode: Sequential Cascades
+
+While Check and Diff modes are highly powerful, they suffer from an inherent system weakness: they cannot simulate sequential cascades where a later task depends on a change made by an earlier task.
+
+Consider the following three tasks written in a playbook:
 
 ```yaml
-- name: Render orders-api environment
+- name: Create system log storage directory
+  ansible.builtin.file:
+    path: /var/log/refunds
+    state: directory
+    owner: refunds-app
+    mode: "0750"
+
+- name: Create secure log audit script
   ansible.builtin.template:
-    src: orders.env.j2
-    dest: /etc/orders-api/orders.env
+    src: audit.sh.j2
+    dest: /var/log/refunds/audit.sh
+    mode: "0700"
+
+- name: Run log audit pre-check
+  ansible.builtin.command: "/var/log/refunds/audit.sh --precheck"
+```
+
+In a normal execution run, this sequence succeeds because each step builds the environment required by the next step.
+
+However, when you run this playbook with `--check`, the cascade breaks:
+- **Task 1** queries the host, sees `/var/log/refunds` is missing, and reports `changed=True` without creating the directory.
+- **Task 2** attempts to verify the script state. Because the directory `/var/log/refunds` was never created in Task 1, the template module fails with a directory-not-found error, or halts execution.
+- **Task 3** attempts to execute `/var/log/refunds/audit.sh`. Because the script was never written in Task 2, the execution immediately crashes.
+
+This cascade breakdown leads to false playbook failures in Check Mode, even when the underlying playbook code is entirely correct. This can frustrate operators, who may stop using Check Mode because dry runs frequently fail.
+
+## Managing Dependency Breakdowns with check_mode Overrides
+
+To prevent these false failures and maintain a working dry-run pipeline, you can use check-mode task overrides to force specific tasks to run or skip during Check Mode.
+
+Ansible provides two main task-level parameters for this:
+- `check_mode: false`: Forces the task to execute normally and apply its changes, even when the playbook is run with the global `--check` flag.
+- `check_mode: true`: Forces the task to run in dry-run mode, even when the playbook is run in normal apply mode.
+
+For example, if your playbook runs a read-only script that gathers diagnostic data required by downstream tasks, you should force the task to execute during dry runs by setting `check_mode: false`:
+
+```yaml
+- name: Query current cluster routing metadata
+  ansible.builtin.command: "/opt/routing/bin/query_routes.sh"
+  register: routing_metadata
+  changed_when: false
+  check_mode: false
+```
+
+By setting `check_mode: false`, the `query_routes.sh` script executes normally during a `--check` run. The registered `routing_metadata` variable is populated with real system data, ensuring that downstream tasks that depend on this variable can evaluate their conditions without crashing.
+
+Conversely, you can use the `ansible_check_mode` boolean variable inside task conditions to skip unstable tasks during dry runs:
+
+```yaml
+- name: Run complex database migration script
+  ansible.builtin.command: "/opt/db/bin/migrate.sh"
+  when: not ansible_check_mode
+```
+
+This condition ensures that the migration script is skipped during Check Mode, keeping the database safe from partial simulations while allowing other playbook tasks to be audited.
+
+## Under the Hood: Handlers and Change Notifications in Dry Runs
+
+Timing boundaries also introduce unique behaviors when executing notification handlers in Check Mode. Handlers are deferred tasks registered to run at the play's end only when notified of a state change by a preceding task.
+
+If a task is evaluated in Check Mode, reports `changed: [host]`, and triggers a `notify` block, Ansible queues the handler to run at the play's end. The dry run registers that the service *would* have restarted, which is useful validation.
+
+However, the handler task itself is subject to Check Mode rules when it executes. If Nginx config changes and notifies `Restart Nginx`, the handler executes in dry-run mode. The engine queries the systemd socket state, verifies Nginx configuration file paths, and logs that Nginx *would* reload.
+
+If a preceding task was forced to apply using `check_mode: false`, but the handler is skipped or simulated, the real running process does not reflect the new configuration until the actual apply phase is executed.
+
+Furthermore, if the playbook run is executed with the CLI flag `--force-handlers` or the configuration `force_handlers = True` is active, it instructs the execution engine to run queued handlers even if a task fails midway through the play. In Check Mode, if a task fails, these queued handlers are still executed in dry-run mode (simulating reloads/restarts) so you can audit if the service configuration reloads would have been triggered.
+
+Because handlers execute at handler flush points, if a task fails before queued handlers are reached and `--force-handlers` is not active, those handlers may not execute for that host, even in dry run. This is why `meta: flush_handlers` can be important when subsequent tasks require the service to be reloaded before the final play recap.
+
+## Auditing Diffs Safely: The Secret Boundary Collision
+
+A major operational risk is the collision between Diff Mode and secret boundaries. If a playbook renders an environment environment file containing database passwords or session signing keys, enabling Diff Mode will display the plain-text secrets on the terminal.
+
+To prevent this collision, any task that manages sensitive templates must carry the `diff: false` and `no_log: true` parameters:
+
+```yaml
+- name: Render refund database environment configuration
+  ansible.builtin.template:
+    src: refund_db.env.j2
+    dest: /etc/refunds/refund_db.env
     owner: root
-    group: orders-api
-    mode: "0640"
+    group: refunds-admin
+    mode: "0600"
   no_log: true
   diff: false
 ```
 
-The absence of a diff for that file is part of the safety design. The review should show that the task is hidden, not the secret values inside it.
+By explicitly setting `diff: false`, you instruct the task to suppress diff output. The module can still calculate changed status, but the secret-bearing before/after text is not returned as a normal diff.
 
-## Reading Preview Output
+## Operating System Process Introspection Leaks
 
-Good preview output starts with the target set. Check mode is not useful if it is aimed at the wrong hosts. Before reading task results, list the hosts that the playbook would use:
-
-```bash
-ansible-playbook -i inventories/prod.ini playbooks/orders.yml \
-  --list-hosts \
-  --limit orders-web-01
-```
-
-The output should match the intended canary:
+As a crucial security configuration tip on Linux-based systems, administrators can prevent other unprivileged users from auditing active processes and inspecting arguments by mounting the `/proc` filesystem with the `hidepid=2` option:
 
 ```text
-playbook: playbooks/orders.yml
-
-  play #1 (orders_web): Roll out orders-api
-    pattern: ['orders_web']
-    hosts (1):
-      orders-web-01
+UUID=proc /proc proc defaults,hidepid=2 0 0
 ```
 
-Now the preview has a boundary. The team knows the inventory is production, the playbook targets `orders_web`, and the limit narrowed the run to one host.
-
-When you read check output, focus on the pattern of change. For the port move, it makes sense for Nginx and the service environment to change together. It would be suspicious if Nginx changed but the service environment did not, because that could leave Nginx pointing at a port where nothing listens. It would also be suspicious if a secret task printed a diff, because the previous article's boundary would be broken.
-
-The recap is useful, but it is only a summary:
-
-```text
-orders-web-01 : ok=9 changed=2 unreachable=0 failed=0 skipped=2
-```
-
-`changed=2` tells you two tasks predicted changes. It does not tell you whether those changes are the right two. The task names and diffs provide the real review detail.
-
-## Where Preview Is Weak
-
-Check mode does not create a full temporary copy of the host. Each task runs against the current host state and predicts what it can. That matters when later tasks depend on earlier changes.
-
-For example, one task might create `/etc/orders-api`, and a later task might inspect a file inside that directory. In the real run, the directory exists by the time the later task runs. In check mode, the directory may not be created, so the later task can skip, fail, or produce incomplete output. The preview is still useful, but the reader needs to know why it is incomplete.
-
-Registered variables are another common surprise. A task can register a result, and a later task can use that result in a condition. In check mode, a skipped task may not produce the same registered data as a real run. A condition that depends on that data can behave differently.
-
-Handlers also need careful reading. A template can report `changed` and notify `Restart orders-api`. In check mode, that tells you a restart would be requested. It does not prove that the restarted service will be healthy on port `8081`. That proof belongs in the real rollout with a health check after handlers run.
-
-Modules differ too. Some modules support check mode and diff mode well. Some support one but not the other. Some command-style tasks cannot predict much. A clean preview does not mean every later operation is guaranteed.
-
-## Safe Review Evidence
-
-The safest preview artifact combines several small pieces:
-
-| Evidence | What It Proves | What It Does Not Prove |
-| --- | --- | --- |
-| `--list-hosts` | The selected host set | That tasks will succeed |
-| `--check` recap | Predicted task changes | Final service health |
-| Public diffs | Exact safe text changes | Secret values or binary changes |
-| Hidden secret tasks | Secret output boundary exists | The secret value is correct |
-| Later health task | The playbook has a runtime check | The check already passed in dry run |
-
-For the `orders` change, the review artifact should show one canary host, the Nginx port diff, the expected service configuration task marked changed but censored, and no secret text. It should also show that a health check exists, even if the check is skipped in dry run.
-
-This is the right mental model:
-
-```text
-Preview output can stop obvious mistakes.
-It cannot replace a controlled apply run.
-```
-
-The preview can catch a wrong port, wrong host, missing variable, public diff mismatch, or accidental secret output. The apply run still needs rollout controls because the service only truly changes during the real run.
+Setting `hidepid=2` can help prevent local users from viewing process CLI arguments or environment variables belonging to other users, mitigating process introspection leaks on Linux hosts. Test this carefully because procfs mount options can affect monitoring and troubleshooting tools.
 
 ## Putting It All Together
 
-The `orders` team wanted proof before changing production. They listed the hosts first so the preview had a clear boundary. They ran `--check` to see which tasks predicted change. They added `--diff` so public text changes were visible. They hid the secret environment file with `no_log: true` and `diff: false`.
+Check Mode and Diff Mode provide an auditing boundary, allowing teams to preview likely task actions and inspect text changes before modifying production servers. By listing hosts first and running canary dry runs, you catch many syntax errors, variable mapping issues, and accidental secret exposures early.
 
-That gave them useful evidence without pretending the dry run was the final state. The preview showed what Ansible could predict. The next safety layer is execution scope: changing one host or one batch, running handlers, checking health, and stopping before a bad change spreads.
+Managing these dry-run pipelines requires balancing flexibility and safety:
 
-## What's Next
+| System Mode | Execution Timing | Operating System Action | System Limitations |
+| :--- | :--- | :--- | :--- |
+| **Check Mode (`--check`)** | Dry-run simulation | Runs read-only checks, skips state-altering system calls | Fails to simulate cascading tasks where later steps depend on earlier changes. |
+| **Diff Mode (`--diff`)** | Text change comparison | Returns module-supported before/after diff data | Can expose sensitive credentials if `diff: false` is not configured on secret tasks. |
+| **Check Override (`check_mode: false`)** | Forced apply | Runs task normally, even during global `--check` runs | Must be reserved exclusively for read-only actions or diagnostic queries. |
+| **Check Override (`check_mode: true`)** | Forced dry run | Runs task in check mode, even during normal apply runs | Useful for auditing system status within normal configuration pipelines. |
 
-The next article covers `--limit`, `serial`, and health checks. These controls take the change from review evidence into a real rollout while keeping the blast radius small.
+By coordinating these validation modes with selective task overrides, you make automated deployments safer, more predictable, and easier to review against enterprise security standards.
 
 ---
 
 **References**
 
-- [Ansible documentation: Validating tasks: check mode and diff mode](https://docs.ansible.com/projects/ansible/latest/playbook_guide/playbooks_checkmode.html)
-- [Ansible documentation: ansible-playbook command line reference](https://docs.ansible.com/projects/ansible/latest/cli/ansible-playbook.html)
-- [Ansible documentation: Patterns: targeting hosts and groups](https://docs.ansible.com/projects/ansible/latest/inventory_guide/intro_patterns.html)
-- [Ansible documentation: Controlling playbook execution: strategies and more](https://docs.ansible.com/projects/ansible/latest/playbook_guide/playbooks_strategies.html)
+- [Ansible Documentation: Check Mode and Diff Mode](https://docs.ansible.com/ansible/latest/playbook_guide/playbooks_checkmode.html)
+- [Controlling Playbook Execution with check_mode](https://docs.ansible.com/ansible/latest/playbook_guide/playbooks_checkmode.html#information-about-check-mode-in-playbooks)
+- [Ansible Task Diffs and Secure Logging](https://docs.ansible.com/ansible/latest/reference_appendices/logging.html)

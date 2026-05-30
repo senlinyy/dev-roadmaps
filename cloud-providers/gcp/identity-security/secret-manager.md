@@ -12,206 +12,145 @@ aliases:
 
 ## Table of Contents
 
-1. [The Problem](#the-problem)
-2. [Secret Manager](#secret-manager)
-3. [Secrets And Versions](#secrets-and-versions)
-4. [Secret Access](#secret-access)
-5. [Runtime Flow](#runtime-flow)
-6. [Rotation](#rotation)
-7. [Audit Evidence](#audit-evidence)
-8. [Encryption](#encryption)
-9. [KMS](#kms)
-10. [Review Shape](#review-shape)
-11. [Putting It All Together](#putting-it-all-together)
-
-## The Problem
-
-The Orders API needs a few dangerous values. It needs a database URL, a payment webhook signing secret, and perhaps a token for a third-party provider.
-
-Those values start in convenient places:
-
-- A developer keeps the database URL in a local `.env` file.
-- A pipeline variable stores the production value but does not say which app uses it.
-- A secret is pasted into a ticket during an incident.
-- An old Cloud Run revision keeps using a previous value after rotation.
-
-The problem is not that configuration exists. Applications need configuration. The problem is that some configuration gives power to whoever can read it.
-
-The beginner question is:
-
-> Where should sensitive runtime values live, and who can read them?
-
-In GCP, the first answer is Secret Manager.
+1. [Secret Manager](#secret-manager)
+2. [Secrets and Versions Logical Separation](#secrets-and-versions-logical-separation)
+3. [Rotation Notifications and Pub/Sub Hooks](#rotation-notifications-and-pub-sub-hooks)
+4. [VPC Service Controls and Perimeter Security](#vpc-service-controls-and-perimeter-security)
+5. [Cross-Cloud Mapping Reference](#cross-cloud-mapping-reference)
+6. [Putting It All Together](#putting-it-all-together)
 
 ## Secret Manager
 
-Secret Manager is the managed GCP service for storing and managing sensitive values such as API keys, passwords, certificates, and tokens. It gives the team a named place for secrets, versioned values, IAM access control, audit evidence, and encryption behavior.
+Secret Manager is a secure, managed Google Cloud service designed to store, manage, and audit sensitive runtime configuration values such as database connection strings, third-party API tokens, cryptographic private keys, and certificates. Rather than storing dangerous plain-text values inside version control repositories, dynamic application filesystems, or environmental variables, Secret Manager provides a dedicated security control point.
 
-Secret Manager does not make every design safe by itself. It gives the team a better control point than Git, chat, tickets, local files, or broad pipeline variables.
+By housing secrets inside a managed API service, you decouple sensitive data from runtime execution code. Applications retrieve credentials programmatically at startup or during execution, ensuring that dangerous payloads remain completely isolated from operators and unauthorized systems.
 
-For the Orders API, a secret might be:
+Secret Manager unifies secret storage under a managed service boundary. It manages version transitions, enforces granular IAM access controls, generates auditable access logs, encrypts data at rest by default, and can integrate with customer-managed encryption keys when your compliance model requires them.
 
-```text
-project: devpolaris-orders-prod
-secret: orders-db-url
-purpose: database connection value for production runtime
-reader: orders-api-prod service account
-```
+## Secrets and Versions Logical Separation
 
-That record is already safer than "the password is in the deploy notes." The name is stable. The payload is controlled. Access can be reviewed.
+A major operational gotcha in credentials management is the difficulty of rotating secrets without causing application downtime. If a password is bound to a single configuration variable, rotating that credential forces a redeployment or container restart. Secret Manager solves this by establishing a strict logical separation between a **Secret** and its **Versions**.
 
-## Secrets And Versions
+![The secret name is the container. Each version is an immutable stored value with its own state.](/content-assets/articles/article-cloud-providers-gcp-identity-security-secret-manager-encryption-basics/secret-version-boundary.png)
 
-Secret Manager separates the secret from its versions.
+*Rotation changes which version is used without changing the resource identity.*
 
-The secret is the named container:
+The **Secret** is the named logical container (e.g. `projects/dev-project/secrets/orders-db-url`). It defines the metadata, IAM access policies, replication locations, and rotation schedules. The secret container itself does not store sensitive payloads; it acts as the stable resource address that your application references.
 
-```text
-orders-db-url
-```
+A **Secret Version** represents the actual encrypted payload (e.g. version `1`, `2`, or `3`) stored within that container. Versions are immutable; once a payload is written to a version, it cannot be modified. If the database password changes, you add a new version to the container.
 
-A secret version is a stored payload inside that container:
+This split enables seamless credential rotations:
 
-```text
-orders-db-url version 1
-orders-db-url version 2
-orders-db-url version 3
-```
+*   **Stable References**: Application code can request the latest active payload dynamically by querying the virtual path suffix `/versions/latest`, eliminating the need to update container environment variables when credentials change.
+*   **Version Lifecycles**: Old versions can be disabled (temporarily blocking access) or destroyed (permanently shredding the payload) systematically, allowing you to transition workloads to new credentials with minimal operational risk.
 
-That split makes rotation possible. The app can keep referring to the same secret name while the value changes over time. A new version can be added. An old version can be disabled or destroyed according to the team's process. Some systems pin a specific version; others read the latest enabled version.
+:::expand[Design Detail: Default Encryption, CMEK, and HSM Choices]{kind="design"}
+Understanding encryption options prevents a common compliance mistake. Secret Manager encrypts secret data at rest by default with Google-managed encryption. You can optionally configure customer-managed encryption keys (CMEK) so your organization controls the Cloud KMS key used for a secret.
 
-The non-obvious truth is that the secret name is usually not the dangerous part. The payload is. It is often fine for engineers to know a production secret named `orders-db-url` exists. It is not fine for every engineer to read the connection string value inside it.
-
-## Secret Access
-
-Secret access is still IAM. The runtime service account needs a role that allows it to access the secret version payload.
-
-For the Orders API, the access sentence should be narrow:
-
-```text
-serviceAccount:orders-api-prod@devpolaris-orders-prod.iam.gserviceaccount.com
-gets Secret Manager Secret Accessor
-on secret orders-db-url
-```
-
-Granting access at the project can be convenient, but it may allow the app to read more secrets than needed. Granting access at the secret keeps the blast radius smaller when the service only needs one value.
-
-Also separate readers from managers. A runtime service account may need to read the current secret value. It usually should not create, rotate, disable, destroy, or grant access to secrets.
-
-## Runtime Flow
-
-The runtime flow has four parts:
+The beginner-safe way to explain the encryption model is to separate what Google Cloud does by default from the extra controls your team can choose:
 
 ```mermaid
 flowchart TD
-    Run["Cloud Run service"] --> SA["Runtime service account"]
-    SA --> IAM["IAM check"]
-    IAM --> Secret["Secret Manager secret"]
-    Secret --> Version["Secret version payload"]
-    Version --> App["App uses value"]
+    subgraph SecretManagerEngine["GCP Secret Manager Data Plane"]
+        Payload["Plaintext Payload"]
+        EncryptedPayload[("Encrypted Secret Version")]
+    end
+
+    subgraph KMSEngine["Optional Cloud KMS CMEK"]
+        Key["Customer-managed key"]
+    end
+
+    Payload -->|Encrypted at rest by default| EncryptedPayload
+    Key -.->|Optional key control| EncryptedPayload
 ```
 
-Read it slowly:
+1.  **Default Protection**: Secret Manager encrypts secret data at rest using Google-managed encryption.
+2.  **CMEK Option**: With CMEK, Secret Manager uses Cloud KMS so your team controls the key lifecycle and can disable or rotate that key according to policy.
+3.  **HSM Option**: HSM-backed protection applies only when the Cloud KMS key itself uses the HSM protection level. Do not describe every Secret Manager secret as HSM-backed by default.
 
-1. The Cloud Run service runs as a service account.
-2. The app asks Secret Manager for a value.
-3. IAM checks whether that service account can access the secret version.
-4. Secret Manager returns the payload if the request is allowed.
-5. The app uses the value to connect to the dependency.
+When an application authorized by IAM requests a version, Secret Manager returns the secret payload through the API. The operational controls you manage are IAM scope, version state, rotation workflow, replication, audit logs, and optional CMEK configuration.
+:::
 
-If the app fails, each part is evidence. Which service account did Cloud Run use? Which secret path did the app request? Which version was read? Which IAM binding allows access? What did the audit logs show?
+## Rotation Notifications and Pub/Sub Hooks
 
-## Rotation
+To maintain a secure posture, production credentials must be rotated on a deliberate schedule. Secret Manager can integrate with **Cloud Pub/Sub** to notify automation when a secret reaches its configured rotation time:
 
-Rotation means changing a secret value safely. The app, dependency, rollout, and rollback path all matter.
+![A rotation schedule should create a new version, notify automation, and leave audit evidence.](/content-assets/articles/article-cloud-providers-gcp-identity-security-secret-manager-encryption-basics/rotation-pubsub-flow.png)
 
-For a database URL, a rotation might look like this:
+*Rotation is safest when the version change is visible and repeatable.*
 
-| Step | Why it matters |
-| --- | --- |
-| Create or prepare the new database credential | The dependency must accept the new value. |
-| Add a new secret version | The secret name stays stable while the payload changes. |
-| Deploy or restart the app path that reads the value | The runtime must actually use the new version. |
-| Verify checkout and database connections | The new value must work for users. |
-| Disable or remove old credential after a safe window | Old access should not live forever. |
+1.  **Rotation Schedule Configuration**: You define a rotation schedule and a target Pub/Sub topic on the secret.
+2.  **Rotation Notification**: At the configured time, Secret Manager publishes a `SECRET_ROTATE` event to the Pub/Sub topic.
+3.  **Automation Handler**: A subscriber, such as a Cloud Run service or Cloud Run function, performs the real credential work. It might connect to the backing database, generate a new password, test it, and add a new Secret Manager version.
+4.  **Graceful Rollout**: Application code reads a specific version, alias, or `latest` through the Secret Manager API. Once the new credential is verified across the fleet, automation can disable or destroy the old version after a grace window.
 
-Rotation is a release plan. If old revisions still use the old value, disabling it too early can break traffic. If old values never get disabled, rotation becomes a ritual instead of risk reduction.
+Secret Manager does not rotate the database password or third-party token by itself. It gives you the versioned storage and the notification point so your automation can perform the rotation safely and leave audit evidence.
 
-## Audit Evidence
+## VPC Service Controls and Perimeter Security
 
-Secret review should gather evidence without exposing the payload.
+In highly secure environments, standard IAM policies are insufficient to protect against insider data exfiltration. If a malicious insider or a compromised container possesses the correct IAM `Secret Manager Secret Accessor` role, they can extract payloads from any device globally. To prevent this, you enforce **VPC Service Controls (VPC-SC)** perimeters.
 
-Useful evidence includes:
+VPC Service Controls allows you to draw a logical security perimeter around supported Google-managed services, including Secret Manager:
 
-| Evidence | What it proves |
-| --- | --- |
-| Secret name and project | Which controlled value is involved. |
-| Version metadata | Which version exists, is enabled, or was disabled. |
-| IAM policy | Which principals can access the payload. |
-| Cloud Run revision config | Which runtime service account asks for the secret. |
-| Audit logs | Who accessed or changed secret metadata or versions, where supported. |
-| Rotation record | Which app version uses which secret version or latest value. |
+```mermaid
+flowchart LR
+    subgraph ExternalDevice["Public Device / External Network"]
+        Attacker["Operator with IAM Accessor Role"]
+    end
 
-Avoid pasting secret values into tickets or chat to prove work happened. Prove the value changed by showing metadata, version state, deployment evidence, and successful app behavior.
+    subgraph VPCSCPerimeter["VPC Service Controls (VPC-SC) Perimeter"]
+        subgraph CustomerVPC["Customer VPC Subnet"]
+            AppVM["App VM Instance"]
+        end
+        SecretManager["Secret Manager Resource"]
+    end
 
-## Encryption
+    AppVM -->|1. Request from VPC| SecretManager
+    SecretManager -->|Allowed| AppVM
 
-Secret Manager encrypts secret data in transit and at rest. That baseline matters, but it is not the whole security story.
+    Attacker -->|1. Request from Internet| SecretManager
+    SecretManager -->|Blocked by API Gateway<br/>(403 VPC Service Controls)| Attacker
+```
 
-Encryption protects stored and transmitted data at the platform layer. IAM still decides who can read the payload. Audit logs still help explain who accessed or changed things. Rotation still limits how long a compromised value remains useful. Application design still decides whether the secret gets copied into logs or error messages.
+VPC Service Controls is independent of IAM. IAM still decides whether the principal has permission to access the secret. VPC-SC adds a perimeter check that can restrict data movement across perimeter boundaries using ingress and egress rules and optional access levels.
 
-Do not use "it is encrypted" as a reason to grant broad access. Encryption and access control solve different parts of the problem.
+If an operator with correct IAM roles attempts to access a protected secret from outside the allowed perimeter path, the request can still be rejected by VPC Service Controls. This makes VPC-SC a defense-in-depth control for exfiltration risk, not a replacement for narrow secret-level IAM.
 
-## KMS
+## Cross-Cloud Mapping Reference
 
-Cloud Key Management Service, or Cloud KMS, manages cryptographic keys. Secret Manager can use Google-managed encryption by default, and for workloads that require more control, Secret Manager can use customer-managed encryption keys, often called CMEK.
+This table maps core GCP Secret Manager components to their direct AWS and Azure equivalents:
 
-For a beginner, KMS belongs in the "extra control and compliance" conversation, not in every first secret review.
-
-Use KMS questions when the team has a real requirement:
-
-| Question | Why it matters |
-| --- | --- |
-| Do we need customer-managed keys for this secret? | Some compliance or control requirements demand it. |
-| Who can administer the key? | Key admins can affect secret availability. |
-| Is the key in the right location for the secret behavior? | CMEK has location and service constraints. |
-| What happens if the key is disabled? | The secret may become unusable. |
-
-KMS can strengthen control. It also adds an operating dependency. Treat it as a deliberate design choice.
-
-## Review Shape
-
-A practical secret review for the Orders API should answer:
-
-| Question | Example answer |
-| --- | --- |
-| Which secret? | `projects/devpolaris-orders-prod/secrets/orders-db-url` |
-| What is stored? | Database connection value, not pasted in review. |
-| Who reads it? | `orders-api-prod` runtime service account. |
-| Who manages it? | A small platform or database operations group. |
-| How does rotation work? | New version, app rollout, verification, old credential disabled. |
-| What evidence is safe to share? | Version state, IAM binding, audit logs, app health, no payload. |
-
-That shape keeps sensitive values out of ordinary conversation while still making security review concrete.
+| GCP Component | AWS Equivalent | Azure Equivalent | Operational Behavior |
+| :--- | :--- | :--- | :--- |
+| **Secret** | Secret Container | Secret | Logical container hosting metadata, IAM policies, and rotation schedules. |
+| **Secret Version** | Secret Version (with Labels) | Secret Version | Immutable physical payload stored within the secret container. |
+| **Pub/Sub Rotation Hook**| Rotation Lambda Integration| Event Grid Integration | Asynchronous trigger hooks to automate credentials generation and rotation. |
+| **VPC-SC Perimeter** | VPC Endpoint Policy | Private Endpoint + NSG | Network-level perimeter security that blocks cross-boundary exfiltration. |
 
 ## Putting It All Together
 
-Return to the opener.
+Protecting runtime credentials requires a multi-layered security architecture.
 
-- The `.env` file became a local development detail, not the production secret store.
-- The pipeline variable became a controlled Secret Manager entry.
-- The pasted ticket value became safe metadata and audit evidence instead of a payload leak.
-- The old revision problem became a rotation and rollout question.
-- The runtime service account got read access to the needed secret, not broad power over every secret.
-- Encryption and KMS became part of the protection story without replacing IAM or rotation.
+By separating secrets from versions, you decouple connection strings from application code, allowing your microservices to query the latest credential payload dynamically.
 
-Secret Manager is the place where sensitive runtime values become named, versioned, access-controlled, auditable resources. That closes the identity and security module: the next GCP module can now talk about networks knowing who the callers are and where secrets live.
+Secret Manager encrypts secret data at rest by default, and CMEK lets you bring a Cloud KMS key when your organization needs key-level control. HSM-backed keys are an optional Cloud KMS protection choice, not the default behavior of every secret.
+
+Pub/Sub integration gives your rotation automation a reliable signal, and VPC Service Controls perimeters add a second boundary around supported Google APIs when insider or compromised-credential exfiltration is a concern.
+
+This completes the Identity & Security architecture: your workloads can use keyless identities, and sensitive application configuration can live in Secret Manager with IAM, audit logs, encryption, rotation workflows, and optional perimeter controls.
+
+![A six-part summary infographic for secret manager summary covering Secret resource, Versions, IAM access, KMS layer, Rotation event, Audit evidence](/content-assets/articles/article-cloud-providers-gcp-identity-security-secret-manager-encryption-basics/secret-manager-summary.png)
+
+*Use this summary as the quick mental checklist before designing or debugging the service.*
+
 
 ---
 
 **References**
 
-- [Secret Manager overview](https://docs.cloud.google.com/secret-manager/docs/overview)
-- [Access control with IAM](https://cloud.google.com/secret-manager/docs/access-control)
-- [Access and manage secret versions](https://cloud.google.com/secret-manager/docs/access-secret-version)
-- [Enable customer-managed encryption keys for Secret Manager](https://cloud.google.com/secret-manager/docs/cmek)
+- [Google Cloud: Secret Manager overview](https://cloud.google.com/secret-manager/docs/overview) - Core specification for managed secrets and versions.
+- [Google Cloud: Secret Manager CMEK](https://cloud.google.com/secret-manager/docs/cmek) - Explains customer-managed encryption key behavior for Secret Manager.
+- [Google Cloud: Secret rotation](https://cloud.google.com/secret-manager/docs/secret-rotation) - Documents rotation schedules and `SECRET_ROTATE` Pub/Sub notifications.
+- [Google Cloud: Access a secret version](https://cloud.google.com/secret-manager/docs/access-secret-version) - Describes version numbers, aliases, and `latest` access.
+- [Google Cloud: Secret Manager access control](https://cloud.google.com/secret-manager/docs/access-control) - Guide to enforcing least-privilege IAM roles on secret resources.
+- [Google Cloud: VPC Service Controls overview](https://cloud.google.com/vpc-service-controls/docs/overview) - Technical reference for building logical network perimeters around APIs.

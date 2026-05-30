@@ -23,14 +23,14 @@ id: article-cloud-providers-azure-storage-databases-azure-sql-database
 
 Azure SQL Database is a fully managed relational database platform built on Microsoft's SQL Server database engine. Relational databases store structured records inside tables with strict schemas, enforcing transactional boundaries and referential integrity between tables using keys and constraints. Managed service delivery means Microsoft automates host operating system patching, physical storage capacity scaling, high-availability replication, and backup scheduling, freeing your engineering team to focus entirely on database schema design, index tuning, transaction boundaries, and query performance.
 
-If you deploy workloads on AWS, Azure SQL Database serves as the managed relational equivalent of Amazon RDS and Amazon Aurora. However, their underlying physical architectures differ. While a standard Amazon RDS SQL Server instance runs the database engine on a single Amazon EC2 virtual machine with network-attached EBS storage, Azure SQL Database separates compute resources from physical data storage at the platform layer. For high-throughput workloads requiring distributed performance, Amazon Aurora utilizes a log-structured shared storage volume across multiple availability zones. In Azure, this decoupled compute-to-storage architecture is fully realized through specialized service tiers that tailor the physical network and physical storage structures to your latency and durability budgets.
+If you deploy workloads on AWS, Azure SQL Database serves as the managed relational equivalent of Amazon RDS and Amazon Aurora. However, their service shapes differ. Azure SQL Database exposes a logical server and managed databases instead of a customer-managed VM. Its service tiers choose different combinations of compute, storage, availability, and latency behavior, so tier selection is part of the application architecture rather than a cosmetic billing choice.
 
 :::expand[Under the Hood: General Purpose vs. Business Critical Architectures]{kind="design"}
 Azure SQL Database configures physical compute, network, and storage layouts differently depending on the chosen architectural tier:
 
-* **General Purpose Tier (Remote Storage)**: This tier decouples the compute engine from the storage engine. The stateless compute layer (running the SQL Server database engine process, `sqlservr.exe`) executes on a virtual machine node managed by Azure Service Fabric. This compute node mounts remote data and log files (`.mdf` and `.ldf`) hosted on Azure Premium Storage SSD cabinets. If the compute host experiences hardware degradation or requires a platform update, Service Fabric spins up a new stateless compute node and re-mounts the remote Premium Storage files over the storage network. Read and write operations travel over the network between compute and storage layers, introducing typical network disk latencies.
+* **General Purpose Tier (Remote Storage)**: This tier separates compute from remote storage. It is a good fit for many business applications because Azure can move or replace compute while the database files remain on durable remote storage. The tradeoff is that reads and writes use a remote storage path, so latency-sensitive workloads may need a higher tier.
 
-* **Business Critical Tier (Local Storage Always On)**: This tier co-locates compute and storage onto the same physical Virtual Machine Scale Set (VMSS) node, leveraging direct-attached local NVMe drives for ultra-low read and write latencies. To guarantee high availability, Service Fabric deploys a four-node cluster running a Microsoft SQL Server Always On Availability Group. One node is designated as the primary replica, which accepts all client read-write traffic. The remaining three nodes operate as secondary replicas. When a write transaction executes on the primary replica, the transaction log records are replicated synchronously over a high-speed InfiniBand network backplane to at least one secondary replica before the transaction is acknowledged to the application client as committed. If the primary node fails, failover to a hot standby secondary replica is near-instantaneous (typically occurring in under five seconds) without data loss.
+* **Business Critical Tier (Local SSD and Replicas)**: This tier is designed for lower latency and higher availability by using local SSD storage and Always On availability group replicas. The primary replica accepts writes, and secondary replicas support high availability and, when configured, read scale-out. This is the tier to consider when transaction latency, failover behavior, and read replica options matter more than the lowest hosting cost.
 
 ```mermaid
 flowchart TD
@@ -41,10 +41,10 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    subgraph BC["Business Critical (Direct Local NVMe & Always On Replicas)"]
-        Primary["Primary Replica (Active Write NVMe)"] -- "Synchronous Log Replication" --> Sec1["Secondary Replica 1 (NVMe Standby)"]
-        Primary -- "Synchronous Log Replication" --> Sec2["Secondary Replica 2 (NVMe Standby)"]
-        Primary -- "Asynchronous Replication" --> Sec3["Secondary Replica 3 (Read-Scale Out)"]
+    subgraph BC["Business Critical (Local SSD & Always On Replicas)"]
+        Primary["Primary Replica (Writes)"] -- "Replica Log Flow" --> Sec1["Secondary Replica"]
+        Primary -- "Replica Log Flow" --> Sec2["Secondary Replica"]
+        Primary -- "Read Scale-Out When Enabled" --> Sec3["Readable Secondary"]
     end
 ```
 :::
@@ -89,7 +89,7 @@ Under the hood, Azure SQL Database enforces durability using a Write-Ahead Loggi
 
 1. **Memory Manipulation**: The engine locates the target database pages inside the system memory buffer pool. If the pages are not in RAM, they are read from persistent storage. The engine updates the data pages in memory, marking them as dirty pages.
 2. **Synchronous Log Write**: The engine generates a sequential transaction log record detailing the exact physical changes. The transaction log record must be flushed from memory and written synchronously to persistent physical SSD storage (the `.ldf` file) before the engine acknowledges the commit success back to the client application.
-3. **Asynchronous Checkpoints**: The dirty data pages inside the RAM buffer pool are not immediately written to the main database file (`.mdf`). Instead, an asynchronous background lazy writer process or a scheduled database checkpoint writes the modified pages to physical disks. 
+3. **Asynchronous Checkpoints**: The dirty data pages inside the RAM buffer pool are not immediately written to the main database file (`.mdf`). Instead, an asynchronous background lazy writer process or a scheduled database checkpoint writes the modified pages to physical disks.
 
 If the database node experiences a sudden power loss, no data is lost. Upon reboot, the engine scans the synchronous transaction log. It rolls forward any committed changes that were not yet written to the `.mdf` data files, and rolls back any uncommitted changes from incomplete transactions.
 
@@ -97,12 +97,16 @@ If the database node experiences a sudden power loss, no data is lost. Upon rebo
 
 Applications connect to Azure SQL Database using standard TCP/IP connection strings. Managing database connections requires configuring secure network routes, robust authentication mechanisms, and connection pooling settings to prevent resources from exhausting.
 
+![An infographic showing an app reaching Azure SQL through private DNS and a private endpoint instead of the public internet](/content-assets/articles/article-cloud-providers-azure-storage-databases-azure-sql-database/private-sql-network-path.png)
+
+*Private SQL access depends on both the private endpoint path and the DNS answer clients receive.*
+
 An application client's connection path relies on two connection redirection modes:
 
 * **Redirect Mode (Inside Azure)**: When the application client establishes a connection, it queries the Azure SQL Gateway over port 1433 to authenticate and locate the active database node. The gateway returns the direct IP address of the compute node hosting the database. The client then routes all subsequent database queries directly to the compute node over ports 11000 to 11999. This minimizes gateway bottlenecks and delivers optimal query latencies.
 * **Proxy Mode (Outside Azure)**: When connecting from an external network, all queries and responses route directly through the Azure SQL Gateway over port 1433. While this increases gateway round-trip latency, it simplifies enterprise firewall security, requiring you to open only a single port (1433) to the gateway's IP address.
 
-To secure these pathways, avoid public internet access paths. Connect your application compute resources (such as App Services or AKS clusters) using Private Endpoint configurations via Azure Private Link. This assigns a private IP address from your Virtual Network (VNet) to your logical database server, routing all query traffic entirely over Microsoft's private global fiber network. 
+To secure these pathways, avoid public internet access paths. Connect your application compute resources (such as App Services or AKS clusters) using Private Endpoint configurations via Azure Private Link. This assigns a private IP address from your Virtual Network (VNet) to your logical database server, keeping the private connection on the Microsoft network instead of exposing the database endpoint directly to the public internet.
 
 Additionally, eliminate database passwords and connection string secrets from your codebases by using Managed Identities cabled to Microsoft Entra ID. The application authenticates using its system-assigned identity, and the database maps permissions directly to the application's Entra object, removing credential leakage vectors.
 
@@ -118,22 +122,52 @@ To manage database deployments safely in a continuous integration and continuous
 
 Never execute ad-hoc schema alterations directly on production systems. Run all migrations through verified pipelines that test schema changes against staging environments before execution.
 
+:::expand[Renaming Columns on Live Traffic]{kind="pitfall"}
+A common database deployment trap is executing a direct column rename—such as running `sp_rename 'Orders.customer_id', 'client_id', 'COLUMN'` in T-SQL—in a single database migration script. While simple on a local workstation, running this on a live production database triggers immediate client-side crashes. Because the old application container replicas are still serving active traffic while your CI/CD pipeline deploys the new code version, any query from an active worker attempting to read `customer_id` will fail instantly with a `207 Invalid column name` error, leading to transaction rollbacks and a spike in HTTP 500 errors.
+
+This database constraint applies universally across all relational engines, including **Amazon RDS (Postgres or MySQL)** and **Amazon Aurora**. Relational schema alterations must always follow the **Expand-Contract Pattern** (or Parallel Run pattern) to decouple database changes from application code deployments.
+
+To execute a zero-downtime column migration, structure your deployment into five distinct, backward-compatible phases:
+
+1.  **Phase 1 (Expand):** Add the new column, keeping it fully nullable.
+    ```sql
+    ALTER TABLE Orders ADD client_id INT NULL;
+    ```
+2.  **Phase 2 (Dual Write):** Deploy a new application version that reads from the old column (`customer_id`) but writes identical, duplicated data to both columns on every new write.
+3.  **Phase 3 (Backfill):** Run a background, batch-migration script to copy historical data from the old column to the new column:
+    ```sql
+    UPDATE TOP (1000) Orders SET client_id = customer_id WHERE client_id IS NULL;
+    ```
+4.  **Phase 4 (Read Transition):** Deploy another application version that reads entirely from the new column (`client_id`) and writes only to the new column.
+5.  **Phase 5 (Contract):** Drop the old, now-unused column and enforce the required `NOT NULL` constraint on the new column:
+    ```sql
+    ALTER TABLE Orders ALTER COLUMN client_id INT NOT NULL;
+    ALTER TABLE Orders DROP COLUMN customer_id;
+    ```
+
+**Rule of thumb:** Never drop or rename a relational column in a single step. Always execute schema refactoring using the Expand-Contract method to protect your live transactional traffic from version-mismatch outages.
+:::
+
 ## Automated Backups and Recovery
 
 A database's recovery system is the foundation of operational reliability. Azure SQL Database provides automated backups that are maintained continuously without manual configuration.
+
+![An infographic showing transaction log backups enabling point-in-time restore after a failure](/content-assets/articles/article-cloud-providers-azure-storage-databases-azure-sql-database/transaction-log-restore.png)
+
+*Point-in-time restore works by replaying backups and transaction logs to the selected moment, usually into a new database.*
 
 The platform creates three distinct types of backups to enable Point-in-Time Restore (PITR) operations:
 * **Full Backups**: A complete copy of the database structure and data, generated weekly.
 * **Differential Backups**: Captures all changes made since the last weekly full backup, generated daily.
 * **Transaction Log Backups**: Captures sequential transaction log modifications, generated every 5 to 10 minutes.
 
-These backups are written to read-access geo-redundant storage (RA-GRS) configurations by default, distributing your backup files across secondary regional datacenters to protect against whole-region disasters.
+Azure SQL stores backups in separate backup storage, and you can configure backup storage redundancy options such as locally redundant, zone-redundant, geo-redundant, or geo-zone-redundant storage depending on service and region support.
 
-Using these three backup types, PITR enables you to restore a database to its exact state at any specific millisecond within your retention window (typically 7 to 35 days). When you trigger a point-in-time restore, the Azure platform provisions a new database, restores the closest weekly full backup, applies the latest daily differential backup, and rolls forward the sequential transaction logs up to the targeted millisecond.
+Using these three backup types, PITR enables you to restore a database to a selected point within your retention window (typically 7 to 35 days for short-term retention). When you trigger a point-in-time restore, the Azure platform provisions a new database, restores the closest full backup, applies differential changes, and rolls forward transaction logs to the selected restore time.
 
 ```mermaid
 flowchart TD
-    subgraph Storage["Backup Storage Media (RA-GRS)"]
+    subgraph Storage["Backup Storage"]
         Full["Weekly Full Backup"]
         Diff["Daily Differential Backup"]
         Logs["5-Min Transaction Logs"]
@@ -162,7 +196,7 @@ Keep in mind that restoring a database does not overwrite your active production
 
 Azure SQL Database delivers a managed relational environment for application data that requires strict transactional consistency and structured schema guarantees.
 
-* **Decoupled Architecture**: Select the General Purpose tier to decouple compute from remote Premium Storage, or select the Business Critical tier to co-locate compute and storage using direct-attached local NVMe drives and synchronous Always On availability groups.
+* **Service Tier Fit**: Select the General Purpose tier for balanced remote-storage workloads, or select the Business Critical tier when local SSD latency, Always On replicas, and read scale-out are worth the extra cost.
 * **Logical Management**: Provision database capacity using the vCore model to control virtual cores and scale memory independently of storage.
 * **Strict Constraints**: Structure business records using rigid tables, and enforce referential integrity and data validity using system-level database constraints.
 * **WAL Durability**: Rely on Write-Ahead Logging to guarantee ACID transaction durability, flushing log records synchronously to physical media before committing.
@@ -172,6 +206,11 @@ Azure SQL Database delivers a managed relational environment for application dat
 ## What's Next
 
 Now that we have structured our relational business records, we will explore Azure Cosmos DB. We will examine how to manage semi-structured documents, distribute data globally, optimize partition key hashing, and select the correct tunable consistency level.
+
+![An infographic showing an app reaching Azure SQL Database through a private network, logical server, database, transaction log, firewall, migration, backup, and point-in-time restore controls](/content-assets/articles/article-cloud-providers-azure-storage-databases-azure-sql-database/azure-sql-safety-path.png)
+
+*Use this as the Azure SQL safety path: protect the network path, treat schema changes as releases, rely on the transaction log for durability, and verify backup and restore behavior.*
+
 
 ---
 

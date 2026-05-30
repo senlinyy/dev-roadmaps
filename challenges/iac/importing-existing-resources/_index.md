@@ -1,7 +1,7 @@
 ---
 title: "Importing Existing Resources"
 description: "Adopt existing infrastructure with resource blocks, import blocks, ownership decisions, and first-plan review."
-articleId: article-infrastructure-as-code-terraform-importing-existing-resources
+articleId: article-iac-terraform-state-manipulating
 difficulty: medium
 order: 11
 tags: ["terraform", "import", "state", "drift"]

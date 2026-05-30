@@ -250,6 +250,10 @@ Fifth, enforce image provenance. Generate SBOMs on every build, and cryptographi
 
 We have completed the **CI/CD Fundamentals** module, establishing the core mental models for integration, runner execution, immutable promotions, and shift-left perimeters. In the next submodule, **GitHub Actions**, we will translate these fundamentals into concrete enterprise workflows. We will write advanced YAML pipeline files, handle complex triggering events, build reusable custom actions, configure secure environments, and lock down runner permissions.
 
+![Pipeline security summary showing shift-left scanning, secret protection, dependencies, image layers, SBOM, and provenance](/content-assets/articles/article-cicd-fundamentals-securing-the-pipeline/pipeline-security-summary.png)
+
+*Use this as the pipeline-security checklist: move checks earlier, catch leaked secrets, rotate compromised credentials, scan code and dependencies, inspect image layers, and verify provenance.*
+
 ---
 
 **References**

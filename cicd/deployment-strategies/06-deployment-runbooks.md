@@ -155,6 +155,10 @@ Centralizing release operations inside Git-versioned executable runbooks and aut
 * **Blind Pipeline Green-Lights**: Integrating automated curl-based smoke tests immediately post-deployment ensures that network blocks or startup connection failures are caught instantly, halting the pipeline and triggering rollbacks before user traffic is exposed.
 * **Missing Database Backups**: Enforcing structured pre-flight check gates inside version-controlled markdown playbooks guarantees that database snapshots are confirmed healthy before any migration commands execute.
 
+![Deployment runbook summary showing runbook steps, idempotent actions, smoke tests, pre-flight, post-flight, and automation boundary](/content-assets/articles/article-cicd-deployment-strategies-deployment-runbooks-and-release-automation/deployment-runbook-summary.png)
+
+*Use this as the runbook checklist: turn release steps into executable actions, make them idempotent, verify with smoke tests, keep pre-flight and post-flight checks in version control, and know where automation should stop for human judgment.*
+
 ---
 
 **References**

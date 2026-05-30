@@ -14,10 +14,10 @@ aliases:
 ## Table of Contents
 
 1. [The Ambiguity of Friendly Labels](#the-ambiguity-of-friendly-labels)
-2. [Precise Physical Resource IDs](#precise-physical-resource-ids)
+2. [Service-Specific Resource Identifiers](#service-specific-resource-identifiers)
 3. [Amazon Resource Names as Universal Coordinates](#amazon-resource-names-as-universal-coordinates)
 4. [Syntactical Variations Across Services](#syntactical-variations-across-services)
-5. [Wrapping Physical Resources in Business Context](#wrapping-physical-resources-in-business-context)
+5. [Wrapping Resources in Business Context](#wrapping-resources-in-business-context)
 6. [Enforcing a Consistent Tagging Standard](#enforcing-a-consistent-tagging-standard)
 7. [Safe Naming Conventions](#safe-naming-conventions)
 8. [The Operational Pre-Change Checklist](#the-operational-pre-change-checklist)
@@ -38,25 +38,25 @@ The engineer is forced to guess, clicking through screens in a panic. In the clo
 
 *Friendly names are for humans, but they are not coordinates. When several resources share similar names, the safe target is the one identified by account, Region, service, and resource path.*
 
-## Precise Physical Resource IDs
+## Service-Specific Resource Identifiers
 
-Friendly names are incomplete because they do not carry service type, owning account ID, or physical region details. To eliminate this ambiguity, AWS services automatically generate a unique physical resource ID the moment any resource is created.
+Friendly names are incomplete because they do not carry service type, owning account ID, or Region details. AWS services solve this in different ways. Some services generate opaque IDs, some use names as the resource identifier, and some use nested paths that include more than one piece of service context.
 
-These system-generated IDs are highly structured and specific to their service families. A virtual server instance receives an ID like `i-0123456789abcdef0`, a Virtual Private Cloud receives a network ID like `vpc-0a1b2c3d4e5f6g7h8`, and an isolated network subnet receives a zonal ID like `subnet-0987654321fedcba0`.
+These identifiers are structured by service family. A virtual server instance receives an ID like `i-0123456789abcdef0`, a Virtual Private Cloud receives a network ID like `vpc-0a1b2c3d4e5f67890`, and an isolated network subnet receives a zonal ID like `subnet-0987654321fedcba0`. Other services identify resources by name, such as an S3 bucket named `orders-exports-prod`, an IAM role named `orders-api-task-prod`, or a CloudWatch log group named `/aws/ecs/orders-api`.
 
-Physical resource IDs are incredibly useful because they are completely unique within their service context. If an operational ticket reports that instance `i-0123456789abcdef0` is exhibiting high memory exhaustion, there is no guessing which virtual server is failing. The ID points to a single physical resource inside the infrastructure.
+Service-specific identifiers are useful because they remove local naming guesswork within the service that owns them. If an operational ticket reports that instance `i-0123456789abcdef0` is exhibiting high memory exhaustion, there is no guessing which EC2 instance is failing. The ID points to one instance in that account and Region.
 
-However, a resource ID is still not a complete coordinate string. It does not explicitly state which AWS account ID owns the resource, or which physical Region it resides in. To create a universal, complete identifier that can be used across security policies and CLI scripts, AWS combines the service namespace, physical Region, account ID, and resource ID into a single canonical URI.
+However, a service-specific identifier is still not a complete coordinate string. It may not explicitly state which AWS account owns the resource, which Region it resides in, or which service namespace should interpret the identifier. To create a policy-ready identifier, AWS combines the partition, service namespace, Region, account ID, and service-specific resource path into an Amazon Resource Name.
 
 ## Amazon Resource Names as Universal Coordinates
 
-This canonical string is the Amazon Resource Name, commonly abbreviated as an ARN. The ARN is the standard, absolute identifier for every single resource in AWS. ARNs are used to define access permissions in security policies, route events in serverless pipelines, and target resources in deployment scripts.
+This canonical string is the Amazon Resource Name, commonly abbreviated as an ARN. The ARN is the standard identifier format AWS uses for many resource references. ARNs are used to define access permissions in security policies, route events in serverless pipelines, and target resources in deployment scripts.
 
 When you need to specify an infrastructure component without any possibility of error, the ARN is the exact string you must copy. The standard structural pattern follows a clean, colon-delimited format:
 
 `arn:partition:service:region:account-id:resource-id`
 
-Dissecting a standard ECS service ARN illustrates how this format encodes all logical and physical coordinate systems into a single string:
+Dissecting a standard ECS service ARN illustrates how this format encodes logical ownership and service-specific targeting into a single string:
 
 `arn:aws:ecs:us-east-1:123456789012:service/orders-prod/orders-api`
 
@@ -64,11 +64,11 @@ Dissecting a standard ECS service ARN illustrates how this format encodes all lo
 
 * **Partition (`arn:aws`)**: Identifies the string as an Amazon Resource Name inside the standard public partition. GovCloud accounts use `aws-us-gov`, and AWS China uses `aws-cn`.
 * **Service Namespace (`ecs`)**: The specific AWS service that owns and manages the resource configuration.
-* **Physical Region (`us-east-1`)**: The physical territory where this Regional resource resides.
+* **Region (`us-east-1`)**: The AWS Region where this Regional resource resides.
 * **Account ID (`123456789012`)**: The 12-digit AWS account container that owns and pays for the resource.
 * **Resource Path (`service/orders-prod/orders-api`)**: The service-specific path to the resource. Here, it targets an ECS service named `orders-api` inside a cluster named `orders-prod`.
 
-Reading the ARN from left to right gives you an absolute coordinate. If an alert names a resource ARN in `us-east-1`, you know immediately that a similarly named resource in `us-west-2` or inside your developer sandbox account is not the target.
+Reading the ARN from left to right gives you a precise AWS coordinate for services that use ARNs. If an alert names a resource ARN in `us-east-1`, you know immediately that a similarly named resource in `us-west-2` or inside your developer sandbox account is not the target.
 
 ![An infographic showing an ARN as a left-to-right coordinate chain from partition to service, Region, account, resource path, and exact resource](/content-assets/articles/article-cloud-providers-aws-foundations-resources-arns-tags/arn-coordinate-chain.png)
 
@@ -92,9 +92,9 @@ The triple colon after `s3` and the third colon before the bucket name indicate 
 
 An ARN is not a secret credential. It does not contain passwords, API keys, or access tokens. It is an identifier. While you should handle ARNs with care to avoid exposing your internal architecture patterns, they are safe to share in operational tickets, logs, and documentation.
 
-## Wrapping Physical Resources in Business Context
+## Wrapping Resources in Business Context
 
-An ARN provides a perfect physical coordinate, but it carries no business context. It can tell you that a database exists in account `123456789012` and Region `eu-west-2`, but it cannot tell you:
+An ARN provides a precise AWS target, but it carries little business context. It can tell you that a database exists in account `123456789012` and Region `eu-west-2`, but it cannot tell you:
 
 * Which application microservice relies on the database.
 * Which engineering team is on-call to debug it.
@@ -107,7 +107,7 @@ Tags do not alter how the resource performs. They add business metadata that mak
 
 ![An infographic showing an S3 bucket resource identified by an ARN and surrounded by business context tags for application, environment, owner, cost center, and management source](/content-assets/articles/article-cloud-providers-aws-foundations-resources-arns-tags/tags-business-context.png)
 
-*The ARN identifies the physical resource, while tags add the operational context humans and automation need: application, environment, owner, cost center, and management source.*
+*The ARN identifies the AWS target, while tags add the operational context humans and automation need: application, environment, owner, cost center, and management source.*
 
 ## Enforcing a Consistent Tagging Standard
 
@@ -164,7 +164,7 @@ Before you modify, delete, or redeploy any AWS resource, slow down and document 
 
 * **Verify Caller Identity**: Execute `aws sts get-caller-identity` to prove your session is targeting the intended account ID.
 * **Verify Active Region**: Run `aws configure get region` or inspect your environment profile to confirm you are targeting the correct physical territory.
-* **Record Target ARN**: Copy the absolute Amazon Resource Name of the resource you intend to modify into your change log.
+* **Record Target ARN**: Copy the Amazon Resource Name of the resource you intend to modify into your change log when the service exposes one.
 * **Inspect Metadata Tags**: Confirm that the target resource tags (such as `Environment=prod`) align with your expected impact scope.
 * **Consult CloudTrail Logs**: Check recent API events in CloudTrail to confirm when and who last modified the target resource configuration.
 
@@ -179,7 +179,7 @@ Our initial on-call engineer was paralyzed by naming collisions and regional set
 * We use friendly names like `payments-exports-prod` to search and communicate.
 * We read ARNs like `arn:aws:s3:::payments-exports-prod` to identify exact resource targets in access policies.
 * We inspect standard tags like `Owner=payments-platform` to locate the on-call team and cost centers instantly.
-* We document physical IDs and session states before running any deployment script or administrative command.
+* We document service-specific IDs and session states before running any deployment script or administrative command.
 
 By applying our pre-change operational checklist, we ensure that every modification targets the exact resource intended, keeping production stable and secure.
 
@@ -191,7 +191,7 @@ The next article is **AWS Core Services Map**. We will zoom out and build a comp
 
 ![A six-part summary infographic for AWS resource identity covering colliding names, precise IDs, ARN coordinate fields, omitted ARN fields, business tags, and the pre-change checklist](/content-assets/articles/article-cloud-providers-aws-foundations-resources-arns-tags/resources-arns-tags-summary.png)
 
-*Use this as the short resource safety checklist: names help you search, IDs and ARNs identify exact targets, tags add business meaning, and the pre-change checklist proves you are about to modify the right thing.*
+*Use this as the short resource safety checklist: names help you search, service IDs and ARNs identify exact targets, tags add business meaning, and the pre-change checklist proves you are about to modify the right thing.*
 
 ---
 

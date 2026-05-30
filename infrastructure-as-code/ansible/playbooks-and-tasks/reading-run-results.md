@@ -1,184 +1,197 @@
 ---
-title: "Reading Run Results"
+title: "Reading Playbook Output"
 description: "Read Ansible output as per-host evidence about what ran, what changed, and what failed."
-overview: "Ansible output is the feedback loop for a playbook run."
+overview: "Understand the stdout streams and recap blocks of playbook runs, separate connection drops from task failures, and decode execution metadata."
 tags: ["ansible", "results", "recap"]
 order: 4
 id: article-infrastructure-as-code-ansible-reading-run-results
+aliases:
+  - playbooks-and-tasks/reading-run-results.md
+  - infrastructure-as-code/ansible/playbooks-and-tasks/reading-run-results.md
 ---
 
 ## Table of Contents
 
-1. [Why Results Matter](#why-results-matter)
-2. [Per-Host Evidence](#per-host-evidence)
-3. [OK and Changed](#ok-and-changed)
-4. [Failed and Unreachable](#failed-and-unreachable)
-5. [Skipped, Rescued, and Ignored](#skipped-rescued-and-ignored)
-6. [The Recap](#the-recap)
-7. [Where Results Mislead](#where-results-mislead)
+1. [The Feedback Loop of Playbook Execution](#the-feedback-loop-of-playbook-execution)
+2. [The Playbook Output Stream and Code Preview](#the-playbook-output-stream-and-code-preview)
+3. [Decoding the Status Stream](#decoding-the-status-stream)
+4. [Isolating Failures: Unreachable vs. Failed](#isolating-failures-unreachable-vs-failed)
+5. [Execution Branching: Skipped, Rescued, and Ignored](#execution-branching-skipped-rescued-and-ignored)
+6. [Under the Hood: Standard Out Capture and JSON Parsing](#under-the-hood-standard-out-capture-and-json-parsing)
+7. [The Play Recap: Auditing Fleet Health](#the-play-recap-auditing-fleet-health)
 8. [Putting It All Together](#putting-it-all-together)
 9. [What's Next](#whats-next)
 
-## Why Results Matter
+## The Feedback Loop of Playbook Execution
 
-Ansible output is the evidence trail for a run. It tells you which task ran, which host produced the result, whether the task changed that host, and whether the host can continue.
+Ansible's command-line output is a structured audit trail that provides real-time feedback during a playbook execution. Because Ansible manages fleets of servers rather than a single local machine, the terminal output does not present a single success or failure status. Instead, it breaks down the execution timeline by play, task, and host, providing detailed proof of exactly how each remote system responded. Reading this output allows you to diagnose connection drops, identify configuration errors, and confirm that your infrastructure has settled into a safe, predictable state.
 
-This matters because playbooks usually target groups, not one machine. The same orders task can install Nginx on one host, report `ok` on another host, and fail on a third host. Reading the output well means you do not flatten those different host stories into one vague pass or fail.
+To understand why analyzing this feedback loop is critical, consider our scenario. You are executing a configuration update across a three-node database and application cluster containing `db-node-01`, `app-node-01`, and `app-node-02`. The playbook installs a security library, modifies a cluster config file, and reloads the service.
 
-Clear output starts before the run begins. The task name becomes the label in the output. A task named `Render orders site config` gives useful information. A task named `Do thing` makes the output hard to use when time is short.
+If you treat the output as a simple binary pass-or-fail:
+- You might miss that the security library task succeeded on two nodes but silently failed on the third due to a broken system repository, leaving that host vulnerable.
+- A connection timeout on a database node might be hidden behind a wall of green task names, causing you to assume the whole cluster was updated.
+- You might not realize that a specific task is continuously applying modifications on every run, slowly wearing down your storage drives with unnecessary writes.
 
-## Per-Host Evidence
+A professional operations workflow relies on this status stream. By looking at the colors, codes, and recap summaries that Ansible outputs, you can instantly see which hosts already matched your desired state, which ones required active modifications, which ones connection failures blocked, and which tasks triggered error-handling paths.
 
-Ansible reports task results per host. This short output says one task reached two orders web hosts and found different states:
+## The Playbook Output Stream and Code Preview
 
-```text
-TASK [Install nginx]
-changed: [orders-web-02]
-ok: [orders-web-01]
-```
-
-The task was the same. The result differed because the hosts differed. `orders-web-02` needed a package installed. `orders-web-01` already had it.
-
-This per-host shape continues through the whole run. If `orders-web-02` later fails during a template task, Ansible can stop running later tasks on that host while continuing with `orders-web-01`. The output is both a timeline and a map of host state.
-
-## OK and Changed
-
-`ok` means the task ran and did not change the host. For a state-aware task, this usually means the host already matched the requested state.
-
-`changed` means the task ran and changed the host, or the task was told to report change. Both can be healthy. A fresh host should show changes. A settled host should show mostly `ok`. A deployment that edits the orders Nginx template should show change on the template task.
-
-The useful question is whether the change matches the work. In this output, the template change is expected because a new config was deployed:
+Here is an early, comment-free console output preview of a playbook run against our three-node cluster. This output demonstrates a mixed run where different hosts produce different results:
 
 ```text
-TASK [Render orders site config]
-changed: [orders-web-01]
-changed: [orders-web-02]
+PLAY [Standardize application and database cluster] ****************************
 
-RUNNING HANDLER [Reload nginx]
-changed: [orders-web-01]
-changed: [orders-web-02]
+TASK [Gathering Facts] *********************************************************
+ok: [db-node-01]
+ok: [app-node-01]
+ok: [app-node-02]
+
+TASK [Install cluster security library] ****************************************
+ok: [db-node-01]
+changed: [app-node-01]
+fatal: [app-node-02]: FAILED! => {"changed": false, "msg": "No package matching 'sec-lib' found"}
+
+TASK [Configure cluster settings] **********************************************
+changed: [db-node-01]
+changed: [app-node-01]
+
+RUNNING HANDLER [Reload application service] ***********************************
+changed: [app-node-01]
+
+PLAY RECAP *********************************************************************
+db-node-01                 : ok=3    changed=1    unreachable=0    failed=0    skipped=0
+app-node-01                : ok=3    changed=3    unreachable=0    failed=0    skipped=0
+app-node-02                : ok=1    changed=0    unreachable=0    failed=1    skipped=2
 ```
 
-The handler ran because the template task reported change. If that same handler runs on every playbook run with no template edits, the change result is probably too broad.
+## Decoding the Status Stream
 
-## Failed and Unreachable
+As Ansible executes each task, it prints a status line for each active host in the play. The status is the direct output of the state-aware module comparing your playbook parameters with the actual remote system.
 
-`failed` and `unreachable` are different problems.
+The two most common successful statuses are `ok` and `changed`:
 
-`unreachable` means Ansible could not connect to the host. The task did not really get a chance to run:
+### 1. The `ok` Status
+An `ok` status indicates that Ansible connected to the host, ran the module's state check, and determined that the target system parameter already matched your desired state. The module may still inspect the system, read files, or query service state, but it did not apply a modification. In a healthy, settled environment, most state-management tasks should output `ok`, which tells you that no system drift was corrected during that run.
+
+### 2. The `changed` Status
+A `changed` status indicates that the host did not match your playbook parameters. The module executed system writes (such as creating directories, writing configuration text, or installing packages) to align the host. A `changed` status is completely healthy during an initial run, but if the same task continues to report `changed` on every run, the task is likely poorly designed and lacks proper state-aware guards.
+
+Understanding these two indicators helps you analyze what is happening under the hood. If a configuration template task outputs `changed`, it will automatically trigger any downstream notifications, queueing service restarts. If it outputs `ok`, the notifications are skipped, keeping your application services stable.
+
+## Isolating Failures: Unreachable vs. Failed
+
+When a task encounters an error during a playbook execution, Ansible marks the host status as `fatal` and outputs one of two distinct failure states: `UNREACHABLE` or `FAILED`. Distinguishing between these two conditions is the fastest way to isolate operational problems:
 
 ```text
-fatal: [orders-web-02]: UNREACHABLE! => {
-    "msg": "Failed to connect to the host via ssh"
-}
+  fatal: [host-01]: UNREACHABLE!
+  |____________________________|
+                 |
+        Transport-Layer Error
+  (SSH, Keys, DNS, VPN)
+
+  fatal: [host-01]: FAILED!
+  |_________________________|
+                |
+       Execution-Layer Error
+  (Permissions, Missing Files, Typos)
 ```
 
-For an unreachable host, check the inventory address, SSH user, SSH key, DNS, VPN, firewall rules, bastion access, and whether the host is running.
+### 1. Transport-Layer Failures (UNREACHABLE)
+An `UNREACHABLE` status indicates that the control plane could not connect to the host through the selected connection path. The task did not get a chance to run on the host. The issue usually resides in the network or transport layer:
+- The control node could not resolve the host's DNS name or route packets to its IP address.
+- The SSH cryptographic handshake failed because the remote host key was unknown or mismatched.
+- The private key file was rejected, or the configured login username does not exist on the remote host.
 
-`failed` means Ansible reached the host, ran the task or module, and the task did not complete successfully:
+### 2. Execution-Layer Failures (FAILED)
+A `FAILED` status indicates that the connection was successful, but the module encountered an error while attempting to inspect or modify the host. The issue resides in the task parameters, module runtime, interpreter setup, or operating system boundaries:
+- The task attempted to copy a configuration file to a directory that does not exist on the host.
+- The package manager returned an error because the requested package name was misspelled or missing from system repositories.
+- The module attempted to write a file to a protected directory but privilege escalation (`become: true`) was omitted, triggering a permission error.
+- The remote Python interpreter required by a Python module is missing or not discovered correctly, causing the module bootstrap to fail after the connection succeeds.
 
-```text
-fatal: [orders-web-01]: FAILED! => {
-    "msg": "Destination directory /etc/nginx/conf.d does not exist"
-}
+When a host encounters either failure state, Ansible drops it from the active run pool for the remainder of the play by default. Error-handling features such as `ignore_errors`, `ignore_unreachable`, `rescue`, and `clear_host_errors` can alter that flow, so always read the task message before assuming what happened next.
+
+## Execution Branching: Skipped, Rescued, and Ignored
+
+Ansible's runtime output also captures execution branching, which occurs when playbooks use conditionals, error handling, or error overrides to control task flow:
+
+- **`skipped`**: A skipped status indicates that a task was evaluated, but a conditional statement (like a `when` block checking the host's operating system) resolved to `false`. Skipped tasks do not run on the host, consume zero execution time, and are completely healthy when configuring heterogeneous environments.
+- **`rescued`**: A rescued status appears when you group tasks inside a `block` and configure a `rescue` section. If a task inside the block fails, the execution does not stop; instead, the control plane catches the failure, runs the rescue tasks to clean up or recover, and allows the play to continue successfully.
+- **`ignored`**: An ignored status occurs when a task fails but you have set `ignore_errors: true` on that step. Ansible logs the failure in standard out but allows the playbook to proceed. You must use this override sparingly, as ignoring failures can hide critical configuration bugs.
+
+## Under the Hood: Standard Out Capture and JSON Parsing
+
+To understand how these colors and formatting lines land in your terminal, it helps to look at the process isolation and data streams operating inside the control plane.
+
+When you run a playbook, the Ansible execution engine on your control node forks a separate worker process for each targeted managed host (up to the limit set by your concurrency settings, commonly defaulting to 5 forks).
+
+Here is the step-by-step systems depth of how output is processed:
+
+1. **Module Result Creation**: The remote module payload performs the work and returns a structured result object. Command-like modules include fields such as `stdout`, `stderr`, and `rc`; other modules return fields specific to their domain.
+2. **Pipe Communication**: The remote bootstrap script writes this JSON string directly to the open SSH network pipe.
+3. **Control Node Capture**: The control node worker process reads the bytes from the local control socket file, parsing the JSON string into an in-memory Python dictionary.
+4. **Callback Plugin Dispatch**: The execution engine takes this dictionary and passes it to the **Callback Plugin Manager**. Callback plugins are modular Python scripts that control the user interface.
+5. **Formatted Rendering**: The default callback plugin reads the JSON fields (such as `rc`, `stdout`, `stderr`, and `msg`), translates them into human-readable terminal lines, applies ANSI color escape codes (green for ok, yellow for changed, red for failed, and cyan for skipped), and outputs the lines to your local stdout stream.
+
+```mermaid
+flowchart LR
+    subgraph Managed["Managed Server"]
+        ZIP["Module Payload"] -->|1. Return Result Object| JSONPipe["JSON Output Stream"]
+    end
+
+    subgraph Control["Control Node (Your Machine)"]
+        SSHConn["SSH Network Socket"] -->|2. Receive Bytes| Worker["Forked Worker Process"]
+        Worker -->|3. JSON Parse to Dict| Engine["Execution Engine"]
+        Engine -->|4. Dispatch Result| CallbackManager["Callback Plugin Manager"]
+        CallbackManager -->|5. ANSI Colors| Terminal["Your Terminal Stdout"]
+    end
+
+    JSONPipe -->|SFTP/SSH Pipe| SSHConn
 ```
 
-For a failed task, start with the module arguments and the host state. In this example, the fix may be to install Nginx first, create the directory, or correct the destination path.
+This process is why Ansible can keep output readable even when tasks run across multiple worker forks. Callback plugins group the result data by task and host so you can read the run as a structured status stream instead of raw interleaved SSH output.
 
-The practical surprise is that these statuses affect the rest of the run. By default, a host with a failed task stops running later tasks in that play. A host marked unreachable is also removed from the active set. Other hosts can continue.
+## The Play Recap: Auditing Fleet Health
 
-## Skipped, Rescued, and Ignored
+At the very end of every playbook run, Ansible prints a final, aggregated summary table called the **Play Recap**. The recap compiles the execution metrics for each targeted host, acting as a high-level compliance dashboard.
 
-`skipped` usually means a condition evaluated to false. The task was considered, but Ansible decided it should not run for that host.
+Here is a quick reference table showing the meaning and diagnostic focus of each Play Recap column:
 
-An orders playbook may install packages differently by operating system family:
+| Recap Column | System Meaning | Operational Audit Focus |
+| :--- | :--- | :--- |
+| **`ok`** | Successful tasks that made no modifications. | Measures target environment compliance and stability. |
+| **`changed`** | Successful tasks that modified host states. | Indicates active environment updates; should be 0 on a rerun. |
+| **`unreachable`** | Connection failures. | Highlights network, DNS, SSH, or credential bugs. |
+| **`failed`** | Task errors that aborted execution on the host. | Identifies parameter mismatches, directory typos, or permission bugs. |
+| **`skipped`** | Tasks bypassed by conditional statements. | Validates OS-specific or environment-specific branching logic. |
+| **`rescued`** | Failed tasks successfully resolved by rescue blocks. | Confirms automated recovery pipelines are active. |
+| **`ignored`** | Failed tasks bypassed by ignore overrides. | Highlights accepted risks; audit regularly to prevent stale errors. |
 
-```yaml
-- name: Install nginx on Debian hosts
-  ansible.builtin.apt:
-    name: nginx
-    state: present
-  when: ansible_facts["os_family"] == "Debian"
-```
-
-On a Red Hat family host, that task is skipped because the condition is false. A skipped task can be healthy if the condition is expected. It can also reveal that facts were missing or a variable had an unexpected value.
-
-`rescued` appears when a task fails inside a block and a rescue section handles the failure. This is useful for controlled recovery, but it should still be read carefully. The original task failed; the playbook had a planned path for what to do next.
-
-`ignored` means a task failed but the play continued because the playbook told Ansible to ignore the error. Ignored failures are easy to forget because the run may still complete. Use them sparingly and name the task clearly so the output explains why the failure was acceptable.
-
-## The Recap
-
-The recap at the bottom summarizes each host:
-
-```text
-PLAY RECAP
-orders-web-01 : ok=14 changed=2 unreachable=0 failed=0 skipped=1 rescued=0 ignored=0
-orders-web-02 : ok=8  changed=1 unreachable=0 failed=1 skipped=1 rescued=0 ignored=0
-```
-
-Read the recap as a per-host health table.
-
-| Field | Meaning |
-|-------|---------|
-| `ok` | Tasks completed without changing the host |
-| `changed` | Tasks reported a host change |
-| `unreachable` | Ansible could not connect to the host |
-| `failed` | Tasks failed after Ansible reached the host |
-| `skipped` | Tasks were skipped by conditions or other control flow |
-| `rescued` | Failures were handled by rescue blocks |
-| `ignored` | Failures were ignored by playbook settings |
-
-In the example recap, `orders-web-01` completed cleanly. `orders-web-02` had one failed task. Even though some tasks were `ok` and one task changed, the host still needs attention because `failed=1`.
-
-## Where Results Mislead
-
-Ansible output is useful, but it is only as accurate as the tasks make it.
-
-A command task can report `changed` every run even when it only checks health. Add `changed_when: false` when the command is read-only:
-
-```yaml
-- name: Check orders API health
-  ansible.builtin.command: curl -fsS http://127.0.0.1:3000/health
-  register: orders_health
-  changed_when: false
-```
-
-A command can also return a non-zero code for a result you expect. In that case, define failure with `failed_when` instead of hiding every error:
-
-```yaml
-- name: Look for optional orders maintenance flag
-  ansible.builtin.command: test -f /etc/orders-api/maintenance.flag
-  register: maintenance_flag
-  changed_when: false
-  failed_when: maintenance_flag.rc not in [0, 1]
-```
-
-Here `rc=0` means the flag exists and `rc=1` means it does not. Both are valid observations. Any other return code is treated as failure.
-
-The other common source of confusion is verbosity. Normal output is intentionally short. When a module failure message is not enough, rerun with more verbosity or add a focused `debug` task while troubleshooting. Remove broad debug output when the lesson is learned, especially if values could contain secrets.
+When you analyze a recap block after a deployment, any host with a non-zero value in `failed` or `unreachable` requires immediate attention. Even if a server shows sixteen successful `ok` tasks, a single failure indicates that the machine aborted its execution, leaving it in an incomplete, drifting state.
 
 ## Putting It All Together
 
-For the orders service, a good Ansible run tells a clear story:
+We started by looking at how a mixed cluster playbook run produces per-host execution details, and why flattening this feedback loop into a simple pass-or-fail can hide critical failures on individual servers.
 
-- The task names say what the playbook tried to manage.
-- Each host reports its own result for each task.
-- `ok` and `changed` show whether the host already matched or needed work.
-- `failed` and `unreachable` separate task problems from connection problems.
-- The recap shows which hosts are clean and which hosts need attention.
+Ansible answers this by providing a highly structured, color-coded status stream and recap dashboard:
+- **State-Aware Statuses**: Terminal lines use `ok` to indicate compliance and `changed` to highlight system writes, driving downstream handlers.
+- **Clear Failure Isolation**: The output separates transport-layer socket errors (`UNREACHABLE`) from task parameter errors (`FAILED`), allowing you to isolate network bugs from config bugs instantly.
+- **Branching Capture**: The stream logs skipped conditionals, block rescues, and ignored errors, giving you complete visibility into task flow.
+- **Process Redirection**: Under the hood, the control plane forks worker processes, captures remote JSON return blocks over SSH pipes, and uses callback plugins to render clean terminal output.
+- **The Play Recap**: A final per-host dashboard summarizes the health of your entire fleet, pointing you directly to the hosts that require remediation.
 
-This output is the feedback loop for idempotency. A settled orders host should become quieter on later runs. When it does not, the task result points you toward the part of the playbook that needs inspection.
+Mastering this feedback loop allows you to read your playbook runs as precise evidence of system status, keeping your deployments safe and compliant.
 
 ## What's Next
 
-The next group moves from playbook structure into values and facts. Playbooks become much more useful when the same task can read different service ports, host names, package names, and operating system facts without copying the whole task list.
+Now that you have completed Theme 1 and master the foundations of playbooks, tasks, modules, idempotency, and run outputs, the next theme will move into **Inventory, Connections, & Variables**. We will start by exploring Inventories, showing you how Ansible organizes host catalogs, handles static and dynamic host mappings, and resolves DNS names to active network addresses.
 
 ---
 
 **References**
 
-- [Ansible playbooks: playbook execution](https://docs.ansible.com/projects/ansible/latest/playbook_guide/playbooks_intro.html#playbook-execution)
-- [Error handling in playbooks](https://docs.ansible.com/projects/ansible/latest/playbook_guide/playbooks_error_handling.html)
-- [Conditionals](https://docs.ansible.com/projects/ansible/latest/playbook_guide/playbooks_conditionals.html)
-- [Handlers: running operations on change](https://docs.ansible.com/projects/ansible/latest/playbook_guide/playbooks_handlers.html)
+- [Ansible Playbook Execution and Output](https://docs.ansible.com/ansible/latest/playbook_guide/playbooks_intro.html#playbook-execution) - Official reference for execution flow and terminal stdout logs.
+- [Developing Ansible Callback Plugins](https://docs.ansible.com/ansible/latest/plugins/callback.html) - Documentation on how callback scripts process JSON structures and control stdout formatting.
+- [ANSI Escape Codes Specification](https://www.ecma-international.org/publications-and-standards/standards/ecma-48/) - The ECMA standard for colorizing and formatting terminal character streams.
+- [Ansible Error Handling: Defining Failures and Overrides](https://docs.ansible.com/ansible/latest/playbook_guide/playbooks_error_handling.html) - Official reference for failed_when, changed_when, and block-rescue structures.

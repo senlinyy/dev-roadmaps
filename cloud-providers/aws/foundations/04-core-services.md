@@ -19,7 +19,7 @@ aliases:
 4. [Traffic: Public DNS and HTTP Load Balancing](#traffic-public-dns-and-http-load-balancing)
 5. [Compute: Containerized Scaling Under Surges](#compute-containerized-scaling-under-surges)
 6. [State: Relational Databases and Object Buckets](#state-relational-databases-and-object-buckets)
-7. [Access Authorization and Secrets Injection](#access-authorization-and-secrets-injection)
+7. [Access Authorization and Secret Delivery](#access-authorization-and-secret-delivery)
 8. [Signals: Observability Pipelines and Logs](#signals-observability-pipelines-and-logs)
 9. [Operations: Image Registries, Budgets, and Backups](#operations-image-registries-budgets-and-backups)
 10. [A Systematic Request Path Diagnostic Walkthrough](#a-systematic-request-path-diagnostic-walkthrough)
@@ -27,7 +27,7 @@ aliases:
 
 ## Connecting the Standalone Pieces
 
-At this stage of your cloud journey, you have mastered the foundational mental models: you understand how the cloud runs your code, how coordinates (Accounts, Regions, and Zones) organize placement, and how Resource Names (ARNs) and tags establish precise inventory control. However, having a collection of isolated, standalone resources, such as a running container, a relational database, and an object storage bucket, does not yet yield a live, functioning website.
+At this stage of your cloud journey, the standalone pieces are visible: compute runs code, accounts and Regions place resources, and ARNs plus tags identify targets. However, having a running container, a relational database, and an object storage bucket does not yet produce a live website. The pieces must be connected into one request path.
 
 To share your application with the public reliably, you must connect these isolated pieces into a unified, secure, and cooperative system. You face a new set of real-world operational challenges:
 
@@ -45,7 +45,7 @@ This job-based map groups services by the specific operational role they perform
 **Core Service Families**
 
 * **Traffic Routing**: Manages public DNS records and handles how internet requests enter your private VPC boundary. Key services include Route 53 and Application Load Balancers.
-* **Compute Execution**: Allocates processor and memory slices to run your application runtime process. Key services include EC2, ECS Fargate, and Lambda.
+* **Compute Execution**: Provides CPU, memory, network identity, and lifecycle rules for your application runtime process. Key services include EC2, ECS Fargate, and Lambda.
 * **State Persistence**: Houses structured and unstructured data, ensuring records survive system restarts. Key services include RDS and S3.
 * **Access and Secrets**: Grants secure permissions to compute jobs and encrypts private API keys. Key services include IAM roles and Secrets Manager.
 * **Observability Signals**: Aggregates stdout logs, performance metrics, and API audit logs. Key services include CloudWatch Logs and CloudTrail.
@@ -57,15 +57,15 @@ This job-based map groups services by the specific operational role they perform
 
 ## Networking: Private IP Network Rooms
 
-Before public requests can enter or internal systems can communicate, you must establish the private IP network room for your workloads. In AWS, this foundation is cabled cashing the Virtual Private Cloud, commonly referred to as a VPC. A VPC is a logically isolated private network block that you define inside a single Region. It defines the IP address coordinates and private routing tables that allow your resources to communicate securely.
+Before public requests can enter or internal systems can communicate, you must establish the private IP network room for your workloads. In AWS, this foundation is the Virtual Private Cloud, commonly referred to as a VPC. A VPC is a logically isolated private network block that you define inside a single Region. It defines the IP address coordinates and route tables that decide where packets can travel.
 
 To protect your system from threat actors, you must design a structured three-tier subnet architecture inside your VPC:
 
-* **Public Tier Subnets**: These narrow subnets host only the public-facing entry points, such as Application Load Balancers and NAT gateways. They possess a default route table entry pointing directly to an Internet Gateway, allowing inbound and outbound communication with the public internet.
-* **Private Application Tier Subnets**: These subnets host your core compute workloads, such as application containers or workers. Their route tables contain no route to the Internet Gateway, keeping them completely unreachable from direct inbound internet scans. If they require outbound access (such as pulling an operating system update or calling a third-party payment API), they route traffic through a NAT gateway sitting in the public tier.
-* **Isolated Data Tier Subnets**: These subnets host your transactional database engines and caches. To guarantee absolute isolation, their route tables have no gateways cabled, preventing both inbound internet connections and outbound internet exits. They can communicate only with the app compute hosts sitting in the private tier.
+* **Public Tier Subnets**: These narrow subnets host only public-facing entry points, such as Application Load Balancers and NAT gateways. Their route tables contain a default route to an Internet Gateway. Public reachability still depends on public IP mapping, security groups, network ACLs, and the service configuration.
+* **Private Application Tier Subnets**: These subnets host core compute workloads, such as application containers or workers. Their route tables do not send internet-bound traffic directly to an Internet Gateway, so public clients cannot open direct inbound connections to the tasks. If the tasks require outbound access, they route through a NAT gateway or use VPC endpoints for supported AWS services.
+* **Isolated Data Tier Subnets**: These subnets host transactional database engines and caches. Their route tables have no internet exit, and their security groups accept traffic only from the application tier. This keeps database access dependent on private routes and explicit firewall rules.
 
-By separating your VPC network into these three tiers, you establish a solid architectural boundary. The database is not kept private because of a loose software policy; it is private because the physical topology of the network makes public routing impossible.
+By separating your VPC network into these three tiers, you establish a solid architectural boundary. The database is not kept private because of a loose naming convention; it is private because route tables, security groups, and service settings leave no direct public path to it.
 
 ![An infographic showing a three-tier VPC with public load balancer and NAT gateway, private ECS tasks, isolated RDS database, and no internet route for the data tier](/content-assets/articles/article-cloud-iac-cloud-providers-core-services/three-tier-vpc.png)
 
@@ -75,13 +75,13 @@ By separating your VPC network into these three tiers, you establish a solid arc
 
 Traffic routing is the system's public gatekeeper. When a customer enters `orders.devpolaris.com` in their browser, the request must traverse a structured entry chain before it can reach your app containers.
 
-This traffic entry path is cabled cashing Route 53 and an Application Load Balancer (ALB):
+This traffic entry path uses Route 53 and an Application Load Balancer (ALB):
 
 * Route 53 acts as your global DNS telephone book. It translates the human name `orders.devpolaris.com` into the specific, dynamic public IP addresses of your ALB nodes cabled in the Region.
-* The ALB receives the incoming public HTTP request. It manages SSL/TLS certificates, evaluates listener rules (such as path-based matching), and protects your backend tasks from DDoS traffic spikes.
+* The ALB receives the incoming public HTTP request. It manages TLS certificates, evaluates listener rules, and forwards accepted requests to healthy targets. DDoS and application-layer filtering are handled by related services such as AWS Shield and AWS WAF, not by the ALB alone.
 * The target group continuously audits the health of your compute tasks by sending recurring HTTP health probes to the container's health path. If the tasks are healthy, the ALB forwards the HTTP packet directly to their private IP and port inside the private subnet.
 
-This pipeline introduces a major operational gotcha: target group health checks. If your container task boots successfully but listens on port 8080 while the load balancer target group health checks are cabled to probe port 3000, the ALB will declare the targets unhealthy. It will immediately refuse to route incoming public traffic to them, returning a 502 Bad Gateway or 503 Service Unavailable error to the user, even though the application container is running perfectly inside your compute layer.
+This pipeline introduces a major operational gotcha: target group health checks. If your container task boots successfully but listens on port 8080 while the target group probes port 3000, the ALB will declare the targets unhealthy. If at least one healthy target exists, traffic moves away from the failing target. If every target is unhealthy, the load balancer can fail open and route to all targets anyway, so health checks are a protection signal, not a substitute for working application readiness.
 
 ## Compute: Containerized Scaling Under Surges
 
@@ -89,7 +89,7 @@ Compute is the runtime engine that executes your application code. AWS provides 
 
 * **EC2 (Virtual Servers)**: Provides complete administrative access to virtual server operating systems. You are responsible for patching kernels, scaling capacity, and configuring network routing directly.
 * **ECS with Fargate (Containers)**: Packages your application into Docker containers. Fargate runs the containers serverless, managing the virtual machine hosts underneath so you only focus on task configurations.
-* **Lambda (Functions)**: Executes short-lived code blocks only when invoked by an API gateway request or event payload, scaling capacity automatically and reducing cost to zero when idle.
+* **Lambda (Functions)**: Executes code blocks when invoked by an API gateway request or event payload, scaling capacity automatically. Standard on-demand functions do not bill while no invocations run, while provisioned concurrency keeps environments warm and bills for that reserved readiness.
 
 For long-running checkout APIs, ECS Fargate is the standard choice.
 
@@ -99,7 +99,7 @@ For long-running checkout APIs, ECS Fargate is the standard choice.
 * **Task**: A single active container instance running in the cloud.
 * **Service**: The orchestrator that maintains your desired running task count, registers new tasks with the ALB target group, and manages zero-downtime rolling deployments.
 
-Fargate compute allows your system to scale automatically under surges. If a Black Friday shopping promotion spikes traffic, ECS monitors container CPU and memory usage. It automatically adjusts the desired task count from 2 running containers to 10 in seconds, distributing the load and preventing server exhaustion.
+Fargate compute can scale under surges when you configure ECS Service Auto Scaling. If a Black Friday shopping promotion spikes traffic, Application Auto Scaling can watch ECS CPU, memory, or custom metrics and adjust the desired task count from 2 running containers to 10. ECS then launches replacement tasks, pulls images, assigns network interfaces, waits for target health, and shifts traffic to the healthy capacity.
 
 ## State: Relational Databases and Object Buckets
 
@@ -118,7 +118,7 @@ State represents the persistent business data that must survive after your dynam
 
 By separating relational databases in RDS from flat file assets in S3 object buckets, you protect your database memory and ensure your data architecture is highly performant and cost-effective.
 
-## Access Authorization and Secrets Injection
+## Access Authorization and Secret Delivery
 
 Access control governs what API actions your compute tasks are allowed to perform, while secrets management protects sensitive configuration keys.
 
@@ -127,9 +127,9 @@ AWS Identity and Access Management (IAM) enforces a default-deny gate. Every AWS
 * `s3:PutObject` on the exports bucket.
 * `secretsmanager:GetSecretValue` on the database secret.
 
-This locked-down configuration prevents credential theft. Instead of hardcoding access keys into Docker images, Fargate dynamically retrieves temporary, short-lived security tokens from the IAM control plane.
+This locked-down configuration reduces credential blast radius. Instead of hardcoding access keys into Docker images, the ECS runtime exposes temporary task-role credentials to the container, and the AWS SDK uses those credentials to sign service API calls.
 
-AWS Secrets Manager vaults sensitive database connection strings. When the Fargate container boots, the system calls Secrets Manager to decrypt and inject the connection URL directly into the container's environment memory. If the secret is rotated, the running containers continue using the cached value until the ECS service is updated, triggering fresh secret injection on boot.
+AWS Secrets Manager vaults sensitive database connection strings. ECS can fetch a referenced secret at task startup and place the value into an environment variable, or the application can call Secrets Manager at runtime and cache the value in process memory. If a startup-injected secret is rotated, running containers continue using the old value until the ECS service launches fresh tasks.
 
 ## Signals: Observability Pipelines and Logs
 
@@ -138,7 +138,7 @@ Signals are the durable operational evidence that tells you what your applicatio
 * **CloudWatch Logs**: Collects stdout and stderr streams from compute tasks, routing them to persistent log groups. If a container crashes, its trace history remains readable in CloudWatch.
 * **CloudWatch Metrics**: Aggregates numeric trends over time, such as CPU consumption, memory leaks, database connection spikes, and ALB 5xx error rates.
 * **CloudWatch Alarms**: Triggers automated alerts (such as paged notifications or auto-scaling rules) when a metric crosses a defined threshold.
-* **CloudTrail**: Logs every single management API call executed across the AWS account, proving who created a bucket, modified an IAM role, or deleted a database.
+* **CloudTrail**: Records management API events across the AWS account and can be configured for selected data events, helping prove who created a bucket, modified an IAM role, or deleted a database.
 
 Observability is not a passive logging configuration. It is an active diagnostic practice. By setting up CloudWatch Alarms for target group health and routing those signals to your team, you resolve failures before users notice a service outage.
 
@@ -163,7 +163,7 @@ When an incident occurs, use the core services map to trace the path of the fail
 * **Step 2: Compute Check**: Search the ECS service console. Are tasks actively running, or is the service stuck in a crash loop?
   * *Evidence*: If tasks are boot-looping, check the CloudWatch Logs group for the compute task.
 * **Step 3: Signal Check**: Read the container stdout trace logs inside `/aws/ecs/orders-api`.
-  * *Evidence*: The logs state `Connection refused on rds-orders-prod.postgres.database.azure.com`. The app cannot reach its database. Proceed to the State and Access families.
+  * *Evidence*: The logs state `Connection refused on orders-prod.cluster-a1b2c3d4e5f6.eu-west-2.rds.amazonaws.com`. The app cannot reach its database. Proceed to the State and Access families.
 * **Step 4: Access and State Check**: Inspect Secrets Manager. Was the database connection URL rotated recently? Verify the ECS task IAM role can assume permissions.
   * *Evidence*: The secret was rotated, but the running ECS tasks were not restarted to pull the new value.
 * **Resolution**: Execute an ECS service update with force new deployment to spin up fresh containers with the current secret injected.
@@ -182,7 +182,7 @@ Instead of searching for floating product names, professional cloud engineers tr
 
 * Private network foundations start at the VPC, which isolates resources into public entry tiers, private application subnets, and isolated data subnets.
 * Public Route 53 DNS records point traffic to an Application Load Balancer, which checks target group health before forwarding packets to the app.
-* Compute runs as ECS Fargate tasks, pulling Docker images from ECR and reading connection secrets from Secrets Manager via IAM roles.
+* Compute runs as ECS Fargate tasks, pulling Docker images from ECR and receiving or retrieving connection secrets through Secrets Manager with IAM roles.
 * State is divided intentionally: transactional ledgers reside in RDS tables, while unstructured files are written to S3 buckets.
 * Ephemeral runtimes export their diagnostic evidence to CloudWatch Logs, metrics, and alarms, while CloudTrail records control-plane changes.
 * Budgets, Cost Explorer, and AWS Backup protect the business lifecycle from spending surprises and data loss.

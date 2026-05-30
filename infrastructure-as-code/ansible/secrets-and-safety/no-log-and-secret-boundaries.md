@@ -1,209 +1,308 @@
 ---
-title: "No Log and Secret Boundaries"
+title: "Masking Secrets in Logs"
 description: "Use no_log and output boundaries to keep decrypted Ansible secrets out of logs, diffs, and task results."
 overview: "Vault protects secret files before the run, but decrypted values still need output boundaries so review evidence stays useful without exposing credentials."
 tags: ["ansible", "no-log", "secrets"]
 order: 2
 id: article-infrastructure-as-code-ansible-no-log-secret-boundaries
+aliases:
+  - no-log-secret-boundaries
+  - infrastructure-as-code/ansible/no-log-and-secret-boundaries.md
 ---
 
 ## Table of Contents
 
-1. [Why Secrets Reappear](#why-secrets-reappear)
-2. [Output Boundaries](#output-boundaries)
-3. [The no_log Setting](#the-no_log-setting)
-4. [Diffs and Templates](#diffs-and-templates)
-5. [Debugging Without Printing Secrets](#debugging-without-printing-secrets)
-6. [Safe Evidence](#safe-evidence)
-7. [Putting It All Together](#putting-it-all-together)
-8. [What's Next](#whats-next)
+1. [The Problem: Decrypted Secrets in Execution Logs](#the-problem-decrypted-secrets-in-execution-logs)
+2. [Understanding Output Boundaries](#understanding-output-boundaries)
+3. [The no_log System Filter and Masking Mechanics](#the-no_log-system-filter-and-masking-mechanics)
+4. [Under the Hood: Intercepting the Python JSON Stream](#under-the-hood-intercepting-the-python-json-stream)
+5. [JSON Payload Scrubbing: Before and After](#json-payload-scrubbing-before-and-after)
+6. [Tainted Registered Variables and Memory Propagation](#tainted-registered-variables-and-memory-propagation)
+7. [Developing Custom Modules: The Argument Specification Boundary](#developing-custom-modules-the-argument-specification-boundary)
+8. [The System Limits of no_log Protection](#the-system-limits-of-no_log-protection)
+9. [Operating System Process Introspection Leaks](#operating-system-process-introspection-leaks)
+10. [Secure Diffs and Configuration Auditing](#secure-diffs-and-configuration-auditing)
+11. [Debugging Without Credentials Exposure](#debugging-without-credentials-exposure)
+12. [Auditing and Logging Infrastructure Integration](#auditing-and-logging-infrastructure-integration)
+13. [Putting It All Together](#putting-it-all-together)
+14. [What's Next](#whats-next)
 
-## Why Secrets Reappear
+## The Problem: Decrypted Secrets in Execution Logs
 
-The previous article stored the `orders` service secrets in an encrypted Vault file. That protected the file in Git. It did not mean the database password stayed encrypted through the whole playbook run.
+When building a secure database infrastructure for processing customer payment refunds, developers face a difficult challenge. The automation playbooks must run seamlessly, installing database engines, rendering system credentials files, and initiating API connections with payment gateways. To perform these actions, the control plane must read encrypted Ansible Vault files, decrypt the sensitive keys in-memory on the control node, and pass the plain-text credentials to the target systems.
 
-Ansible has to decrypt a value before a task can use it. The `orders-api` process cannot connect to the database with encrypted Vault text. It needs the real password in its environment file or another runtime secret source. That means the secret moves from one protected place into several new places.
+The security issue arises during the task execution reporting phase. By default, Ansible reports the success or failure of each task, and optional settings such as higher verbosity, argument display, logging, and diff mode can expose much more detail.
 
-For the `orders` service, the secret might pass through this path:
+If a task that handles the database password encounters an error, the execution engine prints the entire failed task structure to standard output. This output, including the plain-text database password, is then captured by continuous integration systems, saved in log archives, forwarded to central syslog servers, and exposed on monitoring dashboards.
+
+Vault successfully protected the credential while it was at rest in the repository. However, the lack of secure output boundaries during execution has allowed the plain-text password to leak into the organization's persistent log systems, creating a major vulnerability.
+
+## Understanding Output Boundaries
+
+An output boundary is any system point where Ansible translates its internal, decrypted variable state into human-readable text. When designing a secure automation system, you must trace the path of a secret and implement protective boundaries at every point where the secret changes state.
+
+A standard refund processor deployment exposes secrets along several parallel paths:
 
 ```text
-group_vars/orders_web.vault.yml
-  -> orders_database_password variable
-  -> template task argument
-  -> rendered /etc/orders-api/orders.env
-  -> task result and optional diff output
-  -> terminal or CI log
+Control Plane Memory (Decrypted Variable)
+  -> Task Invocations (Command Arguments)
+  -> Target Host Standard Input/Output Pipes
+  -> Rendered Configuration Files (Managed Disk)
+  -> Callback Manager Plugins (Stdout Formatter)
+  -> Syslog Sockets and Remote Log Forwarders
 ```
 
-The leak usually happens near the end of that path. The vaulted source file is still encrypted. The problem is that a task result, a diff, or a debug message printed the decrypted value.
+To secure this pipeline, you cannot rely on a single tool. Encrypting the source file only protects the repository. Once the variable is decrypted, you must apply output boundaries to prevent the value from reaching the console, template diffs, or debug streams.
 
-`no_log` is Ansible's main task-level tool for this. It tells Ansible to hide sensitive task details in normal output. It is not a storage tool like Vault. It is an output boundary.
-
-## Output Boundaries
-
-An output boundary is a place where Ansible turns internal work into something people can read. The boundary might be your terminal, a CI log, a saved callback log, a diff artifact, or an automation platform job page.
-
-The `orders` playbook has both public and secret output. Public output is useful. A reviewer should be able to see that Nginx will proxy to port `8080`, that the systemd unit is enabled, and that the health endpoint returned HTTP 200. Secret output is different. A reviewer does not need to see the database password to know that the environment file was managed.
+You must also apply restrictive host permissions to secure the variable once it is written to disk. Each of these boundaries has a distinct job, and missing even one will expose your system credentials.
 
 ```mermaid
-flowchart TD
-    Vault["Vaulted variable"] --> Task["Task argument"]
-    Task --> Result["Module result"]
-    Task --> Diff["Diff output"]
-    Task --> File["Rendered file"]
-    Result --> Log["Terminal or CI log"]
-    Diff --> Log
+graph TD
+    subgraph ControlPlane ["Control Node Memory"]
+        RawSecret["Decrypted Secret: Variable"]
+        no_logFilter["no_log: true Interceptor"]
+        CallbackPlugin["Stdout Callback Plugin"]
+    end
+
+    subgraph OutputStreams ["Output Boundaries"]
+        Console["Console Standard Out"]
+        Syslog["syslog /dev/log Sockets"]
+        Cilogs["CI Log Archives"]
+    end
+
+    RawSecret -->|Parsed in Module JSON| no_logFilter
+    no_logFilter -->|Censored Results| CallbackPlugin
+    CallbackPlugin --> Console
+    CallbackPlugin --> Syslog
+    CallbackPlugin --> Cilogs
+
+    style no_logFilter fill:#f9f,stroke:#333,stroke-width:2px
 ```
 
-The diagram has two important lessons. First, the rendered file and the log are separate places. A secret might be valid on the host but invalid in the log. Second, `no_log` belongs near the task that handles the plain value. Hiding an earlier include does not hide a later template result.
+## The no_log System Filter and Masking Mechanics
 
-## The no_log Setting
+The primary mechanism for establishing an execution-level output boundary in Ansible is the `no_log: true` parameter. This parameter instructs the control plane to suppress and mask the input and output parameters of a specific task.
 
-Use `no_log: true` on a task when the task arguments or result can contain a secret. The `orders-api` environment file is the simplest example because the template receives secret variables and writes them into a destination file.
+The following task invokes a script that processes database schema migrations for the payment refunds system. It accepts sensitive database credentials as environment variables but uses the `no_log: true` parameter to keep them safe:
 
 ```yaml
-- name: Render orders-api environment
-  ansible.builtin.template:
-    src: orders.env.j2
-    dest: /etc/orders-api/orders.env
-    owner: root
-    group: orders-api
-    mode: "0640"
+- name: Execute database refund schema migrations
+  ansible.builtin.command:
+    cmd: "/opt/refunds/bin/migrate.sh --user database_admin --pass {{ refund_db_password }}"
   no_log: true
-  notify: Restart orders-api
 ```
 
-The task still runs. It can still change the file. It can still notify the restart handler. The difference is that Ansible censors the details it would normally show about the task result.
+When this task executes, the engine hides the command arguments and the resulting stdout stream. If the task fails or succeeds, the console output simply reports:
 
-Keep the boundary as narrow as the secret path allows. A whole play can use `no_log`, but that makes routine operations hard to understand. If every task is censored, an operator loses useful information about package installation, service status, host reachability, and health checks. Most playbooks are easier to operate when only the secret-bearing tasks are hidden.
+```text
+changed: [database-node-01]
+```
 
-There is also a practical limit. `no_log` controls Ansible output for the marked task. It does not make the destination file encrypted. It does not remove secrets from application logs if the service prints them later. It does not make deliberate debugging safe. If someone writes a separate task that prints the secret, that task needs its own boundary or should not exist.
+Without the `no_log: true` parameter, a failure in `migrate.sh` would cause the command execution engine to print the command arguments, the standard error stream, and the return dictionary to the terminal, exposing the administrative password.
 
-## Diffs and Templates
+It is best to apply `no_log: true` selectively at the task level rather than globally at the play level. If you censor the entire playbook, operators lose visibility into package installations, service reload triggers, and directory setups, making it difficult to debug genuine environment issues.
 
-Diff mode is helpful when a file contains public configuration. If the `orders` team changes the Nginx upstream port, a diff makes the review concrete:
+## Under the Hood: Intercepting the Python JSON Stream
+
+To understand how the `no_log: true` parameter functions, we must look at the communications channel between the control node and the remote managed host.
+
+When a task executes, the control plane prepares the module code and its parameters, sends the payload through the selected connection, and runs the module using the target host's supported execution path.
+
+Once the remote module completes its work, it writes its outcomes back to the control plane as a JSON dictionary over the standard output descriptor (stdout). This JSON payload contains fields like `changed`, `failed`, the module arguments, and any registered output strings.
+
+On the control plane, the task execution is managed by the `ansible.executor.task_executor.TaskExecutor` class in the Python runtime. When preparing to run a task, this class checks the `task.no_log` attribute. If it evaluates to true, the executor binds an internal state flag (`_no_log = True`) to the task result tracking object.
+
+When the raw stdout JSON string is received back from the SSH process pipe, the control plane's action plugin loader intercepts it. Before passing the dictionary to any display callback plugins (which write to stdout) or log handlers, it executes a recursive scrubbing routine on the Python dictionary objects in memory.
+
+## JSON Payload Scrubbing: Before and After
+
+To visualize the operation of this recursive scrubbing routine, consider the raw JSON return dictionary generated by a failed execution of the command module before scrubbing:
+
+```json
+{
+  "changed": false,
+  "failed": true,
+  "cmd": "/opt/refunds/bin/migrate.sh --user database_admin --pass secretPassword123",
+  "rc": 1,
+  "stdout": "Error: Connection refused for user database_admin",
+  "stderr": "FATAL: password authentication failed for database_admin",
+  "invocation": {
+    "module_args": {
+      "cmd": "/opt/refunds/bin/migrate.sh --user database_admin --pass secretPassword123",
+      "_uses_shell": false
+    }
+  }
+}
+```
+
+If the task does not carry `no_log: true`, this raw JSON block is written directly to the console display.
+
+When `no_log: true` is active, Ansible censors the normal task result before it is sent to the formatter:
+
+```json
+{
+  "changed": false,
+  "failed": true,
+  "censored": "the intellectual property sensitive data was muted",
+  "invocation": {
+    "module_args": {
+      "censored": "the intellectual property sensitive data was muted"
+    }
+  }
+}
+```
+
+The plain-text credentials and detailed failed output are hidden from normal Ansible result output, so log collectors record the censored task state instead of the raw parameters.
+
+## Tainted Registered Variables and Memory Propagation
+
+When a playbook task registers its outcome into a variable (using the `register` keyword), and that task carries the `no_log: true` flag, Ansible preserves no-log metadata with that result.
+
+Under the hood, Ansible marks the registered result so normal display callbacks know it came from a censored task.
+
+This reduces accidental exposure when later tasks pass that registered result through normal Ansible output paths. It does not make deliberate `debug` tasks safe: official Ansible logging guidance warns that `no_log` does not affect debugging output, so never print secret values or secret-bearing registered results during production troubleshooting.
+
+## Developing Custom Modules: The Argument Specification Boundary
+
+When writing custom Python modules to run on target hosts, developers must ensure that the custom module code respects the secret masking boundaries. Simply declaring `no_log: true` in the playbook task will suppress the control plane's output, but it cannot prevent the remote execution module from logging sensitive parameters to the target host's local logs before returning.
+
+To secure custom modules, you must configure the module's argument specification using the standard `AnsibleModule` utility library. In the argument definition dictionary, you must explicitly set `no_log=True` for any sensitive parameters:
+
+```python
+# Inside a custom Python module: library/refund_db_user.py
+from ansible.module_utils.basic import AnsibleModule
+
+def main():
+    module = AnsibleModule(
+        argument_spec=dict(
+            username=dict(type='str', required=True),
+            password=dict(type='str', required=True, no_log=True),
+            endpoint=dict(type='str', required=True)
+        )
+    )
+    # Module execution logic continues here...
+```
+
+By setting `no_log=True` inside the argument specification dictionary, you tell Ansible's module utilities that the parameter is sensitive:
+1. **Result Masking**: The module utility layer can mask the parameter in invocation data and normal module results.
+2. **Module Author Boundary**: Custom module code must still avoid writing the value to its own logs, exception messages, external commands, or files.
+
+If a developer fails to set `no_log=True` in the Python argument spec, the parameter can appear in module invocation output or error details, creating an operational leak that bypasses the playbook author's expectations.
+
+## The System Limits of no_log Protection
+
+While `no_log: true` is highly effective, it is output redaction, not complete secret containment. Developers must understand its system limits to prevent accidental exposure under complex scenarios.
+
+First, `no_log` only controls output generated by the Ansible execution engine. It cannot intercept actions performed outside the Ansible process. For example, if your task runs a command that writes a database password to a public system log file (such as `/var/log/syslog`) via a shell redirect, the `no_log` parameter on the Ansible task will not stop the target host's syslog daemon from writing the credential to disk.
+
+Second, `no_log` does not prevent Python from writing raw memory dumps during a critical interpreter crash. If the control node processes experience an out-of-memory error or receive a `SIGSEGV` signal while holding decrypted variables, the operating system may write a core dump file to the local disk. This core dump contains the raw memory state, exposing plain-text keys to anyone with access to the core dump directory.
+
+Third, `no_log` can be bypassed by custom, third-party callback plugins that do not respect the Ansible execution API. When installing community callback plugins for external monitoring systems, engineers must verify that the plugin strictly honors the internal `no_log` flag before deploying it to production systems.
+
+## Operating System Process Introspection Leaks
+
+A major architectural leak vector is operating system process introspection. When a playbook task runs a command line tool passing a secret as an argument (such as `--pass secretPassword123`), the operating system kernel creates a new process table entry.
+
+During the execution window, local users with enough permission on the target host may run commands like `ps -ef` or query `/proc/<PID>/cmdline` to view the raw command arguments, exposing the decrypted password in plain text.
+
+To mitigate this OS-level process boundary leak, avoid passing decrypted secrets via command-line arguments. Prefer purpose-built Ansible modules, protected files with strict permissions, standard input where appropriate, or short-lived secret manager tokens. Environment variables can also be visible through process inspection on some systems, so treat them as sensitive rather than automatically safe.
+
+## Secure Diffs and Configuration Auditing
+
+During normal configuration runs, administrators use the `--diff` command-line flag to review changes made to target files. Diff mode is excellent for tracking alterations to public templates like Nginx configurations:
 
 ```diff
-- proxy_pass http://127.0.0.1:8080;
-+ proxy_pass http://127.0.0.1:8081;
+- server_name payments-dev.internal;
++ server_name payments-prod.internal;
 ```
 
-That diff is useful because it shows exactly what will change and does not expose a credential. The same setting is unsafe for an environment file that contains secrets:
+However, if a playbook renders a database configuration file or an environment environment file containing secrets, enabling diff mode will print the plain-text secrets directly to the terminal during a change:
 
-```ini
-DATABASE_HOST=orders-db.internal
-DATABASE_PASSWORD=generated-production-password
-SESSION_SECRET=generated-session-key
+```diff
+- DATABASE_PASSWORD=old-password;
++ DATABASE_PASSWORD=new-vaulted-password;
 ```
 
-If diff mode prints that file, the password is now in the review artifact. Vault did not fail. The playbook allowed a secret-bearing template to become output.
-
-For secret-bearing templates, combine `no_log: true` with `diff: false`:
+This output violates your security policy, exposing the credential in the review log. To prevent this, you must explicitly disable diff mode on any task that handles sensitive configurations by setting `diff: false`:
 
 ```yaml
-- name: Render orders-api environment
+- name: Render refund service environment configuration
   ansible.builtin.template:
-    src: orders.env.j2
-    dest: /etc/orders-api/orders.env
+    src: refund_service.env.j2
+    dest: /etc/refunds/refund_service.env
     owner: root
-    group: orders-api
-    mode: "0640"
+    group: refunds-admin
+    mode: "0600"
   no_log: true
   diff: false
-  notify: Restart orders-api
 ```
 
-`diff: false` is a useful extra signal for human readers. It says the absence of a diff is intentional, not an accident. It also keeps the task safe when someone runs the playbook with `--diff`.
+By explicitly setting `diff: false` alongside `no_log: true`, you keep the task's normal diff and result output censored even when an operator runs the entire playbook with the global `--diff` command-line parameter.
 
-Do not turn off diff mode everywhere just because one file contains secrets. Public diffs are part of safe review. The better pattern is to show public text changes and hide secret-bearing files.
+## Debugging Without Credentials Exposure
 
-| File | Show Diff? | Reason |
-| --- | --- | --- |
-| Nginx site | Yes | Shows public routing behavior |
-| systemd unit | Yes | Shows command and service shape |
-| orders.env | No | Contains database and session secrets |
-| Generated archive | No | Too large or not meaningful as text |
-
-## Debugging Without Printing Secrets
-
-Debug tasks are tempting when a variable is not behaving as expected. They are also one of the easiest ways to leak a secret.
-
-This task is unsafe:
+When a variable fails to resolve correctly, developers are often tempted to insert quick `debug` tasks to print the variable to the screen:
 
 ```yaml
-- name: Show orders database password
+- name: Output the database password variable (Unsafe)
   ansible.builtin.debug:
-    var: orders_database_password
+    var: refund_db_password
 ```
 
-The task does exactly what it says. It prints the password. A safer task checks the property you actually need to know. For example, the playbook may only need to confirm that the value exists and is long enough to be plausible:
+This is a dangerous habit that often leads to credentials leaking into Git branches and CI runs. A secure playbook should validate the state of a variable without displaying the actual secret value.
+
+You should use the `ansible.builtin.assert` module to verify that a variable is present and meets basic structural requirements, while applying the `no_log: true` parameter to mask the assertion parameters if the check fails:
 
 ```yaml
-- name: Confirm orders database password is loaded
+- name: Validate that the database credentials are loaded securely
   ansible.builtin.assert:
     that:
-      - orders_database_password is defined
-      - orders_database_password | length >= 20
-    fail_msg: "orders_database_password is missing or too short"
+      - refund_db_password is defined
+      - refund_db_password | length >= 24
+    fail_msg: "The refund_db_password variable is missing or does not meet the 24-character security minimum."
   no_log: true
 ```
 
-The operator learns whether the password is present without seeing the value. The task uses `no_log` because even assertion output can include values when conditions fail or when verbosity is high.
+This task verifies that the password variable exists and contains a secure, long value. If the assertion fails, the engine raises an error and halts execution, while `no_log: true` keeps the normal task result from printing the sensitive variable context.
 
-When you need to compare behavior between environments, prefer names, lengths, checksums of non-secret public files, service status, and health checks. Do not print partial secrets. The first four characters of a token can still help an attacker identify or search for the real value in another system.
+## Auditing and Logging Infrastructure Integration
 
-## Safe Evidence
+In enterprise environments, playbooks do not run in isolation. Control nodes are configured to forward their execution logs to local syslog sockets (like `/dev/log`) or remote logging clusters (such as Splunk or Elasticsearch) using the `ANSIBLE_LOG_PATH` setting or custom syslog callback plugins.
 
-Hiding secret output should not leave the team blind. A good playbook replaces secret text with evidence that proves the right thing happened.
+When integrating with these platforms, engineers must ensure that the logging pipeline respects the `no_log` boundary. Ansible's normal output paths honor censored task results, but custom callbacks, wrapper scripts, and debug settings require separate review.
 
-For the rendered `orders-api` environment file, metadata is useful:
+If a task is marked `no_log: true`, the engine replaces the log string with:
 
-```yaml
-- name: Check orders-api environment metadata
-  ansible.builtin.stat:
-    path: /etc/orders-api/orders.env
-  register: orders_env_file
-  changed_when: false
-
-- name: Confirm orders-api environment file permissions
-  ansible.builtin.assert:
-    that:
-      - orders_env_file.stat.exists
-      - orders_env_file.stat.pw_name == "root"
-      - orders_env_file.stat.gr_name == "orders-api"
-      - orders_env_file.stat.mode == "0640"
+```text
+ansible-command: [safe log data omitted]
 ```
 
-This output proves that the file exists and has restricted ownership. It does not prove the password value, and that is fine. Reviewers need to know that the file is managed safely, not what the password is.
+This filtering helps local logs remain compliant. However, if you configure a custom wrapper script around the `ansible-playbook` command that redirects standard output to a log forwarder (for example, `ansible-playbook deploy.yml | tee -a /var/log/deploy.log`), a failure in a task that is *not* marked with `no_log` can write secrets directly to the text file.
 
-A health check proves the service can use its configuration:
-
-```yaml
-- name: Check local orders-api health
-  ansible.builtin.uri:
-    url: http://127.0.0.1:8080/healthz
-    status_code: 200
-    return_content: false
-  changed_when: false
-```
-
-This tells the team that the service started and answered on the expected local port. It is much better evidence than printing the password and hoping the reader infers that the service can connect.
+To maintain compliance, all standard output captures must be treated as sensitive, with access restricted to authorized security administrators.
 
 ## Putting It All Together
 
-The `orders` team started with a vaulted variable and still risked exposing it in CI output. The reason was movement. Vault protected the stored value, but the template task handled the plain value. Diff output and debug output could make that plain value readable outside the host.
+Securing decrypted variables during playbook runs requires establishing clear output boundaries at every stage of execution. While Ansible Vault protects secrets at rest in your repository, the `no_log: true` parameter is required to protect those secrets from leaking during active execution.
 
-The safer playbook marks the secret-bearing template with `no_log: true` and `diff: false`. It keeps public diffs for public files. It uses metadata and health checks to prove that the file was created correctly and the service works. Reviewers get useful evidence without receiving the database password.
+By combining selective logging suppression with secure templates, assertions, and target host file permissions, you establish a multi-layered security boundary:
 
-## What's Next
+| Execution State | Leak Vector | Mitigation Tool | Implementation Pattern |
+| :--- | :--- | :--- | :--- |
+| **Task Outputs** | Console stdout, CI log archives, task failure recaps | `no_log: true` Directive | Intercepts and replaces module JSON return structures with censored blocks in memory. |
+| **File Diffs** | Unified diff output during template renders | `diff: false` Parameter | Disables text diff generation for the target task, even during `--diff` runs. |
+| **Custom Modules** | Target syslog socket leaks on remote hosts | `no_log=True` Argument Spec | Declares parameter as sensitive inside the remote Python module's argument definition. |
+| **Process Introspection** | OS process table queries (`ps -ef` or `/proc`) | Stdin Pipe Transports | Passes credentials via stdin channels instead of shell command arguments. |
+| **Registered Results** | Registered variables in downstream tasks | Preserved no-log metadata | Keeps normal result output censored, while still requiring developers to avoid unsafe debug printing. |
+| **Operational Validation** | Debug prints during troubleshooting | `ansible.builtin.assert` | Verifies variable presence and minimum length bounds without displaying values. |
 
-The next article stays with review evidence and looks at `--check` and `--diff`. Those modes can show what Ansible expects to change before a real run, but they have limits that matter when a playbook depends on changed state.
+By coordinating these execution boundaries, your team can automate complex systems, verify successful deployments, and audit target environments without exposing the credentials that keep your platforms secure.
 
 ---
 
 **References**
 
-- [Ansible documentation: Logging Ansible output](https://docs.ansible.com/projects/ansible/latest/reference_appendices/logging.html)
-- [Ansible documentation: Ansible Vault](https://docs.ansible.com/projects/ansible/latest/vault_guide/vault.html)
-- [Ansible documentation: Validating tasks: check mode and diff mode](https://docs.ansible.com/projects/ansible/latest/playbook_guide/playbooks_checkmode.html)
-- [Ansible documentation: ansible-playbook command line reference](https://docs.ansible.com/projects/ansible/latest/cli/ansible-playbook.html)
+- [Ansible Documentation: Masking Sensitive Tasks](https://docs.ansible.com/ansible/latest/reference_appendices/logging.html#protecting-sensitive-data-no-log)
+- [Managing Secrets and Variable Precedence](https://docs.ansible.com/ansible/latest/playbook_guide/playbooks_variables.html)
+- [Syslog Socket Configuration and Logging](https://docs.ansible.com/ansible/latest/reference_appendices/logging.html)
+- [Ansible Task Diffs and Templates](https://docs.ansible.com/ansible/latest/playbook_guide/playbooks_checkmode.html#diff-mode)

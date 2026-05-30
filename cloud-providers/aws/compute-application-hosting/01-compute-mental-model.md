@@ -30,7 +30,7 @@ When you run a software application on your local laptop during development, the
 However, once you are ready to host that application in the cloud for real users, this unified local trust environment disappears. You quickly realize that the single application codebase is not a single operational unit. It contains different jobs with entirely different execution lifecycles:
 
 * A primary checkout API that must stay online constantly and answer user HTTP requests instantly.
-* A specialized enterprise fraud-detection worker that intercepts network packets via a custom-compiled Linux kernel module (`sec-audit.ko`) to analyze socket buffers in kernel space, and enforces a node-locked vendor license tied directly to the host's physical motherboard GUID and the primary network card's static MAC address.
+* A specialized enterprise fraud-detection worker that intercepts network packets via a custom-compiled Linux kernel module (`sec-audit.ko`) to analyze socket buffers in kernel space, and uses a vendor license that expects stable host-level identifiers or dedicated host placement.
 * Nightly email campaigns, financial exports, and database cleanups that only need to run once a day or when a queue message arrives.
 
 Trying to force all of these tasks onto the same virtual server or runtime environment creates massive operational friction. The continuous API process can choke during a heavy background export batch, a crash in the email campaign script can bring down the entire checkout checkout path, and you spend your cloud budget paying for idle servers that do nothing but wait for nightly exports. To deploy software successfully in the cloud, you must step back from the specific tool names and build a systematic mental model around application compute.
@@ -55,6 +55,10 @@ flowchart TD
     Shape -- Bounded Event-Driven --> Lambda[AWS Lambda Function]
 ```
 
+![Three AWS compute shapes mapped to service-shaped, host-shaped, and event-shaped workloads](/content-assets/articles/article-cloud-providers-aws-compute-application-hosting-compute-mental-model/compute-shapes-map.png)
+
+*A single application can contain several runtime shapes. Continuous services fit managed containers, host-dependent jobs fit EC2, and bounded event work fits Lambda because each one has a different execution contract.*
+
 By mapping your application's distinct functions to these three runtime profiles, you can run a single product across multiple compute styles. Your web API can run on containers, your legacy background processes on virtual servers, and your side effects on serverless functions, with all of these sharing the same database while maintaining clean, isolated operational boundaries.
 
 ## The Workload Shape
@@ -62,7 +66,7 @@ By mapping your application's distinct functions to these three runtime profiles
 Before comparing specific AWS service features, you must describe the work your code performs in plain English. This is the practice of identifying the workload shape:
 
 * **Service-Shaped (Continuous)**: Workloads that must listen on a network port constantly to answer incoming public traffic. They require steady-state compute replicas, load balancer target registrations, active health checks, and rolling deploy rollouts. The primary Node checkout API is a service-shaped workload.
-* **Host-Shaped (Server-Dependent)**: Workloads that depend directly on the specific guest operating system kernel or physical machine identifiers. This includes software requiring custom kernel module installations, direct access to physical CPU performance-monitoring counters (PMUs) for anomaly detection, or proprietary licensing systems bound to static hardware assets like MAC addresses. These workloads cannot run on serverless container engines like Fargate, which share a locked host kernel and dynamically rotate task network interfaces on every single deployment. The specialized fraud-detection worker is a classic host-shaped workload.
+* **Host-Shaped (Server-Dependent)**: Workloads that depend directly on the guest operating system, privileged host agents, kernel modules, or stable host-level licensing assumptions. These workloads do not fit serverless container engines like Fargate, where AWS owns the host boundary, blocks privileged host access, and gives each replacement task fresh runtime placement and networking. The specialized fraud-detection worker is a classic host-shaped workload.
 * **Event-Shaped (Reactive)**: Workloads that only execute when triggered by an external event. They do not need to listen on a port all day; instead, they boot, process a single message or file, and exit. The receipt email sender and nightly financial exports are event-shaped workloads.
 
 Filing your tasks by their natural shape prevents you from over-engineering simple features or under-engineering complex runtimes.
@@ -98,7 +102,7 @@ Compute Ownership Trade-offs:
 * **Amazon EC2 (Virtual Servers)**:
   * What AWS Operates: Physical server racks, virtualization layer, network cables, and power delivery.
   * What Your Team Operates: Guest operating system selection, security patching, library updates, process managers (like systemd), log file rotation, and scaling rules.
-  * Operational Vibe: Absolute control. If your code needs a custom kernel module or specific system agent, you can configure it directly.
+  * Operational Vibe: Maximum guest OS control. If your code needs a custom kernel module or specific system agent, EC2 is the AWS compute shape that lets you configure it directly.
 * **Amazon ECS on AWS Fargate (Containers)**:
   * What AWS Operates: Host operating system patching, container engine runtime, cluster server fleet, and physical hardware.
   * What Your Team Operates: Container image packaging, task definitions, environment variables, network port mappings, and load balancer target health paths.
@@ -119,11 +123,11 @@ When you deploy a long-running, continuous workload on AWS, the core architectur
 To select the correct home, you must evaluate how their operational footprints compare across five core dimensions:
 
 ### 1. Operating System and Kernel Control
-* **Amazon EC2**: Gives your team absolute administrative root control over a dedicated guest operating system. You choose the Linux distribution, build custom kernel images, load proprietary kernel extensions (`.ko` binary drivers), and tune low-level TCP/IP socket structures or kernel namespace limits directly.
-* **AWS Fargate**: Runs your application containers on a shared, highly optimized Linux host kernel managed entirely by AWS. Your container processes are strictly blocked from loading kernel modules, modifying host network interfaces, or executing privileged root-level hardware calls.
+* **Amazon EC2**: Gives your team administrative root control over the guest operating system. You choose the Linux distribution, build custom kernel images, load proprietary kernel extensions (`.ko` binary drivers), and tune low-level TCP/IP socket structures or kernel namespace limits directly.
+* **AWS Fargate**: Runs your application containers inside an AWS-managed isolation boundary. Your task does not share its kernel, CPU, memory, or network interface with another task, but AWS still owns the host layer. Your container processes are blocked from loading kernel modules, modifying host network interfaces, or executing privileged host-level calls.
 
 ### 2. Resource and Network Ephemerality
-* **Amazon EC2**: Virtual machines are stable, running environments. You can assign static Elastic IPs directly to host interfaces, attach persistent EBS volumes that survive OS reboots, and maintain stable network configurations.
+* **Amazon EC2**: Virtual machines are stable, running environments while they exist. You can assign Elastic IPs to host interfaces, attach persistent EBS volumes that survive OS reboots when configured to persist, and maintain stable network configurations.
 * **AWS Fargate**: Container tasks are designed to be completely ephemeral and stateless. Every new deployment, autoscaling event, or task replacement provisions a fresh network interface (ENI) with a dynamic private IP address from your VPC pool, rotating all host identifiers.
 
 ### 3. Startup Speed and Provisioning Latency
@@ -145,8 +149,8 @@ The table below provides a side-by-side architectural blueprint to guide your ho
 | Architectural Dimension | Amazon EC2 (Virtual Servers) | Amazon ECS with AWS Fargate (Serverless Containers) |
 | :--- | :--- | :--- |
 | **Operational Interface** | Virtual Guest OS (Linux/Windows) | Packaged Container Image (Docker/OCI) |
-| **OS Kernel Access** | Absolute. Root access, custom kernel modules. | None. Shared, locked host kernel managed by AWS. |
-| **Host Identifiers** | Stable. Motherboard GUIDs, MACs, EBS disk volumes. | Ephemeral. Dynamic ENI IPs, rotating host parameters. |
+| **OS Kernel Access** | Broad guest OS control. Root access, custom kernel modules. | None. AWS-managed task isolation boundary; no host kernel control. |
+| **Host Identifiers** | More stable while the instance exists; can use ENIs, EBS volumes, and dedicated hosts when licensing demands it. | Ephemeral. Dynamic task placement, ENI IPs, and replacement lifecycles. |
 | **Patching Responsibility** | Customer manages guest OS security and updates. | AWS manages host OS; Customer manages container. |
 | **Process Supervisor** | Guest OS init systems (e.g., `systemd`). | ECS Service Controller task health monitoring. |
 | **Scaling & Boot Speed** | 1–3 minutes (OS virtualization boot + user data). | 30–90 seconds (direct container process launch). |
@@ -159,8 +163,8 @@ Selecting between these two compute models is a design decision about matching y
 * **Default to ECS Fargate**: For 95% of standard web applications, REST/GraphQL APIs, queue-processing microservices, and background workers. If your code can run inside a standard Docker container and communicates over standard TCP/UDP ports, Fargate is the superior choice. It eliminates host patching, disk failures, and systemd maintenance, allowing a small team to operate a global service with minimal system administration budget.
 * **Choose Amazon EC2 Only Under Special Constraints**: Select virtual servers exclusively when your workload is physically incompatible with container virtualization. The explicit technical triggers that mandate choosing EC2 are:
   * **Custom Kernel Drivers**: The application must insert proprietary Linux kernel modules (`.ko` binary drivers via `insmod`) to inspect low-level system call buffers or perform custom packet capture at the network card level.
-  * **Node-Locked Software Licensing**: The software vendor enforces a node-locked licensing model tied to the host's physical motherboard UUID, boot disk hardware volume serial number, or a static MAC address that cannot tolerate the ephemeral, rotating nature of container ENIs.
-  * **Legacy Virtualization**: The workload requires nested virtualization (such as launching guest hypervisors or running Android OS emulators) that serverless container runtimes physically block.
+  * **Node-Locked Software Licensing**: The software vendor enforces a node-locked licensing model tied to stable host attributes, dedicated host placement, or fixed network interfaces that cannot tolerate the ephemeral, rotating nature of container tasks.
+  * **Legacy Virtualization**: The workload requires nested virtualization (such as launching guest hypervisors or running Android OS emulators) that serverless container runtimes do not support.
   * **Specialized Hardware Tuning**: The system demands direct, raw access to physical hardware Performance Monitoring Units (PMUs) or highly customized block-storage RAID array formatting that container file boundaries abstract away.
 
 By applying this decision framework, you prevent your engineering team from carrying unnecessary administrative burdens, while guaranteeing that specialized, host-dependent workloads receive the deep OS and hardware control they require.
@@ -189,6 +193,10 @@ By designing your compute around workload shapes and team ownership, you build a
 ## What's Next
 
 We now have a clean mental model for choosing where our application code should run in AWS. However, to operate virtual machines effectively when a host-shaped workload truly demands it, we must understand the baseline compute service under the cloud. In the next article, we will go deep into EC2 virtual servers, deconstructing AMIs, instance types, EBS storage volumes, automated boot scripts, and process daemons.
+
+![Six-tile AWS compute checklist covering workload shape, ownership budget, EC2, ECS Fargate, Lambda, and queues](/content-assets/articles/article-cloud-providers-aws-compute-application-hosting-compute-mental-model/compute-checklist-summary.png)
+
+*Use this as the compute checklist: name the workload shape first, decide how much infrastructure the team can own, choose EC2 only when host control matters, use ECS Fargate for continuous services, use Lambda for bounded events, and decouple side effects with queues.*
 
 ---
 

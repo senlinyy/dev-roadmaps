@@ -46,7 +46,7 @@ Relational databases organize your data into clean, grid-like spreadsheets calle
 
 ## Managed Infrastructure vs. Developer Schema Ownership
 
-Amazon RDS is a managed service, meaning AWS automates a vast portion of the physical database administration work. When you provision an RDS instance, AWS automatically sets up the underlying virtual machine, installs your chosen database engine, configures automated hourly backup schedules, and applies critical operating system security patches during scheduled maintenance windows.
+Amazon RDS is a managed service, meaning AWS automates a vast portion of the physical database administration work. When you provision an RDS instance, AWS automatically sets up the underlying virtual machine, installs your chosen database engine, configures automated daily snapshots with transaction log archiving for point-in-time recovery, and applies critical operating system security patches during scheduled maintenance windows.
 
 However, a managed database is not a magic system that automatically solves all data correctness and performance problems. While AWS manages the physical database infrastructure, your engineering team still completely owns the logical data model and runtime behavior.
 
@@ -106,13 +106,13 @@ $ aws secretsmanager get-secret-value --secret-id production/db/credentials
 }
 ```
 
-The server parses the `SecretString` JSON payload at runtime, retrieving the host address, username, and password into temporary environment variables. This design ensures the password never touches local disk or environment files. Furthermore, Secrets Manager coordinates directly with RDS to automatically rotate your database password on a recurring schedule (e.g. every 30 days), updating the credentials inside the database engine and the secret payload without requiring a code redeploy.
+The server parses the `SecretString` JSON payload at runtime, retrieving the host address, username, and password into process memory or a carefully controlled runtime configuration object. This design ensures the password never touches local disk or environment files. Furthermore, Secrets Manager can coordinate with RDS to rotate your database password on a recurring schedule (e.g. every 30 days), updating the credentials inside the database engine and the secret payload without requiring a code redeploy.
 
 ## Autoscaling and the DB Connection Exhaustion Limit
 
 Securing your network and credentials allows your application to start processing transactions. In local development, your application typically maintains a single, steady connection to the database. In a production cloud environment, however, your application auto-scales dynamically, launching dozens of concurrent tasks or serverless functions to handle sudden traffic spikes.
 
-Because relational databases allocate dedicated memory and CPU threads for every single open connection, they have a strict physical limit on maximum concurrent connections. If your connection limit is exceeded, RDS will immediately reject all new connection attempts, causing your application servers to throw critical timeout errors.
+Because relational databases allocate memory and process resources for open connections, they have a strict limit on maximum concurrent connections. If your connection limit is exceeded, RDS may reject or queue new connection attempts, causing application servers to throw errors, slow down, or time out under load.
 
 To prevent connection failures, you must understand the connection multiplication equation. The total number of open database connections is calculated as:
 
@@ -135,7 +135,7 @@ To guarantee high availability, you must deploy RDS using a **Multi-AZ** (Multi-
 
 When you enable Multi-AZ, RDS automatically provisions and maintains a synchronous standby replica of your database in a completely separate physical Availability Zone. When your application writes data, RDS ensures the changes are successfully written to both the primary and standby disks before returning a success signal to your application code.
 
-If the primary database instance suffers a hardware failure, RDS automatically triggers an automated failover. The system detects the physical failure and updates the database's DNS endpoint to point to the healthy standby instance. This failover process typically completes in under 60 seconds with zero manual intervention and requires no application code changes.
+If the primary database instance suffers a hardware failure, RDS automatically triggers an automated failover. The system detects the failure and updates the database's DNS endpoint to point to the healthy standby instance. Many failovers complete in roughly 60 to 120 seconds, though the exact duration depends on engine, workload, and recovery state. Your application usually does not need to change endpoint names, but it must handle dropped connections and reconnect cleanly.
 
 ```mermaid
 sequenceDiagram
@@ -156,7 +156,11 @@ sequenceDiagram
     Primary-->>ReadReplica: 5. Asynchronous Log Shipping (WAL)
 ```
 
-The sequence shows why Multi-AZ standby replication is reserved for high availability and disaster recovery, while Read Replicas are used for scaling reads. Multi-AZ mirror transactions block application commits until both disks are updated, guaranteeing zero data loss during failovers. Conversely, Read Replicas rely on asynchronous Write-Ahead Log (WAL) shipping. This asynchronously decouples transactions from write commits, meaning read replicas can scale read-heavy loads but suffer from minor replication lag, making them unsuitable for emergency failover targets.
+The sequence shows why Multi-AZ standby replication is primarily used for high availability, while Read Replicas are commonly used for scaling reads. Multi-AZ mirror transactions block application commits until the standby path acknowledges the write, greatly reducing data-loss risk during failovers. Conversely, Read Replicas rely on asynchronous Write-Ahead Log (WAL) shipping. They can scale read-heavy loads and, for many engines, can be promoted during a recovery event, but they may lag behind the writer and are not the same as a synchronous standby.
+
+![RDS private database path showing ALB, API tasks, Secrets Manager, RDS Proxy, private data subnets, primary database, standby, and connection limits](/content-assets/articles/article-cloud-providers-aws-storage-databases-rds-relational-databases/rds-private-database-path.png)
+
+*A production RDS path is a private network path plus a capacity boundary. Application tasks retrieve credentials, pool connections through a proxy, reach the database only inside private data subnets, and rely on Multi-AZ standby failover when the primary instance fails.*
 
 ## Executing Backward-Compatible Schema Migrations
 
@@ -187,7 +191,7 @@ WHERE id IN (
 ALTER TABLE orders ALTER COLUMN delivery_instructions SET NOT NULL;
 ```
 
-Adding a nullable column is a fast metadata change that does not require a full table rewrite, meaning the table is not locked. In contrast, running `ALTER TABLE orders ADD COLUMN delivery_instructions VARCHAR(500) NOT NULL DEFAULT 'None'` on a table with 10 million rows forces the database engine to lock the table while it physically updates every single disk block to append the default string, starving active app connections. Using this multi-phase migration workflow ensures that your database and application code remain fully compatible at every step of a release, keeping your application completely online.
+Adding a nullable column is usually a lighter metadata change than rewriting every row, though the exact lock behavior depends on the database engine and version. In contrast, adding a required column with a default can be much more disruptive on some engines because the database may need to validate or rewrite existing rows while holding stronger locks. Using this multi-phase migration workflow ensures that your database and application code remain compatible at every step of a release, reducing the chance that active checkouts are blocked by schema changes.
 
 ## Putting It All Together
 
@@ -203,7 +207,11 @@ RDS is the premier cloud container for structured SQL data. By treating the data
 
 ## What's Next
 
-RDS is the ideal starting point when application correctness depends on database transactions and structured tables. However, when application data is key-shaped and requires sub-millisecond lookups at massive scale without the limits of database connections, such as active session states or idempotency tokens, NoSQL key-value databases are superior. In the next article, we will cover serverless NoSQL design in DynamoDB.
+RDS is the ideal starting point when application correctness depends on database transactions and structured tables. However, when application data is key-shaped and requires predictable low-latency lookups at massive scale without the limits of database connections, such as active session states or idempotency tokens, NoSQL key-value databases are often a better fit. In the next article, we will cover serverless NoSQL design in DynamoDB.
+
+![Six-tile RDS checklist covering private endpoint, schema ownership, Secrets Manager, connection pooling, Multi-AZ failover, and safe migrations](/content-assets/articles/article-cloud-providers-aws-storage-databases-rds-relational-databases/rds-checklist.png)
+
+*Use this as the RDS checklist: keep endpoints private, own the schema and indexes, fetch credentials dynamically, control connection pressure, design for failover, and migrate schemas in backward-compatible phases.*
 
 ---
 

@@ -50,7 +50,7 @@ Trust vs Permission Policy Separation:
 * **Trust Policy (Who is allowed to assume the role)**:
   * Trusted Entity: `ecs-tasks.amazonaws.com`
   * Action: `sts:AssumeRole`
-  * Security Job: Allow the ECS cluster manager to fetch credentials for this workload role when starting a task.
+  * Security Job: Allow the ECS tasks service to assume this workload role when starting an authorized task.
 * **Permissions Policy (What the assumed role is allowed to do)**:
   * Allowed Action: `s3:PutObject`
   * Target Resource: `arn:aws:s3:::receipts-prod/uploads/*`
@@ -60,7 +60,7 @@ By separating the trust boundary from the operational boundary, you ensure that 
 
 ## How Temporary Credentials Work
 
-When the AWS hosting runtime starts your application, it does not inject permanent credentials. Instead, it contacts the AWS Security Token Service, known as STS, to assume the workload role on your behalf. STS is the service that issues temporary, short-lived security credentials for the role session.
+When the AWS hosting runtime starts your application, it does not inject permanent credentials. Instead, the hosting service assumes the workload role through the AWS Security Token Service, known as STS, and exposes the resulting temporary credentials to the workload through the runtime's local credential endpoint. STS is the service that issues temporary, short-lived security credentials for the role session.
 
 The resulting temporary credential set contains three distinct values:
 
@@ -74,22 +74,26 @@ The workflow of the runtime assuming a role and delivering these credentials fol
 ```mermaid
 flowchart TD
     ECS[ECS Service manager] --> Boot[Boot container task]
-    Boot --> Request[Query ECS metadata endpoint]
-    Request --> STS[Call AWS STS AssumeRole]
-    STS --> Issue[Issue temporary credentials]
-    Issue --> Inject[Deliver keys and session token to container]
-    Inject --> SDK[AWS SDK signs S3 API request]
+    Boot --> Assume[Assume task role through STS]
+    Assume --> Issue[Issue temporary credentials]
+    Issue --> Endpoint[Expose credentials on ECS task credential endpoint]
+    Endpoint --> SDK[AWS SDK reads credentials]
+    SDK --> Signed[AWS SDK signs S3 API request]
 ```
 
-When the expiration timestamp is reached, AWS immediately rejects any API requests signed with that credential set. The AWS SDK or runtime must query the metadata service again to retrieve a fresh, authorized credential set from STS. 
+When the expiration timestamp is reached, AWS rejects API requests signed with that credential set. Before that happens, the ECS runtime refreshes the role session and the AWS SDK retrieves fresh credentials from the container credential endpoint.
 
-Because this lifecycle is fully automated, the developer does not write credential rotation scripts. The system self-heals, rotating its keys hourly without interrupting the application's runtime traffic.
+Because this lifecycle is fully automated, the developer does not write credential rotation scripts. The system refreshes credentials before expiration without interrupting the application's runtime traffic.
+
+![Temporary credentials flow infographic showing static keys replaced by a workload role, STS credentials, runtime metadata, SDK provider chain, and signed AWS API requests](/content-assets/articles/article-cloud-providers-aws-identity-security-temporary-credentials-role-assumption/temporary-credentials-flow.png)
+
+*A workload role replaces permanent keys with short-lived credentials. The hosting runtime and STS issue the session, runtime metadata exposes it to the SDK, and the SDK signs AWS API requests without hardcoded secrets in application code.*
 
 ## The SDK Default Credential Provider Chain
 
 A common developer concern is how to manage these temporary credentials inside the application codebase. If the keys are dynamic, rotate hourly, and require a session token, does the application code need to constantly query STS, track expiration times, and pass tokens into every service client?
 
-The answer is no. You do not write credential management logic. The AWS SDK provides an automated default credential provider chain that scans the local runtime environment for valid credentials in a strict, standardized order:
+The answer is no. You do not write credential management logic. The AWS SDK provides an automated default credential provider chain that scans the local runtime environment for valid credentials. The exact order varies slightly by SDK and version, but the practical sources are familiar:
 
 * **Environment Variables**: The SDK checks for `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, and `AWS_SESSION_TOKEN`. This is useful for local testing or CI/CD pipelines.
 * **Shared Credentials File**: The SDK scans the local filesystem for a credentials file, typically populated by the AWS CLI during local development.
@@ -101,8 +105,8 @@ Because of this automated provider chain, your application code remains complete
 ```javascript
 import { S3Client } from "@aws-sdk/client-s3";
 
-// The SDK automatically scans the environment, locates the temporary ECS task
-// credentials, reads the session token, and handles hourly token rotation.
+// The SDK automatically locates valid runtime credentials, reads the session
+// token when one exists, and refreshes temporary credentials before expiration.
 const s3 = new S3Client();
 ```
 
@@ -150,6 +154,10 @@ By adopting passwordless workload roles, you secure your workloads against crede
 ## What's Next
 
 Now that our application container runs securely under a workload role and signs API requests using temporary credentials, we face the next security challenge: Where do our third-party credentials, database passwords, and API tokens live? How do we encrypt them securely under the hood, and how do we verify who accessed them without printing sensitive plaintext values in our application logs? In the next article, we will explore Secrets Manager, KMS envelope encryption, CloudTrail audit trails, and safe console logging practices.
+
+![Workload roles summary infographic showing no static keys, workload roles, trust policy, permission policy, temporary credentials, and task role versus execution role](/content-assets/articles/article-cloud-providers-aws-identity-security-temporary-credentials-role-assumption/workload-roles-summary.png)
+
+*Use this as the workload-role checklist: remove static keys, assign a role to the workload, configure who can assume it, limit what it can do, let temporary credentials rotate, and keep the task role separate from the execution role.*
 
 ---
 

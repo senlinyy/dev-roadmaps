@@ -49,15 +49,17 @@ The architectural request and access pipeline in EKS bridges the Kubernetes API 
 
 ```mermaid
 flowchart TD
-    ALB[Application Load Balancer Ingress] --> Service[Kubernetes Routing Service]
-    Service --> Pod[Kubernetes App Pod ENI]
-    Pod --> PodIdentity[EKS Pod Identity Mapping]
+    Ingress[Kubernetes Ingress] --> Controller[AWS Load Balancer Controller]
+    Controller --> ALB[Application Load Balancer]
+    ALB --> TargetGroup[Target Group]
+    TargetGroup --> Pod[Kubernetes App Pod IP]
+    Pod --> PodIdentity[EKS Pod Identity Credential Path]
     PodIdentity --> IAM[Scoped AWS IAM Role]
 ```
 
 This pipeline demonstrates how Kubernetes resources are cabled directly into AWS infrastructure. The Application Load Balancer routes external traffic through a Kubernetes Ingress Controller directly into the virtual cluster. 
 
-The Kubernetes Service maps requests to the private IP addresses of the running Pods. EKS Pod Identity associates the workload's Kubernetes service account with a scoped AWS IAM Role, granting the container dynamic permissions to call AWS APIs.
+The AWS Load Balancer Controller watches Kubernetes Ingress and Service resources, then creates or updates AWS load balancer target groups. In IP target mode, the ALB can route directly to pod IPs; in instance target mode, it routes through worker nodes and NodePort. EKS Pod Identity associates the workload's Kubernetes service account with a scoped AWS IAM Role, granting the container dynamic permissions to call AWS APIs.
 
 ## The Control Plane vs Worker Capacity
 
@@ -108,7 +110,7 @@ The pods will be running successfully in the cluster, but the load balancer heal
 
 One of the most significant architectural differences between running containers in EKS and other platforms is how networking is integrated into your VPC. EKS enforces this integration using the Amazon VPC Container Network Interface (CNI) plugin.
 
-Under the Amazon VPC CNI, every single pod launched on your worker nodes receives a real, fully routed private IP address from your VPC subnets. The CNI attaches secondary ENIs and pre-allocates warm private IPs directly to the EC2 worker hosts.
+Under the Amazon VPC CNI, pods launched on your worker nodes receive real, fully routed private IP addresses from your VPC subnets. On EC2 worker nodes, the CNI attaches secondary ENIs and pre-allocates warm private IPs directly to the hosts.
 
 This architecture provides a massive operational benefit: pod traffic is native VPC traffic. You do not manage complex network address translation (NAT) bridges inside the cluster, and pods can connect directly to private databases or external VPC endpoints using standard security group rules.
 
@@ -121,6 +123,10 @@ If you build your EKS cluster inside tight `/24` subnets (which only provide 251
 
 When designing for EKS, you must size your private application subnets generously (using at least `/20` or `/19` CIDR blocks) to provide the massive IP address runway that Kubernetes workloads demand.
 
+![EKS cluster layers showing managed control plane, worker nodes, pods, service label routing, and VPC subnet IP pool consumption](/content-assets/articles/article-cloud-providers-aws-compute-application-hosting-eks/eks-cluster-layers.png)
+
+*EKS is easier to reason about when the layers stay separate. AWS manages the control plane, your worker capacity runs the pods, services find pods through labels, and the VPC subnet must have enough private IPs for the pod fleet.*
+
 ## Least-Privilege Authorization with Pod Identity
 
 Securing your containerized applications in EKS requires separating Kubernetes cluster permissions from AWS API permissions.
@@ -129,13 +135,13 @@ First, authorize operators and pipelines using Kubernetes Role-Based Access Cont
 
 Second, authorize your application code to call AWS APIs (like reading S3 or Secrets Manager) using **EKS Pod Identity**.
 
-Historically, granting AWS permissions to containers on EC2 hosts was coarse and insecure: you attached the IAM role to the EC2 host node profile, which automatically granted every container running on that host the same high-level permissions. EKS Pod Identity completely eliminates this risk:
+Historically, granting AWS permissions to containers on EC2 hosts was often too coarse: teams attached broad IAM permissions to the EC2 node profile, and any pod that could reach node credentials had a path to those permissions. EKS Pod Identity sharply reduces this risk:
 
 * **Workload Association**: You create a standard Kubernetes Service Account inside your namespace and associate it directly with a scoped AWS IAM Role.
-* **Scoped Temporary Credentials**: When EKS schedules your pod, the EKS Pod Identity agent automatically mounts a temporary security token directly into the pod container environment.
-* **Zero-Trust Boundary**: Your application code uses the standard AWS SDK, which reads the mounted token and signs S3 or Secrets Manager API requests under the narrow role. 
+* **Scoped Temporary Credentials**: When EKS schedules your pod, the EKS Pod Identity Agent exposes temporary credentials to that pod through the AWS SDK credential path.
+* **Narrow Workload Boundary**: Your application code uses the standard AWS SDK, which retrieves those credentials and signs S3 or Secrets Manager API requests under the narrow role.
 
-Unrelated pods running on the exact same host EC2 node remain completely blocked from accessing your AWS resources, enforcing least-privilege security at the individual container boundary.
+Unrelated pods should not receive that workload role unless they use the associated service account. You still need standard Kubernetes hardening, such as avoiding broad node roles and limiting pod access to instance metadata, but Pod Identity gives you a much cleaner least-privilege boundary at the workload level.
 
 ## ECS vs EKS: The Platform Trade-off
 
@@ -164,6 +170,10 @@ Amazon EKS is a powerful container orchestrator that bridges the vast Kubernetes
 * **Choose by Complexity**: Select ECS with Fargate for straightforward AWS-native container backends, and reserve EKS for multi-team platforms that demand the Kubernetes standard.
 
 By mastering EKS control structures, optimizing your VPC subnet IP footprints, and securing workload boundaries via Pod Identity, you construct containerized platforms that are highly extensible, globally portable, and secure.
+
+![Six-tile EKS checklist covering control plane, worker capacity, pods and services, subnet IP runway, Pod Identity, and platform choice](/content-assets/articles/article-cloud-providers-aws-compute-application-hosting-eks/eks-checklist.png)
+
+*Use this as the EKS checklist: separate control-plane health from worker capacity, align pods and services through labels, give subnets enough IP runway, scope AWS permissions with Pod Identity, and choose EKS when Kubernetes is the platform you need to operate.*
 
 ---
 

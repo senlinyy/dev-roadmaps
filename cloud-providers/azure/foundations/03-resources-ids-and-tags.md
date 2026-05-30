@@ -54,9 +54,13 @@ Reading this path from left to right, we find critical management evidence that 
 
 This path is the Azure equivalent of the AWS Amazon Resource Name (ARN). ARNs and Azure Resource IDs are styled differently, but both solve the exact same operational requirement: they locate one specific, absolute instance of a resource, eliminating all search ambiguity across global datacenters.
 
-Under the hood, ARM uses this path string as a literal routing key to find the correct Resource Provider. When you send a command, ARM parses the `/providers/Microsoft.KeyVault` segment and knows exactly which internal Azure microservice API to route your JSON payload to. It is an extremely clean, RESTful architectural design. 
+Under the hood, ARM uses this path string as a literal routing key to find the correct Resource Provider. When you send a command, ARM parses the `/providers/Microsoft.KeyVault` segment and knows exactly which internal Azure microservice API to route your JSON payload to. It is an extremely clean, RESTful architectural design.
 
-This routing mechanism behaves exactly like a web server's routing middleware or a Linux filesystem's inode path lookup. When a REST command hits the ARM endpoint (`management.azure.com`), ARM treats the URI segments as database keys. It checks its global registry index (Azure Resource Graph) to verify that the subscription and resource group exist, and then resolves the provider namespace to find the HTTP endpoint of the service controller. Only after this lookup is successful does ARM sign the management request and proxy the parameters forward, eliminating any risk of command routing ambiguity.
+This routing mechanism behaves like a web server's routing middleware. When a REST command hits the ARM endpoint (`management.azure.com`), ARM reads the URI segments, authenticates and authorizes the request, and forwards it to the appropriate Azure resource provider. Azure Resource Graph is a separate query service you can use to search and report across resources at scale; it is not the routing registry that ARM uses to forward a write request.
+
+![An infographic showing an Azure Resource ID path being parsed by ARM into subscription, resource group, provider, type, and name before routing to the exact resource](/content-assets/articles/article-cloud-providers-azure-foundations-resource-groups-and-ids/resource-id-route.png)
+
+*A Resource ID is a routing coordinate, not just a label. ARM reads the path segments to find the owning subscription, resolve the provider, and reach the exact resource that a command intends to change.*
 
 ## Metadata Tagging: Standardizing Coordinates
 
@@ -76,7 +80,7 @@ Distinguishes critical production environments from developer staging noise. Mon
 Maps the resource to a specific logical microservice boundary. This allows you to view all related compute, database, and storage costs as a unified application view in cost management dashboards, rather than looking at isolated virtual machine bills.
 
 ### 4. `cost-center` (e.g., `checkout-billing`)
-Allocates the resource's monthly cost directly to business finance segments. You must activate this tag key inside the Microsoft Entra Billing portal to allow cost reporting engines to partition monthly spend. This helps finance teams automate monthly chargebacks.
+Allocates the resource's monthly cost directly to business finance segments. Cost Management + Billing can group and filter spend by tags, and Cost Management tag inheritance can apply parent tags to usage records for reporting when that feature is enabled. This helps finance teams automate monthly chargebacks without treating the tag as an identity or security boundary.
 
 ### 5. `data-class` (e.g., `restricted-customer`)
 Defines the compliance profile of the data stored within the resource. This tag dictates automated backup rules, snapshot retention policies, and encryption keys. If the tag is marked `restricted-customer`, automated compliance checkers verify that public network ingress is completely blocked.
@@ -97,11 +101,9 @@ Management locks apply to all users, including those holding the master `Owner` 
 
 ### The Control Plane vs. Data Plane Mismatch
 
-A major architectural gotcha is the Read-Only lock data-plane mismatch. A `ReadOnly` lock placed on a database resource blocks control plane alterations (such as scaling the database instance size or modifying firewall rules), but it can also block applications from writing actual data records to the database. 
+A major architectural gotcha is the control-plane and data-plane mismatch. A `ReadOnly` lock placed on a database resource blocks control-plane alterations, such as scaling the database instance size or modifying firewall rules. It does not turn the database engine into a read-only database. Normal SQL transactions are data-plane operations, so application inserts and updates can still succeed if the database's own permissions allow them.
 
-Under the hood, many database services utilize temporary control plane writes to handle normal queries. For example, database engines frequently write active connection lists, renew private DNS dynamic records, or update temporary session metadata to the central ARM controllers during runtime. 
-
-Applying a `ReadOnly` lock to a running database blocks these metadata updates at the ARM level. When the database engine attempts to write its dynamic session state, ARM intercepts the request and rejects it, causing the database's runtime engine to hang or its client connection pool to crash with dynamic state errors. To protect your systems, use `ReadOnly` locks strictly for static networking or auditing resources, keeping them far away from volatile, active database or compute nodes.
+The confusing part is that some operations feel like data access but still depend on management-plane actions. For example, listing account keys, changing diagnostic settings, updating firewall rules, or modifying a service configuration can be blocked by a `ReadOnly` lock. To protect your systems, use `CanNotDelete` locks for most production resources, reserve `ReadOnly` locks for cases where you truly want to freeze management settings, and protect actual records with database permissions, Key Vault RBAC, storage data-plane RBAC, soft delete, versioning, and backups.
 
 ## The CLI Scope: Inspecting Resources and Enforcing Locks
 
@@ -177,17 +179,66 @@ This central interception makes lock evaluation incredibly fast and robust. The 
 
 For engineers transitioning from AWS, the most common Azure metadata gotcha is the tagging inheritance trap.
 
-In many AWS environments, tags applied to a CloudFormation stack or an Account automatically cascade and apply to every child resource provisioned under that scope. 
+![An infographic showing that resource group tags do not automatically copy to child resources](/content-assets/articles/article-cloud-providers-azure-foundations-resource-groups-and-ids/tag-inheritance-trap-gpt.png)
 
-**Azure does not support automatic tag inheritance.**
+*Resource group tags are a useful coordinate, but child resources still need their own tags or an audit process will find gaps.*
 
-If you apply the tag `env=prod` to `rg-orders-prod-uksouth`, the child container app (`app-orders-prod`) and key vault (`kv-orders-prod`) inside that group will remain completely un-tagged in Cost Explorer. 
+In many AWS environments, tags applied to a CloudFormation stack or an Account automatically cascade and apply to every child resource provisioned under that scope.
+
+Azure resource tags do not automatically copy from a resource group to its child resources.
+
+If you apply the tag `env=prod` to `rg-orders-prod-uksouth`, the child container app (`app-orders-prod`) and key vault (`kv-orders-prod`) inside that group will remain untagged as resources unless your deployment or policy applies the tag to them. Cost Management has a separate tag inheritance feature for usage reporting, but that does not change the resource object's own tag set.
 
 Under the hood, ARM treats every single resource as an isolated REST API object with its own distinct properties block. A parent resource group is simply a metadata folder; it does not cascade its tags to child properties during deployment.
 
 If your finance team runs a billing report grouped by the tag key `env`, the resources inside the group will compile thousands of dollars under an "un-grouped" or "blank" category, blinding managers to the true cost driver.
 
-To avoid this, you must construct your deployment pipelines (such as Bicep templates or GitHub Actions scripts) to explicitly apply the tag metadata block to both the parent resource group and every individual child resource defined in your templates. You can also deploy an Azure Policy compliance rule that automatically intercepts non-compliant, un-tagged deployments or copies resource group tags to child resources at creation time.
+To avoid this, construct your deployment pipelines (such as Bicep templates or GitHub Actions scripts) to explicitly apply the tag metadata block to both the parent resource group and every individual child resource defined in your templates. You can also deploy an Azure Policy rule that denies untagged deployments or uses a modify effect to copy resource group tags to child resources at creation time. For billing reports, enable Cost Management tag inheritance only when you understand that it changes reporting attribution, not the tags stored on the resource itself.
+
+:::expand[The Idiomatic Bicep Tag Propagation Pattern]{kind="pattern"}
+Unlike AWS CloudFormation, where stack-level tags can propagate to supported nested resources, Azure Resource Manager (ARM) does not automatically copy a resource group's tags to child resources. If you tag a Resource Group, the child resources inside it remain untagged unless your template, deployment pipeline, Azure Policy, or reporting configuration handles the propagation deliberately.
+
+To solve this systematically, Azure practitioners use the **Bicep Tag Propagation Pattern**. Instead of copy-pasting tag blocks onto every resource—which leads to tag drift when new resources are added—you declare a single master tags object at the top of your Bicep file and pass it dynamically to every child resource.
+
+Here is the before and after comparison:
+
+*   **Before (Copy-Paste Drifting Pattern):**
+    ```bicep
+    resource sqlServer 'Microsoft.Sql/servers@2021-11-01' = {
+      name: 'sql-orders-prod'
+      tags: { env: 'prod', team: 'commerce' }
+    }
+    resource kv 'Microsoft.KeyVault/vaults@2021-11-01' = {
+      name: 'kv-orders-prod'
+      tags: { env: 'production', team: 'commerce-team' } // Mismatched tag values
+    }
+    ```
+
+*   **After (Idiomatic Bicep Propagation Pattern):**
+    ```bicep
+    var defaultTags = {
+      env: 'prod'
+      team: 'commerce-platform'
+      service: 'orders-api'
+      costCenter: 'checkout-billing'
+    }
+
+    resource sqlServer 'Microsoft.Sql/servers@2021-11-01' = {
+      name: 'sql-orders-prod'
+      tags: defaultTags
+    }
+    ```
+
+To enforce compliance for resources deployed outside of Bicep (such as manual portal creations), you can pair this pattern with Azure Policy:
+
+| Tagging Approach | Enforcement Mechanism | Tradeoff / Strength |
+| :--- | :--- | :--- |
+| **Bicep `var` Propagation** | Client-side definition passed to each resource | **High consistency**, easily updated in one location; relies on developer compliance. |
+| **Azure Policy `append`** | Automatically adds missing tags to resources during deploy | **Soft enforcement**; can mask developer omissions in source code repositories. |
+| **Azure Policy `deny`** | Blocks deployments if required tags are missing | **Hard enforcement**; ensures 100% compliance but breaks non-compliant pipelines. |
+
+**Rule of thumb:** Define your master tagging dictionary once at the root Bicep deployment and propagate it as a variable parameter to all downstream modules. Combine this with an Azure Policy `deny` guardrail to guarantee no untagged resource is ever deployed in production.
+:::
 
 ## Putting It All Together
 
@@ -202,6 +253,10 @@ Operating a secure, transparent cloud hierarchy requires transitioning from frie
 ## What's Next
 
 We have established our resource identifiers, metadata tags, tagging flow behaviors, and management locks. Now we are ready to map our application jobs to physical Azure services. In the next article, we will construct the complete core services map, choosing the first Azure service families to inspect for public ingress, container runtime, persistent storage, secrets management, and observability.
+
+![A six-tile Azure resource safety checklist covering exact IDs, provider routing, business tags, delete locks, read lock caution, and auditing first](/content-assets/articles/article-cloud-providers-azure-foundations-resource-groups-and-ids/resource-safety-checklist.png)
+
+*Use this as the resource safety checklist: identify the exact resource path, understand which provider owns the action, apply business tags directly, protect production with delete locks, treat read locks carefully, and audit before changing anything.*
 
 ---
 

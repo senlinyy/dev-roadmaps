@@ -14,7 +14,7 @@ aliases:
 ## Table of Contents
 
 1. [The Mid-day Traffic Surge](#the-mid-day-traffic-surge)
-2. [knobs and switches: Runtime Controls](#knobs-and-switches-runtime-controls)
+2. [Knobs and Switches: Runtime Controls](#knobs-and-switches-runtime-controls)
 3. [The Lever of Capacity Scaling](#the-lever-of-capacity-scaling)
 4. [Desired Task Count Controls](#desired-task-count-controls)
 5. [Automated Target Tracking Scaling Policies](#automated-target-tracking-scaling-policies)
@@ -37,7 +37,7 @@ Your production application is deployed, configured, healthy, and fully observab
 
 When these events occur, you cannot wait 10 minutes to deploy new code. You need immediate controls to adjust how the running systems behave. You need knobs to add compute capacity, slow down background work, pause scheduled jobs, or isolate poison messages in real time while your engineering team gathers evidence.
 
-## knobs and switches: Runtime Controls
+## Knobs and Switches: Runtime Controls
 
 Runtime controls are the operational switches built into your cloud architecture that let you adjust the amount, timing, and flow of work without deploying code changes. 
 
@@ -114,31 +114,46 @@ Autoscaling also has dynamic time behavior. It operates after metrics change, re
 
 Queues separate customer-facing API transactions from slow background processes. The orders API writes the transaction to RDS, publishes a receipt message to SQS, and returns an immediate success page to the user, offloading email delivery to background workers.
 
-To monitor queue health from your administrative workstation, you query SQS attributes using the AWS CLI:
+To inspect queue depth from your administrative workstation, you query SQS attributes using the AWS CLI:
 
 ```bash
 $ aws sqs get-queue-attributes \
     --queue-url "https://sqs.eu-west-2.amazonaws.com/123456789012/ReceiptQueue" \
-    --attribute-names "ApproximateNumberOfMessagesVisible" "ApproximateAgeOfOldestMessage"
+    --attribute-names "ApproximateNumberOfMessages" "ApproximateNumberOfMessagesNotVisible"
 ```
 
-The terminal returns the queue's real-time telemetry coordinates:
+The terminal returns approximate queue depth coordinates:
 
 ```json
 {
   "Attributes": {
-    "ApproximateNumberOfMessagesVisible": "14250",
-    "ApproximateAgeOfOldestMessage": "3650"
+    "ApproximateNumberOfMessages": "14250",
+    "ApproximateNumberOfMessagesNotVisible": "38"
   }
 }
 ```
 
 Every returned coordinate represents critical system health evidence:
 
-* `ApproximateNumberOfMessagesVisible`: The backlog length (14,250 messages waiting in the queue). A high count indicates that incoming message volume is exceeding worker throughput.
-* `ApproximateAgeOfOldestMessage`: The delay in seconds (3,650 seconds, or ~1 hour). This is the primary metric for measuring customer latency. A rising age is a high-priority operational alarm, proving that emails are delayed.
+* `ApproximateNumberOfMessages`: The visible backlog length (14,250 messages waiting in the queue). A high count indicates that incoming message volume is exceeding worker throughput.
+* `ApproximateNumberOfMessagesNotVisible`: Messages currently being processed or waiting for their visibility timeout to expire. A high value can indicate slow workers, long processing time, or repeated failures.
 
-If messages visible and age are both rising, check the worker stdout logs. If workers are failing to delete messages after processing them, SQS will make those messages visible again after the visibility timeout, causing the fleet to process the same failing payloads repeatedly in an infinite, expensive loop.
+For customer latency, the stronger signal is the CloudWatch metric `ApproximateAgeOfOldestMessage`, which reports how long the oldest non-deleted message has been waiting:
+
+```bash
+$ aws cloudwatch get-metric-statistics \
+    --namespace "AWS/SQS" \
+    --metric-name "ApproximateAgeOfOldestMessage" \
+    --dimensions Name=QueueName,Value=ReceiptQueue \
+    --start-time "2026-05-28T11:00:00Z" \
+    --end-time "2026-05-28T12:00:00Z" \
+    --period 300 \
+    --statistics Maximum
+```
+
+A rising maximum age is a high-priority operational alarm, proving that emails or other background jobs are delayed.
+
+If visible messages and message age are both rising, check the worker stdout logs. If workers are failing to delete messages after processing them, SQS will make those messages visible again after the visibility timeout, causing the fleet to process the same failing payloads repeatedly in an expensive loop.
 
 ## Schedules and Background Pipeline Jobs
 
@@ -151,15 +166,18 @@ To prevent scheduled collisions during incidents, you can disable the trigger di
 ```bash
 $ aws scheduler update-schedule \
     --name "NightlyCleanupJob" \
+    --schedule-expression "cron(0 2 * * ? *)" \
     --flexible-time-window "Mode=OFF" \
     --state "DISABLED" \
-    --target '{"Arn":"arn:aws:lambda:eu-west-2:111122223333:function:cleanup-job"}'
+    --target '{"Arn":"arn:aws:lambda:eu-west-2:111122223333:function:cleanup-job","RoleArn":"arn:aws:iam::111122223333:role/EventBridgeSchedulerInvokeCleanup"}'
 ```
 
 This CLI update halts the schedule instantly:
 
 * `--name`: The target schedule to modify.
+* `--schedule-expression`: Preserves the existing schedule expression while updating the state.
 * `--state`: Transitions the schedule to `DISABLED`, preventing EventBridge from executing the task until the active incident is resolved.
+* `--target`: Preserves the target and invocation role required by EventBridge Scheduler.
 
 ## Bounding Downstream Pressures: Concurrency Limits
 
@@ -185,7 +203,7 @@ The major gotcha of pause controls is backlog pressure. Pausing background worke
 
 ## When Scaling Compute Destroys Database Performance
 
-A classic cloud operations disaster is the compute-to-database connection loop. When relational database query performance degrades due to an missing index, query execution times rise. As checkout queries take longer, web containers spend more time waiting for database sockets to return.
+A classic cloud operations disaster is the compute-to-database connection loop. When relational database query performance degrades due to a missing index, query execution times rise. As checkout queries take longer, web containers spend more time waiting for database sockets to return.
 
 On your high-level CPU dashboards, CPU usage climbs as containers accumulate waiting threads. The auto-scaler detects the CPU spike and automatically launches 10 new container tasks to absorb the load.
 
@@ -203,6 +221,10 @@ Each new container task boots, initializes its default connection pool, and open
 
 Relying on auto-scaling compute capacity to solve database saturation will accelerate system collapse. Responders must verify database performance and active connection counts before pulling compute scaling levers during incidents.
 
+![Runtime controls infographic showing task scaling increasing database connections into a connection storm, with queue age, concurrency limit, and pause switch as safer pressure controls](/content-assets/articles/article-cloud-providers-aws-deployment-runtime-operations-scaling-jobs-and-operational-controls/scaling-connection-storm.png)
+
+*Scaling is a pressure move, not a universal fix. If the shared database is already the bottleneck, adding tasks opens more connections and can turn a slowdown into a connection storm.*
+
 ## Putting It All Together
 
 Operating live cloud environments requires a thorough understanding of capacity levers, queue backlogs, and pause switches:
@@ -213,6 +235,10 @@ Operating live cloud environments requires a thorough understanding of capacity 
 * **Secure and Version Schedules**: Treat scheduled jobs as active production writers, managing their triggers and permissions with release discipline.
 * **Defend Boundaries with Concurrency**: Enforce strict database connection pool limits to prevent auto-scaling tasks from exhausting database limits.
 * **Design Elegant Pause Controls**: Implement reversible, visible, and owned pause switches to buy diagnostic time during incidents.
+
+![Runtime controls checklist covering desired count, autoscaling, queue age, schedules, concurrency, and pause switch](/content-assets/articles/article-cloud-providers-aws-deployment-runtime-operations-scaling-jobs-and-operational-controls/runtime-controls-checklist.png)
+
+*Use this as the runtime controls checklist: adjust desired count deliberately, let autoscaling follow the right metric, alarm on queue age, own schedules as production writers, bound concurrency, and keep pause switches reversible.*
 
 ---
 

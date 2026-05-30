@@ -36,22 +36,26 @@ The sheer number of services in the Azure catalog can feel overwhelming. But if 
 *   **Operational Evidence (Observability)**: Where do your logs, metrics, and alerts go so you can see what is happening under the hood?
 *   **Repeatable Release (Deployment Operations)**: How do your container images and templates safely transition from Git into active production?
 
-By standardizing on this map, you prevent your team from getting lost in product menus. When a problem occurs, you immediately identify which family owns the job, locate the correct CLI commands, and query the specific resource properties. 
+By standardizing on this map, you prevent your team from getting lost in product menus. When a problem occurs, you immediately identify which family owns the job, locate the correct CLI commands, and query the specific resource properties.
 
 This job-centric mapping is the best antidote to cloud catalog fatigue. As a developer, your primary concern is not memorizing trademarked marketing names; it is understanding the flow of bytes through your system. By categorizing services by their runtime responsibilities, you can immediately narrow down where a bug lives. If a user cannot resolve your domain name, you check DNS; if their container crashes during an active query, you check Compute; if their session data is lost, you check State.
+
+![An infographic showing an Orders API connected to Azure service job families for traffic, compute, state, access, signals, and release work](/content-assets/articles/article-cloud-providers-azure-foundations-core-services/service-jobs-map.png)
+
+*The service map starts from the application job, not the product catalog. A symptom becomes easier to diagnose when you first decide whether the broken job is traffic, compute, state, access, signals, or release flow.*
 
 ## Traffic: Managing Public Entry
 
 Traffic services answer a fundamental routing question: How does a customer's browser request safely navigate the internet and reach your running code?
 
-When an application starts small, you can connect your compute containers directly to the public internet using their built-in HTTPS ingress endpoints. But as your traffic grows and security requirements become more strict, exposing your application servers directly to the raw internet is an operational risk. You need dedicated routing layers to serve as shields and traffic cops.
+When an application starts small, you can connect your compute containers directly to the public internet using their built-in HTTPS ingress endpoints. But as your traffic grows and security requirements become more strict, exposing your application servers directly through public endpoints is an operational risk. You need dedicated routing layers to serve as shields and traffic cops.
 
 In the Azure ecosystem, public ingress is managed by four specialized routing layers:
 
 *   **Azure DNS**: This is the translation layer. It maps human-friendly custom domain names (like `api.devpolaris.com`) to the raw IP addresses or default domain names of your Azure resources.
-*   **Azure Front Door**: A global edge routing service deployed across hundreds of Microsoft edge points of presence (PoPs) worldwide. Front Door utilizes Anycast routing to automatically route user traffic to the physically nearest edge facility. It handles Web Application Firewall (WAF) filtering, terminates SSL/TLS handshakes close to the user to eliminate latency overhead (using a split-TCP design), and load-balances requests across global regions. If a DDoS attack hits your API, Front Door absorbs the impact at the global edge before the traffic ever reaches your hosting region.
-*   **Application Gateway**: A regional Layer 7 load balancer that lives inside your private virtual network. It functions as a high-performance reverse proxy (built on Nginx-style routing fabrics) designed to handle regional SSL termination, custom path-based routing rules (e.g., sending `/api/*` to your backend containers and `/static/*` to object storage), and private backend integration.
-*   **API Management (APIM)**: An API gateway that serves as an administrative proxy. It sits in front of your microservices, enforcing rate limits, usage quotas, token validation, and versioning constraints. APIM uses an in-memory Redis caching layer under the hood to authenticate incoming client tokens without forcing every request to query your backend compute directory, keeping your systems fast and shielded.
+*   **Azure Front Door**: A global edge routing service deployed across Microsoft edge points of presence (PoPs) worldwide. Front Door routes HTTP and HTTPS traffic at the edge, can apply Web Application Firewall (WAF) filtering, terminates TLS close to users, and load-balances requests across global origins.
+*   **Application Gateway**: A regional Layer 7 load balancer that lives inside your virtual network. It handles regional TLS termination, path-based routing rules (for example, sending `/api/*` to your backend containers and `/static/*` to object storage), Web Application Firewall policies, and private backend integration.
+*   **API Management (APIM)**: An API gateway that serves as an administrative proxy. It sits in front of your microservices, enforcing rate limits, usage quotas, token validation policies, versioning, subscriptions, and transformations. APIM can use caching policies and external cache integrations, but token validation should be explained through APIM policy configuration rather than an assumed Redis authentication layer.
 
 ## Compute: Where the Code Runs
 
@@ -67,9 +71,30 @@ One step up the ladder, App Service hides the operating system. Azure handles al
 A step higher, Container Apps hides both the OS and the web server engine, as well as the entire container orchestrator. You do not manage Kubernetes nodes, API servers, or pod network interfaces. You simply supply a pre-built Docker container image, and Azure handles container scheduling, ingress proxying, TLS termination, and autoscaling.
 
 ### 4. Azure Functions (The Serverless FaaS Tier)
-At the top of the ladder, even the container boundary is hidden. You do not manage scaling limits or runtime pools. You simply supply raw code functions cabled to specific events—such as an incoming HTTP query, a new row in a database, or a message in a queue. If no events occur, the platform scales to zero, and you pay absolutely nothing for idle compute.
+At the top of the ladder, even the container boundary is hidden. You supply code functions connected to specific events, such as an incoming HTTP query, a new row in a database, or a message in a queue. Scale and idle billing behavior depends on the hosting plan. Consumption-style plans can scale to zero for event-driven workloads, while Premium, Dedicated, and other plans keep different amounts of capacity available for performance, networking, or predictability.
 
 For our transactional orders API, Azure Container Apps (ACA) provides the ideal balance of managed serverless scaling and simple container orchestration.
+
+:::expand[Why the Four-Tier Abstraction Ladder Exists]{kind="design"}
+Azure did not build Virtual Machines, App Service, Container Apps, and Functions as competing alternatives. Instead, each tier represents a step on an **abstraction ladder** designed to systematically remove operational surface area that the tier below it forced your team to manage.
+
+This directly mirrors the AWS abstraction ladder:
+*   **Virtual Machines** correspond to **Amazon EC2** (raw infrastructure).
+*   **App Service** matches **AWS Elastic Beanstalk** (managed platform).
+*   **Container Apps** aligns with **AWS Fargate** (serverless containers).
+*   **Functions** equates to **AWS Lambda** (serverless FaaS).
+
+As you climb this ladder, you trade low-level infrastructure control for increased speed of delivery and lower operational overhead:
+
+| Abstraction Tier | Team Ownership Surface | Cold-Start Behavior | Ingress & Scale Control |
+| :--- | :--- | :--- | :--- |
+| **Virtual Machines (IaaS)** | OS updates, kernel patches, disk provisioning, and web servers. | **Zero cold start** (always warm) | Custom load balancers and scale sets. |
+| **App Service (PaaS)** | Runtime version choices, minor updates, and scale-unit sizing. | **Zero cold start** (unless configured to sleep) | Built-in slots and platform scale rules. |
+| **Container Apps (CaaS)** | Container base images, library dependencies, and ingress ports. | **Seconds or more** (if scaled to zero, depending on image and startup path) | Managed ingress, revisions, and event-driven scale rules. |
+| **Functions (FaaS)** | Pure application code and input/output trigger bindings. | **Milliseconds to seconds** (highly dependent on runtime) | Event-driven triggers only (HTTP, queue, timer). |
+
+**Rule of thumb:** Choose the highest rung of the abstraction ladder that your workload's execution model and technical constraints allow. Climbing the ladder trades granular host control for operational simplicity, but moving down should be treated as a last resort reserved for specialized compliance needs or custom operating system kernel extensions.
+:::
 
 ## State: Relational Databases and Object Storage
 
@@ -83,17 +108,15 @@ State services guarantee that your application data survives deployment updates,
 
 Access services establish secure trust boundaries between your compute containers and your data persistent blocks. To keep private passwords and keys out of your Git repositories and Docker image layers, you enforce a strict access loop:
 
-```text
-Container App (Managed Identity) -> REST API -> Key Vault (Role Assignment) -> Decrypted Secret
-```
+Container App (Managed Identity) -> local identity endpoint -> Key Vault API -> role assignment check -> secret value.
 
-Under the hood, this passwordless access loop relies on a highly secure **IMDS (Instance Metadata Service) cryptographic handshake**:
+Under the hood, this passwordless access loop relies on Microsoft Entra ID and a platform-managed local identity endpoint:
 
-1.  **The Metadata Call**: When your application container starts and needs to connect to the database, it makes an HTTP GET request to a private, non-routable link-local IP address: `http://169.254.169.254/metadata/identity/oauth2/token?api-version=2018-02-01&resource=https://vault.azure.net`.
-2.  **IMDS Interception**: The local host hypervisor intercepts this loop. Because the request originates from the physical compute container cabled to the virtual network interface, the hypervisor proves to Microsoft Entra ID that the request is authentic.
-3.  **Token Generation**: Microsoft Entra ID issues a short-lived JSON Web Token (JWT), cryptographically signed by Azure's master identity key, and returns it to the container over the local metadata bridge.
-4.  **Vault Verification**: The container app extracts this JWT and passes it in the `Authorization: Bearer eyJ...` header of its REST API query to your Azure Key Vault resource.
-5.  **Role Assignment Check**: Key Vault reads the JWT, verifies the signature against Entra ID, parses the workload identity ID, and checks its own Role-Based Access Control (RBAC) rules. If the identity holds the `Key Vault Secrets User` role assignment, Key Vault decrypts the secret connection string and returns it to the container in the JSON response body.
+1.  **The Token Request**: When your container app needs to connect to Key Vault, the Azure SDK asks the Container Apps managed identity endpoint for a token for `https://vault.azure.net`.
+2.  **Platform Verification**: Container Apps exposes that endpoint only inside the running app environment and protects the request with platform-provided headers.
+3.  **Token Generation**: Microsoft Entra ID issues a short-lived access token for the managed identity.
+4.  **Vault Verification**: The container app passes this access token in the `Authorization: Bearer eyJ...` header of its REST API query to your Azure Key Vault resource.
+5.  **Role Assignment Check**: Key Vault validates the token, identifies the workload identity, and checks its own Role-Based Access Control (RBAC) rules. If the identity holds a data-plane role such as `Key Vault Secrets User`, Key Vault returns the secret value to the container in the JSON response body.
 
 This passwordless handshake is infinitely safer than storing database connection strings or API keys in configuration files or container images. Even if an attacker somehow gains read access to your Git repository, there are no passwords to steal, because credentials only exist as ephemeral, cryptographically signed memory tokens generated at runtime. It completely resolves "the first secret problem" of bootstrap security.
 
@@ -161,21 +184,23 @@ Every returned parameter provides critical runtime evidence:
 
 To design a robust compute architecture, you must understand the physical layers that Azure manages beneath the surface. When you deploy a container app to Azure Container Apps (ACA), the platform does not run your container directly on a bare metal host. Instead, ACA abstracts three highly complex orchestration frameworks behind a simple, serverless REST API:
 
-```text
-Container App API -> Kubernetes (AKS Nodes) -> KEDA (Scale rules) -> Envoy Proxy (Ingress/TLS)
-```
+![An infographic showing Envoy ingress, KEDA scaling, revisions, pods, health checks, and target ports inside Container Apps](/content-assets/articles/article-cloud-providers-azure-foundations-core-services/container-apps-fabric-gpt.png)
 
-### 1. The Envoy Proxy Handshake
+*Container Apps feels like a simple service because Azure hides ingress, scaling, revision, and Kubernetes mechanics behind the app contract.*
 
-Every ingress request is intercepted by a managed **Envoy Proxy**. Envoy functions as a high-performance, L7 traffic cop. It terminates incoming TLS connections, effectively shielding your container from the complexities of certificate renewal and encryption negotiation. Once decrypted, Envoy performs a "health-check-aware" forward to your container. If your container process is failing to respond, Envoy immediately marks the endpoint as unhealthy, preventing the propagation of 504 gateway errors to your users.
+Container App API -> managed Container Apps environment -> revisions -> replicas -> ingress and scale rules.
 
-### 2. KEDA: The Event-Driven Metrics Loop
+### 1. Managed Ingress
 
-Scaling in ACA is not governed by simple CPU percentages. It is managed by **KEDA** (Kubernetes Event-driven Autoscaling). KEDA operates a continuous monitoring loop that interrogates external "event sources." For example, if you define a scale rule based on HTTP request concurrency, KEDA samples the telemetry coming from the Envoy ingress. When the backlog of pending requests exceeds your threshold, KEDA signals the orchestrator to provision new Pod instances. This is a "reactive" scaling loop that happens at sub-minute intervals, allowing the system to scale down to exactly zero when the telemetry reports idle status.
+When ingress is enabled, Container Apps gives the app an external or internal endpoint and forwards traffic to the target port configured on the container app. The important operational detail is the contract between ingress and the container process: the container must listen on the target port, and the app must become healthy quickly enough for traffic to reach it. A wrong target port, slow startup path, or failed container health state can still produce `502`, `503`, or `504` symptoms.
 
-### 3. Managed Kubernetes (AKS)
+### 2. Event-Driven Scale Rules
 
-Under the hood, all these components reside within a multi-tenant, hidden AKS cluster. Azure manages the control plane, keeping the API server hardened and patched. When you update your container image, Azure performs a "Blue-Green" deployment by spinning up the new version, running Envoy health checks against it, and shifting the weighted traffic only when the new revision confirms it is ready to accept production load.
+Scaling in Container Apps is controlled through scale rules. A rule can react to HTTP concurrency, queue depth, CPU, memory, or supported external event sources. When the observed value crosses the configured threshold, the platform changes the replica count inside the bounds you set. If the minimum replica count is `0`, the app can scale to zero when idle. If you need predictable latency for customer-facing traffic, keep at least one replica warm.
+
+### 3. Revisions
+
+Each meaningful application change creates a revision. In single-revision mode, the latest active revision receives all traffic. In multiple-revision mode, you can split traffic between revisions for canary or blue-green rollouts. Azure manages the environment and orchestration layer, but you still choose the image version, target port, health behavior, minimum replicas, maximum replicas, and traffic weights.
 
 ## Operational Diagnostics: Mapping Symptoms to Service Families
 
@@ -198,14 +223,17 @@ Operating a resilient cloud system requires connecting application symptoms to e
 *   **Triage by App Job**: Start every diagnostic run by mapping the symptom to the correct service family; never scale capacity blindly without evidence.
 *   **Secure the Access Loop**: Leverage Managed Identities cabled to Key Vault and RBAC assignments to decouple credentials from images.
 *   **Map target Ingress Ports**: Align your container app's `targetPort` configurations with your container code's internal network binding port to prevent gateway timeout errors.
-*   **Acknowledge the Serverless Fabric**: Recognize that Azure Container Apps abstracts AKS, Envoy, and KEDA under the hood, managing scaling and traffic transitions.
+*   **Acknowledge the Managed Runtime**: Recognize that Azure Container Apps gives you managed environments, revisions, ingress, and scale rules so your team can run containers without operating the orchestration layer directly.
 *   **Isolate Database Latency**: Look past database CPU metrics during connection drops, inspecting I/O bottlenecks, active connection limits, and query index definitions first.
+
+![A six-tile Azure core services checklist covering public entry, runtime hosting, durable state, managed access, external signals, and evidence-first diagnosis](/content-assets/articles/article-cloud-providers-azure-foundations-core-services/core-services-checklist.png)
+
+*Use this as the core services checklist: start with the public entry path, find the runtime host, separate durable state from compute, secure managed access, send signals outside the runtime, and diagnose with evidence before scaling or replacing services.*
 
 ---
 
 **References**
 
-* [Azure Container Apps Architecture](https://learn.microsoft.com/en-us/azure/container-apps/overview) - Core serverless fabric and orchestration components.
-* [Envoy Proxy Ingress and Routing](https://www.envoyproxy.io/docs/envoy/latest/) - Technical details of Envoy edge path proxying.
-* [Kubernetes Event-driven Autoscaling (KEDA)](https://keda.sh/) - Event autoscaling patterns and metrics operators.
+* [Azure Container Apps overview](https://learn.microsoft.com/en-us/azure/container-apps/overview) - Core managed container app concepts such as environments, revisions, ingress, and scale.
+* [Set scaling rules in Azure Container Apps](https://learn.microsoft.com/en-us/azure/container-apps/scale-app) - Official guide to Container Apps scaling behavior.
 * [Azure Service Map and Triage Workflows](https://learn.microsoft.com/en-us/azure/architecture/guide/) - Best practices for cloud infrastructure operations.

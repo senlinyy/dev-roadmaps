@@ -69,7 +69,7 @@ A major security gotcha is tag data leaks. Because tag metadata is exported in p
 
 ## Tuning the Lens: AWS Cost Explorer
 
-AWS Cost Explorer is the regional visual dashboard designed to filter, group, and analyze your account spending over historical and forecasted windows. Rather than auditing a flat line item list, you configure Cost Explorer to segment your spending.
+AWS Cost Explorer is the billing dashboard and API designed to filter, group, and analyze your account spending over historical and forecasted windows. Rather than auditing a flat line item list, you configure Cost Explorer to segment your spending.
 
 Let us execute a terminal session to query Cost Explorer directly using the AWS CLI, grouping our production Fargate and RDS spending by service tags:
 
@@ -187,13 +187,13 @@ By pairing billing changes with operational evidence, you ensure that your cost-
 
 ## Under-the-Hood: The Billing Data Pipeline
 
-Behind the Cost Explorer visual console sits a complex AWS data pipeline. When your containers run, AWS continuously generates billing records. These records are aggregated hourly and written to a massive, detailed database called the Cost and Usage Report (CUR).
+Behind the Cost Explorer visual console sits a complex AWS data pipeline. When your containers run, AWS continuously generates billing records. These records are aggregated and delivered into detailed billing data called the Cost and Usage Report (CUR).
 
-The CUR is stored as compress parquet files inside a secure Amazon S3 bucket in your account. 
+The CUR can be delivered as compressed CSV or Apache Parquet files inside a secure Amazon S3 bucket in your account.
 
-Because the billing engine must ingest, aggregate, and calculate unblended costs for millions of active resources across global regions, there is an inherent physical delay of 8 to 24 hours between a resource's runtime execution and its appearance in Cost Explorer. 
+Because the billing engine must ingest, aggregate, and calculate costs for millions of active resources across global regions, billing data is delayed. Cost Explorer and CUR are useful for macro cost analysis, but they are not second-by-second operational telemetry. Expect updates to arrive on an hourly-to-daily cadence depending on the report and view.
 
-If a developer mistakenly launches an oversized database instance at 9 a.m. and deletes it at 10 a.m., the charge will compile instantly in the CUR parquet files, but it will not register in Cost Explorer dashboards until later that night. This is why budgets and anomaly detection alerts are critical: they continuously parse the S3 billing data pipeline behind the scenes, catching leaks long before the final monthly invoice is compiled.
+If a developer mistakenly launches an oversized database instance at 9 a.m. and deletes it at 10 a.m., the operational damage starts immediately, but the cost evidence appears later in the billing pipeline. This is why budgets, anomaly detection, deployment records, and CloudWatch usage metrics belong together: billing tools flag spend movement, while operational telemetry explains what changed before the final monthly invoice is compiled.
 
 ## The Systemic Discipline of Cost Ownership
 
@@ -213,11 +213,11 @@ By standardizing on clear ownership records, you turn cloud spending into clear 
 
 Operating a cost-effective cloud system requires complete transparency over billing metrics:
 
-* **Eliminate Local Billing Assumptions**: Design your workflows with the absolute awareness that every cloud resource compiles hourly fees.
+* **Eliminate Local Billing Assumptions**: Design your workflows with the awareness that cloud resources can compile hourly, request, storage, and data-transfer fees.
 * **Enforce Active Tagging**: Set strict Cost Allocation Tags at creation time, partition production spending, and keep passwords out of metadata.
 * **Cable Proactive Budgets**: Create dedicated daily or monthly budgets for your environments, cabled directly to team communication tools.
 * **Decode Spends with Evidence**: Link billing jumps to deployment logs, NAT gateway volumes, and queue retry metrics.
-* **Acknowledge Pipeline Lags**: Recognize the 8-to-24 hour delay inside the Cost and Usage Report pipeline, using proactive anomaly alerts to catch leaks early.
+* **Acknowledge Pipeline Lags**: Recognize that billing data trails runtime activity, using proactive budgets, anomaly alerts, deployment records, and usage metrics together to catch leaks early.
 
 ## What's Next
 

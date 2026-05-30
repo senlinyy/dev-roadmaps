@@ -30,7 +30,7 @@ aliases:
 
 If you are accustomed to developing applications on a single workstation or a dedicated virtual server, you are used to treating storage as a stable, local disk path. When your application code writes a file, saves a session key, or appends a log, the host operating system maps that path to physical blocks on a permanent drive. Because your server process and its backing disk share the same hardware life, files written to directories like `/var` or `/tmp` remain persistent and readable across process restarts and system reboots.
 
-Once you deploy your workloads into a highly available, regional cloud network, this simple single-host storage model breaks down completely. Cloud compute environments are built on stateless, transient compute nodes. Virtual servers and container tasks are designed to scale out, scale in, and heal automatically from hardware crashes. If a container task crashes, a security group is modified, or an auto-scaling group scales down, the running compute instance is immediately terminated and replaced by a fresh, blank copy initialized from a static image. If your application code writes customer invoices, session cache files, or media uploads to the container's local root disk, that data is permanently lost upon termination.
+Once you deploy your workloads into a highly available, regional cloud network, this simple single-host storage model breaks down completely. Cloud compute environments are built on stateless, transient compute nodes. Virtual servers and container tasks are designed to scale out, scale in, redeploy, and heal automatically from hardware crashes. If a container task crashes, a deployment replaces it, or an auto-scaling group scales down, the running compute environment may disappear and be replaced by a fresh copy initialized from a static image. If your application code writes customer invoices, session cache files, or media uploads only to the container's local root disk, that data is lost when that environment is removed.
 
 You can observe this operational ephemerality directly by running a short command sequence on any system with Docker. We will launch a lightweight Alpine container in the background, write an invoice file to its local `/tmp` directory, inspect the container's disk layout, terminate the container, and then spin up a fresh one to check if the file survives:
 
@@ -79,6 +79,10 @@ To identify a data shape before naming an AWS service, evaluate four core operat
 
 By answering these questions, you prevent a common cloud mistake: treating storage services as interchangeable because they all ultimately hold bytes. Forcing every data shape into a single service out of familiarity leads to severe scaling limits, high operational costs, and catastrophic security risks. The data shape acts as the contract; the AWS service is the physical implementation.
 
+![Application state mapped to S3 objects, RDS relational data, DynamoDB key-value data, EBS block disks, EFS shared files, and recovery copies](/content-assets/articles/article-cloud-providers-aws-storage-databases-storage-database-mental-model/data-shape-map.png)
+
+*Start with the way the data behaves. Whole files, relational rows, key lookups, mounted disks, shared folders, and recovery copies each need a different storage interface because the application reads, changes, and protects them differently.*
+
 ## Objects
 
 Object storage is designed for data that the application treats as a whole, complete unit. A user profile image, a receipt PDF, a nightly financial spreadsheet export, an application log archive, or a software build artifact has an identity, binary contents, metadata, and access rules. The application does not update individual lines of these files in place. Instead, it writes or replaces the entire file, and later reads it back in full by its exact name.
@@ -97,11 +101,11 @@ Relational storage relies on database transactions, ensuring that complex checko
 
 ## Key-Value Data
 
-Some application data does not require database relationships or complex schema constraints. Instead, the application already knows the exact identity of the record it wants and needs to read or write it with sub-millisecond response times at extreme scale. An API security token, a user session cache, a feature flag setting, or an active shopping cart is key-shaped data. The application simply asks to get or set the value behind a specific key.
+Some application data does not require database relationships or complex schema constraints. Instead, the application already knows the exact identity of the record it wants and needs to read or write it with predictable low latency at high scale. An API security token, a user session cache, a feature flag setting, or an active shopping cart is key-shaped data. The application simply asks to get or set the value behind a specific key.
 
-Amazon DynamoDB is the serverless AWS database designed for this key-value shape. Unlike relational databases that must parse complex queries and scan multiple tables, DynamoDB routes requests directly to physical storage partitions by matching the unique primary key. This ensures that query speed remains constant, whether your table holds ten rows or ten billion rows.
+Amazon DynamoDB is the serverless AWS database designed for this key-value shape. Unlike relational databases that must parse complex queries and scan multiple tables, DynamoDB routes requests directly to storage partitions by matching the unique primary key. With a healthy key design and enough capacity, this keeps point lookups fast even as the table grows, though hot keys and uneven access patterns can still cause throttling.
 
-The core operational habit in key-value design is modeling around known access patterns. You must list every question your application needs to ask before creating the database table, as NoSQL databases do not support dynamic table joins. This model trades query flexibility for infinite horizontal scaling and predictable high-velocity performance.
+The core operational habit in key-value design is modeling around known access patterns. You must list every question your application needs to ask before creating the database table, as NoSQL databases do not support dynamic table joins. This model trades query flexibility for managed horizontal scaling and predictable high-velocity performance when your keys distribute traffic well.
 
 ## Attached Storage
 
@@ -109,7 +113,7 @@ Certain cloud workloads cannot communicate with databases or web APIs. Operating
 
 Attached storage provides this local filesystem interface directly to compute hosts, split into two primary AWS services:
 
-* **Amazon Elastic Block Store (EBS)**: This service provides raw virtual disk volumes that attach directly to a single running virtual server. EBS behaves exactly like a physical hard drive plugged into a server motherboard, delivering low-latency disk access. This makes EBS the ideal home for operating system boot drives, high-speed application caches, and raw database directories. However, EBS volumes are physically bound to a single Availability Zone and cannot be mounted across multiple separate servers or scaled horizontally across zones without manual snapshots.
+* **Amazon Elastic Block Store (EBS)**: This service provides raw virtual disk volumes that attach to EC2 instances inside one Availability Zone and appear to the operating system like local block devices. EBS delivers low-latency disk access for operating system boot drives, high-speed application caches, and raw database directories. However, standard EBS volumes are single-AZ resources and are normally attached to one instance at a time. Multi-Attach exists for specific io1/io2 volumes and clustered applications, but most apps should treat EBS as single-writer storage.
 * **Amazon Elastic File System (EFS)**: This service provides a managed, regional network directory. EFS supports standard operating system folder actions, including concurrent file locking, directory traversal, and raw appends. EFS can be mounted simultaneously by hundreds of virtual machines and container tasks across multiple Availability Zones in the Region. This regional scope makes EFS the correct choice for shared folders, collaborative processing jobs, and legacy vendor applications that expect a common, shared filesystem folder tree.
 
 Choosing between EBS, EFS, and S3 comes down to the interface your application code expects. If the workload can fetch files by name via web APIs, S3 is simpler and cheaper. If it truly needs local disk blocks, use EBS. If multiple workers must read and write to the same shared directory path, use EFS.
@@ -121,7 +125,7 @@ A storage architecture is incomplete until the data recovery path is fully desig
 Different storage shapes require different recovery mechanisms:
 
 * **Object Protection**: S3 manages recovery at the individual file key level. By enabling Object Versioning, the bucket maintains a historical stack of versions whenever a key is modified or overwritten. If a file is accidentally deleted, S3 appends a lightweight delete marker instead of purging data, allowing you to restore the file simply by deleting the marker. This protection must be paired with Lifecycle Policies to automatically purge old versions and contain monthly storage bills.
-* **Relational Protection**: RDS Relational databases combine daily baseline backups with continuous transaction log recording. This logging architecture enables Point-in-Time Recovery. If a corrupting database script executes in production, this recovery allows you to provision a fresh database instance, restore the last clean baseline backup, and replay the logs up to the exact second before the corruption occurred, preventing catastrophic data loss.
+* **Relational Protection**: RDS Relational databases combine daily baseline backups with continuous transaction log recording. This logging architecture enables Point-in-Time Recovery. If a corrupting database script executes in production, this recovery allows you to provision a fresh database instance, restore the last clean baseline backup, and replay logs near the chosen timestamp before the corruption occurred, sharply reducing data loss compared with daily snapshots alone.
 * **Attached Disk Protection**: EBS virtual disks rely on block-level incremental snapshots. When a snapshot is initiated, only the virtual disk sectors that have changed since the previous backup are copied, minimizing storage fees. To guarantee consistency when backup commands run on active hosts, you must instruct the operating system to write all cached data from memory onto the disk before backups occur.
 * **Centralized Coordination**: AWS Backup centralizes data protection policies across multiple distinct AWS resource types (EBS, RDS, EFS, DynamoDB) through a single dashboard. Instead of maintaining custom backup scripts, you define backup plans that automate backups based on resource tags (e.g. `BackupPlan=Production-Critical`). AWS Backup manages lifecycle rules, controls compliance audits, and secures snapshots inside protected vaults that can block accidental administrative deletion commands.
 
@@ -154,8 +158,8 @@ Our e-commerce orders application did not have a single storage problem; it had 
 | --- | --- | --- | --- | --- | --- |
 | **Amazon S3** | Whole immutable files (Objects) | API Key lookup | Overwrite whole file | Tens of milliseconds (HTTP) | Object Versioning & Lifecycle |
 | **Amazon RDS** | Relational rows (SQL tables) | Dynamic query (SQL) | Multi-table Transactions | Single-digit milliseconds | Point-in-Time Recovery logs |
-| **Amazon DynamoDB** | Schema-flexible items | Partition Key hashing | Single-key conditional writes | Sub-10 milliseconds | PITR & continuous backups |
-| **Amazon EBS** | Raw virtual disk sectors | Block read/write (OS) | Direct sector update | Microsecond-level local bus | Incremental block snapshots |
+| **Amazon DynamoDB** | Schema-flexible items | Partition Key hashing | Single-key conditional writes | Single-digit milliseconds for well-designed key access | PITR & continuous backups |
+| **Amazon EBS** | Raw virtual disk sectors | Block read/write (OS) | Direct sector update | Low-latency AZ-local block I/O | Incremental block snapshots |
 | **Amazon EFS** | Network directories | POSIX path walks (NFS) | Concurrent file locks/appends | Single-digit milliseconds | Regional filesystem replication |
 
 Understanding these stateful interfaces forms the baseline for secure cloud application design. By allowing each piece of data to explain its own operational requirements in plain English, you bypass the common architectural error of choosing a database out of habit, and establish a decoupled, resilient, and highly secure storage layer.
@@ -163,6 +167,10 @@ Understanding these stateful interfaces forms the baseline for secure cloud appl
 ## What's Next
 
 Now that we have established the overall data shape taxonomy, our next step is to examine the most common regional object container in the cloud: S3. In the next article, we will go deep into bucket architecture, key prefixes, private bucket security policies, lifecycle rules, large file uploads, and browser-safe direct upload delegation.
+
+![Six-tile data shape checklist covering placement unit, lookup method, modification style, recovery objective, latency need, and ownership boundary](/content-assets/articles/article-cloud-providers-aws-storage-databases-storage-database-mental-model/data-shape-checklist.png)
+
+*Use this as the data-shape checklist: identify the unit being stored, how code finds it, how updates happen, what restore point matters, how fast the access must be, and which team or boundary owns the data.*
 
 ---
 

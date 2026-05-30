@@ -37,6 +37,10 @@ Once you deploy that application into a distributed cloud environment like AWS, 
 
 If a customer encounters a timeout, you cannot attach an interactive debugger to production resources. There is no single console to watch. The application hosts are transient, meaning they scale out, scale in, and heal from underlying hardware failures automatically. If you attempt to diagnose failures by guessing which resource is saturated, you enter an expensive, high-risk troubleshooting cycle. To operate distributed cloud applications successfully, you must transition from local terminal snooping to a structured practice of cloud observability.
 
+![Observability mental model showing local debugging visibility changing into cloud systems that emit logs, metrics, and traces for answering operational questions](/content-assets/articles/article-cloud-providers-aws-observability-observability-mental-model/cloud-visibility-shift.png)
+
+*Observability replaces direct local inspection with emitted evidence. In the cloud, the request crosses separate runtimes, so logs, metrics, and traces become the way engineers reconstruct what happened.*
+
 ## What Is Observability
 
 Observability is the architectural practice of collecting, organizing, and correlating external outputs, known as telemetry, from a running system so that your engineering team can answer unexpected operational questions about its internal state. Observability means designing a system that leaves enough structured evidence in its wake that you can explain why a production failure occurred without having to reproduce the bug or make assumptions.
@@ -131,7 +135,7 @@ This loop starts with code instrumentation, where your application developers co
 
 When a metric crosses a defined performance boundary, such as the target response latency exceeding two seconds for three consecutive minutes, the alarm transitions to an active state. The alarm does not contact engineers directly. It publishes a structured message to an Amazon Simple Notification Service (SNS) topic, decoupling the alert trigger from the communication target.
 
-Downstream notification systems, such as PagerDuty or team Slack webhooks, subscribe to this SNS topic to dispatch alerts, paging the on-call engineer with direct links to the relevant cockpit dashboard. Simultaneously, the SNS topic can trigger automated self-healing actions, such as calling Auto Scaling policies to provision fresh ECS container tasks to handle the load spike, resolving the incident before human intervention is required.
+Downstream notification systems, such as PagerDuty or team Slack webhooks, subscribe to this SNS topic to dispatch alerts, paging the on-call engineer with direct links to the relevant cockpit dashboard. In more advanced systems, alarm actions or SNS subscribers can also trigger automation, such as invoking a Lambda runbook or adjusting an approved scaling path. Keep that automation narrow and observable; a self-healing loop that scales the wrong bottleneck can make an incident worse.
 
 ## Putting It All Together
 
@@ -148,6 +152,10 @@ By wrapping your cloud applications in structured metrics, real-time dashboards,
 ## What's Next
 
 We have established the core mental model of cloud observability, separating the distinct jobs of logs, metrics, and traces. But before we can query these signals, we must configure a durable networking pathway that captures application print streams and ships them securely into CloudWatch Logs. In the next article, we will go deep into CloudWatch Logs, configuring ECS and Lambda drivers, writing structured JSON payloads, and executing high-performance pipe-delimited Logs Insights queries.
+
+![Six-tile observability map checklist covering logs, metrics, traces, alarms, dashboards, and correlation](/content-assets/articles/article-cloud-providers-aws-observability-observability-mental-model/observability-map-checklist.png)
+
+*Use this as the observability map: logs preserve exact events, metrics compress trends, traces connect request paths, alarms turn signals into action, dashboards organize response, and correlation joins the evidence.*
 
 ---
 

@@ -21,7 +21,7 @@ aliases:
 
 ## What Is Metrics and Alerts
 
-A metric is a lightweight, numeric data value captured at uniform time intervals and structured as a multi-dimensional time series. An alert is a stateless background evaluation loop that continuously polls these metric streams against configured conditions, routing operational attention to engineers when thresholds are crossed. While detailed text logs and distributed traces are designed to help you diagnose the root cause of a specific failure, metrics and alerts are built to track the overall system health, monitor trends, and notify humans before users experience service degradation.
+A metric is a lightweight, numeric data value captured at regular intervals and structured as a multi-dimensional time series. An alert rule evaluates metrics or log query results against configured conditions, then routes operational attention to engineers when those conditions are met. Alerts can be stateful or stateless depending on the rule configuration. While detailed text logs and distributed traces are designed to help you diagnose the root cause of a specific failure, metrics and alerts are built to track the overall system health, monitor trends, and notify humans before users experience service degradation.
 
 If you operate monitoring systems on AWS, these concepts map directly to your existing mental models:
 
@@ -30,40 +30,38 @@ If you operate monitoring systems on AWS, these concepts map directly to your ex
 
 Understanding metrics and alerts means recognizing that you do not configure alerts for every single error or machine fluctuation. You design structured monitoring loops that separate normal system activity from user-visible pain.
 
-:::expand[Under the Hood: In-Memory Time-Series Storage and Alert Evaluation Loop Physics]{kind="design"}
-Azure Monitor separates metrics ingestion and alert evaluation from heavy log indexing to achieve ultra-low query latencies and immediate response times:
+:::expand[Under the Hood: Time-Series Metrics and Alert Evaluation]{kind="design"}
+Azure Monitor separates metrics from logs because numeric time-series data needs different behavior from detailed event records:
 
-* **In-Memory Time-Series Database Grid**: When a resource or application emits a metric, the data point bypasses traditional disk-based database indexes. Azure Monitor Metrics routes the value directly to a high-performance, in-memory time-series database. The engine stores metric values and their associated dimension tags (e.g., `Region: EastUS`, `APIPath: /checkout`) in pre-aggregated, double-delta compressed arrays. This architecture enables the metrics engine to process and plot millions of data points per second with sub-second retrieval times.
-* **Stateless Alert Evaluation Loop**: The Azure Monitor Alert Engine runs as a continuous, stateless background microservice. At your configured evaluation interval (e.g., every 1 minute), the engine executes a lightweight aggregation query against the in-memory metrics grid:
-    * **Latency Advantage**: Because the query target is in-memory and numeric, the aggregation completes in single-digit milliseconds, consuming almost zero disk I/O.
-    * **Consecutive Windows**: The engine evaluates the metric across your designated lookback window. If the value violates the alert threshold for the specified number of consecutive intervals (e.g., 3 out of 3 consecutive 1-minute intervals), the engine changes the alert state to `Fired`.
-    * **Asynchronous Dispatch**: The engine generates an alert payload and dispatches it asynchronously to the Azure Resource Manager (ARM) Action Group gateway, which routes the notification to external SMS providers, email servers, or webhook endpoints.
+* **Optimized Time-Series Database**: Azure Monitor Metrics stores numeric values with timestamps, resource identifiers, namespaces, metric names, and optional dimensions. Platform metrics are commonly collected at one-minute frequency unless a metric definition says otherwise.
+* **Metric Retention**: Platform and custom metrics in Azure Monitor Metrics are retained for 93 days, which makes them useful for recent trend analysis and alerting. Send metrics or logs to Log Analytics when you need longer-term retention and richer querying.
+* **Alert Evaluation**: Metric alert rules evaluate metric data on a configured frequency and over a configured time window. Some alerts automatically resolve when the condition is no longer met; stateless alerts can notify repeatedly according to their configuration. Action Groups route the resulting alert payload to email, SMS, voice, push, webhook, ITSM, or automation targets.
 
 ```mermaid
 flowchart TD
-    Resource["Compute VM / App Service"] -->|"High-Velocity Metric Streams"| InMemGrid["In-Memory Time-Series Database"]
-    
-    subgraph AlertEngine["Stateless Alert Evaluation Service"]
+    Resource["Compute VM / App Service"] -->|"Metric Streams"| MetricDB["Azure Monitor Metrics"]
+
+    subgraph AlertEngine["Alert Evaluation"]
         Evaluator["Lightweight Aggregation Query"] -->|"Evaluates every 1 Min"| ConditionCheck{"Threshold Violated?"}
         ConditionCheck -->|"No"| Idle["Keep Idle / Resolved State"]
         ConditionCheck -->|"Yes (Consecutive Windows)"| Transition["Transition State to Fired"]
     end
-    
-    InMemGrid -->|"Single-Digit ms Pull"| Evaluator
-    Transition -->|"Asynchronous Payload Dispatch"| ActionGateway["ARM Action Group Gateway"]
-    
+
+    MetricDB --> Evaluator
+    Transition -->|"Alert Payload"| ActionGateway["Action Group"]
+
     ActionGateway -->|"Email/SMS API"| OnCall["On-Call Page"]
     ActionGateway -->|"REST Webhook"| Automation["Auto-Scaling / Recovery Script"]
 ```
 :::
 
-This decoupled database design ensures that your alerting system remains operational and highly responsive even when primary logging databases are experiencing heavy ingest queues or storage latencies.
+This decoupled design means metric alerts can evaluate lightweight numeric signals without waiting for complex log searches. Use log search alerts when the condition genuinely requires KQL over detailed records.
 
 ## Platform vs. Custom Application Metrics
 
 To build a comprehensive operating view, you must combine infrastructure-side metrics with application-side metrics:
 
-* **Platform Metrics**: Auto-generated by Azure hypervisors and host blades without requiring code changes or application instrumentation. These metrics track physical resource constraints, network utilization, and database hardware pressure:
+* **Platform Metrics**: Created by Azure resources without requiring application code changes. These metrics track resource health, performance, throughput, and saturation:
     * **Compute (VM/App Service)**: CPU utilization percentage, memory saturation, replica instance count, and HTTP queue length.
     * **Databases (Azure SQL)**: CPU percentage, Database Transaction Unit (DTU) limits, remote storage I/O throughput, and active connection counts.
     * **Storage (Blob Storage)**: Total request volume, network egress bandwidth, and client throttling counts.
@@ -78,7 +76,7 @@ While platform metrics reveal whether your virtualized hardware is stable, custo
 A common monitoring failure is configuring alert rules for every individual resource metric without evaluating the customer impact. This leads to alert noise and on-call fatigue. To design high-signal alerts, differentiate between symptomatic and systemic signals:
 
 * **Symptomatic Alerts (Low-Level Resource Metrics)**: These rules alert on low-level machine fluctuations, such as a virtual machine crossing 90% CPU usage or a database experiencing a brief spike in active connections. Because transient background tasks (e.g., backup sweeps, scheduled log compression, or data exports) frequently trigger short CPU spikes without impacting user workflows, symptomatic alerts create constant false alarms.
-* **Systemic Alerts (User-Facing Workflow Metrics)**: These rules alert on indicators that represent true customer pain, such as the checkout API returning an error rate above 5% or p95 transaction response latencies exceeding 2 seconds for consecutive minutes. 
+* **Systemic Alerts (User-Facing Workflow Metrics)**: These rules alert on indicators that represent true customer pain, such as the checkout API returning an error rate above 5% or p95 transaction response latencies exceeding 2 seconds for consecutive minutes.
 
 ```text
 Systemic Alert: Checkout HTTP 5xx Error Rate > 5% (Pages On-Call)
@@ -90,11 +88,47 @@ Systemic Alert: Checkout HTTP 5xx Error Rate > 5% (Pages On-Call)
 
 Adopt a high-signal alerting posture: configure systemic alerts to page on-call engineers for critical user-facing workflow failures, and use symptomatic platform metric alerts as low-priority tickets or dashboard indicators to assist in diagnostic investigations.
 
+:::expand[Pitfall: Alert Storms from Symptomatic-Only Rules]{kind="pitfall"}
+A classic monitoring failure occurs when a platform team configures static, high-priority alerts on low-level resource metrics (such as VM CPU utilization > 80% or SQL Database CPU > 85%). During a transient, scheduled background task—such as a database backup sweep, a nightly log compression job, or a database index rebuild—the hardware will naturally run at maximum capacity. When this happens, a flurry of 40 separate alerts will fire simultaneously, flooding team channels, triggering pager calls, and masking the true state of the platform.
+
+The danger of this "alert storm" is two-fold:
+1.  **Drowned Signals**: During the storm, a genuine, high-severity outage (like a database deadlock or a network partition) might occur. Because the team is currently receiving dozens of automated backup alerts, the critical alert is drowned in the noise and missed.
+2.  **Alert Fatigue**: If engineers are repeatedly woken up at 3:00 AM by alerts that resolve themselves in ten minutes once the backup sweep finishes, they learn to ignore the paging system. This behavioral conditioning leads to delayed response times when a real database hardware failure occurs.
+
+This exact anti-pattern is common in AWS. If you provision static CloudWatch Alarms on every EC2 or RDS instance's `CPUUtilization` metric, you will trigger constant noise during nightly batch jobs or automated Aurora snapshots. The solution in both clouds is to avoid static CPU alerts for paging, utilizing AWS CloudWatch Anomaly Detection to build dynamic baselines, or alerting strictly on high-level user indicators such as Application Load Balancer `HTTPCode_Target_5XX_Count` or API Gateway latency.
+
+The top-down diagram below shows how low-level resource alerts create noise and drown out real user outages:
+
+```mermaid
+flowchart TD
+    subgraph ResourceSpike["Normal Background Task (No User Impact)"]
+        Backup["Database Backup Sweep"] -->|"CPU Spikes to 95%"| DBHost["Database Host"]
+        DBHost -->|"Symptomatic Alert Rule"| StaticAlert["SQL CPU > 85% Alert"]
+        StaticAlert -->|"Result"| AlertStorm["Alert Storm: 40 Pages Dispatched (Noise)"]
+    end
+
+    subgraph Outage["Real Outage (Severe User Impact)"]
+        Deadlock["SQL Transaction Deadlock"] -->|"CPU stays low, but queries block"| DBHost2["Database Host"]
+        DBHost2 -->|"Systemic Alert Rule"| SystemicAlert["Checkout API Error Rate > 5%"]
+        SystemicAlert -->|"Result"| RealPage["Critical PagerDuty Notification (Signal)"]
+    end
+
+    AlertStorm -.->|"Drowns out and fatigues engineers"| RealPage
+    RealPage -->|"Ignored as 'just another backup'"| OnCall["Engineer Delays Response"]
+```
+
+**Rule of thumb:** Never route low-level, symptomatic metric alerts to high-priority paging systems (like PagerDuty). If an alert does not require an immediate, manual action by an engineer to prevent user-visible downtime, relegate it to an offline dashboard or a low-priority ticket.
+:::
+
 ## Designing Resilient Alerts and Action Groups
 
 Azure Monitor supports two primary alert rule engines:
 
-* **Metric Alert Rules**: Evaluated against the high-performance, time-series metrics database. They support sub-minute polling intervals, evaluate quickly, and are highly reliable. Use metric alerts for all primary threshold rules.
+![An infographic showing a metric threshold, evaluation window, severity, action group, and alert](/content-assets/articles/article-cloud-providers-azure-observability-azure-metrics-dashboards-alerts/threshold-window-design.png)
+
+*Good alerts combine a metric threshold with an evaluation window so short spikes do not automatically page the team.*
+
+* **Metric Alert Rules**: Evaluated against the Azure Monitor Metrics time-series database. They support configurable evaluation frequency and are a strong fit for primary threshold rules over numeric signals.
 * **Log Search Alert Rules**: Evaluated by executing a scheduled KQL query against your Log Analytics workspace (e.g., counting the number of error rows written to `StorageBlobLogs` over the last 15 minutes). While log search alerts are highly flexible and can evaluate complex logs across multiple tables, they run against the columnar disk index, which introduces slightly higher evaluation latencies and query costs.
 
 When an alert rule triggers, it routes the payload to a reusable **Action Group**. The Action Group decouples the alerting logic from the notification channels:
@@ -111,6 +145,10 @@ Treat Action Groups as stable, version-controlled operational resources, ensurin
 
 Alert noise occurs when alerts fire too frequently, do not require human action, or monitor variables that do not affect users. High alert noise leads to alert fatigue, training engineers to ignore pages and increasing the resolution time for real production outages.
 
+![An infographic showing noisy alerts grouped, suppressed, scored by severity, and assigned to an owner](/content-assets/articles/article-cloud-providers-azure-observability-azure-metrics-dashboards-alerts/alert-noise-filter.png)
+
+*Alert design should reduce many events into one owned signal that a person can act on.*
+
 Implement these five design patterns to mitigate alert noise:
 
 1. **Alert on Sustained Rates, Not Single Events**: Do not alert on a single failed HTTP call or a brief transient CPU spike. Set rules to evaluate rates over consecutive intervals (e.g., "Failure rate is $>5\%$ across 3 consecutive 5-minute evaluation windows").
@@ -123,11 +161,16 @@ Implement these five design patterns to mitigate alert noise:
 
 Metrics and alerts establish a proactive operational loop that tracks system trends and coordinates human attention.
 
-* **In-Memory Speed**: Leverage Azure Monitor's in-memory time-series database to evaluate metric thresholds in milliseconds.
+* **Time-Series Metrics**: Use Azure Monitor Metrics for recent numeric trends, platform health, and fast threshold evaluation.
 * **Decoupled Routing**: Separate alert evaluation logic from notification channels by utilizing reusable, centralized Action Groups.
 * **Custom Context**: Combine automated platform metrics with custom application metrics to monitor both hardware constraints and business workflows.
 * **High-Signal Posture**: Prioritize systemic user-facing workflow alerts to page on-call engineers, and relegate symptomatic resource alerts to dashboards and ticketing systems.
 * **Noise Mitigation**: Track sustained failure rates across consecutive windows, utilize multi-dimensional metric splitting, and link operational runbooks directly to alert payloads to prevent on-call fatigue.
+
+![An infographic showing a metric alert loop from metric data through rule evaluation to action groups, on-call signals, thresholds, windows, severity, and suppression](/content-assets/articles/article-cloud-providers-azure-observability-azure-metrics-dashboards-alerts/metric-alert-loop.png)
+
+*Use this as the alert loop: pick the metric, define the threshold and window, route through an action group, and control noise so on-call signals stay trustworthy.*
+
 
 ---
 

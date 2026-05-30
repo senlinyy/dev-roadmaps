@@ -19,6 +19,7 @@ aliases:
 6. [Identity and the Default-Deny Access Gate](#identity-and-the-default-deny-access-gate)
 7. [Durable Log Streams Outside the Container](#durable-log-streams-outside-the-container)
 8. [Putting It All Together](#putting-it-all-together)
+9. [What's Next](#whats-next)
 
 ## The Local Laptop Baseline
 
@@ -52,7 +53,7 @@ This virtualization changes how you view compute. You are renting execution capa
 To make sense of the vast AWS console catalog, translate your familiar local laptop setup directly to its cloud-native counterparts. Every cloud resource is simply a specialized version of a job your laptop performed locally:
 
 * **Compute Execution**: Your local application process running on your laptop's CPU maps to ECS Fargate compute tasks in the cloud.
-* **Secrets Management**: Your plaintext `.env` file stored on local disk maps to encrypted Secrets Manager vaults in the cloud, which inject connection keys securely into your running container's memory.
+* **Secrets Management**: Your plaintext `.env` file stored on local disk maps to encrypted Secrets Manager vaults in the cloud. ECS can fetch those values when a task starts, or your application can retrieve them through the AWS SDK with its task role.
 * **Object Storage**: Your local files and exports written to your hard drive map to durable S3 object buckets in the cloud, ensuring files survive container restarts.
 * **Durable Database**: Your local database running on `localhost` maps to transactional RDS relational databases in the cloud.
 * **Observability Logs**: Your local terminal stdout scrollback maps to persistent CloudWatch log groups in the cloud, keeping your logs readable after the process exits.
@@ -75,21 +76,21 @@ On your laptop, your local user account has administrator sudo privileges. Your 
 
 In the cloud, this all-powerful default posture is a massive security vulnerability. If a container had unrestricted access to your entire AWS account, a single code vulnerability could allow an attacker to delete your databases or access other client data. To prevent this, AWS operates on a default-deny foundation governed by Identity and Access Management, commonly called IAM.
 
-Unless an action is explicitly allowed by a security policy, AWS blocks it. Every single request inside the cloud is an API call that must pass through the IAM permission gate. When your container attempts to write a file to an S3 bucket or read a database URL, AWS validates the task's identity first. It asks: Who is making the request, what specific action are they attempting, and what target resource is involved? Instead of hardcoding static password keys into your codebase, you assign a low-privilege IAM task role to your container, which dynamically assumes temporary, short-lived API credentials at runtime.
+Unless an AWS API action is explicitly allowed by a security policy, AWS blocks it. IAM evaluates AWS service API calls, not every TCP packet, database login, or operating system file read. When your container attempts to write an object to S3 or retrieve a database URL from Secrets Manager, AWS validates the task's identity first. It asks: Who is making the request, what specific action are they attempting, and what target AWS resource is involved? Instead of hardcoding static password keys into your codebase, you assign a low-privilege IAM task role to your container. The runtime exposes temporary credentials for that role, and the AWS SDK uses them to sign API requests.
 
 ![An infographic showing a task role request passing through an IAM gate that checks who, action, and resource before allowing S3 and Secrets Manager access or denying a database deletion](/content-assets/articles/article-cloud-providers-aws-foundations-aws-mental-model/iam-default-deny-gate.png)
 
 *IAM is the cloud permission checkpoint. A role can be allowed to read one secret or write one bucket while still being denied unrelated actions in the same AWS account.*
 
-Sensitive API credentials, like database connection strings, are vaulted inside AWS Secrets Manager. Secrets Manager encrypts the values at rest and decrypts them only when authorized by an IAM request, allowing your containers to securely pull database credentials at boot time without exposing them to developers or Git repositories.
+Sensitive API credentials, like database connection strings, are vaulted inside AWS Secrets Manager. Secrets Manager encrypts the values at rest and returns them only to authorized callers, allowing ECS task startup or application code to retrieve database credentials without storing plaintext values in Git repositories.
 
 ## Durable Log Streams Outside the Container
 
 When you test an application locally, troubleshooting is simple because the process runs directly in your active shell session. If an error occurs, you watch the traceback scroll by on your screen, or you open the terminal logs to inspect the failure.
 
-In the cloud, you do not have a terminal window to watch. Runtimes are headless and automated. If a container encounters a database connection error and crashes, the physical instance hosting the container is immediately destroyed by the scheduler, taking the terminal scrollback history with it.
+In the cloud, you do not have a terminal window to watch. Runtimes are headless and automated. If a container encounters a database connection error and exits, the scheduler may stop the task and replace it with a fresh task. The terminal scrollback history disappears with the stopped runtime unless the logs were already shipped somewhere durable.
 
-To diagnose failures, you must route all operational evidence to a persistent location that exists outside the compute runtime. CloudWatch Logs acts as this permanent vault, capturing the application's stdout and stderr streams and preserving them even after the container ceases to exist. CloudWatch Metrics tracks numeric trends, like database connection limits and memory leaks, while CloudTrail records every management API call in the account. Observability is the continuous practice of collecting these signals to verify that your system is performing as intended, turning mysterious cloud behavior into visible, debuggable evidence.
+To diagnose failures, you must route all operational evidence to a persistent location that exists outside the compute runtime. CloudWatch Logs acts as this permanent vault, capturing the application's stdout and stderr streams and preserving them even after the container ceases to exist. CloudWatch Metrics tracks numeric trends, like database connection limits and memory leaks, while CloudTrail records management API events in the account and can be configured for additional data events where needed. Observability is the continuous practice of collecting these signals to verify that your system is performing as intended, turning mysterious cloud behavior into visible, debuggable evidence.
 
 ![An infographic showing stdout, stderr, metrics, and CloudTrail events streaming from an app container into persistent evidence stores after the container stops](/content-assets/articles/article-cloud-providers-aws-foundations-aws-mental-model/observability-outside-runtime.png)
 
@@ -114,6 +115,10 @@ By mapping local concepts to their cloud-native equivalents and structuring them
 ![A six-part summary infographic for the AWS mental model covering the laptop baseline, compute, VPC isolation, IAM request gates, durable data, and logs outside runtime](/content-assets/articles/article-cloud-providers-aws-foundations-aws-mental-model/aws-mental-model-summary.png)
 
 *Use this as the short mental checklist: start from the laptop baseline, move code execution into managed compute, draw network boundaries with VPCs, gate every cloud request with IAM, keep durable data outside ephemeral runtimes, and preserve operational evidence after the runtime disappears.*
+
+## What's Next
+
+Now that the local-to-cloud mental model is clear, the next question is placement. AWS resources live inside accounts, Regions, Availability Zones, and subnets. The next article explains how those coordinates shape security boundaries, latency, and resilience.
 
 ---
 

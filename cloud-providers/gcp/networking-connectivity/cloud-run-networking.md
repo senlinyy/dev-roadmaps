@@ -12,186 +12,144 @@ aliases:
 
 ## Table of Contents
 
-1. [The Problem](#the-problem)
-2. [Ingress](#ingress)
-3. [IAM And Ingress](#iam-and-ingress)
-4. [Egress](#egress)
-5. [Direct VPC Egress](#direct-vpc-egress)
-6. [Private Ranges](#private-ranges)
-7. [All Traffic](#all-traffic)
-8. [Startup Checks](#startup-checks)
-9. [Evidence](#evidence)
-10. [Putting It All Together](#putting-it-all-together)
-11. [What's Next](#whats-next)
+1. [Cloud Run Ingress and Egress](#cloud-run-ingress-and-egress)
+2. [Inbound Ingress Settings and Path Protection](#inbound-ingress-settings-and-path-protection)
+3. [Outbound Egress Modes](#outbound-egress-modes)
+4. [The IMDS Workload Token Exchange](#the-imds-workload-token-exchange)
+5. [Putting It All Together](#putting-it-all-together)
+6. [What's Next](#whats-next)
 
-## The Problem
+## Cloud Run Ingress and Egress
 
-Cloud Run makes deployment feel simple. You give it a container, and Google runs instances when requests arrive. That simplicity can hide two different network edges.
+When you use serverless platforms like Google Cloud Run, your containerized application runs on physical servers managed entirely by Google. You do not have to configure virtual machines, set up operating systems, or manage scaling limits. However, removing server management does not eliminate the need for network planning. To operate a secure serverless service, you must treat your container's networking like designing the doors of a highly secure building. You must configure two completely separate paths: the inbound "front door" (how users and other services reach your container) and the outbound "back door" (where your container goes to fetch data or call external APIs).
 
-- Users or load balancers need to reach the service over HTTPS.
-- The service needs to call Cloud SQL, Google APIs, and sometimes private addresses in a VPC.
-- A team sets the service to require authentication and assumes that means the network is private.
-- Another team configures private egress and assumes that means the public URL is no longer reachable.
+![Ingress controls who can reach the service. Egress controls where the service sends outbound traffic.](/content-assets/articles/article-cloud-providers-gcp-networking-connectivity-cloud-run-networking-private-egress/ingress-egress-map.png)
 
-Cloud Run networking is easier when you split the directions. Ingress is about who can reach the service. Egress is about where the service sends outbound traffic. IAM authentication is related to ingress, but it is not the same thing as network reachability.
+*Read the two sides separately when debugging access.*
 
-## Ingress
+The inbound path is called ingress. It determines who is allowed to walk through your front door. For example, you can choose to make your container's public URL accessible to anyone on the public street (internet), or lock it down so only visitors arriving from inside your private VPC network (or guided through your global load balancer) are permitted to enter.
 
-Ingress controls which network paths can reach a Cloud Run service. A service can be reachable from the public internet, only through internal paths, or through selected load balancer and internal patterns depending on the chosen setting.
+The outbound path is called egress. It dictates where your container can go when it opens its back door to send a network request. For example, when your application code needs to save data, it can make requests out to the public internet (default internet egress), or route privately through a secure tunnel directly to your internal database subnet (VPC egress) completely separated from the public street.
 
-Ingress and invocation permission answer different questions. Ingress is the reachability gate. If the path is blocked by ingress, the request should not get to the service as an invocable request. If the path is allowed, IAM may still require an authenticated principal.
+By separating ingress from egress, you protect your system from common security holes. You can ensure that a backend processing container can access private internal databases securely through its back door, while keeping its front door completely locked and invisible to any unsolicited public internet requests.
 
-For the Orders API, a common production shape is:
+## Inbound Ingress Settings and Path Protection
 
-| Caller path | Ingress decision |
-| --- | --- |
-| Public users through external load balancer | Allow the load balancer path |
-| Random direct internet caller to generated URL | Block or avoid depending on design |
-| Internal service in the same environment | Allow only if the architecture needs internal calls |
+When you deploy a Cloud Run service, the platform assigns it a default public URL (e.g. `https://orders-api-123.a.run.app`). To prevent clients from bypassing your public entry points (like load balancers or API gateways), you must configure **Ingress Settings**:
 
-The key review question is plain: should this Cloud Run service be directly public, or should it only be reached through the public entry point you designed?
+*   **All (Public)**: The default setting. The service is reachable directly from the public internet using the generated platform URL or any custom domain mapping.
+*   **Internal**: The service is only reachable from resources within the same VPC network (via VPC connectors or Direct VPC egress) or other serverless services.
+*   **Internal and Cloud Load Balancing**: The service is only reachable from your external Application Load Balancer (via Serverless NEGs) or from internal VPC resources.
 
-## IAM And Ingress
+These settings are the serverless equivalents of AWS Target Group path restrictions or Azure Container Apps Ingress Access Restrictions. They isolate your microservice, ensuring that public users cannot discover and invoke your raw container endpoints directly.
 
-IAM answers who may invoke a service when authentication is required. Ingress answers where requests may come from. Those checks can work together, but they solve different problems.
+The setting is enforced by Cloud Run's ingress control. Google documents the outcome rather than a header algorithm: direct internet calls to the raw service URL are blocked, while traffic from the allowed load-balancer or internal paths can reach the service.
 
-If a service allows public ingress but requires IAM, an unauthenticated public request may reach the service edge and then be rejected for lack of permission. If a service blocks the network path through ingress, adding an IAM role to the caller does not open that path.
+```mermaid
+flowchart TD
+    PublicUser["Public User Request"]
+    AdminVPN["Admin VPN Route"]
 
-This distinction prevents a common production mistake. A team locks down IAM and leaves an unintended network path open. Another team restricts ingress and then debugs an IAM role that was never reached. Read the failure carefully: a network-style rejection and an IAM permission denial point to different controls.
+    subgraph GoogleEdge["Cloud Run Ingress Gate"]
+        IngressCheck{"Ingress Locked to<br/>Internal & LB?"}
+    end
 
-| Control | Question |
-| --- | --- |
-| Ingress | Is this request path allowed to reach the service? |
-| IAM | Is this caller allowed to invoke the service? |
-| Application auth | Is this user or token allowed inside the app's own model? |
+    subgraph CloudRunService["Cloud Run Service"]
+        AppContainer["Application Container"]
+    end
 
-Cloud Run can be simple, but public security still has layers.
+    PublicUser -->|1. Direct to a.run.app URL| IngressCheck
+    AdminVPN -->|1. Through Internal VPC Path| IngressCheck
 
-## Egress
+    IngressCheck -->|Direct public path not allowed| Denied["403 Forbidden"]
+    IngressCheck -->|Allowed load balancer or internal path| AppContainer
+```
 
-Egress controls where outbound traffic from the Cloud Run service goes. A service might call public APIs, Google APIs, private VM addresses, Cloud SQL private IPs, or internal services. Each destination may need a different path.
+This is separate from IAM authentication. A service can have public ingress but still require callers to have the Cloud Run Invoker permission. A service can also allow unauthenticated invocation but restrict which network paths are accepted. Read ingress and IAM as two gates, not one.
 
-By default, Cloud Run can make outbound requests without you manually attaching it to a subnet. That is fine for many public API calls. It is not enough when the destination is a private address inside a VPC or when the team wants outbound traffic to leave through a controlled VPC path.
+## Outbound Egress Modes
 
-For the Orders API, egress questions include:
+Outbound egress controls where your container sends packets. When your code makes an HTTP request or establishes a TCP socket, Cloud Run routes the packets based on your configured egress path:
 
-| Destination | Network question |
-| --- | --- |
-| Public payment API | Can normal outbound internet access reach it, and should egress be controlled? |
-| Secret Manager | Is the Google API reachable, and does IAM allow access? |
-| Cloud SQL private IP | Does Cloud Run have a VPC egress path to the private address? |
-| Internal VM service | Does the VPC route and firewall allow the path? |
+*   **Default Internet Egress**: Outbound packets leave the container over Google's public shared routing fabric, assigning a dynamic public IP address to the connection. This works for calling external API endpoints but cannot reach private resources inside a VPC.
+*   **VPC Egress**: Routes outbound packets through a dedicated subnet interface inside your VPC network.
 
-Egress is not "turn on private networking." It is choosing the outbound path for the destinations the service actually uses.
+When VPC Egress is active, you must choose a routing policy:
 
-## Direct VPC Egress
+*   **Private Ranges Only**: The default VPC routing policy. Only packets destined for RFC 1918 private IP address blocks (such as `10.0.0.0/8`, `172.16.0.0/12`, or `192.168.0.0/16`) are routed through your VPC subnet. All other outbound traffic to the public internet or public Google APIs bypasses the VPC, routing over Google's default internet paths.
+*   **All Traffic**: Forces every outbound packet (including public internet calls) to route through your VPC subnet. This policy is necessary when you must inspect all outbound traffic or route all public requests through a static IP address via a Cloud NAT gateway.
 
-Direct VPC egress lets a Cloud Run service send traffic directly to a VPC network without a Serverless VPC Access connector. It gives the service a VPC network and subnet path for outbound traffic.
+:::expand[Design Detail: Direct VPC Egress Behavior]{kind="design"}
+Historically, serverless runtimes often routed outbound VPC traffic through a Serverless VPC Access connector, a dedicated managed connector that acted as a transit bridge. Direct VPC egress lets Cloud Run send outbound traffic to a VPC network without that connector.
 
-This is often the clearer starting point for new Cloud Run services that need private addresses. The service still runs as Cloud Run. You are not placing a fleet of VMs. You are configuring how outbound packets that need VPC reachability leave the service.
+The documented behavior is the important part. Cloud Run allocates ephemeral IP addresses from the selected subnet for outbound VPC traffic. During scale-up, the platform can reserve IP addresses in blocks, so subnet sizing matters. Google recommends allowing enough free IP space, and small subnets can become a scaling bottleneck.
 
-The subnet choice matters. If the service runs in `us-central1`, use a subnet in the right region and make sure the IP range has room for the egress behavior you expect. If the destination is a private managed service, the VPC also needs the correct private access pattern.
+Direct VPC egress affects outbound traffic only. It does not make a Cloud Run service reachable from your VPC by inbound TCP connections. Cloud Run services and jobs do not support Direct VPC ingress, so inbound access still uses Cloud Run ingress settings, load balancers, IAM, and service URLs.
 
 ```mermaid
 flowchart LR
-    Run["Cloud Run service"] --> Egress["Direct VPC egress"]
-    Egress --> Subnet["subnet-orders-app-us-central1"]
-    Subnet --> SQL["Cloud SQL private IP"]
-    Subnet --> VM["Internal VM service"]
+    subgraph CloudRun["Cloud Run Service"]
+        AppCode["Application Code<br/>(e.g., Node/Go/Python)"]
+        EgressSetting["Direct VPC egress setting"]
+    end
+
+    subgraph UserVPC["Customer VPC Network"]
+        AppSubnet["Subnet: subnet-orders-app-us-central1"]
+        PrivateDB["Private database IP"]
+    end
+
+    AppCode -->|1. Connect to private address| EgressSetting
+    EgressSetting -->|2. Use subnet IP capacity| AppSubnet
+    AppSubnet -->|3. Route to private target| PrivateDB
 ```
 
-The diagram shows only outbound traffic. It does not say who can call Cloud Run inbound.
+When your application initiates a socket connection to a private database, Cloud Run uses the configured egress mode to decide whether the connection should leave through the VPC subnet. With `private-ranges-only`, private address ranges go through the VPC and other traffic uses the default path. With `all-traffic`, all outbound traffic goes through the VPC, which is useful when you need Cloud NAT, inspection, or a controlled egress path.
+:::
 
-## Private Ranges
+## The IMDS Workload Token Exchange
 
-Cloud Run egress settings can send only private-range traffic through the VPC path while leaving other outbound traffic on the normal internet path. This is a useful default when the service only needs VPC egress for private addresses.
+Securing serverless database and API connections requires you to avoid hardcoding static credentials inside container configurations. Cloud Run solves this by letting the service run as a service account and by exposing metadata access that Google client libraries can use to obtain short-lived credentials.
 
-For example, the Orders API might send `10.30.0.0/16` traffic through the VPC path to reach private services, while calls to a public payment API use normal outbound internet. That keeps the VPC path focused on private dependencies.
+![Private network paths and metadata identity checks work together before managed services trust a request.](/content-assets/articles/article-cloud-providers-gcp-networking-connectivity-cloud-run-networking-private-egress/private-egress-token.png)
 
-The gotcha is destination classification. If a service endpoint is a public Google API, it may not behave like a private RFC 1918 address. If the team needs all Google API calls or all outbound traffic to use a controlled private path, private-ranges-only may not express the policy. The destination and policy have to match.
+*Network privacy does not replace IAM. Both paths must pass.*
 
-| Egress mode | Good fit |
-| --- | --- |
-| Private ranges only | Service needs VPC access for private IP destinations |
-| All traffic | Service needs every outbound request to use the VPC path |
+Cloud Run supports metadata access through the local metadata hostname. The point is not the sandbox implementation; the point is that the workload can request credentials for its attached service account without storing a key file.
 
-Private ranges only is not weaker by default. It is just narrower. Use it when the destination set is truly private ranges.
+When your container code or SDK client attempts to access a resource (such as reading a database key or calling Secret Manager), it initiates a dynamic handshake:
 
-## All Traffic
+1.  **Local Fetch**: The application issues an HTTP GET request to `http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token` with the required header `Metadata-Flavor: Google`.
+2.  **Runtime Identity Check**: The runtime knows which service account is attached to the Cloud Run revision.
+3.  **Token Issuance**: Google returns a short-lived OAuth2 access token for that service account.
 
-All-traffic egress sends every outbound request through the VPC path. This can be useful when the team wants central egress controls, NAT behavior, inspection, or private Google API access patterns to apply to all outbound traffic.
+The application container injects this token into its outbound Bearer headers to access resources securely, ensuring that no static keys ever reside on disk or in environment variables.
 
-The tradeoff is that the VPC path now has to support everything the service calls. Public internet APIs may need Cloud NAT or another egress route. Google API access may need the right private access design. Firewall and route restrictions can break dependencies that previously worked through the default Cloud Run outbound path.
-
-Before choosing all traffic, write down the outbound dependency list:
-
-| Dependency | Needed path |
-| --- | --- |
-| Cloud SQL private IP | VPC private path |
-| Secret Manager | Google API access plus IAM |
-| Cloud Storage | Google API access plus IAM |
-| Payment provider | Internet egress path |
-| Internal worker | VPC route and firewall |
-
-All traffic gives more central control. It also makes the VPC egress design responsible for more destinations.
-
-## Startup Checks
-
-Cloud Run scales instances as traffic arrives. Network mistakes can show up during startup and during long-running requests. A service may fail to become ready because it tries to connect to a private database, fetch a secret, or call a dependency before serving requests.
-
-That does not mean every dependency should be called at startup. It means startup behavior should be intentional. If startup requires a private connection, the egress path, route, firewall, DNS, and IAM need to be correct before the revision receives traffic.
-
-Useful startup evidence includes:
-
-```text
-revision: orders-api-00042
-ingress: load-balancer-and-internal
-egress: direct-vpc, private-ranges-only
-subnet: subnet-orders-app-us-central1
-startup dependency: Cloud SQL private IP
-failure shape: timeout, permission denied, or DNS resolution error
-```
-
-The failure shape matters. Timeout points toward path, route, firewall, or DNS. Permission denied points toward IAM or database credentials. A refused connection points toward the destination service and port.
-
-## Evidence
-
-A Cloud Run network review should name both edges:
-
-```text
-service: devpolaris-orders-api
-region: us-central1
-ingress: load balancer path only
-invocation: authenticated where required
-egress mode: direct VPC egress, private ranges only
-egress subnet: subnet-orders-app-us-central1
-private dependency: Cloud SQL private IP
-public dependency: payment API over HTTPS
-logs: request logs and startup logs reviewed
-```
-
-That note gives incident responders a starting point. If public requests fail, start with DNS, load balancer, ingress, IAM, and revision traffic. If private database calls fail, start with egress, VPC path, private access, DNS, firewall, and database permission.
+This metadata path gives your container libraries a uniform lookup target, enabling passwordless authentication without local private keys.
 
 ## Putting It All Together
 
-Return to the opening problems.
+Let's trace how the inbound and outbound edges work together on a Cloud Run microservice.
 
-Users reaching the service are an ingress question. Decide whether callers can use the generated Cloud Run URL, a custom domain, a load balancer path, internal paths, or some combination.
+By setting your service's ingress to `internal-and-cloud-load-balancing`, you ensure that inbound user traffic must arrive through the allowed load-balancer path or an allowed internal path, protecting your container from direct raw internet access.
 
-The service calling Cloud SQL is an egress question. If the database uses a private IP, Cloud Run needs a VPC egress path and the managed service private access design must exist.
+For outbound traffic, you enable Direct VPC egress bound to your regional subnet. When the application container makes a private database call, Cloud Run routes that outbound connection through the configured VPC egress path and consumes subnet IP capacity during scaling.
 
-IAM authentication and ingress are separate gates. Requiring an authenticated invoker can reject callers, but it does not by itself decide which network paths are allowed.
-
-Private egress is not the same as hiding the public URL. Egress controls outbound traffic. Ingress controls inbound reachability. Keeping those directions separate makes Cloud Run feel much less mysterious.
+Finally, the application uses Cloud Run service identity and metadata-backed credentials to acquire short-lived OAuth2 tokens. The private network path gets packets to the right place, and IAM decides whether the service account is allowed to use the target Google API.
 
 ## What's Next
 
-Cloud Run can send traffic into a VPC, but some destinations are managed services that do not simply live inside your subnet. Next, we look at private access to Cloud SQL, Google APIs, and service-oriented private endpoints.
+Cloud Run can now send traffic into a VPC. However, many backing resources (such as relational databases or managed object storage) are managed services that do not simply sit in your subnet. In the next article, we detail Private Access, focusing on Private Services Access peering, Private Google Access DNS virtual IPs, and Private Service Connect proxy gateways.
+
+![A six-part summary infographic for cloud run networking summary covering Ingress mode, Internal path, VPC connector, Private egress, Metadata token, IAM check](/content-assets/articles/article-cloud-providers-gcp-networking-connectivity-cloud-run-networking-private-egress/cloud-run-networking-summary.png)
+
+*Use this summary as the quick mental checklist before designing or debugging the service.*
+
 
 ---
 
 **References**
 
-- [Google Cloud: Cloud Run ingress settings](https://cloud.google.com/run/docs/securing/ingress)
-- [Google Cloud: Configure Direct VPC egress](https://cloud.google.com/run/docs/configuring/vpc-direct-vpc)
-- [Google Cloud: Serverless VPC Access](https://cloud.google.com/vpc/docs/serverless-vpc-access)
+- [Google Cloud: Cloud Run ingress settings](https://cloud.google.com/run/docs/securing/ingress) - Core guide to restricting inbound access to serverless runtimes.
+- [Google Cloud: Configure Direct VPC egress](https://cloud.google.com/run/docs/configuring/vpc-direct-vpc) - Specification for direct virtual network interface mounting.
+- [Google Cloud: Cloud Run authentication overview](https://cloud.google.com/run/docs/authenticating/overview) - Explains Cloud Run Invoker checks and unauthenticated access.
+- [Google Cloud: Cloud Run service identity](https://cloud.google.com/run/docs/securing/service-identity) - Explains service accounts and runtime credentials.

@@ -26,7 +26,7 @@ When you are the only developer working on a local laptop app, team collaboratio
 
 However, the moment you move your application to the cloud to share it with users, your team begins to grow. You invite other developers, testers, and operations engineers to help manage the workload. In this shared environment, giving everyone direct access to a single cloud sandbox leads to immediate friction and critical errors. A developer attempting to clean up a staging test environment can accidentally delete the live, customer-facing database if all resources reside in the same flat area.
 
-To prevent these accidents, you must establish logical boundaries. The strongest logical boundary you can create in AWS is the AWS account. An account is a completely self-contained digital container. It features its own unique 12-digit account ID, independent identity namespace, separate billing ledger, dedicated service quotas, and absolute isolation from every other account.
+To prevent these accidents, you must establish logical boundaries. The strongest everyday boundary you can create in AWS is the AWS account. An account has its own unique 12-digit account ID, identity namespace, billing ledger, service quotas, and policy boundary. It is not a physical wall around servers, and it is not impossible to cross. Cross-account access is common in mature AWS environments, but it must be configured deliberately through trust policies, resource policies, organizations, or shared networking.
 
 AWS makes this logical coordinate visible in every CLI session. Before running any command, you must verify which account ID and role your terminal is actively targeting:
 
@@ -40,7 +40,7 @@ $ aws sts get-caller-identity
 
 The Account field shows the exact logical container targeted by your session. The Arn field shows the assumed identity role.
 
-Understanding this wall changes how your team collaborates. By treating the account as a solid security perimeter, you ensure that raw developer experiments are physically isolated at the account edge. A developer can run testing scripts or break databases in their private workspace without any risk of affecting live customer transactions, because the account wall has no default administrative path across it.
+Understanding this boundary changes how your team collaborates. By treating the account as a strong logical security perimeter, you ensure that raw developer experiments do not share the same default administrative space as production. A developer can run testing scripts or break databases in a development account without a default path to live customer transactions, because cross-account access has to be granted on purpose.
 
 ![An infographic showing AWS placement as nested coordinates from account to Region to Availability Zone to subnet](/content-assets/articles/article-cloud-providers-aws-foundations-accounts-regions-availability-zones/aws-coordinate-nesting.png)
 
@@ -48,7 +48,7 @@ Understanding this wall changes how your team collaborates. By treating the acco
 
 ## Isolating Environments by Risk Profiles
 
-Because the account is a solid perimeter, you must use separate accounts to isolate different stages of your application lifecycle. You do not need a separate account for every individual microservice, but you must split environments that require different administrative permissions or operate under different threat vectors.
+Because the account is a strong logical perimeter, you should use separate accounts to isolate different stages of your application lifecycle. You do not need a separate account for every individual microservice, but you should split environments that require different administrative permissions or operate under different threat vectors.
 
 At a minimum, keep production and non-production environments in completely isolated accounts. In a development account, developers need wide administrative access to experiment, destroy databases, and spin up new services. In a production account, permissions must be tightly restricted, allowing changes only through automated, audited deployment pipelines.
 
@@ -71,28 +71,41 @@ A common point of confusion is S3 object storage. While S3 bucket names are glob
 
 ## Availability Zones and Physical Resiliency
 
-Within every geographic Region, AWS physical infrastructure is divided into isolated data center clusters called Availability Zones, commonly abbreviated as AZs. A Region typically contains three or more AZs, identified by letters at the end of the Region name, such as `eu-west-2a`, `eu-west-2b`, and `eu-west-2c`.
+Within every geographic Region, AWS physical infrastructure is divided into isolated data center clusters called Availability Zones, commonly abbreviated as AZs. A Region typically contains three or more AZs, identified in your account by letters at the end of the Region name, such as `eu-west-2a`, `eu-west-2b`, and `eu-west-2c`.
 
 An Availability Zone is not a single server rack. It is a physically separate cluster of data centers, sitting on distinct flood plains, utilizing independent power grids, and featuring dedicated cooling systems and backup generators. AZs are cabled together with high-bandwidth, redundant, low-latency private fiber lines, but they are physically distant enough that a localized disaster (like a grid outage or flood) in one zone will not affect the others.
+
+One cross-account gotcha matters early: AZ names are account-mapped. `us-east-1a` in one AWS account may not be the same physical zone as `us-east-1a` in another account. AWS also exposes stable AZ IDs, such as `use1-az1`, so platform teams can coordinate the same physical zone across accounts when they design shared networks or disaster recovery layouts.
 
 Availability Zones address physical infrastructure survivability. While a Region asks which geographic country or territory your resources should inhabit, the Availability Zone asks how many physically isolated locations you should spread your app across to withstand local failures. If you run all application compute tasks in a single zone, your system has a single point of physical failure.
 
 ## Zonal Subnets and Multi-AZ Design
 
-To achieve physical resilience, you must understand how network design interacts with physical zones. While a Virtual Private Cloud (VPC) spans the entire Region, an individual subnet is strictly bound to a single Availability Zone.
+Start with the placement rule: a VPC is Regional, but a subnet is zonal. A Virtual Private Cloud (VPC) is the private network boundary you create inside one AWS Region. It can contain subnets in several Availability Zones in that Region. A subnet is smaller. It is one range of private IP addresses, and AWS attaches that range to exactly one Availability Zone.
 
-This zonal nature means that simply having a regional VPC is not enough to survive failures. You must actively duplicate your subnet tiers across multiple Availability Zones and instruct your compute and database engines to deploy resources into those dynamic subnets.
+That means choosing a subnet also chooses the physical zone where the resource lands. If you launch an EC2 instance, ECS task, load balancer node, or database network interface into a subnet in `eu-west-2a`, that network placement is tied to `eu-west-2a`. The VPC can still span the whole Region, but the resource's actual network doorway sits inside one zone.
+
+This is why a Regional VPC by itself does not make an application resilient. If production has only one public subnet and one private subnet, both in the same Availability Zone, every important network path is still concentrated in that one physical location. When that zone has a power, cooling, fiber, or control-plane problem, the VPC may still exist, but your application has no healthy second subnet tier to use.
+
+The beginner-friendly Multi-AZ pattern is to repeat the role of each subnet tier across zones. Create a public subnet in AZ A and another public subnet in AZ B for load balancer entry points. Create a private application subnet in AZ A and another private application subnet in AZ B for compute. Then configure the service with the full subnet list, so AWS can place healthy copies in more than one zone and stop sending traffic to the failed zone.
+
+| Design object | Scope | Beginner rule |
+| --- | --- | --- |
+| VPC | Region | One private network boundary for the Region. |
+| Subnet | One Availability Zone | Choosing the subnet chooses the physical zone. |
+| Public/private tier | Repeated per zone | Copy the same tier role into at least two AZs. |
+| Load-balanced service | Uses a subnet list | Give the service subnets in multiple AZs so it has somewhere healthy to run. |
 
 ![An infographic showing a Regional VPC duplicated across two Availability Zones with traffic continuing through the healthy zone when one zone fails](/content-assets/articles/article-cloud-providers-aws-foundations-accounts-regions-availability-zones/multi-az-placement.png)
 
-*A VPC is Regional, but subnets are zonal. Multi-AZ designs repeat public and private subnet tiers across AZs so traffic can keep flowing when one physical zone fails.*
+*A VPC gives you one Regional network, but each subnet is still inside one AZ. Multi-AZ design means repeating the same public and private subnet roles in multiple AZs, then giving services the full subnet list so traffic can move to the healthy zone.*
 
 ## Global, Regional, and Zonal Scopes
 
 As you build your cloud inventory, you will interact with resources that operate at different physical scales. AWS categorizes resources into three distinct scopes, which dictates how they fail, where they are visible in the console, and how you target them:
 
 * **Zonal Scope**: Resources physically tied to a single Availability Zone, such as an EC2 instance, an EBS volume, or an individual subnet. If that zone has a physical outage, the zonal resource is directly impacted.
-* **Regional Scope**: Resources distributed across multiple zones in a single Region, such as a VPC, an Application Load Balancer, an RDS database, or an S3 bucket. They can survive zonal failures but remain isolated within the geographic Region boundary.
+* **Regional Scope**: Resources owned by one Region, such as a VPC, an Application Load Balancer, an RDS database, or an S3 bucket. Regional scope means the resource is found through that Region's control plane. It does not automatically mean every deployment survives an AZ failure; RDS needs Multi-AZ configuration, and load balancers need enabled zones and healthy targets.
 * **Global Scope**: Resources that operate across the entire global AWS partition, such as IAM roles, Route 53 DNS records, and CloudFront CDN distributions. They support your Regional workloads but are not owned by any single Region.
 
 A common beginner mistake is searching for a Regional database while the console Region selector is set to the wrong Region, leading the developer to believe the resource has been deleted. Aligning your documentation with these scopes ensures you always target the correct resource coordinate.
@@ -114,7 +127,7 @@ By documenting and validating logical perimeters, geographic regions, and physic
 
 ![A six-part summary infographic for AWS accounts, Regions, and zones covering account isolation, environment separation, Regional placement, Multi-AZ resilience, zonal subnets, and scope tracking](/content-assets/articles/article-cloud-providers-aws-foundations-accounts-regions-availability-zones/accounts-regions-zones-summary.png)
 
-*Use this as the short placement checklist: isolate risk with accounts, split dev and prod, choose Regions deliberately, spread resilient systems across AZs, remember subnets are zonal, and track every resource by scope.*
+*Use this as the short placement checklist: isolate risk with accounts, split dev and prod, choose Regions deliberately, use AZ IDs for cross-account physical placement, spread resilient systems across AZs, remember subnets are zonal, and track every resource by scope.*
 
 ---
 

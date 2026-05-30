@@ -33,7 +33,7 @@ However, once you are ready to host that container image in the cloud for real u
 * How do we grant secure AWS API permissions to the application code running *inside* the container, without baking permanent credentials into the image?
 * Where do container boot-up errors, environment config failures, and standard print logs go once the container leaves your terminal screen?
 
-The hard part of container hosting in the cloud is not building the Docker image. It is turning the container package into a resilient, load-balanced application service. To do this, you need a container orchestrator that coordinates container lifecycles, monitors process health, manages network interfaces, translates ingress traffic, and aggregates logs durable in the background.
+The hard part of container hosting in the cloud is not building the Docker image. It is turning the container package into a resilient, load-balanced application service. To do this, you need a container orchestrator that coordinates container lifecycles, monitors process health, manages network interfaces, translates ingress traffic, and aggregates logs durably in the background.
 
 ## What Is ECS
 
@@ -56,6 +56,10 @@ flowchart TD
 This model is a highly integrated pipeline. The container image in Amazon ECR moves into a Task Definition configuration. An ECS Service uses that task definition to start running Tasks on Fargate managed compute. 
 
 The Application Load Balancer routes incoming user traffic through a Target Group directly to the private network interfaces of those tasks, while the container's standard output is captured and streamed to CloudWatch Logs.
+
+![ECS Fargate path from ECR image and task definition to ECS service, Fargate tasks, IP target group, ALB, roles, and logs](/content-assets/articles/article-cloud-providers-aws-compute-application-hosting-ecs-and-fargate/container-to-service-map.png)
+
+*An ECS service turns a static image into a living backend. The service maintains task count, Fargate gives each task a private network interface, the target group tracks changing task IPs, and logs plus roles leave clear side channels for operations and security.*
 
 ## Task Definitions and Running Tasks
 
@@ -99,18 +103,18 @@ When deploying containers in ECS, you must choose where the tasks physically exe
 
 In an EC2-backed cluster, you are responsible for managing the cluster's virtual servers. You must launch EC2 instances, install the container runtime, maintain the ECS host agent, patch the host operating systems, and coordinate how tasks are packed onto instances to optimize CPU usage.
 
-AWS Fargate completely eliminates this host server fleet management. Fargate is serverless compute for containers. With Fargate, you do not launch or patch virtual servers; you specify the exact CPU and memory your task needs, and Fargate instantly provisions the required virtual hardware inside an AWS-managed boundary.
+AWS Fargate completely eliminates this host server fleet management. Fargate is serverless compute for containers. With Fargate, you do not launch or patch virtual servers; you specify the exact CPU and memory your task needs, and Fargate provisions an AWS-managed task isolation boundary for the container.
 
 The Fargate division of responsibility is highly efficient:
 
-* **What AWS Managed under Fargate**: Host operating system patching, hypervisor security boundaries, ECS agent updates, container engine operations, and physical hardware scaling.
+* **What AWS Manages under Fargate**: Host operating system patching, task isolation boundaries, ECS agent updates, container engine operations, and physical hardware scaling.
 * **What Your Team Manages**: Container image packaging, task definition configuration, task-level CPU/memory boundaries, environment configurations, and target health checks.
 
 Fargate does not make your application automatic. Your team still owns the container's internal stability. If your Node.js code has a memory leak, runs out of memory, or binds to the wrong port, Fargate will execute the container faithfully, but the application will crash. Fargate manages the host capacity; your team manages the container's operational contract.
 
 ## Container Networking and Load Balancing
 
-Under the default Fargate networking model, `awsvpc`, container networking is simple and isolated. Each Fargate task receives its own Elastic Network Interface (ENI) cabled directly into your VPC. The task behaves exactly like a private virtual server, receiving a unique private IP address and its own security groups.
+Under the default Fargate networking model, `awsvpc`, container networking is simple and isolated. Each Fargate task receives its own Elastic Network Interface (ENI) cabled directly into your VPC. From the VPC's point of view, the task behaves like a private network target, receiving a unique private IP address and its own security groups.
 
 This private IP is completely dynamic. When ECS replaces a task, the old ENI is deleted, the old IP is discarded, and the new replacement task receives a completely new private IP. Because task IPs change constantly, you cannot route traffic to static IP addresses.
 
@@ -169,6 +173,10 @@ By wrapping your container images in structured task definitions, managing their
 ## What's Next
 
 We have established a robust runtime shape for containerized services that stay online constantly and answer load-balanced HTTP requests. However, what about bounded, background tasks? How do we run code that only executes in response to queue messages, file uploads, or cron schedules without keeping a container process running and costing money all day? In the next article, we will explore AWS Lambda event-driven compute, deconstructing JSON events, triggers, invocation methods, and retry-driven idempotency.
+
+![Six-tile ECS Fargate checklist covering task definition, service controller, Fargate boundary, IP target group, port contract, roles, and logs](/content-assets/articles/article-cloud-providers-aws-compute-application-hosting-ecs-and-fargate/ecs-fargate-checklist.png)
+
+*Use this as the ECS Fargate checklist: define the task recipe, let the service controller maintain replicas, keep the host boundary with Fargate, route through IP target groups, align every port, and separate boot permissions from application permissions.*
 
 ---
 

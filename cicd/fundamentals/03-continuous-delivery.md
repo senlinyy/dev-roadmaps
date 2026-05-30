@@ -241,6 +241,10 @@ Fifth, prioritize MTTR with automated rollbacks. Design your CD platform to supp
 
 Automating your deployment pipeline ensures that release operations are repeatable and fast. However, shifting code rapidly to production introduces severe security risks. In the next chapter, **Securing the Pipeline**, we will explore how to shift security left by scanning code repositories for secrets, executing static and dynamic scans, generating Software Bills of Materials (SBOMs), and signing images cryptographically.
 
+![Continuous delivery summary showing build once, config injection, promotion gates, health checks, and rollback](/content-assets/articles/article-cicd-fundamentals-continuous-delivery/continuous-delivery-summary.png)
+
+*Use this as the continuous-delivery checklist: separate delivery from deployment, build once, inject runtime config, promote through gates, watch health checks, and keep rollback paths ready.*
+
 ---
 
 **References**

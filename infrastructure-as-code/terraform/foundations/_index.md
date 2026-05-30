@@ -1,6 +1,6 @@
 ---
-title: "Foundations"
-description: "Learn what Terraform and OpenTofu do, how AWS resources are described in code, and how the core workflow turns files into reviewed infrastructure changes."
-tags: ["terraform", "opentofu", "aws", "workflow"]
+title: "Foundations & Getting Started"
+description: "Understand the 'why' behind Infrastructure as Code, how Terraform works under the hood, and how to authenticate with cloud providers."
+tags: ["iac", "terraform", "providers"]
 order: 1
 ---

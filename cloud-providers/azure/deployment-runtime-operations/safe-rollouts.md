@@ -61,6 +61,10 @@ Those surfaces are release tools, not decorations. They give the team a controll
 
 An App Service deployment slot is a live app with its own hostname. It belongs to the same App Service app, but it can run a different version. Common slot names are `staging`, `blue`, or `green`.
 
+![An infographic showing staging warm-up, smoke tests, health checks, and config checks before production traffic moves](/content-assets/articles/article-cloud-providers-azure-deployment-runtime-operations-slots-revisions-safe-rollouts/slot-swap-safety-checks.png)
+
+*A slot swap should wait for warm-up, health, smoke, and config checks before it receives real users.*
+
 The beginner mental model is a theater stage. Production is the stage users see. A staging slot is a second stage where the same app can warm up, receive settings, and answer tests. A swap changes which slot is serving production traffic.
 
 ```mermaid
@@ -74,7 +78,37 @@ flowchart LR
 
 Slots help because they separate deployment from production exposure. The team can deploy the candidate to `staging`, test the direct slot URL, verify settings and health, then swap. If the swapped version is bad and the previous slot remains available, the rollback path is often another swap.
 
-Slots are not free of risk. A staging slot is still an app. It can call real databases if configured that way. It can use different settings from production. It can accidentally send emails, process jobs, or write to shared storage if the team does not design its behavior. Test the slot as a candidate production path, not as a harmless copy.
+Slots are not free of risk. A staging slot is still an app. It can call real databases if configured that way. It can use different settings from production. It can accidentally send emails, process jobs, or write to shared storage if the team does not design its behavior. Test the slot as a candidate production path, not as a harmless copy, and make any production dependency access deliberate, guarded, and safe.
+
+:::expand[Pitfall: Staging Slots Connected to Production Data]{kind="pitfall"}
+A catastrophic staging slot misconfiguration occurs when the staging slot is cabled directly to active production data stores and queues. During a slot swap, Azure warm-up routines boot the candidate application inside the staging slot first to ensure it is responsive. If your deployment scripts or engineers then execute automated database schema migrations, test transactions, or data cleanups against the staging endpoint to "verify" the build, these operations will run directly against your active production SQL database or Cosmos DB container.
+
+The blast radius of this data pollution is severe:
+1.  **Production Data Corruption**: Running test checkouts, deleting sample accounts, or truncating tables during staging verification directly alters live customer records.
+2.  **Queue Interception**: If the staging slot boots up and listens to a shared production Service Bus queue or Event Hub stream, it will begin pulling and processing real production messages, preventing the active production slot from handling them and leading to lost orders or orphan customer workflows.
+
+This identical data hazard exists in AWS blue-green deployments. When swapping ECS target groups or Route 53 DNS weights, if your green environment's task definitions are not isolated to staging database connection strings, your pre-swap warm-up tests will write to the active Amazon RDS database or pull messages from the live production Amazon SQS queue.
+
+The top-down diagram below compares a polluted shared-data configuration with an isolated, secure staging configuration:
+
+```mermaid
+flowchart TD
+    subgraph Polluted["Unsafe Staging Configuration (Shared Production Data)"]
+        StagingAppA["Staging Slot (Warm-up App)"] -->|"Writes Test Data"| ProdDBA[("Production SQL Database (Live)")]
+        ProdAppA["Production Slot (Active Users)"] -->|"Writes Real Orders"| ProdDBA
+        StagingAppA -->|"Pulls Messages"| ProdQueueA[("Production Message Queue")]
+        ProdQueueA -->|"Mismatched Processing"| StagingAppA
+    end
+
+    subgraph Isolated["Secure Staging Configuration (Isolated Sandboxes)"]
+        StagingAppB["Staging Slot (Warm-up App)"] -->|"Writes Test Data"| StagingDBB[("Staging SQL Database (Sandbox)")]
+        ProdAppB["Production Slot (Active Users)"] -->|"Writes Real Orders"| ProdDBB[("Production SQL Database (Live)")]
+        StagingAppB -->|"Pulls Messages"| StagingQueueB[("Staging Message Queue")]
+    end
+```
+
+**Rule of thumb:** Do not let a staging slot perform writes, destructive tests, or queue processing against production dependencies. Prefer slot-sticky environment settings that point staging to staging databases, storage accounts, and queues. If a final validation must touch a production dependency, make it read-only or use controlled test data with an explicit rollback and cleanup plan.
+:::
 
 ## Slot Settings
 
@@ -113,6 +147,10 @@ The gotcha is configuration scope. Some Container Apps changes create a new revi
 ## Traffic Splitting
 
 Traffic splitting sends percentages of traffic to different versions. In Container Apps, a team can split ingress traffic between revisions. That makes canary-style rollouts possible: 0 percent, then 10 percent, then 50 percent, then 100 percent if evidence is healthy.
+
+![An infographic showing Container Apps ingress shifting 90 percent and 10 percent of traffic between two revisions](/content-assets/articles/article-cloud-providers-azure-deployment-runtime-operations-slots-revisions-safe-rollouts/revision-traffic-shift.png)
+
+*Revision traffic weights let a team expose a new version gradually while watching health.*
 
 Traffic splitting reduces blast radius compared with moving everything at once, while ten percent of traffic can still include important customers. A bug may only appear for a specific account, region, feature flag, or data shape.
 
@@ -171,6 +209,11 @@ Safe rollout tools do not remove release risk. They make the risk visible and co
 ## What's Next
 
 The next article focuses on configuration and secrets. A rollout can be careful and still fail if the candidate receives the wrong setting, references the wrong secret, or uses an identity that cannot read Key Vault.
+
+![An infographic comparing App Service slots and Container Apps revisions for direct testing, health checks, traffic splitting, and rollback targets](/content-assets/articles/article-cloud-providers-azure-deployment-runtime-operations-slots-revisions-safe-rollouts/safe-rollout-lanes.png)
+
+*Use this as the safe rollout map: test the candidate directly, shift traffic only after health evidence looks good, and preserve a known rollback target before users feel the full change.*
+
 
 ---
 

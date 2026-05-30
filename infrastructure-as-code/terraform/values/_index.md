@@ -1,6 +1,6 @@
 ---
-title: "Values"
-description: "Control how values enter Terraform modules, move through configuration, leave after apply, and stay protected when they are sensitive."
-tags: ["Terraform", "OpenTofu", "Variables", "Locals", "Outputs"]
-order: 4
+title: "Values and Expressions"
+description: "Make your Terraform code dynamic and reusable using input variables, local values, outputs, and built-in functions."
+tags: ["terraform", "variables", "locals", "outputs", "functions"]
+order: 3
 ---

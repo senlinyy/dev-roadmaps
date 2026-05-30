@@ -37,6 +37,10 @@ Consider an industrial assembly analogy. When manufacturing a vehicle, engineers
 
 Continuous Integration represents the practice of continuously assembling and testing components at every stage of production. By integrating early, errors are caught when they are small and easy to fix.
 
+![Continuous integration feedback loop showing code changes entering clean validation and returning merge or fix signals](/content-assets/articles/article-cicd-fundamentals-continuous-integration/ci-validation-loop.png)
+
+*Continuous integration works best as a fast feedback loop: each change enters a clean runner, passes build, test, and scan checks, and either merges or returns to the developer with a concrete fix.*
+
 ## The Core Loop: Merge Early, Validate Often
 
 The operation of Continuous Integration rests on two rules:
@@ -249,6 +253,10 @@ Fifth, eliminate flaky tests immediately. Never tolerate a test suite that passe
 ## What's Next
 
 Programmatically validating code ensures that our changes are logically sound. However, we must also understand the execution engines that run these pipelines and the artifacts they compile. In the next chapter, **Pipelines, Runners, and Artifacts**, we will explore the split-brain architecture of controllers and runners, evaluate hosted versus self-hosted executors, mount isolated database containers, and manage dependency caches safely.
+
+![Continuous integration summary checklist with six learning anchors](/content-assets/articles/article-cicd-fundamentals-continuous-integration/continuous-integration-summary.png)
+
+*Use this as the continuous-integration checklist: integrate early, require status checks, control branch drift, keep pipeline specs declarative, balance the test pyramid, and trust clean runners over local machines.*
 
 ---
 

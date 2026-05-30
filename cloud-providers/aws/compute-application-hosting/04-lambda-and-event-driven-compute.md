@@ -33,7 +33,7 @@ However, once you introduce background operational jobs, this continuous process
 * **Unpredictable memory surges**: If a user uploads a heavy CSV manifest file, processing the rows locally can spike your web server's RAM usage, starving the primary request thread and dropping active checkout connections.
 * **Tight fault coupling**: If the external email service is temporarily slow or offline, your web API threads will block waiting for a response, quickly exhausting your connection pools and bringing down the entire storefront.
 
-To eliminate this overhead and isolate failures, you must decouple these background tasks from your primary request pipeline. You need to transition to event-driven compute. Instead of keeping a process waiting constantly, you package your task as an isolated function that remains completely idle, boots in milliseconds only when a work trigger arrives, executes its bounded job, and shuts down back to zero cost.
+To eliminate this overhead and isolate failures, you must decouple these background tasks from your primary request pipeline. You need to transition to event-driven compute. Instead of keeping a process waiting constantly, you package your task as an isolated function that stays inactive until a work trigger arrives, executes its bounded job, and then freezes or shuts down. Without provisioned concurrency, you are not billed for idle wait time between invocations.
 
 ## What Is Lambda
 
@@ -50,16 +50,16 @@ Continuous Service Process:
 
 Lambda Event-Driven Function:
 
-* Startup: Stays completely idle until an event trigger arrives.
+* Startup: Has no always-listening process until an event trigger arrives.
 * Networking: Has no listener port; reads an incoming JSON payload.
 * Runtime: Starts a transient execution environment, processes one job, and freezes.
 * Lifecycle: Managed by event triggers and parallel invocations.
 
-This reactive design means you are only billed for the exact milliseconds your code actively processes a request. When the transaction count drops to zero, your function costs zero. However, this shift requires a new architectural discipline. A Lambda function should represent a single, bounded operation. It is not a place to host a multi-route, complex web application framework. If a function begins to require route-based middleware, shared process memory, and massive startup packages, it is telling you it belongs inside a container service.
+This reactive design means you are billed for the compute time your code actively processes requests, plus any configured extras such as provisioned concurrency. When ordinary on-demand invocation volume drops to zero, the function is not sitting on a paid server waiting for work. However, this shift requires a new architectural discipline. A Lambda function should represent a single, bounded operation. It is not a place to host a multi-route, complex web application framework. If a function begins to require route-based middleware, shared process memory, and massive startup packages, it is telling you it belongs inside a container service.
 
 ## The JSON Event Contract
 
-A Lambda function does not read files from a local disk or listen on a network socket. The only input your handler receives is a structured JSON document called the Event. 
+A Lambda function does not listen on a network socket like a web server. The primary input your handler receives is a structured JSON document called the Event. Lambda also provides a temporary local filesystem at `/tmp`, which is useful for scratch files during an invocation but should not be treated as durable storage.
 
 The most vital beginner habit in serverless development is treating the event as a strict API contract. The shape of the JSON event is defined entirely by the service triggering the function, and these shapes vary drastically:
 
@@ -84,7 +84,7 @@ SQS Event Payload Structure:
 }
 ```
 
-Because your code must parse and unpack these nested JSON structures, you must write strict input validation at the absolute edge of your handler. Parse the body, check for required keys, and throw an explicit validation error immediately if the payload is malformed. Catching a schema error at the edge of your code is infinitely easier to debug than a silent failure deep within your database queries.
+Because your code must parse and unpack these nested JSON structures, you must write strict input validation at the edge of your handler. Parse the body, check for required keys, and throw an explicit validation error immediately if the payload is malformed. Catching a schema error at the edge of your code is much easier to debug than a silent failure deep within your database queries.
 
 ## Invocations and Triggers
 
@@ -133,7 +133,7 @@ Memory and CPU Scaling Trade-offs:
   * CPU Share: Multiple vCPUs.
   * Operational Result: Heavy CPU-bound tasks like image manipulation or machine learning inference.
 
-Because billing is based on gigabyte-seconds of execution, raising your memory from 512 MB to 1024 MB can double your CPU speed and cut your execution duration in half. The faster run time cancels out the higher memory rate, resulting in the exact same cost while delivering a vastly faster experience to your users.
+Because billing is based on gigabyte-seconds of execution, raising your memory from 512 MB to 1024 MB can increase CPU share and sometimes cut execution duration enough to offset the higher memory rate. The right setting is workload-specific, so benchmark a few memory sizes instead of assuming the smallest memory value is cheapest.
 
 Additionally, optimize your function performance by leveraging execution environment warm starts. When Lambda reuses a container environment for subsequent invocations, any clients or database connections initialized outside your handler function remain active. 
 
@@ -148,34 +148,44 @@ In event-driven architectures, transient network drops, database locking errors,
 
 This retry behavior introduces a major architectural hazard: the exact same event payload can be delivered to your handler more than once.
 
-If your function processes a payments event, charges a card via Stripe, and then times out before deleting the message, the next retry will execute the payment charge again. 
+If your function processes a payments event, charges a card via Stripe, and then times out before deleting the message, the next retry may execute the payment charge again.
 
 To prevent duplicate charges, financial errors, or double emails, your handler must be idempotent. Idempotency means that executing the same operation multiple times produces the exact same system state as a single execution.
 
-To implement idempotency, your handler must enforce an Idempotency Key:
+To implement idempotency, your handler must enforce an Idempotency Key. The safest pattern is to atomically claim the key before the external side effect, record the final result after success, and make retries return the stored result instead of repeating the side effect:
 
 ```javascript
 const idempotencyKey = `payment:${event.orderId}`;
 
-// 1. Check if this transaction has already succeeded
-const alreadyProcessed = await db.checkExists(idempotencyKey);
-if (alreadyProcessed) {
+// 1. Atomically claim the transaction key before the external side effect
+const claim = await db.tryCreateProcessingRecord(idempotencyKey);
+if (!claim.created) {
   console.info("Duplicate transaction skipped", { key: idempotencyKey });
-  return;
+  return claim.storedResult;
 }
 
-// 2. Perform the critical external side effect
-await chargeCard(event.total, event.token);
+try {
+  // 2. Perform the critical external side effect with the provider's own idempotency key
+  const paymentResult = await chargeCard(event.total, event.token, { idempotencyKey });
 
-// 3. Mark the transaction complete in a fast database
-await db.saveSuccess(idempotencyKey);
+  // 3. Mark the transaction complete in a fast database
+  await db.saveSuccess(idempotencyKey, paymentResult);
+  return paymentResult;
+} catch (error) {
+  await db.markFailedOrRetryable(idempotencyKey);
+  throw error;
+}
 ```
 
-By enforcing a fast database check (using a high-speed store like DynamoDB) before executing any external side effects, you protect your system from retry surges. The event can safely arrive three times, but your payment API is only called once.
+By using a fast database such as DynamoDB with a conditional write for the initial claim, you protect your system from retry surges. The event can safely arrive more than once, but duplicate workers see the existing key and do not blindly repeat the external side effect. This order matters: if you charge the card first and only write the idempotency record afterward, a timeout between those two steps leaves no proof that the charge happened. For payment providers, also pass the provider's own idempotency key so their API can reject duplicate charges even if your function is retried.
+
+![Retry-safe Lambda path where an SQS event enters a handler, claims an idempotency key, performs one side effect, and skips duplicates on retry](/content-assets/articles/article-cloud-providers-aws-compute-application-hosting-lambda-event-driven-compute/retry-safe-lambda.png)
+
+*A Lambda retry is normal delivery behavior, not an edge case. The handler should claim an idempotency key before the side effect so a repeated event can be recognized and skipped instead of sending the same email or charge twice.*
 
 ## Managing Concurrency Pressure
 
-Concurrency is the number of execution environments running your function code simultaneously to handle incoming events. If your SQS queue suddenly receives 1,000 messages, Lambda will rapidly scale horizontally, spinning up 1,000 parallel environments to process them.
+Concurrency is the number of execution environments running your function code simultaneously to handle incoming events. If your SQS queue suddenly receives 1,000 messages, Lambda can scale horizontally to process them quickly, subject to account concurrency limits and event source mapping behavior.
 
 While this horizontal scaling is excellent for processing massive spikes, it introduces a severe danger to your downstream infrastructure:
 
@@ -192,7 +202,7 @@ Here is a clean Node.js handler template for our receipt email function. The cod
 
 ```javascript
 import { SESClient, SendEmailCommand } from "@aws-sdk/client-ses";
-import { DynamoDBClient, PutItemCommand, GetItemCommand } from "@aws-sdk/client-dynamodb";
+import { DynamoDBClient, PutItemCommand, UpdateItemCommand } from "@aws-sdk/client-dynamodb";
 
 const ses = new SESClient();
 const db = new DynamoDBClient();
@@ -208,20 +218,28 @@ export const handler = async (event, context) => {
     }
 
     const idempotencyKey = `receipt:${message.orderId}`;
-    
-    const checkCommand = new GetItemCommand({
-      TableName: "ProcessedReceipts",
-      Key: { Id: { S: idempotencyKey } }
-    });
-    
-    const checkResult = await db.send(checkCommand);
-    if (checkResult.Item) {
-      console.info("Duplicate receipt request skipped", {
-        orderId: message.orderId,
-        messageId: record.messageId,
-        requestId: context.awsRequestId
-      });
-      continue;
+
+    try {
+      await db.send(new PutItemCommand({
+        TableName: "ProcessedReceipts",
+        Item: {
+          Id: { S: idempotencyKey },
+          Status: { S: "PROCESSING" },
+          FirstSeenAt: { N: Date.now().toString() }
+        },
+        ConditionExpression: "attribute_not_exists(Id)"
+      }));
+    } catch (error) {
+      if (error.name === "ConditionalCheckFailedException") {
+        console.info("Duplicate receipt request skipped", {
+          orderId: message.orderId,
+          messageId: record.messageId,
+          requestId: context.awsRequestId
+        });
+        continue;
+      }
+
+      throw error;
     }
 
     await ses.send(new SendEmailCommand({
@@ -233,11 +251,16 @@ export const handler = async (event, context) => {
       }
     }));
 
-    await db.send(new PutItemCommand({
+    await db.send(new UpdateItemCommand({
       TableName: "ProcessedReceipts",
-      Item: {
-        Id: { S: idempotencyKey },
-        ProcessedAt: { N: Date.now().toString() }
+      Key: { Id: { S: idempotencyKey } },
+      UpdateExpression: "SET #status = :status, ProcessedAt = :processedAt",
+      ExpressionAttributeNames: {
+        "#status": "Status"
+      },
+      ExpressionAttributeValues: {
+        ":status": { S: "SENT" },
+        ":processedAt": { N: Date.now().toString() }
       }
     }));
 
@@ -252,7 +275,7 @@ This handler cleanly implements all serverless design rules:
 
 * **Reuses SDK Clients**: SES and DynamoDB clients are declared globally outside the handler, leveraging warm starts.
 * **Strict Schema Verification**: Validates the nested SQS JSON contract at boot.
-* **Enforces Idempotency**: Performs a fast key lookup in DynamoDB before sending the email.
+* **Enforces Idempotency**: Claims the receipt key in DynamoDB with a conditional write before sending the email.
 * **Correlates Metadata**: Logs using both business identifiers (`orderId`) and invocation metadata (`requestId`).
 
 ## Putting It All Together
@@ -265,11 +288,15 @@ Transitioning to event-driven serverless compute requires designing for transien
 * **Code for Idempotency**: Expect duplicate deliveries and retries. Enforce DynamoDB-backed idempotency keys to protect external side effects.
 * **Limit Your Concurrency**: Restrict maximum parallel invocations using Reserved Concurrency limits or proxies to protect downstream relational databases.
 
-By wrapping your background reactive logic in isolated handlers, tuning their resources, and writing retry-safe idempotent code, you build event-driven architectures that scale instantly, cost zero when idle, and are highly resilient to failures.
+By wrapping your background reactive logic in isolated handlers, tuning their resources, and writing retry-safe idempotent code, you build event-driven architectures that scale quickly, avoid paying for idle on-demand servers, and are highly resilient to failures.
 
 ## What's Next
 
 We have established runtime shapes for continuous servers, serverless containers, and event-driven functions. However, what about teams operating at massive scale, who need to coordinate thousands of containers across a shared multi-team platform? How do we run managed Kubernetes clusters on AWS? In the next article, we will explore Amazon EKS, deconstructing pods, deployments, services, VPC CNI IP scaling, and Pod Identity.
+
+![Six-tile Lambda checklist covering event contract, trigger model, timeout, memory CPU scaling, idempotency key, and concurrency guard](/content-assets/articles/article-cloud-providers-aws-compute-application-hosting-lambda-event-driven-compute/lambda-checklist.png)
+
+*Use this as the Lambda checklist: validate the event contract, know the trigger model, set short timeouts, tune memory for CPU, protect side effects with idempotency keys, and cap concurrency before downstream systems run out of capacity.*
 
 ---
 

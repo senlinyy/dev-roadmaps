@@ -152,6 +152,10 @@ By separating the production environment into Twin Blue-Green pools and executin
 
 While Blue-Green deployments isolate active production and ensure instant, single-click rollbacks, they operate as a binary switch: 100% of user traffic is moved to the new version at once. If the new code contains a subtle memory leak or database deadlock that only triggers under production-scale load, the entire user base encounters the failure simultaneously. To minimize this risk, we must explore progressive traffic splits. Let's move to **Canary Deployments** to learn how to route a tiny, 2% slice of real user traffic to the new version while monitoring live telemetry before promoting the release globally.
 
+![Blue-green deployment summary showing twin environments, router swap, no mixed versions, schema compatibility, and capacity cost](/content-assets/articles/article-cicd-deployment-strategies-blue-green-deployments/blue-green-summary.png)
+
+*Use this as the blue-green checklist: run full twin environments, switch traffic deliberately, avoid mixed versions, plan for database compatibility, use expand-and-contract changes, and budget for double capacity.*
+
 ---
 
 **References**

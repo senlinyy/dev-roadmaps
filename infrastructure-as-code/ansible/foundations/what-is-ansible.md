@@ -14,258 +14,223 @@ aliases:
 
 ## Table of Contents
 
-1. [The Problem](#the-problem)
-2. [What Ansible Is](#what-ansible-is)
-3. [The Main Pieces](#the-main-pieces)
-4. [Control Nodes and Managed Nodes](#control-nodes-and-managed-nodes)
-5. [Playbooks and Modules](#playbooks-and-modules)
-6. [Idempotency](#idempotency)
-7. [Reading Ansible Output](#reading-ansible-output)
-8. [Where Ansible Fits](#where-ansible-fits)
+1. [What Is Ansible?](#what-is-ansible)
+2. [The Web Application Fleet Scenario](#the-web-application-fleet-scenario)
+3. [Early Playbook Preview](#early-playbook-preview)
+4. [Agentless Architecture vs. Resident Daemons](#agentless-architecture-vs-resident-daemons)
+5. [Under the Hood: The Module Payload Loop](#under-the-hood-the-module-payload-loop)
+6. [The Control Node and Managed Nodes Split](#the-control-node-and-managed-nodes-split)
+7. [Playbooks, Plays, Tasks, and Modules](#playbooks-plays-tasks-and-modules)
+8. [Idempotency: The Core Safety Principle](#idempotency-the-core-safety-principle)
 9. [Putting It All Together](#putting-it-all-together)
 10. [What's Next](#whats-next)
 
-## The Problem
+## What Is Ansible?
 
-The orders service starts small. One Linux machine runs Nginx, a systemd service called `orders-api`, and a config file under `/etc/orders/`. A person can set that up by hand and remember most of the steps.
+Ansible is an automation tool for configuring computer systems and running repeatable operations on many machines at once. You write plain-text files that describe exactly what directories, configuration settings, software packages, and system services should exist on your servers. Ansible reads those files, connects to the targeted machines over standard network paths, makes whatever adjustments are necessary, and reports back whether the systems were modified.
 
-Then the service grows. There are two web hosts, a staging environment, and a production environment. A security update lands. Nginx needs the same proxy timeout everywhere. The `orders-api` service must be enabled after every rebuild. A new engineer needs to know whether the host they are looking at is correct or just lucky.
+If you manage servers by hand, you know that keeping them matching over time is difficult. An administrator logs into one host, installs a package, and updates a config file. A week later, another host needs the same setup. The administrator repeats the steps, but might miss a small permission setting, or type a slightly different package version number. Over months, these tiny differences multiply. The hosts begin to differ from one another in subtle ways that make them unpredictable.
 
-Manual setup begins to fail in ordinary ways:
+Ansible solves this problem by turning machine setups into written, versioned text files. Instead of remembering what steps to run or keeping private text documents filled with terminal commands, your team writes the desired state of your systems into files that anyone can read. You can then run those files against one machine, five machines, or a thousand machines, ensuring that every host is configured in the exact same way.
 
-- `orders-web-01` has the new Nginx config, but `orders-web-02` still has the old one.
-- A production host was rebuilt, but nobody reran the service setup steps.
-- A hotfix changed a file during an incident, and the change was never written down.
-- A command worked in staging, but someone ran a slightly different command in production.
+## The Web Application Fleet Scenario
 
-The problem is not that people are careless. The problem is that a server is a collection of many small states: packages, files, users, directories, permissions, services, and scheduled jobs. When those states live only in terminal history or a runbook, they drift.
+To see why this is useful, consider a common system administration task. You are managing a fleet of three server machines that run a custom web application. Each of these machines requires a specific environment to operate:
+- The system package catalog must be refreshed before installing software.
+- A web server software package (like Nginx) must be installed.
+- A custom configuration file must exist at `/etc/nginx/sites-available/app.conf` to direct incoming traffic.
+- A system service daemon must be actively running and enabled to start automatically whenever the server reboot cycles occur.
+- A dedicated file directory at `/var/www/app/logs` must exist with restricted permissions so that only the web server process can write logs to it.
 
-Runbook memory has the same weakness as console memory in cloud infrastructure. It can describe what someone thinks they did, but it rarely proves the exact file content, service enablement, package version, target host, privilege path, or review that approved the change.
+Doing this by hand on three machines is tedious. If your fleet grows to fifty machines, manual setup is no longer practical. If one server crashes and needs to be replaced, rebuild steps must be executed from memory or outdated setup guides. By writing this environment description into an Ansible file, you can recreate the setup in the same repeatable shape and make every server converge on the same specifications.
 
-Ansible gives the team a way to write those states down, run them against real machines, and ask whether each machine already matches the description.
+## Early Playbook Preview
 
-## What Ansible Is
-
-Ansible is an automation tool for configuring machines and running repeatable operations. You write files that describe what should be true. Ansible connects to the machines in an inventory, performs the requested work, and reports what happened on each host.
-
-For the orders service, an Ansible project might describe these facts:
-
-- The `nginx` package should be installed.
-- `/etc/nginx/conf.d/orders.conf` should contain the reviewed proxy config.
-- The `orders-api` service should be enabled and running.
-- `/var/log/orders` should exist with the right owner and permissions.
-
-Those sentences are the important part. Ansible is useful because the desired state moves out of memory and into files the team can read, review, and rerun.
-
-That file boundary is why Ansible belongs in infrastructure as code work. A playbook turns machine configuration into a reviewed artifact before it touches hosts. Inventory shows which machines can be reached. Variables show which values change by group or environment. The recap then gives run evidence: which hosts already matched, which changed, which failed, and which could not be reached.
-
-Ansible is commonly called agentless. For Linux hosts, that usually means the managed machines do not need a permanent Ansible service running in the background. The control machine connects over SSH, runs the work needed for the current task, receives a result, and moves on.
-
-Agentless does not mean nothing runs on the remote host. A task still has to check packages, write files, render templates, or restart services. The difference is that Ansible does that work through the connection for the current run instead of depending on a long-running agent process.
-
-## The Main Pieces
-
-Most beginner Ansible work uses a small vocabulary.
-
-| Piece | Meaning | Orders example |
-| --- | --- | --- |
-| Control node | The machine where Ansible runs | A developer laptop or CI runner |
-| Managed node | A machine Ansible connects to and changes | `orders-web-01` |
-| Inventory | The host map Ansible reads before a run | `inventory/prod.yml` |
-| Group | A named set of hosts | `orders_web` |
-| Playbook | A YAML file that describes work | `playbooks/orders-web.yml` |
-| Play | One target and its tasks inside a playbook | Configure `orders_web` |
-| Task | One named step | Install Nginx |
-| Module | Code that knows how to do one kind of work | `ansible.builtin.apt` |
-
-The inventory is the map. It says which machines exist and how Ansible should reach them.
+Here is an early, comment-free preview of an Ansible playbook that standardizes the web application environment described in our scenario. Even if you have never seen Ansible code before, you can read this file and understand what states it enforces:
 
 ```yaml
-all:
-  children:
-    orders_web:
-      hosts:
-        orders-web-01:
-          ansible_host: 10.40.10.21
-        orders-web-02:
-          ansible_host: 10.40.10.22
-      vars:
-        ansible_user: deploy
-```
-
-The names `orders-web-01` and `orders-web-02` are Ansible's names for the hosts. The `ansible_host` values are the addresses used for the SSH connection. The group `orders_web` lets a playbook target both machines without listing them again.
-
-The playbook is the work description. It says which hosts should receive the work and which tasks should run.
-
-```yaml
-- name: Configure orders web hosts
-  hosts: orders_web
+- name: Standardize web application hosts
+  hosts: webservers
   become: true
   tasks:
-    - name: Install nginx
+    - name: Ensure nginx web server is installed
       ansible.builtin.apt:
         name: nginx
         state: present
+        update_cache: true
 
-    - name: Keep nginx running
+    - name: Configure virtual host routing
+      ansible.builtin.copy:
+        content: |
+          server {
+              listen 80;
+              server_name localhost;
+              location / {
+                  proxy_pass http://127.0.0.1:8080;
+              }
+          }
+        dest: /etc/nginx/sites-available/app.conf
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Create restricted application log directory
+      ansible.builtin.file:
+        path: /var/www/app/logs
+        state: directory
+        owner: www-data
+        group: www-data
+        mode: "0750"
+
+    - name: Keep web server running and enabled
       ansible.builtin.service:
         name: nginx
         state: started
         enabled: true
 ```
 
-This play selects the `orders_web` group. `become: true` tells Ansible to use privilege escalation for tasks that need it, usually through sudo. Each task calls a module.
+## Agentless Architecture vs. Resident Daemons
 
-## Control Nodes and Managed Nodes
+In the world of system automation, most traditional tools rely on a client-server model that requires a resident background agent (often called a daemon) to be constantly running on every managed machine. This background process periodically polls a central management server for new instructions, compiles them locally, and applies changes.
 
-The control node is where Ansible starts. It reads the inventory, reads the playbook, opens connections, and collects results. The managed nodes are the hosts that receive the work.
+This resident agent model introduces several physical and operational operational issues:
+- **Resource Consumption**: Running a background service on hundreds of small virtual machines constantly consumes CPU cycles and system memory, which reduces the resources available for your actual applications.
+- **Maintenance Overhead**: The agent itself is a piece of software that must be installed, configured, updated, and secured. If the agent crashes or its local configuration becomes corrupted, you lose the ability to manage that machine.
+- **Security Footprint**: A background daemon that runs as root and listens on network ports for central commands introduces an active target for attackers. If the daemon has vulnerability bugs, your entire fleet is at risk.
 
-For a simple Linux fleet, the path looks like this:
+Ansible takes a fundamentally different path: it is agentless. For Linux hosts, this means the managed servers do not run any special Ansible background processes or daemons. They require no resident software updates, no local database files, and no dedicated ports listening for management traffic. Instead, Ansible leverages the network paths and access routes you already use. It connects over standard SSH, runs whatever tasks are needed, and then disconnects completely. When Ansible is not actively running a playbook, it occupies zero memory and zero CPU cycles on your servers.
+
+## Under the Hood: The Module Payload Loop
+
+Because Ansible is agentless, people often wonder how it actually executes tasks on a remote machine. If there is no agent process waiting to receive orders, how does a managed machine know how to check packages, read file permissions, or start systemd services?
+
+The answer lies in a highly structured, temporary execution loop executed by the control machine over SSH. Behind the scenes, when you launch a normal Python-based module, Ansible assembles a temporary module payload. In Ansible's own developer documentation, the packaging framework for new-style Python modules is called **AnsiballZ**.
+
+Here is the step-by-step low-level sequence of how Ansible executes a single task on a remote Linux host:
+
+1. **Establish the Connection**: The control node opens a standard SSH network socket connection to the target managed machine, using the SSH keys and connection parameters you configured.
+2. **Discover the Python Interpreter**: Ansible inspects the remote operating system to find a working Python execution environment. It scans standard system directories (searching for `/usr/bin/python3`, `/usr/bin/python`, or customized paths) and caches the location.
+3. **Assemble the Module in Memory**: On your control computer, Ansible takes the Python code representing the requested module (for example, the code that manages file directories) and merges it with the specific arguments you wrote in your playbook.
+4. **Package the Module Payload**: Ansible compresses this combined Python module code and argument data into a single payload. The payload is self-contained enough to carry the helper code required for that task.
+5. **Transfer the Payload**: Ansible writes a small bootstrapping script to the SSH channel, which creates a temporary directory on the managed host—typically hidden deep inside `/tmp/.ansible/tmp/`—and transfers the base64-encoded zip package using SFTP or SCP file protocols.
+6. **Execute the Code**: The bootstrapping script tells the remote Python interpreter to read and execute the module payload from the temporary directory. The remote Python process performs the real systems calls (like `stat()`, `mkdir()`, or modifying package lists) to align the host state.
+7. **Return Results and Clean Up**: The remote Python execution writes a JSON-formatted text block back to the SSH standard output stream containing the status (whether the task succeeded, if anything changed, or if an error occurred). By default, Ansible removes the temporary files after the module finishes, unless configuration such as remote-file retention is enabled for troubleshooting.
+
+```mermaid
+flowchart TD
+    subgraph ControlNode["Control Node (Your Machine)"]
+        Playbook["Playbook Files"] --> Parser["YAML Playbook Parser"]
+        Parser --> Assembler["Module & Args Compiler"]
+        Assembler --> ZIP["Module Payload"]
+    end
+
+    subgraph ManagedNode["Managed Node (Target Server)"]
+        Interpreter["Python Interpreter<br/>(/usr/bin/python3)"]
+        TempDir["Temporary Folder<br/>(/tmp/.ansible/tmp/)"]
+        SystemState[("Real Machine State<br/>(Files, Services, Packages)")]
+    end
+
+    ZIP -->|1. Transfer over SSH| TempDir
+    TempDir -->|2. Extract & Run| Interpreter
+    Interpreter -->|3. System Calls| SystemState
+    Interpreter -->|4. Return JSON Output| ControlNode
+    ControlNode -->|5. Clean Up| TempDir
+```
+
+This loop is what makes Ansible feel agentless in normal operation. The managed host does not keep a resident Ansible daemon running between plays, and the temporary module files are cleaned up during ordinary execution.
+
+## The Control Node and Managed Nodes Split
+
+To operate Ansible, you divide your computers into two roles: the control node and the managed nodes.
+
+The **control node** is the machine where you actually install the Ansible program itself. This is where your playbook files, inventories, and configuration parameters live. You run commands like `ansible-playbook` from this machine. It can be your personal laptop, a dedicated administration server inside your private network, or a shared CI/CD pipeline runner inside a cloud environment.
+
+The **managed nodes** are the target machines that you want to configure and maintain. These are the systems that receive your web servers, databases, security updates, and directories. These nodes do not have Ansible installed. For typical Linux and other POSIX hosts, they need two simple things:
+- An active network path that allows the control node to reach them over SSH (typically port 22).
+- A working installation of a Python interpreter (Python 3.x is standard on almost all modern Linux distributions).
+
+Windows hosts and network devices use different connection plugins and module families, so they do not fit this exact SSH-plus-Python path. The important beginner idea is that Ansible lives on the control node, while managed nodes only need the runtime access required by the modules you run against them.
+
+Here is a quick reference table showing the differences between these two roles:
+
+| Feature | Control Node | Managed Node |
+| :--- | :--- | :--- |
+| **Ansible Installation** | Must be installed | Not required |
+| **Operating System** | macOS or Linux (Windows not supported as control) | Linux, Windows, macOS, or network switches |
+| **Typical Resource Use** | Temporary CPU spikes during runs | Zero memory/CPU when playbooks are idle |
+| **Authentication** | Holds private SSH keys and vault passwords | Holds public SSH keys matching the control keys |
+| **Execution Role** | Assembles module payloads and orchestrates runs | Executes temporary module code and reports results |
+
+## Playbooks, Plays, Tasks, and Modules
+
+When you write automation files in Ansible, you use a set of hierarchy terms that describe how the work is organized. Understanding these terms prevents confusion when you read playbooks or debug run errors.
+
+The hierarchy flows from the largest file structure down to the individual units of work:
+
+- **Playbook**: A text file written in YAML format that holds one or more plays. Think of it as a complete automation book that details the setup rules for a portion of your infrastructure.
+- **Play**: A structural block inside a playbook that associates a specific group of servers (from your host catalog) with a specific list of tasks. A play answers the question: "Which hosts should get what work?"
+- **Task**: An individual step inside a play that has a clear name and calls a specific module. Every task should focus on one logical goal (like "Ensure Nginx is running").
+- **Module**: The pre-written program called by a task that understands how to interact with the operating system to perform actual work. Ansible ships with thousands of built-in modules that cover everything from package managers and file copying to user management and database manipulation.
 
 ```text
-control node
-  reads inventory
-  reads playbook
-  connects over SSH
-  runs task work
-        |
-        v
-managed nodes
-  orders-web-01
-  orders-web-02
-  return results
+Playbook File (web-servers.yml)
+├── Play 1: Target [webservers] group
+│   ├── Task A: Install Nginx (uses apt module)
+│   └── Task B: Start Service (uses service module)
+└── Play 2: Target [databases] group
+    ├── Task C: Install PostgreSQL (uses apt module)
+    └── Task D: Create Database (uses postgresql_db module)
 ```
 
-This split explains several failures that look confusing at first. If Ansible says a host is `UNREACHABLE`, the playbook task has not started. The control node could not connect to the managed node. The cause is usually the address, DNS, SSH user, key, network path, bastion, firewall, or host key.
+## Idempotency: The Core Safety Principle
 
-If Ansible reaches the host and then a task fails, the connection layer worked. The next question is the task itself: the package name, file path, service name, module arguments, privilege escalation, or remote operating system.
+The single most important safety concept in Ansible is **idempotency**. Idempotency means that running a task multiple times will leave the target machine in the exact same final state as running it once, without causing unintended side effects.
 
-That separation is one of the first useful habits in Ansible. Do not debug a package task until the connection works. Do not debug SSH when the failure is actually a sudo error.
+When you write custom shell scripts to configure servers, you are writing imperative lists of instructions:
+- Run `mkdir /var/log/app`
+- Run `apt-get install nginx`
+- Run `echo "setting = value" >> /etc/app.conf`
 
-## Playbooks and Modules
+If you run this shell script a second time, it will fail or cause issues. The `mkdir` command will return an error because the directory already exists. The `echo` command will append the same setting line a second time, corrupting the configuration file. To make a shell script safe to rerun, you must write complicated conditional logic to check if directories exist and if lines are already in files before running commands.
 
-A playbook is a YAML file that Ansible can run. A playbook contains one or more plays. Each play chooses hosts and then runs tasks against those hosts.
+Ansible modules are designed under the hood to be declarative. You do not tell Ansible what actions to execute; you describe the final state you want. The module compares that desired state with the actual system state, and only acts if they do not match.
 
-A module is the unit of work behind a task. The `apt` module knows how to manage Debian and Ubuntu packages. The `template` module knows how to render a Jinja2 template into a file. The `service` module knows how to start, stop, enable, or disable services.
-
-This matters because a module usually understands state. A package module can check whether a package is already installed. A service module can check whether a service is already running. A file module can check ownership and permissions before changing them.
-
-A task using a module reads like this:
-
-```yaml
-- name: Create orders log directory
-  ansible.builtin.file:
-    path: /var/log/orders
-    state: directory
-    owner: orders
-    group: orders
-    mode: "0750"
-```
-
-The task does not say "run `mkdir`, then run `chown`, then run `chmod`." It says what the directory should look like. The module decides whether anything has to change.
-
-Ansible can also run raw commands and shell commands. Those are useful when no module fits, but they are easier to misuse. A shell command often describes an action, not a final state. That distinction becomes important when the same playbook runs again.
-
-## Idempotency
-
-Idempotency means running the same task many times leaves the host in the same final state as running it once. In configuration work, this is a practical safety property. It lets the orders team rerun a playbook after a failed deployment, a rebuild, or a suspected manual change.
-
-This task is idempotent because it describes a desired package state:
+Consider this Ansible task:
 
 ```yaml
-- name: Install nginx
+- name: Ensure nginx web server is installed
   ansible.builtin.apt:
     name: nginx
     state: present
 ```
 
-If Nginx is missing, Ansible installs it and reports `changed`. If Nginx is already installed, Ansible reports `ok`. The second run should not reinstall the package just because the task appeared in the playbook.
+When Ansible executes this task:
+1. The remote module runs `dpkg-query` or inspects system package catalogs to see if `nginx` is present.
+2. If the package is missing, the module installs it and returns a status of `changed`.
+3. If the package is already present, the module does nothing and returns a status of `ok`.
 
-Now compare that with a shell task:
-
-```yaml
-- name: Add proxy timeout
-  ansible.builtin.shell: echo "proxy_read_timeout 30s;" >> /etc/nginx/conf.d/orders.conf
-```
-
-This appends a line every time the playbook runs. After five runs, the file may have five copies of the same setting. The task changed the file, but it did not describe the final shape of the file.
-
-A better task describes the line that should exist:
-
-```yaml
-- name: Set proxy timeout
-  ansible.builtin.lineinfile:
-    path: /etc/nginx/conf.d/orders.conf
-    regexp: "^proxy_read_timeout"
-    line: "proxy_read_timeout 30s;"
-```
-
-This gives Ansible enough information to search for the existing setting, replace it if needed, and avoid adding duplicates. The practical surprise is that the safer task is often less about the command you would type by hand and more about the state you want the host to settle into.
-
-## Reading Ansible Output
-
-Ansible reports a result for each task on each host. The result words are small, but they tell you which layer to inspect.
-
-```text
-TASK [Install nginx] changed: [orders-web-01]
-TASK [Install nginx] ok: [orders-web-02]
-
-PLAY RECAP
-orders-web-01 : ok=6 changed=1 unreachable=0 failed=0
-orders-web-02 : ok=6 changed=0 unreachable=0 failed=0
-```
-
-This output says `orders-web-01` needed a package change and `orders-web-02` already matched the task.
-
-| Result | Meaning |
-| --- | --- |
-| `ok` | The task ran and the host already matched the requested state. |
-| `changed` | The task ran and changed the host. |
-| `failed` | Ansible reached the host, but the task did not finish successfully. |
-| `unreachable` | Ansible could not connect to the host. |
-| `skipped` | Ansible did not run the task because a condition or mode skipped it. |
-
-The recap is a short report about drift. Treat it as more than a green or red ending. If a stable playbook changes the same file on every run, the task may be rewriting content with a timestamp, appending data, or using a command that cannot tell whether the desired state already exists.
-
-## Where Ansible Fits
-
-Ansible is strongest when you need to configure systems you can reach. It is commonly used for packages, users, files, templates, services, scheduled jobs, release steps, and operational checks.
-
-Terraform usually works at a different layer. It creates and manages infrastructure resources through provider APIs: networks, virtual machines, load balancers, DNS records, buckets, databases, and IAM policies.
-
-For the orders service, a common split is:
-
-| Tool | Typical job |
-| --- | --- |
-| Terraform | Create the network, virtual machines, load balancer, DNS, and firewall rules. |
-| Ansible | Configure Nginx, service files, users, directories, and `orders-api` on the machines. |
-
-The tools can overlap. Ansible has cloud modules. Terraform can pass startup scripts to machines. The simple model is still useful: Terraform often shapes the infrastructure, and Ansible often configures what runs inside the machines after they exist.
-
-Ansible also has limits. It depends on a connection path. It needs credentials and privilege rules. A task can be accurate for Ubuntu and wrong for RHEL. A broad host pattern can reach too many machines. A shell task can look harmless but change the host every time. These limits do not make Ansible weak; they explain why inventory, workflow, variables, privilege, and targeting deserve their own articles.
+Running this task once, ten times, or a hundred times is completely safe. The server settles into the desired state, and Ansible only spends time and effort making changes when the host has drifted from your playbook definition.
 
 ## Putting It All Together
 
-The orders team started with hosts that could drift:
+We started by examining the problems of managing a web application fleet by hand, where manual steps, unwritten config changes, and diverging package versions lead to server drift and unpredictable failures.
 
-- One host could have the new Nginx config while another kept the old file.
-- A rebuilt host could miss the `orders-api` service setup.
-- An incident hotfix could disappear from the team's written process.
-- A repeated command could slowly make a file worse.
+Ansible answers these challenges through an elegant, zero-overhead architecture:
+- **Agentless Execution**: It runs without any resident background daemons on your servers, connecting over standard SSH and using resources only during active execution.
+- **The Module Payload Loop**: During a run, it assembles temporary task payloads, transfers them to the managed host, executes them, receives structured results, and normally cleans up the temporary files afterward.
+- **Declarative and Idempotent Tasks**: It focuses on describing the final target state rather than listing execution steps, ensuring that playbooks can be safely run repeatedly against any number of hosts.
 
-Ansible answers those problems by putting the host map in inventory and the desired machine state in playbooks. The control node connects to managed nodes, modules inspect current state, and task results show whether each host changed, failed, or already matched.
-
-The useful mental model is simple: inventory says where the orders hosts are, playbooks say what should be true on them, modules do the state-aware work, and the recap tells you what actually happened.
+By splitting your computers into control nodes that orchestrate runs and managed nodes that receive temporary tasks, you move your server environments out of human memory and into clear, version-controlled playbooks.
 
 ## What's Next
 
-The next article turns this model into a safe first workflow. It starts by reading the inventory, then tests remote execution, previews supported changes, applies the playbook, reads the recap, and runs again to see whether the hosts settled.
+Now that you understand the high-level architecture of Ansible and the mechanics of the agentless execution loop, the next article will explore the actual workflow of running a playbook. We will step through the commands to set up a control environment, initiate connection checks, execute dry runs to preview system shifts, and read the recap lines to diagnose host changes.
 
 ---
 
 **References**
 
-- [Getting started with Ansible](https://docs.ansible.com/projects/ansible/latest/getting_started/index.html)
-- [How to build your inventory](https://docs.ansible.com/projects/ansible/latest/inventory_guide/intro_inventory.html)
-- [Creating a playbook](https://docs.ansible.com/projects/ansible/latest/getting_started/get_started_playbook.html)
-- [Controlling how Ansible behaves: precedence rules](https://docs.ansible.com/projects/ansible/latest/reference_appendices/general_precedence.html)
+- [Ansible Architecture Overview](https://docs.ansible.com/ansible/latest/network/getting_started/basic_concepts.html) - Official guide to control nodes, managed nodes, and communication patterns.
+- [Ansible Modules Introduction](https://docs.ansible.com/ansible/latest/user_guide/modules.html) - Documentation on how state-aware modules execute on remote targets.
+- [Understanding Idempotency in Configuration Systems](https://docs.ansible.com/ansible/latest/reference_appendices/faq.html#what-is-idempotency) - Detailed explanation of declarative system reconciliation.
+- [Secure Shell (SSH) Protocol Specifications](https://datatracker.ietf.org/doc/html/rfc4251) - The Internet Engineering Task Force (IETF) RFC outlining the SSH transport layer used by Ansible.

@@ -15,17 +15,18 @@ aliases:
 
 1. [The Problem](#the-problem)
 2. [What Is API Gateway](#what-is-api-gateway)
-3. [APIs](#apis)
-4. [Routes](#routes)
-5. [Stages](#stages)
-6. [Integrations](#integrations)
-7. [Authorizers](#authorizers)
-8. [Throttling](#throttling)
-9. [Private Backends](#private-backends)
-10. [ALB Comparison](#alb-comparison)
-11. [Sample API Shape](#sample-api-shape)
-12. [Putting It All Together](#putting-it-all-together)
-13. [What's Next](#whats-next)
+3. [Request Lifecycle](#request-lifecycle)
+4. [APIs](#apis)
+5. [Routes](#routes)
+6. [Stages](#stages)
+7. [Integrations](#integrations)
+8. [Authorizers](#authorizers)
+9. [Throttling](#throttling)
+10. [Private Backends](#private-backends)
+11. [ALB Comparison](#alb-comparison)
+12. [Sample API Shape](#sample-api-shape)
+13. [Putting It All Together](#putting-it-all-together)
+14. [What's Next](#whats-next)
 
 ## The Problem
 
@@ -59,6 +60,34 @@ The useful beginner mental model is a managed API front door. API Gateway does n
 | How does a private service receive external API traffic? | VPC link or private integration |
 
 That does not mean every HTTP endpoint needs API Gateway. An Application Load Balancer can be the simpler front door for a normal web service. API Gateway becomes more attractive when the API layer itself needs managed routes, authorization patterns, request shaping, throttling, usage plans, WebSocket behavior, or direct integration with Lambda and AWS services.
+
+## Request Lifecycle
+
+The easiest way to understand API Gateway is to follow one request from the caller to the backend.
+
+First, the caller opens an HTTPS connection to the API endpoint and sends a method, path, headers, query string, and optional body. API Gateway matches that request against a deployed stage and route. If no route matches, the request fails before it reaches your backend.
+
+Second, API Gateway applies front-door controls. Depending on your API type and configuration, it can evaluate resource policies, IAM authorization, JWT or Cognito authorizers, Lambda authorizers, request validation, throttling, and usage-plan limits. A rejected request stops here with a client-facing error such as `401`, `403`, `429`, or a validation failure.
+
+Third, API Gateway invokes the integration. For Lambda, it sends an event payload to the function. For an HTTP or private VPC integration, it forwards an HTTP request to the configured backend. For AWS service integrations, it calls the selected AWS API action using the configured permissions.
+
+Fourth, the backend returns a response. API Gateway can pass it through directly or apply response mappings, headers, and status-code handling before returning the final HTTP response to the caller.
+
+```mermaid
+flowchart LR
+    Caller["Caller"] --> Stage["Stage and route match"]
+    Stage --> Auth["Authorizer and throttling"]
+    Auth --> Integration["Integration request"]
+    Integration --> Backend["Lambda, HTTP, VPC link, or AWS service"]
+    Backend --> Response["Integration response"]
+    Response --> Caller
+```
+
+This lifecycle is useful during debugging. A `403` before integration points to the API boundary. A `502` or timeout after integration often points to the backend handoff, VPC link, Lambda error, or response shape.
+
+![API Gateway request path showing callers passing through stage, route, authorizer, throttling, and integrations to Lambda, private services, or AWS services](/content-assets/articles/article-cloud-providers-aws-application-integration-api-gateway/api-gateway-request-path.png)
+
+*API Gateway is easiest to debug as a front-door pipeline. A request must match a deployed stage and route, pass boundary controls, reach the right integration, and then return a response through the same managed API surface.*
 
 ## APIs
 
@@ -197,6 +226,10 @@ The design is healthy when API Gateway owns API concerns and the backend owns bu
 ## What's Next
 
 Some work should not happen while the caller waits. Receipt emails, export generation, vendor calls, and retries need a place to wait safely after the API accepts the request. The next article covers messaging with SQS and SNS.
+
+![Six-tile API Gateway checklist covering API contract, routes, stages, integrations, authorizers, and throttling](/content-assets/articles/article-cloud-providers-aws-application-integration-api-gateway/api-gateway-checklist.png)
+
+*Use this as the API Gateway checklist: keep the caller-facing contract stable, route by intent, treat stages as deployments, choose integrations deliberately, authorize at the boundary, and throttle before downstream systems pay the cost.*
 
 ---
 

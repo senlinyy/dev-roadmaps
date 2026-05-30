@@ -40,15 +40,15 @@ On your laptop, no firewalls, no subnets, and no routing tables exist between yo
 
 Once you move your application to the cloud, that simple loopback model disappears. Your database, your web API, and your background queue workers no longer share a single system. They run on completely separate virtual machines hosted inside massive public datacenters. 
 
-If you launch these virtual servers without a deliberate network boundary, they are placed by default on a flat, public network. This means your database receives a public IP address, leaving its port exposed to anyone scanning the internet. 
+AWS resources are normally placed inside a VPC, and many new accounts include a default VPC with public subnets already wired for internet access. The beginner danger is not that AWS lacks private networking. The danger is accepting defaults without understanding them: assigning public IPv4 addresses, using permissive route tables, opening security group rules, or leaving managed services reachable from places they should not trust.
 
-Additionally, your servers share the same broad IP space with thousands of other cloud customers, making private communication difficult to isolate. To run securely in the cloud, you must recreate the isolation of localhost by constructing your own private network boundary.
+To run securely in the cloud, you must recreate the isolation of localhost by designing your own private network boundary deliberately.
 
 ## The Virtual Private Cloud Boundary
 
-A Virtual Private Cloud, commonly referred to as a VPC, is a logically isolated private network container that you create inside a single AWS Region. It is dedicated strictly to your AWS account, cabled logically apart from all other virtual networks in the cloud. Within this boundary, you have complete control over defining private IP address spaces, dividing those spaces into subnets, cabled routing tables, and attaching security gateways.
+A Virtual Private Cloud, commonly referred to as a VPC, is a logically isolated private network container that you create inside a single AWS Region. It is dedicated to your AWS account, separated from other virtual networks by AWS networking controls. Within this boundary, you define private IP address spaces, divide those spaces into subnets, attach route tables, and choose which gateways or endpoints can carry traffic.
 
-The VPC acts as the absolute baseline for all cloud infrastructure security. Without an explicit VPC boundary, network placement is entirely accidental. A database might land directly adjacent to an internet-facing frontend node on the same public tier, exposing critical data to unnecessary risk. 
+The VPC acts as the baseline for cloud infrastructure security. Without an explicit VPC topology, network placement becomes accidental. A database might land in a subnet whose route table and public access settings do not match its risk level, exposing critical data to unnecessary reachability.
 
 By defining a deliberate VPC topology, you ensure that every resource is assigned to an isolated network tier with explicit paths inside and outside your system.
 
@@ -66,6 +66,10 @@ flowchart TD
     end
     AppLocal["Localhost App"] --> CloudVpc["Private Regional VPC"]
 ```
+
+![VPC topology infographic showing public, private app, and data subnets repeated across two Availability Zones with internet, NAT, and endpoint paths](/content-assets/articles/article-cloud-providers-aws-networking-connectivity-logical-isolation-network-topology/vpc-topology-map.png)
+
+*A production VPC is easier to reason about as repeated subnet tiers. Public subnets host entry and egress gateways, private app subnets run workload code, data subnets stay isolated, and route tables decide which path each tier can use.*
 
 ## CIDR Block Address Planning
 
@@ -90,7 +94,7 @@ By segmenting your VPC into distinct subnets, you can establish clear physical b
 
 A secure, production-ready network topology utilizes a three-tier subnet architecture, repeated across at least two Availability Zones:
 
-* **The Public Tier**: Holds internet-facing resources like Application Load Balancers and NAT Gateways. These subnets are configured to assign public IP addresses, and their route tables send outbound traffic directly to the internet.
+* **The Public Tier**: Holds internet-facing resources like Application Load Balancers and NAT Gateways. These subnets have route tables that send internet-bound traffic to an Internet Gateway. Public reachability still requires the resource or managed service to have the right public address and firewall configuration.
 * **The Private Application Tier**: Houses the application code, container tasks, API workers, and internal services. Resources here do not receive public IP addresses and cannot be reached directly from the internet. They can only initiate outbound connections via a NAT Gateway when necessary.
 * **The Data Tier**: Dedicated strictly to databases, key-value caches, and highly sensitive data engines. These subnets are completely isolated, with absolutely no route to the internet, ensuring that data stores remain completely unreachable from outside the private network.
 
@@ -112,7 +116,7 @@ flowchart TD
     PubB --> AppB --> DataB
 ```
 
-Duplicating this three-tier layout across multiple Availability Zones provides a stable network topology. If one physical zone suffers an outage, the load balancer in the remaining public subnets can seamlessly route traffic to application tasks running in the alternative private subnets.
+Duplicating this three-tier layout across multiple Availability Zones provides a stable network topology. If one physical zone suffers an outage, the load balancer in the remaining enabled zones can route traffic to healthy application tasks running in the alternative private subnets.
 
 ## Route Tables and Traffic Routing
 
@@ -126,7 +130,7 @@ The route tables are what actually make a subnet "public" or "private". A subnet
 
 * **Public Subnet Route Table**:
   * Local Destination (`10.40.0.0/16`) -> Target `local` (Allows private same-VPC communication).
-  * Default Outbound Destination (`0.0.0.0/0`) -> Target `Internet Gateway` (Allows direct, bidirectional public internet access).
+  * Default Outbound Destination (`0.0.0.0/0`) -> Target `Internet Gateway` (Provides an internet route path; public IPs, security groups, network ACLs, and service settings still decide actual reachability).
 
 * **Private App Subnet Route Table**:
   * Local Destination (`10.40.0.0/16`) -> Target `local` (Allows private same-VPC communication).
@@ -134,7 +138,7 @@ The route tables are what actually make a subnet "public" or "private". A subnet
 
 * **Data Subnet Route Table**:
   * Local Destination (`10.40.0.0/16`) -> Target `local` (Allows private same-VPC communication).
-  * No outbound route to `0.0.0.0/0` is registered, completely isolating the database tier from the outside world.
+  * No outbound route to `0.0.0.0/0` is registered, preventing direct internet egress from the database tier.
 
 Every VPC contains a default main route table. If a subnet is created without an explicit association, it automatically inherits this main table. To ensure a secure, reviewable topology, you should always create custom route tables for each tier and associate them explicitly with their target subnets.
 
@@ -182,10 +186,10 @@ Because the endpoint route is more specific than the broad `0.0.0.0/0` NAT Gatew
 
 * **Private App Route Table with S3 Gateway Endpoint**:
   * Local Destination (`10.40.0.0/16`) -> Target `local`
-  * S3 Prefix List (`pl-63a5400a`) -> Target `vpce-s3` (Sends S3 traffic privately with zero NAT fee).
+  * S3 Prefix List (`pl-63a5400a`) -> Target `vpce-s3` (Sends S3 traffic through the endpoint instead of the NAT Gateway).
   * Default Outbound Destination (`0.0.0.0/0`) -> Target `NAT Gateway` (Directs all other internet traffic through NAT).
 
-AWS does not charge any hourly or processing fees for using VPC Gateway Endpoints. By placing a Gateway Endpoint in your private route tables, you secure S3 traffic inside the AWS network while reducing your NAT Gateway processing costs to zero.
+AWS does not charge hourly or per-GB endpoint processing fees for Gateway Endpoints themselves. Normal S3 or DynamoDB request, storage, and data transfer charges can still apply. By placing a Gateway Endpoint in your private route tables, you keep supported AWS service traffic on the endpoint path and avoid NAT Gateway processing charges for that traffic.
 
 ## Putting It All Together
 
@@ -194,9 +198,9 @@ Designing a secure cloud network topology means moving from accidental placement
 * **The Regional VPC**: Establishes your private network container, cabled apart from all other cloud customers.
 * **CIDR Planning**: Reserves a distinct, non-overlapping street-grid (such as `10.40.0.0/16`) that leaves ample room for subnets and avoids future IP address conflicts.
 * **Subnet Segmentation**: Duplicates a secure three-tier layout (Public, Private App, Data) across multiple Availability Zones to eliminate single points of failure.
-* **Route Tables**: Acts as the physical routing brain, making subnets truly public or private based on where their default outbound routes point.
+* **Route Tables**: Act as the routing brain, making subnets public, private, or isolated based on where their default routes and service-specific routes point.
 * **Gateways**: Internet Gateways allow public entry points to accept user requests, while NAT Gateways provide private subnets with secure, outbound-initiated egress.
-* **VPC Endpoints**: Bypasses expensive NAT Gateway paths for core AWS services like S3 and DynamoDB, keeping high-volume traffic secure and free.
+* **VPC Endpoints**: Bypass NAT Gateway paths for supported AWS services like S3 and DynamoDB, keeping high-volume traffic private while reducing NAT processing costs.
 
 A clean topology outlines where network paths are cabled. However, routing rules only make paths possible; they do not dictate which packets are permitted to use those paths. To lock down our system, we need to apply precise packet-filtering gates at both the subnet and resource levels.
 
@@ -205,6 +209,10 @@ A clean topology outlines where network paths are cabled. However, routing rules
 Now that we have established our physical VPC topology, our next step is to control packet access. A public subnet may have an active internet route, but we still need to restrict which public ports are open to the world. A private application subnet may have a route to the database tier, but we must ensure that only our backend code can query our data store.
 
 In the next article, we will compare the two primary AWS packet-filtering layers: stateful **Security Groups** protecting individual resource interfaces, and stateless **Network ACLs** guarding subnet boundaries. We will learn how to write clean workload references instead of fragile IP lists, and how to verify our filters using VPC Flow Logs metadata.
+
+![VPC topology summary infographic showing private VPC boundary, CIDR planning, subnet tiers, route tables, internet versus NAT, and VPC endpoints](/content-assets/articles/article-cloud-providers-aws-networking-connectivity-logical-isolation-network-topology/vpc-topology-summary.png)
+
+*Use this as the VPC topology checklist: start with a private boundary, choose a non-overlapping CIDR block, repeat subnet tiers, make route tables explicit, separate internet and NAT paths, and use endpoints when supported services can stay private.*
 
 ---
 

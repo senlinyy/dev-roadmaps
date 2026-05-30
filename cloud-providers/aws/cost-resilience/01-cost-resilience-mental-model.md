@@ -106,6 +106,10 @@ Useful Headroom vs. Idle Waste:
 | **RDS Instance Class** | Provisioning a `db.m6g.xlarge` to ensure nightly export jobs complete within the batch window. | Provisioning a `db.r6g.2xlarge` because a developer forgot to delete a temporary load testing database. |
 | **S3 Snapshot Storage** | Retaining 30 days of daily backups to meet verified compliance and disaster recovery targets. | Retaining thousands of un-lifecycle-expired snapshots from a testing environment deleted last year. |
 
+![Cost and resilience infographic showing a quiet utilization graph, useful headroom for failed tasks, deployment overlap, and traffic surge, plus idle waste that must prove its purpose](/content-assets/articles/article-cloud-providers-aws-cost-resilience-cost-resilience-mental-model/headroom-vs-waste.png)
+
+*Quiet utilization does not prove waste. Some idle-looking capacity protects task failures, deployment overlap, and traffic spikes; other idle resources are true waste only after the team proves they serve no active purpose.*
+
 ## The Boring Efficiency of Waste Removal
 
 Waste is any cloud spending that does not serve a measured workload, support operational evidence checks, or satisfy a verified recovery target.
@@ -146,6 +150,10 @@ Cost and reliability are paired dimensions of the same architectural system:
 ## What's Next
 
 We have established the paired equation of cost and resilience, mapping the balance between spending and reliability. In the next article, we will go deep into cost visibility. We will detail how to configure cost allocation tags, navigate Cost Explorer trends, set up AWS Budgets alerts, and execute terminal CLI sessions to query billing data.
+
+![Cost resilience map checklist covering cost shapes, resilience shapes, headroom, waste, tradeoff map, and rollback plan](/content-assets/articles/article-cloud-providers-aws-cost-resilience-cost-resilience-mental-model/cost-resilience-map.png)
+
+*Use this as the cost and resilience map: identify the cost shape, name the resilience shape it buys, protect real headroom, remove proven waste, document each tradeoff, and keep the rollback plan close.*
 
 ---
 

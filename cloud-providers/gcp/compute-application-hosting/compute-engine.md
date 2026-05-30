@@ -12,179 +12,194 @@ aliases:
 
 ## Table of Contents
 
-1. [The Problem](#the-problem)
-2. [What Is Compute Engine](#what-is-compute-engine)
-3. [Machine Type](#machine-type)
-4. [Images](#images)
-5. [Disks](#disks)
-6. [Zones](#zones)
-7. [Startup](#startup)
-8. [Process Management](#process-management)
-9. [Service Accounts](#service-accounts)
-10. [Network Access](#network-access)
-11. [Logs And Patching](#logs-and-patching)
-12. [Sample Server Shape](#sample-server-shape)
-13. [Putting It All Together](#putting-it-all-together)
-14. [What's Next](#whats-next)
+1. [Compute Engine Virtual Machines](#compute-engine-virtual-machines)
+2. [Virtual Machine Machine Families](#virtual-machine-machine-families)
+3. [OS Images and Snowflake Server Prevention](#os-images-and-snowflake-server-prevention)
+4. [Persistent Disks and Storage Decoupling](#persistent-disks-and-storage-decoupling)
+5. [Zonal Placement and Availability Boundaries](#zonal-placement-and-availability-boundaries)
+6. [Automated Startup and Metadata Bootstrap](#automated-startup-and-metadata-bootstrap)
+7. [Guest Process Supervision with systemd](#guest-process-supervision-with-systemd)
+8. [VPC Network Interface Attachment](#vpc-network-interface-attachment)
+9. [Sample Server Shape](#sample-server-shape)
+10. [Putting It All Together](#putting-it-all-together)
+11. [What's Next](#whats-next)
 
-## The Problem
+## Compute Engine Virtual Machines
 
-Cloud Run is a good first home for many backend APIs, but not every workload fits a managed service shape. Sometimes the team needs a server.
+Compute Engine is Google Cloud's software-defined infrastructure service that provides virtual machines (VMs) on demand. Rather than abstracting the hardware layer completely like serverless container runtimes, Compute Engine allows you to provision, configure, and operate virtual servers with direct root control over the operating system kernel, filesystem configurations, network adapters, and running background processes.
 
-- A legacy import worker needs a host agent that expects a normal Linux machine.
-- A migration has a startup script that installs packages before the app runs.
-- An application writes large temporary files and needs explicit disk planning.
-- A security team requires a specific OS image, patch flow, or host-level monitoring agent.
+A common architectural trap is choosing a virtual machine out of operational familiarity rather than technical necessity. Compute Engine is the correct runtime only when a workload requires raw server-shaped capabilities, such as running a database engine that requires dedicated block storage, hosting legacy vendor software with hardcoded OS requirements, or executing background daemons that require persistent host-level monitoring agents.
 
-Compute Engine is the GCP runtime for that server-shaped work. It gives your team more control than Cloud Run. It also gives your team more to operate.
+For engineers transitioning from other cloud platforms, Compute Engine virtual machines are the direct equivalent of Amazon EC2 instances and Azure Virtual Machines. While the underlying virtualization concepts are familiar, GCP differentiates its environment with customizable machine configurations, durable Persistent Disk storage, and live migration for many planned maintenance events.
 
-## What Is Compute Engine
+:::expand[Design Detail: Maintenance and Live Migration]{kind="design"}
+A primary risk when operating virtual machines is planned host maintenance. If the platform needs to maintain the physical host running your VM, your workload may experience disruption unless the instance type and maintenance policy support live migration.
 
-Compute Engine provides virtual machines, usually called VMs. A VM is a cloud server with CPU, memory, disks, network interfaces, an operating system image, metadata, and optional service account identity.
+Live migration is a Compute Engine feature that can move many running VM instances during planned maintenance with minimal disruption. The beginner contract is important: live migration reduces planned-maintenance downtime for supported instances, but it is not a guarantee that every VM survives every hardware failure. Multi-zone application design is still the reliability boundary for production services.
 
-If EC2 or Azure VMs are familiar, the broad idea transfers. You choose a machine, place it in a zone, attach storage, connect it to a VPC, and run processes on it. The GCP details still matter: projects own the instance, zones place it, VPC firewall rules control packet access, and attached service accounts let software call Google APIs.
+```mermaid
+flowchart TD
+    subgraph Before["Before Maintenance"]
+        VMSource["Running VM instance"]
+    end
 
-The key difference from Cloud Run is ownership. Cloud Run asks for an application contract. Compute Engine gives you a server and expects you to manage the server story.
+    subgraph Platform["Compute Engine Maintenance"]
+        Decision["Maintenance event"]
+        Migration["Live migration if supported"]
+    end
 
-| Runtime question | Cloud Run | Compute Engine |
-| --- | --- | --- |
-| Who manages the OS? | Google abstracts it away | Your team manages the VM OS |
-| How does the app start? | Container startup contract | Startup script, systemd, process manager, or manual setup |
-| Where is local disk? | Ephemeral container filesystem | Boot disk and attached disks you plan |
-| What evidence starts debugging? | Revision and service logs | VM status, startup logs, process logs, disk and OS state |
+    subgraph After["After Migration"]
+        VMDest["Same VM continues running"]
+    end
 
-Choose the VM when those server details are part of the requirement.
-
-## Machine Type
-
-A machine type defines the VM's CPU and memory shape. This sounds like a sizing detail, but it is also an operating promise. Too small, and the app thrashes or fails under load. Too large, and the team pays for idle capacity.
-
-Unlike Cloud Run, a VM normally exists whether traffic arrives or not. If the Orders import worker runs on an `e2-standard-2`, that capacity is reserved and billed while the instance runs. Scaling requires additional automation, such as managed instance groups, scripts, or another orchestration layer.
-
-The first sizing question should be boring: what does this process actually need? CPU-heavy image processing, memory-heavy imports, and lightweight background jobs should not all inherit the same VM shape because it was in the first tutorial.
-
-## Images
-
-An image is the operating system starting point for a VM. It might be a public Linux image, a hardened organization image, or a custom image built from a known server state.
-
-Images matter because they define what exists before your startup script runs. Package repositories, agents, kernel settings, and the Google guest environment can all affect how the instance behaves. A custom image can speed up startup and standardize security, but it also becomes something the team must rebuild and patch.
-
-The beginner trap is treating an instance as a snowflake. Someone SSHs in, installs packages, changes a config file, and the app works. Then the VM is replaced, and the undocumented changes disappear. A healthy VM design can explain which image starts the machine and which automation turns it into the app server.
-
-## Disks
-
-Compute Engine VMs use persistent disks for boot and attached storage. The boot disk holds the operating system and often the application install. Additional disks can hold data or large working files.
-
-Disks make local state visible, but they also make it dangerous. If the app writes important data only to a VM disk, replacing the VM becomes a data migration problem. If the app writes temporary data to a disk that is too small, the failure can look like an application bug.
-
-For backend systems, keep durable application state in managed data services when possible. Use VM disks for OS, local working space, caches, or explicit server workloads that truly need attached storage.
-
-## Zones
-
-Compute Engine instances live in zones. A zone is a location inside a region. If the Orders worker is in `us-central1-a`, that placement matters for latency, availability, disk attachment, and failure planning.
-
-A single VM in one zone is a single point of failure. That may be acceptable for a dev worker or low-risk migration tool. It is usually not enough for a production API. Production VM designs often use multiple zones, managed instance groups, load balancing, and automation that can replace failed instances.
-
-Cloud Run hides much of this placement surface. Compute Engine makes it explicit. That is useful when you need control, and it is extra work when you only wanted to run a normal HTTP app.
-
-## Startup
-
-Startup is how a blank VM becomes useful. It might install packages, pull an artifact, write config files, register an agent, and start the application process.
-
-Compute Engine supports startup scripts through instance metadata. That gives you a repeatable way to run commands when the VM boots. The script should be treated like production code. If it fails halfway through, the VM may exist but not serve the app.
-
-Good startup evidence names what happened:
-
-```text
-instance: orders-import-01
-zone: us-central1-a
-image: debian-12-orders-base
-startup script: installed agent, pulled worker artifact, wrote env file
-status: process started by systemd
+    VMSource --> Decision
+    Decision --> Migration
+    Migration --> VMDest
 ```
 
-If nobody can explain how a new VM becomes the app server, the VM is not really reproducible.
+As traced above, live migration is designed to move supported running VMs during maintenance with minimal disruption:
 
-## Process Management
+1.  **Maintenance Event**: Google Cloud schedules maintenance for the host infrastructure.
+2.  **Eligibility Check**: Compute Engine checks whether the instance supports live migration and whether its maintenance policy allows it.
+3.  **Migration**: If eligible, Compute Engine moves the running instance while trying to keep disruption low.
+4.  **Application Monitoring**: Your app should still use health checks, retries, and multi-zone capacity because live migration is not a substitute for application-level resilience.
+:::
 
-A VM does not automatically know how to keep your app alive. Something must start the process, restart it after crashes, and expose its logs. On Linux, that is often systemd, a supervisor, or another process manager.
+## Virtual Machine Machine Families
 
-Manual `ssh` plus `node server.js` is not a production runtime. It works until the shell exits, the VM reboots, or the process crashes. A server-shaped runtime needs a server-shaped process plan.
+GCP organizes Compute Engine virtual machines into distinct, workload-optimized machine families. Choosing the correct family is critical for matching your workload's under-the-hood hardware requirements to the correct pricing tier:
 
-For the Orders import worker, the process manager should answer:
+*   **General-Purpose (`E2`, `N2`, `C3`)**: The standard workhorses designed for web applications, background utilities, and medium-scale databases. They run on shared or dedicated physical CPU cores, balancing cost and performance.
+*   **Compute-Optimized (`C2`, `H3`)**: Hardened machine families that bind your virtual CPUs directly to high-frequency physical processor cores. These are designed for CPU-heavy tasks like high-performance computing (HPC) or real-time gaming servers.
+*   **Memory-Optimized (`M1`, `M2`, `M3`)**: Specialized instances with massive RAM footprints (up to 12 terabytes), designed for running in-memory databases like SAP HANA or highly complex analytical workloads.
 
-| Question | Example answer |
-| --- | --- |
-| What starts the process? | systemd unit |
-| What restarts it? | Restart policy |
-| Where are logs written? | Journald plus Cloud Logging agent or Ops Agent |
-| How is config loaded? | Environment file or metadata-driven config |
+## OS Images and Snowflake Server Prevention
 
-Compute Engine gives control. Process management turns that control into a reliable runtime.
+Every virtual machine starts from an **OS Image**—a template containing the bootloader, operating system kernel, and pre-installed system packages. While GCP provides standard public images (such as Debian, Ubuntu, and Red Hat Enterprise Linux), relying on manual configuration post-boot is a severe operational risk.
 
-## Service Accounts
+![A VM should rebuild from image, metadata, startup script, package source, and service manager.](/content-assets/articles/article-cloud-providers-gcp-compute-application-hosting-compute-engine-virtual-machines/vm-boot-path.png)
 
-A VM can have an attached service account. Code running on the VM can use that identity to call Google APIs without storing a human password or long-lived key in the app.
+*Repeatable boot turns a VM from a handcrafted server into replaceable infrastructure.*
 
-This is powerful and easy to overgrant. The VM's service account should match the workload. An import worker might need to read from Cloud Storage and write to Cloud SQL. It probably does not need permission to deploy Cloud Run services or administer the whole project.
+If an operator SSHs into a running VM to manually install dependencies, modify configurations, or update code, that VM becomes a **snowflake server**—an undocumented, fragile system that cannot be reproduced. If the physical host experiences a catastrophic crash or a developer accidentally deletes the VM, the configuration is lost permanently.
 
-The identity lesson from earlier modules still applies: separate runtime identity from human identity and deployment identity. A VM feels like a server, but it is still a cloud workload with an IAM principal attached.
+To prevent snowflake servers, you must enforce automation:
 
-## Network Access
+*   **Custom Machine Images (Golden Images)**: Build custom templates using tools like Packer. You install all security agents, runtime dependencies, and application binaries onto a VM, then snapshot its disk to create a custom image. When you deploy a new VM, it boots instantly with all code pre-installed.
+*   **Infrastructure as Code (IaC)**: Standardize all VM deployments using Terraform or Bicep, ensuring that machine types, disk configurations, and VPC attachments are version-controlled and reproducible.
 
-Compute Engine instances attach to VPC networks through network interfaces. Firewall rules, routes, subnets, and public IP behavior all matter directly.
+## Persistent Disks and Storage Decoupling
 
-If the VM needs to receive traffic, the path must be allowed through the VPC and any public entry layer. If it only needs outbound access, the route and egress controls decide where it can call. A VM with an external IP is different from a private VM behind controlled egress.
+Compute Engine virtual machines store data on **Persistent Disks (PD)**. Unlike a laptop hard drive that lives inside one machine, a Persistent Disk is managed separately from the VM. The VM sees it as block storage, but the disk can have its own lifecycle, placement rules, and snapshot strategy.
 
-The networking module covered the deeper model. In this compute article, remember the VM-specific point: unlike Cloud Run, the VM is directly on a subnet through its network interface. That makes subnet, zone, firewall target, and service account targeting very concrete.
+![Persistent Disk keeps block storage separate from the VM lifecycle.](/content-assets/articles/article-cloud-providers-gcp-compute-application-hosting-compute-engine-virtual-machines/persistent-disk-boundary.png)
 
-## Logs And Patching
+*The disk can outlive a VM, but it still has zonal placement rules.*
 
-Compute Engine keeps more operating responsibility with your team. Logs do not become useful just because the VM exists. The app, process manager, OS, and agents need a plan to send evidence where operators can read it.
+This network-decoupled architecture provides critical advantages:
 
-Patching is the same. Google provides infrastructure and images, but your running VM's OS and packages still need an update strategy. If you build custom images, those images need refresh. If you patch in place, you need maintenance windows and restart behavior. If you replace VMs, startup automation must be reliable.
+*   **Dynamic Resizing**: You can expand a persistent disk's capacity (e.g. from 100GB to 500GB) dynamically while the VM is running and mounting the filesystem, without requiring a reboot.
+*   **Independent Lifecycle**: A persistent disk can outlive the VM that uses it, and you can detach and attach disks within documented limits. This is useful for repair and replacement, but it should not be described as instant failover for every host failure.
 
-This is the honest tradeoff. VMs are not bad. They are explicit. They ask the team to be clear about server operations.
+Persistent disks include options such as standard, balanced, SSD, and newer Hyperdisk families. To reduce operational burden for most application teams, store primary relational data in managed engines like Cloud SQL when you want Google to handle backups, patching, and high availability. Use VM disks when the workload specifically needs block storage attached to an operating system.
+
+## Zonal Placement and Availability Boundaries
+
+While GCP VPC networks are natively global, Compute Engine virtual machines are strictly **zonal** resources. A VM is provisioned within a single zone inside a region, such as `us-central1-a`.
+
+Because a VM belongs to one zone, deploying a single VM introduces a single failure boundary. If that zone has a serious outage, the workload can go offline.
+
+To secure highly available applications, you must deploy VMs across multiple zones behind a regional Application Load Balancer. By grouping these VMs into **Managed Instance Groups (MIGs)**, GCP's control plane can monitor VM health dynamically, automatically terminating and recreating any unhealthy instances across zonal boundaries to maintain your desired scale.
+
+## Automated Startup and Metadata Bootstrap
+
+To automate VM provisioning, Compute Engine utilizes a unified **Metadata Server** to pass runtime configurations and scripts to the guest operating system at boot time.
+
+When a VM boots, the Google Guest Agent running inside the OS queries the link-local metadata address `http://metadata.google.internal/computeMetadata/v1/` to fetch configuration parameters, including the user-supplied **`startup-script`**.
+
+A startup script is a collection of shell commands or configuration scripts executed automatically by the root user during the final stages of the VM's boot process. The script acts as the bootstrap mechanism: it reads environment variables from metadata, pulls application configuration files, verifies database connectivity, and initializes your guest processes, ensuring that a freshly booted VM becomes a fully operational application server without human intervention.
+
+## Guest Process Supervision with systemd
+
+Once a virtual machine's startup script completes, the guest operating system needs a persistent process supervisor to keep the application running. In modern Linux distributions like Debian or Ubuntu, this is managed by **`systemd`**.
+
+Relying on raw background processes (like executing `node server.js &` inside a terminal session) is an operational hazard: the shell will eventually close, and if the process crashes due to an unhandled exception, it remains terminated.
+
+To configure systemd to supervise your application, you write a standard service unit file (e.g., `/etc/systemd/system/orders-worker.service`):
+
+```ini
+[Unit]
+Description=Orders Import Worker Daemon
+After=network.target
+
+[Service]
+Type=simple
+User=orders-app
+WorkingDirectory=/opt/orders-worker
+ExecStart=/usr/bin/node dist/index.js
+Restart=always
+RestartSec=5
+EnvironmentFile=/etc/orders/environment.env
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+```
+
+The systemd unit configuration above guarantees process reliability:
+
+*   **`ExecStart`**: Defines the precise binary path and arguments to launch your application securely.
+*   **`Restart=always`**: Instructs the Linux kernel to monitor the process ID dynamically. If the application exits with an error code or crashes, systemd waits 5 seconds (`RestartSec=5`) and automatically spawns a fresh process.
+*   **`StandardOutput=journal`**: Routes all application `stdout` and `stderr` streams directly to the system journal (`journald`), allowing the Google Ops Agent to capture and stream logs to Cloud Logging automatically.
+
+## VPC Network Interface Attachment
+
+Compute Engine virtual machines attach directly to private VPC subnets through network interfaces. Unlike serverless runtimes that hide most backend networking details, a VM is a persistent, addressable node within your private network topology.
+
+This direct attachment requires precise network planning:
+
+*   **Subnet CIDR Reservation**: Ensure your subnet CIDR ranges are sized adequately to support the maximum scale of your Managed Instance Groups.
+*   **Private Google Access (PGA)**: Keep your VM subnets isolated from the public internet. By enabling Private Google Access on the subnet, VMs lacking public IP addresses can still resolve and securely access Google APIs (such as Cloud Storage or Secret Manager) over Google's private network backplane.
+*   **IAM Target-Based Firewalls**: Attach a dedicated service account to the VM instance, and target your VPC firewall rules directly to that service account principal rather than relying on volatile, user-controlled network tags.
 
 ## Sample Server Shape
 
-A simple Compute Engine shape for the Orders import worker might be:
+An idiomatic Compute Engine server shape for the Orders background worker isolates machine sizing, operating system templates, and process execution:
 
-| Part | Example |
-| --- | --- |
-| Instance | `orders-import-01` |
-| Zone | `us-central1-a` |
-| Machine type | `e2-standard-2` |
-| Image | Hardened Debian base image |
-| Boot disk | OS and worker install |
-| Service account | `orders-import-runtime` |
-| Startup | Metadata startup script installs config and starts systemd service |
-| Network | Private subnet with restricted egress |
-| Evidence | Startup logs, systemd status, app logs, disk metrics |
-
-That shape is more work than Cloud Run. It is worth it only when the server-shaped requirements are real.
+| Server Parameter | Configuration Value | Operational Purpose |
+| :--- | :--- | :--- |
+| **Instance Name** | `orders-worker-prod-01` | Unique zonal hostname within the VPC. |
+| **Machine Type** | `e2-standard-2` | Balanced 2 vCPU, 8GB RAM general-purpose instance. |
+| **OS Image** | `debian-12-hardened-v2026` | Pre-built custom golden image with Ops Agent active. |
+| **Persistent Disk** | `30GB Balanced SSD` | Low-latency boot disk network-decoupled from hardware. |
+| **Identity Account**| `orders-worker-runtime@prod-project...` | Least-privilege IAM service account principal. |
+| **Bootstrap Script**| Metadata `startup-script` | Automates config fetching and env file writing. |
+| **Process Manager** | `systemd` daemon unit | Supervises process execution and restarts on crash. |
 
 ## Putting It All Together
 
-Return to the opening problems.
+Operating virtual machines requires establishing automated, reproducible bootstrap configurations.
 
-The host agent and OS package requirements point toward a VM because the server itself matters. Compute Engine gives that control.
+When your deployment pipeline provisions a new background worker VM, Compute Engine creates the instance from the selected machine type, image, disks, network interface, and metadata. The VM boots using a hardened custom image, and the Google Guest Agent queries `metadata.google.internal` to fetch and execute the startup script.
 
-The startup script must be repeatable because a replaced VM should become the same application server without someone reconstructing it by hand.
-
-The disk plan must be explicit because a VM gives local storage choices that managed services hide.
-
-The security and monitoring requirements belong in the image, service account, network rules, logs, and patch flow. Choosing Compute Engine means choosing to own those details.
+The script writes localized environment configurations and launches the systemd supervisor daemon. Systemd executes the application binary, monitors its process ID dynamically to recover from runtime crashes, and streams all logging output directly to the local journal. Finally, the local Ops Agent captures the journal log stream and forwards it to Cloud Logging, ensuring your server-shaped workload remains fully secure, automated, and observable.
 
 ## What's Next
 
-Compute Engine handles server-shaped workloads. Some work is smaller and event-shaped: a file arrives, a message is published, or a schedule fires. Next, we look at Cloud Run functions for those small handlers.
+Compute Engine virtual machines provide comprehensive operating system control for persistent, server-shaped workloads. However, many background tasks are highly ephemeral and event-driven, requiring a runtime that scales immediately to zero when idle. In the next article, we analyze Cloud Run functions, detailing Eventarc CloudEvents triggers and at-least-once idempotency guards.
+
+![A six-part summary infographic for compute engine summary covering Machine family, Image, Startup script, Persistent Disk, Zone, Network NIC](/content-assets/articles/article-cloud-providers-gcp-compute-application-hosting-compute-engine-virtual-machines/compute-engine-summary.png)
+
+*Use this summary as the quick mental checklist before designing or debugging the service.*
+
 
 ---
 
 **References**
 
-- [Google Cloud: Compute Engine instances](https://cloud.google.com/compute/docs/instances)
-- [Google Cloud: Machine families resource and comparison guide](https://cloud.google.com/compute/docs/machine-resource)
-- [Google Cloud: About startup scripts](https://cloud.google.com/compute/docs/instances/startup-scripts)
-- [Google Cloud: Service accounts and access scopes](https://cloud.google.com/compute/docs/access/service-accounts)
+- [Google Cloud: Compute Engine VM instances](https://cloud.google.com/compute/docs/instances) - Specification for virtual machine provisioning.
+- [Google Cloud: Machine families resource guide](https://cloud.google.com/compute/docs/machine-resource) - Resource allocation and CPU/RAM sizing standards.
+- [Google Cloud: About startup scripts](https://cloud.google.com/compute/docs/instances/startup-scripts) - Documentation for automated metadata-driven bootstrapping.
+- [Google Cloud: Persistent disk storage](https://cloud.google.com/compute/docs/disks) - Guide to software-defined network persistent storage.
+- [Google Cloud: Live migration process](https://cloud.google.com/compute/docs/instances/live-migration-process) - Explains live migration behavior, support boundaries, and disruption expectations.

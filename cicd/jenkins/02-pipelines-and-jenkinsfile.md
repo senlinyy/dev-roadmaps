@@ -358,6 +358,10 @@ While managing a structured `Jenkinsfile` inside a repository secures applicatio
 
 To solve this, we abstract repeated pipeline code into central, reusable repositories. Let's move to **Shared Libraries** to learn how to write global Groovy libraries that enforce compliance and keep microservice pipelines DRY.
 
+![Jenkinsfile summary showing pipeline-as-code, declarative shape, scripted Groovy, stages, parallel work, gates, and cleanup](/content-assets/articles/article-cicd-jenkins-pipelines-and-jenkinsfile/jenkinsfile-summary.png)
+
+*Use this as the Jenkinsfile checklist: keep pipelines in version control, prefer declarative shape when possible, use scripted code carefully, model stages clearly, parallelize safely, and always clean up.*
+
 ---
 
 **References**

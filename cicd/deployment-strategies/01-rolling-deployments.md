@@ -29,6 +29,10 @@ Executing software releases in production requires balancing speed with system s
 
 These failures show that production upgrades must occur gradually, verifying the health of new instances before old ones are retired.
 
+![Deployment strategy map comparing rolling waves, blue-green switch, and canary traffic split](/content-assets/articles/article-cicd-deployment-strategies-rolling-deployments-and-rollbacks/deployment-strategy-map.png)
+
+*Deployment strategies are traffic and capacity control patterns: rolling changes capacity in waves, blue-green switches between full environments, and canary sends a measured slice to the new version.*
+
 ## The Wave-Based Replacement Model
 
 A **Rolling Deployment** solves the monolithic capacity crash by replacing old application instances with new ones gradually in controlled, sequential waves.
@@ -179,6 +183,10 @@ Applying the wave-based rolling replacement model, strict healthy percent config
 ## What's Next
 
 While rolling deployments are highly efficient and require minimal resource overhead, they run old and new code concurrently under the same load balancer. For database-heavy architectures, this version mixing can corrupt database state if the two versions cannot share the same schema. To eliminate version mixing entirely, we must decouple environments. Let's move to **Blue-Green Deployments** to learn how to clone identical production environments and switch 100% of user traffic instantly at the router level.
+
+![Rolling deployment summary showing waves, capacity buffers, readiness, target health, automation, and circuit breaker](/content-assets/articles/article-cicd-deployment-strategies-rolling-deployments-and-rollbacks/rolling-deployment-summary.png)
+
+*Use this as the rolling-deployment checklist: replace capacity in waves, preserve minimum healthy capacity, understand surge limits, gate on readiness, watch target health, and let the circuit breaker stop bad rollouts.*
 
 ---
 

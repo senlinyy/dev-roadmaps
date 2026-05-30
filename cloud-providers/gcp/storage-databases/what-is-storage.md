@@ -9,9 +9,11 @@ aliases:
   - gcp-storage-and-database-mental-model
   - storage-and-database-mental-model
   - choosing-the-right-gcp-data-service
+  - what-is-data-storage
   - article-cloud-providers-gcp-storage-databases-choosing-right-gcp-data-service
   - cloud-providers/gcp/storage-databases/gcp-storage-and-database-mental-model.md
   - cloud-providers/gcp/storage-databases/choosing-the-right-gcp-data-service.md
+  - cloud-providers/gcp/storage-databases/what-is-data-storage.md
 ---
 
 ## Table of Contents
@@ -68,6 +70,10 @@ This table is not a product catalog. It is a first filter. If you can explain th
 Data shape means the way the app or team will read, write, update, query, protect, and recover the data. The same business domain can create several shapes.
 
 An order creates business records in Cloud SQL. The receipt PDF for that order can live in Cloud Storage. A checkout draft can live in Firestore if the app reads it by user path. A data pipeline can copy checkout events into BigQuery for analysis. A VM worker may use Persistent Disk for local working space while rebuilding an index. A recovery plan may use backups, versions, snapshots, or time travel.
+
+![Match data to the access pattern before choosing the service brand.](/content-assets/articles/article-cloud-providers-gcp-storage-databases-gcp-storage-database-mental-model/data-shapes-map.png)
+
+*The service map is easier to use when each product owns a clear application job.*
 
 ```mermaid
 flowchart TD
@@ -154,6 +160,10 @@ For the Orders system, a first data map might look like this:
 
 The map is not frozen forever. It is a starting point that lets the team explain why each service exists.
 
+![One application can split receipts, orders, sessions, analytics, and recovery copies into different storage systems.](/content-assets/articles/article-cloud-providers-gcp-storage-databases-gcp-storage-database-mental-model/ecommerce-state-split.png)
+
+*Decoupling state keeps compute replaceable without losing business data.*
+
 ## Putting It All Together
 
 Return to the opening problems.
@@ -174,6 +184,10 @@ Bad writes and deletion need recovery copies. Backups and retention are part of 
 
 The most common first storage shape is object storage: receipts, exports, uploads, images, and generated artifacts. Next, we look at Cloud Storage buckets, objects, names, access, lifecycle, versioning, and signed URLs.
 
+![A six-part summary infographic for storage mental model summary covering Object bytes, Relational rows, Documents, Analytics columns, Attached storage, Recovery copies](/content-assets/articles/article-cloud-providers-gcp-storage-databases-gcp-storage-database-mental-model/storage-mental-model-summary.png)
+
+*Use this summary as the quick mental checklist before designing or debugging the service.*
+
 ---
 
 **References**
@@ -182,3 +196,5 @@ The most common first storage shape is object storage: receipts, exports, upload
 - [Google Cloud: Cloud SQL overview](https://cloud.google.com/sql/docs/introduction)
 - [Google Cloud: Firestore overview](https://cloud.google.com/firestore/docs/overview)
 - [Google Cloud: BigQuery overview](https://cloud.google.com/bigquery/docs/introduction)
+- [Google Cloud: Persistent Disk documentation](https://cloud.google.com/compute/docs/disks/persistent-disks)
+- [Google Cloud: Filestore documentation](https://cloud.google.com/filestore/docs)

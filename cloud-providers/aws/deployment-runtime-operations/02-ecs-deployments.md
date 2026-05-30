@@ -66,7 +66,7 @@ Release Artifact Evidence Matrix:
 | **Git Commit Reference** | `git-4f22cd8` | Connects the artifact to the exact source commit. |
 | **Image Tag** | `v2.4.1` | The human-readable release identifier. |
 | **Image SHA256 Digest** | `sha256:2b91f1...` | The physical, immutable signature of the built bytes. |
-| **ECR Image Scan Status** | `MUTUAL_TRUST_PASS` | Confirms the image is free of severe CVE vulnerabilities. |
+| **ECR Scan Evidence** | `scanStatus=COMPLETE`, `CRITICAL=0`, `HIGH=0` | Confirms the scan finished and no severe findings crossed your release threshold. |
 
 The image alone is not enough to run a service. It has no knowledge of environment configurations, Secrets Manager passwords, or load balancer route rules. Those live around the image in the Task Definition.
 
@@ -138,11 +138,15 @@ Step 4: Deregistration delay completes. Old tasks receive SIGTERM.
 
 By enforcing `minimumHealthyPercent=100%`, the service controller guarantees that active checkout capacity never drops below the desired baseline. If the new task definition fails to boot, the old tasks continue to serve traffic, preventing service outages.
 
+![ECS rolling deployment infographic showing old tasks, new tasks, overlap capacity, health checks, traffic shift, connection drain, and rollback target](/content-assets/articles/article-cloud-providers-aws-deployment-runtime-operations-deploying-and-updating-an-ecs-service/rolling-deployment-overlap.png)
+
+*A rolling ECS deployment is safe because it briefly runs old and new revisions together. New tasks must pass health checks before traffic shifts, and old tasks drain before they stop.*
+
 ## Target Health Checks and Traffic Trust
 
 The service controller does not assume a task is healthy simply because the container process is running. It relies on the Application Load Balancer target group to verify health before routing customer packets.
 
-Let us inspect the recommended production parameters for our ALB target group:
+Let us inspect the recommended production parameters around the ALB target group and ECS service:
 
 Target Group Health Check Configurations:
 
@@ -153,9 +157,9 @@ Target Group Health Check Configurations:
 | **Response Timeout** | `5` seconds | The maximum time the load balancer waits for a response. |
 | **Healthy Threshold** | `3` consecutive successes | Proves the process is stable before routing traffic. |
 | **Unhealthy Threshold** | `2` consecutive failures | Rapidly drops unhealthy nodes to protect customer traffic. |
-| **Grace Period** | `60` seconds | The startup window where health failures are ignored. |
+| **ECS Health Check Grace Period** | `60` seconds | Service-level startup window where ECS ignores target health failures for new tasks. |
 
-The Grace Period is essential. A Node.js or Java application needs time to open database pools, load cache keys, and warm up its runtime. If the grace period is shorter than the application's boot duration, the service controller will mark the new tasks unhealthy and terminate them before they are ready, entering a continuous restart loop.
+The ECS health check grace period is essential. A Node.js or Java application needs time to open database pools, load cache keys, and warm up its runtime. If the grace period is shorter than the application's boot duration, the service controller can treat the new tasks as unhealthy and terminate them before they are ready, entering a continuous restart loop.
 
 ## Deployment Evidence Checklist
 
@@ -235,7 +239,7 @@ $ aws ecs update-service \
 
 Executing this command initiates a rolling update in reverse. The service controller launches tasks from the stable `orders-api:42` blueprint, verifies their health behind the ALB target group, shifts traffic, and terminates the bad version.
 
-If you have configured the ECS Deployment Circuit Breaker, the orchestrator handles rollbacks automatically. The circuit breaker monitors task launch failures. If the primary deployment tasks continuously fail health checks or exit, the circuit breaker marks the deployment failed, halts the rollouts, and updates the service back to the previous stable revision automatically, minimizing user impact.
+If you have configured the ECS Deployment Circuit Breaker with rollback enabled, the orchestrator can handle rollbacks automatically for rolling deployments. The circuit breaker monitors whether the new deployment can reach steady state. If the primary deployment tasks fail to launch, continuously fail health checks, or exit before the service stabilizes, the circuit breaker marks the deployment failed, halts the rollout, and updates the service back to the previous stable revision automatically, minimizing user impact.
 
 ## Operational Deployment Tradeoffs
 
@@ -259,13 +263,17 @@ Operating a resilient deployment pipeline requires mastering orchestrator update
 * **Always Deploy Revisions**: ECS services deploy Task Definition revisions; never attempt to deploy container images directly.
 * **Anchor to SHA256 Digests**: Use immutable image digests inside task definitions to completely prevent tag drift.
 * **Enforce Safe Capacity Boundaries**: Set `minimumHealthyPercent` to 100% in production to protect customer throughput during updates.
-* **Align Grace Periods**: Match target group grace periods to your application's actual startup times to prevent termination loops.
+* **Align Grace Periods**: Match ECS health check grace periods and target group thresholds to your application's actual startup times to prevent termination loops.
 * **Design Elegant Shutdowns**: Intercept `SIGTERM` in your code to drain connection pools and close sockets cleanly.
 * **Enforce Automated Circuit Breakers**: Enable the deployment circuit breaker to automate rollbacks when new tasks fail to boot.
 
 ## What's Next
 
 We have covered the mechanics of zero-downtime rolling updates, target health checking, and rollback pathways. However, a container cannot boot successfully without environment configurations and credentials. In the next article, we will go deep into configurations and secrets, delivering variables securely to tasks, using Secrets Manager references, and evaluating task execution roles vs. task application roles.
+
+![ECS deployment checklist covering image digest, task revision, minimum healthy capacity, health checks, connection drain, and circuit breaker](/content-assets/articles/article-cloud-providers-aws-deployment-runtime-operations-deploying-and-updating-an-ecs-service/ecs-deployment-checklist.png)
+
+*Use this as the ECS deployment checklist: pin the image digest, deploy a task revision, preserve minimum healthy capacity, wait for health checks, drain old connections, and let the circuit breaker return failed rollouts to a stable revision.*
 
 ---
 

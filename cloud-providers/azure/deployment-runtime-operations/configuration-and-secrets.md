@@ -91,6 +91,10 @@ Secrets are especially easy to mishandle during rollouts because teams want to f
 
 Key Vault references let an Azure app refer to a secret in Key Vault instead of storing the secret value directly in the app setting. That keeps sensitive values out of code and ordinary configuration reviews.
 
+![An infographic showing an app setting resolving a Key Vault reference through managed identity at runtime](/content-assets/articles/article-cloud-providers-azure-deployment-runtime-operations-runtime-settings-secrets-configuration/secret-reference-resolution.png)
+
+*Key Vault references let the runtime resolve secret values without putting plaintext secrets in code or deployment artifacts.*
+
 The mental model has two doors:
 
 1. The app setting or environment value points to the Key Vault secret.
@@ -108,6 +112,31 @@ For checkout, a Key Vault reference might hold a payment provider token or datab
 | App behavior after restart or refresh | Shows whether the runtime received the value. |
 
 Do not log the resolved secret value to prove it worked. Prove behavior with safe evidence: successful dependency calls, no secret resolution errors, and expected request behavior.
+
+:::expand[Pitfall: The Two-Door Key Vault Reference Failure]{kind="pitfall"}
+A frustrating release error occurs when an App Service setting shows a valid Key Vault reference structure, but the application code fails to receive the resolved secret at runtime. When you inspect the Azure Portal, you might see a valid-looking setting such as `@Microsoft.KeyVault(SecretUri=https://kv-prod.vault.azure.net/secrets/db-pass/)`, suggesting the pointer is shaped correctly. Yet the booted application throws database connection errors because the platform could not resolve the value successfully for that app instance.
+
+This is the "two-door" configuration hazard. Door 1 is the syntax of the reference pointer, which only proves that the path is well-formed. Door 2 is the actual data-plane authorization and network connectivity. If the App Service's managed identity lacks the required Key Vault data-plane role, or if the Key Vault's private network firewall blocks requests from the App Service path, App Service cannot resolve the reference. The result is a runtime configuration failure even though the deployment itself succeeded.
+
+This identical trap exists in AWS ECS and Lambda. If you reference a secret from AWS Secrets Manager or a parameter from SSM Parameter Store in your task definition, the ECS agent must have both the `secretsmanager:GetSecretValue` permission and the corresponding KMS key decryption permission in its Task Execution Role. If either permission is missing, or if VPC security groups block the path, the container will either fail to boot or receive blank environment variables.
+
+The top-down diagram below maps the two doors required for a successful Key Vault reference:
+
+```mermaid
+flowchart TD
+    AppService["App Service Container Boot"] -->|"1. Parse App Settings"| Door1{"Door 1: Syntax Valid?"}
+
+    Door1 -->|"No"| Fail1["Literal Reference Injected (Syntax Error)"]
+    Door1 -->|"Yes"| Door2{"Door 2: Decryption Authorized?"}
+
+    Door2 -->|"No (Missing RBAC or VNet Block)"| Fail2["Reference Resolution Fails"]
+    Door2 -->|"Yes"| Decrypt["App Service resolves secret value"]
+
+    Decrypt -->|"3. Injects Raw Password"| Code["App Code reads decrypted value in RAM"]
+```
+
+**Rule of thumb:** Never assume a green checkmark in the Azure Portal guarantees that your application can read the secret. Always verify that your compute's active managed identity has a verified `Key Vault Secrets User` role assignment, and test that your app can open database sockets successfully during your rollout's watch window.
+:::
 
 ## Managed Identity
 
@@ -130,6 +159,10 @@ The beginner mistake is fixing identity by granting a broad role at a broad scop
 
 App Service slots create a special configuration problem. Some settings should stay with the slot during a swap. These are often called slot-specific or sticky settings.
 
+![An infographic showing an App Service package swapping while sticky settings remain attached to each slot](/content-assets/articles/article-cloud-providers-azure-deployment-runtime-operations-runtime-settings-secrets-configuration/slot-sticky-settings-map.png)
+
+*Slot-sticky settings stay with the slot during a swap, which prevents staging-only values from accidentally becoming production values.*
+
 Imagine `staging` has a feature flag used only for pre-production smoke tests. If that flag moves into production during a swap, the production app may behave in a way the team did not intend. Now imagine the production slot has the production storage account. If that value moves away from production unexpectedly, checkout may write receipts to the wrong account.
 
 Use sticky settings to protect environment-specific values. But do not rely on memory. Before a swap, the release record should name the values that stay with the slot and the values that move with the version.
@@ -142,6 +175,49 @@ Swap check:
 ```
 
 The exact choices depend on the app. The habit is stable: know which values are part of the candidate and which values are part of the environment.
+
+:::expand[Pattern: The Sticky Settings Manifest]{kind="pattern"}
+A common slot swap disaster occurs when a team relies on memory to configure which App Service settings are "slot-sticky" (staying with the environment) and which are "mutable" (moving with the code version). If an engineer forgets to mark a critical database endpoint like `ORDERS_DB_SERVER` as sticky, a subsequent slot swap will accidentally pull the staging connection string into the production slot, causing the production application to write live customer orders to the staging database.
+
+To eliminate this human error, adopt **The Sticky Settings Manifest** pattern. Rather than setting slot stickiness manually in the Azure Portal, declare the sticky state of your settings as version-controlled code inside your Bicep or Terraform templates. In Bicep, you configure this using the `Microsoft.Web/sites/config` resource with the `slotConfigNames` property:
+
+```bicep
+resource siteConfig 'Microsoft.Web/sites/config@2022-03-01' = {
+  name: 'slotConfigNames'
+  parent: appService
+  properties: {
+    appSettingNames: [
+      'ORDERS_DB_SERVER'
+      'RECEIPTS_STORAGE_ACCOUNT'
+      'APPINSIGHTS_CONNECTION_STRING'
+    ]
+  }
+}
+```
+
+This manifest guarantees that the specified settings remain anchored to their physical slot during every swap. Any environment-specific credentials or logging connection strings are locked, while version-related settings (like `APP_VERSION`) are allowed to travel with the candidate code.
+
+This pattern is equivalent to separating task-level variables from environment-level variables on AWS. In AWS, you do not swap compute environments; you deploy immutable task definitions. To keep environment variables stable, you reference path-scoped SSM Parameter Store hierarchies (such as `/dev/orders/db` vs `/prod/orders/db`) based on the target account, preventing deployment packages from carrying hardcoded environment parameters.
+
+The top-down diagram below illustrates how a sticky manifest anchors configurations during a slot swap:
+
+```mermaid
+flowchart TD
+    subgraph PreSwap["1. Pre-Swap State"]
+        StagingSlot["Staging Slot (v2)"] -->|"ORDERS_DB_SERVER=db-staging"| StagingDB[("Staging Database")]
+        ProdSlot["Production Slot (v1)"] -->|"ORDERS_DB_SERVER=db-prod"| ProdDB[("Production Database")]
+    end
+
+    subgraph SwapWithManifest["2. Swap Swaps CODE only"]
+        StagingSlot2["Staging Slot (v1)"] -->|"ORDERS_DB_SERVER=db-staging"| StagingDB
+        ProdSlot2["Production Slot (v2)"] -->|"ORDERS_DB_SERVER=db-prod"| ProdDB
+    end
+
+    SwapWithManifest ---|"Sticky Manifest Anchors Database Settings!"| PreSwap
+```
+
+**Rule of thumb:** Never configure slot settings manually in the Azure Portal. Always declare your slot-sticky settings explicitly inside a version-controlled Bicep `slotConfigNames` block, ensuring that environment boundaries are hard-gated by your deployment pipeline.
+:::
 
 ## Config Rollback
 
@@ -176,6 +252,11 @@ Configuration is not cleanup after deployment. It is part of what the release ch
 ## What's Next
 
 The next article closes the module with verification and rollback. Once traffic moves, the team needs a watch window, health checks, smoke tests, real request evidence, and a decision path for keeping, rolling back, or fixing forward.
+
+![An infographic showing runtime configuration flowing through app settings, Key Vault references, managed identity, slot sticky settings, and config rollback](/content-assets/articles/article-cloud-providers-azure-deployment-runtime-operations-runtime-settings-secrets-configuration/runtime-configuration-map.png)
+
+*Use this as the runtime configuration map: keep non-secret settings, secret references, identity, slot behavior, and rollback controls separate so configuration changes stay reversible.*
+
 
 ---
 

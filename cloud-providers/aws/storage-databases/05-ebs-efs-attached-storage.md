@@ -40,7 +40,7 @@ To run these workloads safely in the cloud, you cannot save files directly to a 
 
 While S3, RDS, and DynamoDB provide regional data endpoints cabled to external network APIs, certain programs require storage to behave like a local physical hard drive or a directory folder. They expect the host operating system to handle all reads and writes dynamically using standard filesystem commands, without any network API logic. Compute-attached storage bridges the gap between network-isolated cloud storage and local operating system mount paths.
 
-To support these workloads, AWS offers two primary attached storage shapes. Amazon Elastic Block Store (EBS) provides raw, unformatted virtual disk volumes cabled to a single EC2 virtual machine, behaving exactly like an SSD plugged into a physical motherboard slot. Because EBS operates with virtually zero network abstraction inside the host operating system, it delivers the ultra-low latency required by boot drives and databases.
+To support these workloads, AWS offers two primary attached storage shapes. Amazon Elastic Block Store (EBS) provides raw, unformatted virtual disk volumes that attach to EC2 instances inside one Availability Zone and appear to the operating system like local block devices. EBS is network-attached under the hood, but the instance sees it as a disk, making it a strong fit for boot drives, databases, and low-latency block I/O.
 
 Amazon Elastic File System (EFS), conversely, provides a serverless network directory tree cabled to the standard Network File System (NFS) protocol. Unlike EBS block drives, an EFS directory can be mounted simultaneously by hundreds of virtual machines and container tasks across multiple Availability Zones, coordinating concurrent file reads and writes in real-time. Using attached storage allows you to deploy legacy applications, high-performance local search indexes, and collaborative document pipelines in the cloud without modifying their source code. The cloud volumes mount directly into the directory tree, providing the exact path-based interface (`/mnt/app/data`) that traditional operating system kernels expect.
 
@@ -48,18 +48,22 @@ Amazon Elastic File System (EFS), conversely, provides a serverless network dire
 
 To select the correct attached storage service, you must understand the distinction between dedicated virtual hard drives and shared folders cabled across the network:
 
-* **Dedicated Virtual Disks (EBS)**: Presents a raw, unformatted virtual hard drive directly to a single virtual server, behaving exactly like an SSD plugged into a physical motherboard slot. The virtual server completely owns this drive. It formats the drive, mounts it to a local folder, and reads or writes data directly. Because it operates with virtually zero network abstraction overhead, it delivers extremely low latency for database directories, operating system boot drives, and local application caches.
+* **Dedicated Virtual Disks (EBS)**: Presents a raw, unformatted virtual hard drive to a virtual server. The operating system formats the drive, mounts it to a local folder, and reads or writes data through normal block-device operations. EBS is still an AWS-managed network-attached service, but it is optimized for low-latency block access for database directories, operating system boot drives, and local application caches.
 * **Shared Folders (EFS)**: Presents a pre-formatted, shared folder tree cabled over the network using standard file sharing protocols. Instead of managing a raw virtual disk, your virtual server simply communicates using normal file and folder commands. The underlying storage is managed entirely by AWS. Multiple separate servers located in different Availability Zones can mount this exact same folder simultaneously, sharing files in real-time.
 
-Choosing the incorrect type of storage introduces severe performance and operational penalties. Trying to run a database over a shared network folder like EFS will cause write delays due to network file coordination overhead. Conversely, trying to share a single EBS virtual disk among multiple virtual servers is physically impossible because standard block devices are not designed to allow multiple servers to write to them simultaneously.
+Choosing the incorrect type of storage introduces severe performance and operational penalties. Trying to run a database over a shared network folder like EFS will often cause write delays due to network file coordination overhead. Conversely, a standard EBS volume is designed for one attached instance at a time. EBS Multi-Attach exists for specific high-performance volume types and clustered filesystems, but it is not the normal answer for sharing application files. If many hosts need the same directory tree, use EFS or redesign around S3.
+
+![Attached storage boundary comparing EBS single-zone block disk attached to one EC2 instance with EFS shared files mounted through mount targets across Availability Zones](/content-assets/articles/article-cloud-providers-aws-storage-databases-ebs-efs-storage-attached-compute/attached-storage-boundary.png)
+
+*EBS and EFS solve different filesystem problems. EBS behaves like a single-zone disk mounted by one host, while EFS behaves like a regional shared folder reached through mount targets in each zone.*
 
 ## Amazon EBS and the Single-Zone Placement Rule
 
 Amazon Elastic Block Store, commonly referred to as EBS, provides high-performance virtual block storage volumes designed to attach exclusively to a single running EC2 instance. When you provision an EBS volume, you choose its size (in gigabytes) and its volume type, which dictates its physical performance characteristics (measured in Input/Output Operations Per Second, or IOPS).
 
-EBS enforces a critical architectural constraint: **The Single-Zone Placement Rule**. Because an EBS volume behaves like a physical hard drive plugged into a server, it must be physically located within the same datacenter building as the EC2 instance it attaches to. Therefore, both the EC2 instance and the EBS volume must live in the exact same Availability Zone.
+EBS enforces a critical architectural constraint: **The Single-Zone Placement Rule**. An EBS volume is created in one Availability Zone and can attach only to an EC2 instance in that same Availability Zone. Therefore, both the EC2 instance and the EBS volume must live in the same AZ.
 
-This constraint significantly impacts high-availability architecture. First, this rule prevents cross-AZ attachment. An EC2 instance running in Availability Zone A cannot mount an EBS volume located in Availability Zone B. Second, it places limits on horizontal replication. If you need to scale your application horizontally across multiple Availability Zones, you cannot share a single EBS volume; instead, you must launch separate, independent EBS volumes in each zone. Third, it guarantees durable persistence. An EBS volume persists independently of the EC2 instance's lifecycle. If the instance is terminated, the EBS volume remains intact in S3-backed storage, ready to be attached to a new instance in the same zone.
+This constraint significantly impacts high-availability architecture. First, this rule prevents cross-AZ attachment. An EC2 instance running in Availability Zone A cannot mount an EBS volume located in Availability Zone B. Second, it places limits on horizontal replication. If you need to scale your application horizontally across multiple Availability Zones, you cannot share a standard single EBS volume across those zones; instead, you launch separate, independent EBS volumes in each zone or use a different storage shape. Third, it gives you durable persistence that is separate from the instance lifecycle when the volume is configured to remain after termination. Many root volumes are deleted by default when the instance terminates, while separately attached data volumes commonly persist unless `DeleteOnTermination` is enabled. A preserved volume can be attached to a new instance in the same zone.
 
 ## Formatting, Mounting, and Persisting Volumes
 
@@ -114,11 +118,11 @@ Writing a persistent entry in `/etc/fstab` requires six strict columns, detailed
 
 To protect data stored on EBS volumes, you must take regular backups using **EBS Snapshots**. An EBS snapshot is a point-in-time copy of the volume's sectors, saved directly to S3-backed storage.
 
-EBS snapshots utilize incremental backups. The first snapshot of a volume copies all written blocks, but later snapshots are incremental, meaning S3 only copies blocks that have changed since the previous snapshot. This design significantly saves storage costs and reduces backup times. Furthermore, snapshots facilitate rebuilding volumes. You can restore an EBS snapshot into a completely new EBS volume in any Availability Zone within the Region, allowing you to easily migrate data across zones.
+EBS snapshots utilize incremental backups. The first snapshot of a volume copies all written blocks, but later snapshots are incremental, meaning the snapshot system only stores blocks that have changed since the previous snapshot. This design significantly saves storage costs and reduces backup times. Furthermore, snapshots facilitate rebuilding volumes. You can restore an EBS snapshot into a completely new EBS volume in any Availability Zone within the Region, allowing you to migrate data across zones.
 
 However, snapshotting a running system introduces a critical **Crash-Consistency** gotcha. When a snapshot is requested, the operating system and your active applications may have unwritten data cached in system memory. If you take a snapshot during active writes, the restored volume will represent a crash-consistent state, which is exactly like a server that had its power cord suddenly pulled.
 
-To guarantee absolute database and file consistency, follow these three steps immediately before initiating an EBS snapshot:
+To improve database and file consistency beyond a basic crash-consistent snapshot, follow these three steps immediately before initiating an EBS snapshot:
 
 1. **Quiesce the App**: Instruct your database or writing application to temporarily freeze active writes to the disk.
 2. **Flush the OS Cache**: Run the Linux flush command to force the operating system kernel to write all cached blocks from memory onto the disk:
@@ -181,7 +185,7 @@ Amazon EBS and EFS bridge the gap between regional cloud networks and traditiona
 
 * **Block Disk Delivery**: Deploy EBS volumes inside your EC2 server's Availability Zone to provide high-performance block storage for databases and caches.
 * **Persistent OS Integration**: Format attached block disks and establish reboot-safe mount points by writing UUID entries with the `nofail` flag to `/etc/fstab`.
-* **Crash-Safe Snapshots**: Flush operating system caches and freeze active application writes before triggering EBS snapshots to guarantee block consistency.
+* **Crash-Safe Snapshots**: Flush operating system caches and freeze active application writes before triggering EBS snapshots when you need stronger application-level consistency.
 * **Shared Network Filesystems**: Deploy regional EFS filesystems cabled to multi-AZ mount targets to share directory trees across hundreds of separate hosts.
 * **Securing Mount Paths**: Restrict EFS network traffic by whitelisting your compute security groups on TCP port 2049 inside your mount target security groups.
 
@@ -190,6 +194,10 @@ EBS and EFS are the primary cloud containers for operating-system-attached state
 ## What's Next
 
 We have now established secure homes for all object, relational, key-value, and attached filesystem shapes in AWS. However, our data remains vulnerable to application bugs, bad database migrations, compromised root credentials, and accidental deletes. In the final article of this module, we will unify these stateful layers into a complete disaster recovery strategy using backups, point-in-time recovery logs, vault locks, and restore validation drills.
+
+![Six-tile attached storage checklist covering EBS single zone, format and mount, fstab UUID, flush before snapshot, EFS multi-AZ, and NFS security group](/content-assets/articles/article-cloud-providers-aws-storage-databases-ebs-efs-storage-attached-compute/attached-storage-checklist.png)
+
+*Use this as the attached-storage checklist: keep EBS in the same zone as its instance, format and mount volumes intentionally, persist mounts by UUID, flush writes before snapshots, use EFS for multi-zone shared folders, and restrict NFS access through security groups.*
 
 ---
 

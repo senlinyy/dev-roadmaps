@@ -28,17 +28,12 @@ aliases:
 
 Azure Kubernetes Service (AKS) is a managed container orchestration platform that coordinates versioned container clusters in Azure. While Kubernetes provides a declarative API that describes how containers connect, scale, and update, operating a cluster introduces significant infrastructure overhead. AKS addresses this by separating the cluster management into a hosted control plane and dedicated worker node virtual machine pools.
 
-:::expand[Under the Hood: Control Plane HA and Workload Identity Token Exchanges]{kind="design"}
-Azure fully hosts and manages the control plane components (`kube-apiserver`, scheduler, `kube-controller-manager`, and the `etcd` key-value store) in Azure-managed subscriptions at no cost. Azure orchestrates high-availability replication for the consistent `etcd` database across availability zones and runs automated backups.
+:::expand[Under the Hood: Control Plane Management and Workload Identity Token Exchanges]{kind="design"}
+Azure hosts and manages the control plane components (`kube-apiserver`, scheduler, `kube-controller-manager`, and the backing state store) in Azure-managed infrastructure. AKS pricing and support behavior depends on the cluster tier you choose, such as Free, Standard, or Premium. Production clusters should be designed with the tier, SLA requirement, region, and availability zone support in mind rather than assuming every control plane has the same availability promise.
 
 Worker nodes run inside your own subscription, grouped in Virtual Machine Scale Sets (VMSS) managed by the AKS resource provider. They boot with customized Azure-Linux or Ubuntu VM images pre-configured with `containerd` (container runtime), `kubelet` (node agent), and `kube-proxy` (network router).
 
-Workload Identity utilizes OpenID Connect (OIDC) federation between your cluster and Microsoft Entra ID. The cryptographic exchange operates as follows:
-1. **Token Mount**: AKS mounts a cryptographically signed Kubernetes Service Account JWT token into the pod's filesystem.
-2. **STS Query**: The application Azure SDK reads the token and sends it to the Entra ID security token service (STS).
-3. **Issuer Key Retrieval**: Entra ID calls the OIDC issuer endpoint of your AKS cluster to fetch public keys.
-4. **Signature Verification**: Entra ID cryptographically validates the signature and federated trust criteria.
-5. **Access Token Delivery**: Entra ID returns a valid passwordless Entra access token to the pod.
+Workload Identity utilizes OpenID Connect (OIDC) federation between your cluster and Microsoft Entra ID. The OIDC token exchange sequence is described in detail in the Identity section below.
 :::
 
 If you run Kubernetes on AWS, AKS is cabled directly to Amazon EKS. Both provide a managed control plane and delegate worker VM node pools to your subscription. However, their networking and identity configurations reflect their respective clouds. While AWS EKS relies on the AWS VPC CNI (allocating native AWS private IPs to all pods) and IAM Roles for Service Accounts (IRSA), AKS supports Azure CNI (Overlay or native modes) and leverages Microsoft Entra Workload Identity federated OIDC trusts.
@@ -68,11 +63,44 @@ You must also manage cluster upgrades. Kubernetes regularly deprecates old API v
 
 Node Pools represent the worker VM capacity where your pods run. Every node pool maps directly to an Azure Virtual Machine Scale Set (VMSS) running in a specialized infrastructure resource group.
 
+![An infographic showing AKS node pools placing pods on worker nodes with different capacity shapes](/content-assets/articles/article-cloud-providers-azure-compute-application-hosting-aks/node-pool-placement.png)
+
+*Node pools are the capacity lanes where Kubernetes places pods, so pool sizing affects cost, scale, and scheduling.*
+
 AKS divides pools into two functional roles:
-* **System Node Pools**: Dedicated to hosting critical cluster system system pods, such as CoreDNS, metric server agents, and ingress controllers. System node pools must run Linux and must maintain at least one healthy node to keep the cluster operational.
+* **System Node Pools**: Dedicated to hosting critical cluster system pods, such as CoreDNS and other required cluster add-ons. System node pools must run Linux and must maintain enough healthy capacity to keep the cluster operational. Ingress controllers can run on system or user pools depending on how your platform team designs scheduling, taints, and isolation.
 * **User Node Pools**: Dedicated to hosting your application workloads. You can provision multiple user node pools with specialized VM SKUs (such as GPU-enabled VMs for machine learning, memory-optimized VMs for caches, or Windows Server VMs for legacy legacy code).
 
-Workload scheduling is governed by CPU and memory requests defined in your pod manifests. When a pod is deployed, the control plane scheduler checks the node pools to locate a VM with sufficient unreserved RAM and CPU. If no node has enough capacity, the pod remains in a `Pending` state. To prevent this, enable the AKS Cluster Autoscaler, which automatically monitors pending pods and instructs the Fabric Controller to provision new VM nodes in the VMSS when capacity thresholds are breached.
+Workload scheduling is governed by CPU and memory requests defined in your pod manifests. When a pod is deployed, the control plane scheduler checks the node pools to locate a VM with sufficient unreserved RAM and CPU. If no node has enough capacity, the pod remains in a `Pending` state. To prevent this, enable the AKS Cluster Autoscaler, which automatically monitors pending pods and asks Azure to add new VM nodes to the backing scale set when capacity is needed.
+
+:::expand[Pending Pods from Undersized Node Pool SKU]{kind="pitfall"}
+A common Kubernetes scheduling failure occurs when a pod specifies a CPU or memory request that exceeds the physically allocatable capacity of every available VM SKU in your node pool. The pod will sit in a `Pending` state indefinitely. The Cluster Autoscaler detects the pending status and attempts to help, but it can only provision more nodes of the same VM SKU. Since the new nodes are identical in size to the existing ones, they also cannot satisfy the pod's resource request, leaving the autoscaler stuck in a loop of spinning up useless VMs.
+
+This matches the behavior of **Amazon EKS**, where setting resource requests larger than the EC2 instance's allocatable size leaves Pods `Pending` and triggers the AWS Auto Scaling Group (ASG) or Cluster Autoscaler to repeatedly provision identical, useless instances. This waste of compute continues until you upgrade the node group SKU or leverage Karpenter to dynamically provision a larger instance size.
+
+To diagnose this in AKS, run `kubectl get pods` to identify the `Pending` state, then run:
+```bash
+kubectl describe pod <pod-name>
+```
+Look for `FailedScheduling` with an event message like: `0/3 nodes are available: 3 Insufficient memory.`
+
+Consider this resource manifest correction:
+
+*   **Before (The Undersized Request):** Requesting 14 GiB memory on a pool using `Standard_D4s_v3` VMs (which have 16 GB total RAM, but only ~12.8 GB allocatable after OS, kubelet, and system reservations):
+    ```yaml
+    resources:
+      requests:
+        memory: "14Gi" # Exceeds the 12.8 GiB allocatable ceiling
+    ```
+*   **After (Right-Sized Request):** Lower the pod request to fit within the node's allocatable boundary, or provision a new user node pool using `Standard_D8s_v3` VMs (32 GB RAM):
+    ```yaml
+    resources:
+      requests:
+        memory: "10Gi" # Fits comfortably within the allocatable limit
+    ```
+
+**Rule of thumb:** Never set a pod's resource requests based on a VM SKU's total advertised RAM. Run `kubectl describe node` to inspect the actual `Allocatable` CPU and memory values—which are typically 1–2 GB less than physical RAM due to system reservations—before committing pod limits.
+:::
 
 ## Pods
 
@@ -129,9 +157,13 @@ The actual packet routing is executed at the node level by `kube-proxy`. Every t
 
 Ingress is the API layer that manages external HTTP/HTTPS routing into your cluster. While a Service load-balances traffic internally, an Ingress resource defines the public routing rules (such as mapping `api.devpolaris.com/orders` to the `orders-service` on port `80`).
 
+![An infographic showing traffic moving from ingress to service to pods in AKS](/content-assets/articles/article-cloud-providers-azure-compute-application-hosting-aks/service-to-ingress-path.png)
+
+*AKS traffic reaches pods through stable service routing instead of relying on changing pod IPs directly.*
+
 To execute these rules, you must run an Ingress Controller (such as the NGINX Ingress Controller or Azure Application Gateway Ingress Controller) in your cluster. The Ingress Controller runs as a reverse-proxy deployment in your User Node Pool. When you create an Ingress resource, the controller parses the host and path rules and dynamically updates its configuration tables.
 
-Azure load balancers are cabled directly to the Ingress Controller. When a public HTTP request reaches your external Azure Load Balancer, the load balancer forwards the packet to one of the Ingress Controller pod instances. The controller reads the path header, executes TLS decryption, and reverse-proxies the request directly to the private IP of a target application pod, ensuring centralized SSL/TLS termination and path routing.
+The public path depends on the ingress controller you choose. With an in-cluster controller such as NGINX Ingress, an Azure Load Balancer can forward traffic to ingress controller pods, and those pods route requests to Kubernetes Services. With Application Gateway Ingress Controller, Application Gateway becomes the regional Layer 7 entry point and is configured from Kubernetes resources. In both designs, the important operational habit is to trace the request through the Azure public entry, the ingress controller, the Kubernetes Service, and the selected pod endpoints.
 
 ## Identity
 
@@ -176,12 +208,17 @@ This profile helps systems engineers trace the path of a request from the public
 
 Azure Kubernetes Service provides enterprise-scale container orchestration by dividing administrative layers systematically.
 
-* **Managed Control Plane HA**: Azure hosts the core API server and orchestrates automated zone replication for the critical `etcd` key-value store, ensuring state durability.
+* **Managed Control Plane**: Azure hosts the core API server and control plane components, with availability and support characteristics tied to the selected AKS tier and regional design.
 * **Worker Node VMSS**: Application containers run on physical VM worker nodes grouped in scale sets. Runtimes are orchestrated by the local `kubelet` communicating with `containerd`.
 * **Stable Service Routing**: Kubernetes Services provide stable IP endpoints for volatile, changing pods, utilizing `kube-proxy` to configure high-speed kernel routing tables at the socket level.
 * **OIDC Workload Identity**: Secure Entra ID access is managed via OIDC token federation. Pod service account tokens are cryptographically verified by Entra ID, ensuring passwordless connections.
 
 By deploying your workloads inside organized namespaces and managing deployments, services, and workload identities systematically, you can build resilient, highly available container platforms.
+
+![An infographic showing AKS cluster layers including Kubernetes API, node pools, pods, ingress, services, identity, and logs](/content-assets/articles/article-cloud-providers-azure-compute-application-hosting-aks/aks-cluster-layers.png)
+
+*Use this as the AKS layer map: Azure manages the control plane, platform teams manage node pools and cluster integrations, and applications arrive as pods, deployments, services, and ingress rules.*
+
 
 ---
 

@@ -72,7 +72,7 @@ Let us break down each parameter value in place:
 * `Parent`: The unique identifier of the specific segment or service boundary that initiated the current outbound operation.
 * `Sampled`: A binary flag (`1` for sampled, `0` for unsampled) indicating whether downstream services must collect and publish timing telemetry for this transaction.
 
-For tracing to succeed across a microservice fleet, every HTTP client, database connection pool, and queue publisher must be configured to automatically intercept, parse, and inject this context header on every outbound network boundary.
+For tracing to succeed across a microservice fleet, every HTTP client and message publisher must be configured to automatically intercept, parse, and inject trace context on outbound boundaries that can carry it. Database calls are slightly different: most SQL protocols do not carry X-Ray headers to the database engine. Instead, tracing libraries create spans or subsegments around the database call so the trace records query timing without pretending the database received an HTTP-style trace header.
 
 ## Spans: Segments and Subsegments
 
@@ -141,8 +141,8 @@ Asynchronous messaging queues (like SQS) break the synchronous HTTP request-resp
 
 To prevent the trace from breaking at these asynchronous boundaries, you must configure trace context injection and extraction:
 
-* **In SQS Messages**: You inject the `X-Amzn-Trace-Id` as a Message Attribute in the SQS envelope rather than placing it in the message body. When the consumer polls the queue, the tracer extracts the trace ID from the attributes, continues the parent trace, and creates a new consumer segment.
-* **In EventBridge Events**: The trace context is cabled directly into the `detail` envelope of the JSON event payload, ensuring downstream Step Functions or Lambda handlers can reconstruct the initiating event's correlation ID.
+* **In SQS Messages**: You send the trace header as the SQS system attribute named `AWSTraceHeader`, rather than burying it inside the message body. When the consumer polls the queue, instrumentation can extract the trace ID from the envelope, continue the parent trace, and create a new consumer segment.
+* **In EventBridge Events**: EventBridge `PutEvents` entries can carry a trace header for X-Ray-aware flows. For consumers or targets that do not preserve tracing automatically, include a separate application correlation ID in the event detail so logs and workflows can still be joined.
 
 Let us write a Python script demonstrating how to publish a message into an SQS queue with the active trace context attribute:
 
@@ -165,7 +165,7 @@ with tracer.start_as_current_span("PublishToQueue") as span:
     sqs.send_message(
         QueueUrl='https://sqs.us-east-1.amazonaws.com/123456789012/NotificationQueue',
         MessageBody='{"orderId": "order-1042"}',
-        MessageAttributes={
+        MessageSystemAttributes={
             'AWSTraceHeader': {
                 'DataType': 'String',
                 'StringValue': trace_header
@@ -178,7 +178,11 @@ This script ensures the distributed tracing chain is preserved:
 
 1. `trace.get_current_span().get_span_context()`: Extracts the active tracing identifiers from the runtime memory.
 2. `trace_header`: Constructs a valid `X-Amzn-Trace-Id` string, mapping hex-encoded parameters.
-3. `AWSTraceHeader`: Ships the trace header explicitly inside the SQS envelope metadata, allowing background workers to parse the attribute and continue the transaction path.
+3. `AWSTraceHeader`: Ships the trace header explicitly inside the SQS system attributes, allowing background workers to parse the attribute and continue the transaction path.
+
+![Distributed tracing context propagation showing a trace ID moving through an HTTP header, service spans, an SQS attribute, a worker, and trace-linked logs](/content-assets/articles/article-cloud-providers-aws-observability-tracing-request-correlation/trace-context-propagation.png)
+
+*A trace survives only when each boundary carries or records the context correctly. HTTP calls pass headers, database calls become timed spans, queues need message attributes, and logs should include the same trace ID.*
 
 ## Under-the-Hood: Thread-Local State Mechanics
 
@@ -186,7 +190,7 @@ For distributed tracing to work without requiring developers to pass tracing ide
 
 When an application receives an incoming request, the OTel parser intercepts the HTTP headers, extracts the trace context, and mounts it into the thread's execution namespace (such as Python's `threading.local()` or Java's `ThreadLocal`). In single-threaded, asynchronous runtimes like Node.js, the SDK mounts the context into an `AsyncLocalStorage` boundary. 
 
-Whenever the application code makes a downstream database query or publishes an SQS message, the SDK hooks into the runtime libraries. It silently queries the active thread-local storage, retrieves the running trace ID, and injects the proper correlation headers into the outgoing packet. If your application code spins up background threads manually without copying this thread-local context, the tracing chain immediately drops, isolating the downstream spans into disconnected traces.
+Whenever the application code makes a downstream HTTP call or publishes an SQS message, the SDK hooks into the runtime libraries. It silently queries the active thread-local storage, retrieves the running trace ID, and injects the proper correlation context into the outgoing request or message metadata. For database queries, the SDK usually records a child span around the call rather than injecting a trace header into the database protocol. If your application code spins up background threads manually without copying this thread-local context, the tracing chain immediately drops, isolating the downstream spans into disconnected traces.
 
 ## Visualizing Topologies: X-Ray Service Maps
 
@@ -261,11 +265,15 @@ This hybrid sampling approach guarantees that you preserve critical, granular di
 Request correlation is the final layer that transforms disconnected cloud telemetry into a transparent, self-healing architecture:
 
 * **Generate Context at the Edge**: Ingress gateways must generate a unique trace ID and inject the `X-Amzn-Trace-Id` header at the front door.
-* **Enforce Propagators**: Configure all HTTP clients and message queue publishers to parse and propagate trace context headers across every network boundary.
+* **Enforce Propagators**: Configure HTTP clients and message queue publishers to parse and propagate trace context across boundaries that support it, and instrument database clients as timed spans.
 * **Default to OpenTelemetry Standards**: Use the AWS Distro for OpenTelemetry (ADOT) as your default instrumentation framework, avoiding legacy X-Ray SDK libraries.
 * **Isolate Queries via Subsegments**: Map complex database writes and third-party APIs to dedicated subsegments to pinpoint exact bottlenecks.
 * **Link Traces to Structured Logs**: Automatically inject active trace IDs into JSON log events to enable instant trace-to-log navigation during incidents.
 * **Control Budgets with Sampling Rules**: Default to a conservative 5% baseline sampling rate, and dynamically elevate to 100% for error states and high-latency transactions.
+
+![Six-tile distributed tracing checklist covering trace ID, propagators, spans, async context, trace to logs, and sampling](/content-assets/articles/article-cloud-providers-aws-observability-tracing-request-correlation/tracing-checklist.png)
+
+*Use this as the tracing checklist: create one trace identity, propagate it across supported boundaries, model work as spans, preserve async context, write trace IDs into logs, and sample healthy traffic while keeping failures.*
 
 ---
 

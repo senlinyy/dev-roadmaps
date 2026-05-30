@@ -38,10 +38,10 @@ The recovery failed because of three critical operational blind spots:
 flowchart TD
     App[Application Task] -- "1. DNS Error (Old Endpoint)" --> OldDB(Old RDS Endpoint)
     App -- "2. Network Blocked" --> NewDB(Restored RDS Instance)
-    App -- "3. KMS Decrypt Denied" --> KMS[KMS Master Key]
+    App -- "3. Secret or key access missing" --> KMS[KMS / Secrets Boundary]
 ```
 
-First, the restored database was created with a brand-new, dynamically generated DNS endpoint. The application task was still configured to query the old, corrupted RDS hostname, resulting in connection timeouts. Second, the newly restored database instance did not inherit the custom security group rules of the old database, blocking all network traffic from the ECS cluster. Third, the application's IAM task execution role lacked access permissions to the custom AWS Key Management Service customer managed key used to encrypt the restored database snapshot, causing silent decryption crashes at startup.
+First, the restored database was created with a brand-new, dynamically generated DNS endpoint. The application task was still configured to query the old, corrupted RDS hostname, resulting in connection timeouts. Second, the newly restored database instance did not inherit the custom security group rules of the old database, blocking all network traffic from the ECS cluster. Third, the restored environment's secret and key path was incomplete: the application still needed a valid database credential in Secrets Manager, and any customer managed KMS keys used for secrets or cross-account snapshot restore needed the right policies. The application task does not decrypt RDS storage blocks itself, but recovery still fails if the surrounding secret, key, and network permissions are not rebuilt.
 
 A backup vault only proves that you are compiling data storage bills. A verified recovery plan is the only evidence that your application can successfully resume serving users after a disaster.
 
@@ -95,7 +95,7 @@ The backup environment has active application containers and a secondary databas
 
 The most advanced and expensive recovery pattern. You run full-scale production environments in two or more AWS Regions simultaneously, with user traffic distributed across both sites using latency-based or geoproximity Route 53 routing. 
 
-Data is replicated bi-directionally using systems like Amazon Aurora Global Database or Amazon DynamoDB Global Tables. If one region suffers an outage, Route 53 instantly stops routing traffic to the failed site. Because both environments are already running at full capacity and handling data writes, RTO and RPO are near zero. 
+Data replication depends heavily on the database. DynamoDB Global Tables can support multi-Region writes with conflict rules. Amazon Aurora Global Database is usually designed around one primary writer region with fast cross-Region replication and secondary regions that can be promoted during a disaster, not casual active-active multi-writer updates. If one region suffers an outage, Route 53 health checks or another traffic-management layer can steer new traffic away from the failed site, subject to health check timing and DNS behavior. Because both environments are already running at full capacity, RTO can be very low, but RPO and conflict behavior depend on the data store and application design.
 
 The primary trap of Active-Active is write conflicts. If your application logic is not specifically designed to handle concurrent bi-directional writes across global distances, you will suffer severe data corruption when the same user record is modified in two regions simultaneously.
 
@@ -103,16 +103,16 @@ The primary trap of Active-Active is write conflicts. If your application logic 
 
 When database corruption occurs due to a faulty application release or malicious write, standard daily backups are insufficient. If your last snapshot was taken at midnight and the corruption happened at 2:15 p.m., restoring that midnight snapshot would lose 14 hours of valid customer orders. 
 
-To solve this, you use Amazon RDS Point-in-Time Recovery (PITR). PITR combines daily automatic snapshots with transaction logs streamed continuously to secure S3 storage, allowing you to restore a database to any specific second within your retention window.
+To solve this, you use Amazon RDS Point-in-Time Recovery (PITR). PITR combines daily automatic snapshots with transaction logs archived by RDS, allowing you to restore a database near a chosen timestamp within your retention window, subject to the latest restorable time for that engine.
 
-Let us execute a terminal session to restore a corrupted production database to a clean state exactly one second before a bad migration ran:
+Let us execute a terminal session to restore a corrupted production database to a clean state just before a bad migration ran:
 
 ```bash
 $ aws rds restore-db-instance-to-point-in-time \
     --source-db-instance-identifier "production-orders-db" \
     --target-db-instance-identifier "restored-orders-db-temp" \
     --restore-time "2026-05-26T14:14:59Z" \
-    --publicly-accessible \
+    --no-publicly-accessible \
     --db-subnet-group-name "prod-database-subnet-group" \
     --vpc-security-group-ids "sg-08a7b6c5d4e3f2g1"
 ```
@@ -132,7 +132,7 @@ This terminal execution instructs the RDS control plane to provision a new datab
       "Port": 5432
     },
     "LatestRestorableTime": "2026-05-26T21:05:00Z",
-    "PubliclyAccessible": true,
+    "PubliclyAccessible": false,
     "StorageEncrypted": true,
     "KmsKeyId": "arn:aws:kms:eu-west-2:111122223333:key/a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d"
   }
@@ -143,8 +143,8 @@ Every returned parameter provides critical recovery evidence:
 
 * `DBInstanceStatus`: The database is in the `creating` state. Point-in-time recovery does not overwrite the existing database; it provisions an entirely new, isolated resource to protect your active data.
 * `Endpoint.Address`: The newly allocated, temporary DNS endpoint. Your application tasks cannot connect to this instance until you update your configuration parameters or swap the DNS record.
-* `KmsKeyId`: The Key Management Service key used to secure the storage volume. Your application tasks must have explicit `kms:Decrypt` permissions for this key ARN, or they will be blocked from accessing the data.
-* `LatestRestorableTime`: The absolute freshest point in time that the transaction logs can recover.
+* `KmsKeyId`: The Key Management Service key used by RDS to secure the storage volume. Your application tasks do not decrypt database storage directly, but the restore must be allowed to use the key, and any Secrets Manager values your app reads may have their own KMS permission requirements.
+* `LatestRestorableTime`: The newest point in time that the transaction logs can currently recover.
 
 ## Under-the-Hood: Lazy Block Restores and WAL Replay
 
@@ -171,7 +171,7 @@ This lazy block loading introduces a significant read latency penalty (known as 
 
 To satisfy your exact target restore second, the RDS engine launches the database process in a recovery mode. It mounts the lazy EBS blocks, then sequentially pulls the Write-Ahead Logs (WAL) generated by your database engine from secure S3 transaction storage. 
 
-The engine replays these logs step-by-step, applying every single insert, update, and delete transaction that occurred between the snapshot creation and your target `--restore-time`. Once the transaction replay hits the exact requested timestamp, the engine stops, finalizes the database state, and marks the instance ready for active connections.
+The engine replays these logs step-by-step, applying insert, update, and delete transactions that occurred between the snapshot creation and your target `--restore-time`. Once transaction replay reaches the requested restore point, the engine finalizes the database state and marks the instance ready for active connections.
 
 ## Designing a Resilient Storage Architecture
 
@@ -215,7 +215,7 @@ Deploy a temporary ECS test task configured with your active orders container im
 Run a suite of read-only integration tests against the drill endpoint. Verify that the schema is correct, active order records are readable, and the returned database metrics match your expectations.
 
 ### 4. Test Task Role Permissions
-Verify that the test task can write temporary records to S3 and read encrypted values from Systems Manager Parameter Store. This proves that your application's IAM execution roles have the necessary KMS decryption keys to access the new database volume blocks.
+Verify that the test task can write temporary records to S3 and read encrypted values from Systems Manager Parameter Store or Secrets Manager. This proves that your application's task role can access the surrounding runtime dependencies and secret KMS keys needed to connect to the restored environment.
 
 ### 5. Teardown and Delete
 Once the validation checks pass, document the actual time taken from the start of the restore to the final successful integration test (this is your verified RTO). Finally, execute the teardown command:
@@ -235,7 +235,7 @@ Operating a resilient cloud system requires transitioning from simple backups to
 * **Eliminate Backup Assumptions**: Recognize that having snapshots stored in a vault is useless unless you have tested the network, DNS, and IAM permission pathways needed to connect your application to them.
 * **Establish Clear Metrics**: Define explicit RTO (downtime limit) and RPO (data-loss limit) targets based on business needs and data classification.
 * **Match Strategy to Budget**: Select the appropriate recovery tier along the disaster recovery ladder—balancing the low cost of Backup and Restore against the near-zero downtime of Active-Active.
-* **Leverage Point-in-Time Recovery**: Use Amazon RDS PITR to recover from application corruption events by replaying Write-Ahead Logs (WAL) to the exact second before the failure.
+* **Leverage Point-in-Time Recovery**: Use Amazon RDS PITR to recover from application corruption events by replaying logs near the chosen restore timestamp.
 * **Understand the Performance Impact**: Plan for the lazy block loading first-touch latency penalty on newly restored EBS volumes, avoiding instant production traffic routing.
 * **Enforce Storage Resilience**: Enable S3 Versioning and MFA Delete to protect object storage assets from accidental or malicious deletion scripts.
 * **Validate with Drills**: Conduct scheduled, end-to-end recovery drills to measure actual RTO against your target objectives, tearing down test resources immediately to avoid billing leaks.

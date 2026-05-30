@@ -122,6 +122,10 @@ Latency Metric Distribution:
 
 To operate a reliable cloud architecture, you must completely avoid average latency measurements. All latency dashboard charts and automated threshold alarms must be configured to evaluate the `p95` or `p99` statistics.
 
+![Tail latency infographic showing many fast requests, a small slow cluster, average latency looking healthy, p95 exposing pain, and an alarm on p95](/content-assets/articles/article-cloud-iac-observability-metrics-dashboards/tail-latency-percentiles.png)
+
+*Average latency can look healthy while a small group of users waits painfully long. Percentile metrics make that tail visible, which is why latency dashboards and alarms should watch `p95` or `p99`.*
+
 ## Publishing Custom Business Metrics
 
 While AWS automatically publishes infrastructure metrics (such as `CPUUtilization` and `NetworkIn`), it cannot measure your application's business correctness. A load balancer can report successful HTTP status codes, but it cannot detect if your checkout logic is writing blank orders to the database.
@@ -183,7 +187,7 @@ $ aws cloudwatch put-metric-alarm \
     --alarm-name "HighCheckoutLatency" \
     --metric-name "TargetResponseTime" \
     --namespace "AWS/ApplicationELB" \
-    --statistic "p95" \
+    --extended-statistic "p95" \
     --period 60 \
     --threshold 2.0 \
     --comparison-operator "GreaterThanThreshold" \
@@ -196,7 +200,7 @@ This CLI execution configures a highly resilient alarm rule:
 
 * `--alarm-name`: The unique, descriptive name (`HighCheckoutLatency`) displayed in notifications.
 * `--metric-name` & `--namespace`: The target platform metric to watch (`TargetResponseTime` published by the load balancer).
-* `--statistic`: Configures the alarm to evaluate the `p95` latency statistic, ignoring average values.
+* `--extended-statistic`: Configures the alarm to evaluate the `p95` latency statistic, ignoring average values.
 * `--period`: The aggregation window in seconds (`60` seconds).
 * `--threshold`: The trigger boundary (`2.0` seconds).
 * `--comparison-operator`: The mathematical rule checking if the metric is strictly greater than the threshold.
@@ -234,6 +238,10 @@ Numeric telemetry is the key to operating cloud environments at scale without ma
 ## What's Next
 
 Metrics and alarms show us when and where a cloud environment is breaking down, but they cannot follow the journey of a single, complex request as it hops across network boundaries. To isolate bottlenecks and track requests across distributed systems, we must establish correlation. In the next article, we will go deep into distributed tracing, request headers propagation, segments, subsegments, and OpenTelemetry standards.
+
+![Six-tile metrics checklist covering namespace, dimensions, low cardinality, p95 and p99, dashboard, and SNS alarm](/content-assets/articles/article-cloud-iac-observability-metrics-dashboards/metrics-checklist.png)
+
+*Use this as the metrics checklist: group measurements by namespace, partition them with stable dimensions, avoid high-cardinality labels, watch tail latency, build top-down dashboards, and route sustained alarms through SNS.*
 
 ---
 

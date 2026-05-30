@@ -20,15 +20,16 @@ aliases:
 3. [Queues](#queues)
 4. [Producers](#producers)
 5. [Consumers](#consumers)
-6. [Visibility Timeout](#visibility-timeout)
-7. [Retries](#retries)
-8. [Dead-Letter Queues](#dead-letter-queues)
-9. [Standard And FIFO](#standard-and-fifo)
-10. [Topics](#topics)
-11. [Fanout](#fanout)
-12. [Sample Messaging Shape](#sample-messaging-shape)
-13. [Putting It All Together](#putting-it-all-together)
-14. [What's Next](#whats-next)
+6. [Message Timeline](#message-timeline)
+7. [Visibility Timeout](#visibility-timeout)
+8. [Retries](#retries)
+9. [Dead-Letter Queues](#dead-letter-queues)
+10. [Standard And FIFO](#standard-and-fifo)
+11. [Topics](#topics)
+12. [Fanout](#fanout)
+13. [Sample Messaging Shape](#sample-messaging-shape)
+14. [Putting It All Together](#putting-it-all-together)
+15. [What's Next](#whats-next)
 
 ## The Problem
 
@@ -112,6 +113,28 @@ The consumer contract is simple:
 
 The queue gives you retry opportunity. Idempotent worker code makes that retry safe.
 
+## Message Timeline
+
+SQS becomes much easier to reason about when you picture the message timeline.
+
+```mermaid
+sequenceDiagram
+    participant API as Producer API
+    participant Q as SQS Queue
+    participant W as Worker
+    API->>Q: SendMessage
+    W->>Q: ReceiveMessage
+    Q-->>W: Message + receipt handle
+    Note over Q: Message hidden during visibility timeout
+    W->>W: Process side effect
+    W->>Q: DeleteMessage
+    Note over Q: Message removed only after delete succeeds
+```
+
+The receipt handle is important. The consumer does not delete by message ID alone; it deletes the specific received copy using the receipt handle returned by `ReceiveMessage`. If the worker crashes before `DeleteMessage`, SQS can make the message visible again after the visibility timeout.
+
+This timeline explains why duplicate handling is not optional. A message can be received, processed, and then reappear if the delete step fails or the worker times out. The queue protects against losing work. Your consumer protects against repeating harmful work.
+
 ## Visibility Timeout
 
 Visibility timeout is the period after a consumer receives an SQS message when that message is hidden from other consumers. The message remains in the queue, but other consumers cannot process it at the same time.
@@ -123,6 +146,10 @@ For a receipt worker that usually finishes in 10 seconds, a 2 minute timeout may
 Visibility timeout does not guarantee exactly-once processing. Standard queues use at-least-once delivery. A message can be delivered more than once, so consumers need idempotency.
 
 That is the SQS bargain: the queue helps avoid loss and smooth pressure, while the application accepts that retry and duplicate handling are part of the design.
+
+![SQS message lifecycle showing producer, queue, consumer, visibility timeout, success deletion, retry, at-least-once delivery, and DLQ quarantine](/content-assets/articles/article-cloud-providers-aws-application-integration-messaging/sqs-message-lifecycle.png)
+
+*An SQS message is not finished when a worker receives it. The message is hidden during the visibility timeout, deleted only after success, retried after failure, and eventually quarantined in a DLQ when repeated attempts cannot complete it.*
 
 ## Retries
 
@@ -230,6 +257,10 @@ Messaging is healthy when it makes pressure visible and failure contained. The c
 ## What's Next
 
 Queues and topics move work between known components. The next article looks at broader event-driven architecture: event buses, rules, schedules, service events, and workflows where many systems react to facts without point-to-point wiring.
+
+![Six-tile messaging checklist covering producer, queue, consumer, visibility timeout, DLQ, and SNS fanout](/content-assets/articles/article-cloud-providers-aws-application-integration-messaging/messaging-checklist.png)
+
+*Use this as the messaging checklist: keep producers small, let queues hold work, make consumers retry-safe, tune visibility timeout to processing time, inspect DLQs as quarantine, and use SNS fanout when one publication needs independent subscribers.*
 
 ---
 

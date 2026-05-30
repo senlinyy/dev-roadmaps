@@ -21,13 +21,14 @@ aliases:
 4. [Event Buses](#event-buses)
 5. [Rules](#rules)
 6. [Targets](#targets)
-7. [Schedules](#schedules)
-8. [Idempotency](#idempotency)
-9. [Ordering](#ordering)
-10. [Step Functions](#step-functions)
-11. [Sample Event Shape](#sample-event-shape)
-12. [Putting It All Together](#putting-it-all-together)
-13. [What's Next](#whats-next)
+7. [Delivery Failures and Redrive](#delivery-failures-and-redrive)
+8. [Schedules](#schedules)
+9. [Idempotency](#idempotency)
+10. [Ordering](#ordering)
+11. [Step Functions](#step-functions)
+12. [Sample Event Shape](#sample-event-shape)
+13. [Putting It All Together](#putting-it-all-together)
+14. [What's Next](#whats-next)
 
 ## The Problem
 
@@ -134,6 +135,31 @@ EventBridge can also transform input before sending it to a target. That is usef
 
 Targets need permissions too. EventBridge must be allowed to invoke the target. A missing permission can make the event route look right while delivery fails.
 
+## Delivery Failures and Redrive
+
+Event routing is not the same thing as guaranteed business success. EventBridge can successfully match a rule and still fail to deliver to a target because the target permission is missing, the target is throttling, or the target returns an error.
+
+For many target types, EventBridge retries failed invocations for a configured retry window. That is useful for temporary errors, but it also means targets can receive the same event more than once. Configure a dead-letter queue when failed events need inspection instead of disappearing into metrics and logs.
+
+The failure model is per target. If one `OrderCreated` event matches three rules, the receipt target can fail while analytics succeeds and fraud review is delayed. EventBridge does not automatically roll back the successful targets because another target failed.
+
+```mermaid
+flowchart LR
+    Event["OrderCreated"] --> RuleA["Receipt rule"]
+    Event --> RuleB["Analytics rule"]
+    Event --> RuleC["Fraud rule"]
+    RuleA --> Receipt["Receipt queue"]
+    RuleB --> Analytics["Analytics Lambda"]
+    RuleC --> Retry["Retry delivery"]
+    Retry --> DLQ["Rule DLQ"]
+```
+
+This partial-failure behavior is why event consumers must be independently observable. Each target needs logs, metrics, idempotency, and an owner for redrive decisions. EventBridge routes facts; it does not guarantee that every downstream business reaction completed.
+
+![EventBridge routing map showing one event fact entering an event bus, matching receipt, analytics, and fraud rules, and delivering to SQS, Lambda, Step Functions, retry, DLQ, and schedule paths](/content-assets/articles/article-cloud-providers-aws-application-integration-event-driven-architecture/event-routing-map.png)
+
+*EventBridge routes facts independently per target. One rule can succeed while another retries or moves to a DLQ, and a workflow target such as Step Functions is the right shape when the reaction has ordered state and branches.*
+
 ## Schedules
 
 Not every event comes from a business action. Some work starts because time passed: nightly export, stale-cart cleanup, subscription renewal, backup verification, or report generation.
@@ -146,7 +172,7 @@ The gotcha is ownership. A schedule that starts a cleanup job can delete or chan
 
 ## Idempotency
 
-Event-driven systems must expect retries and duplicates. A target may receive the same event more than once. A producer may publish twice after a retry. A subscriber may fail after doing the side effect but before recording success.
+Event-driven systems must expect retries and duplicates. A target may receive the same event more than once. A producer may publish twice after a retry. A subscriber may fail after doing the side effect but before recording success. EventBridge also gives each delivered event an ID, but application-level idempotency should usually use a stable business key when the business action must happen only once.
 
 Idempotency means handling repeated input without repeating harmful side effects. If `OrderCreated` is delivered twice, the receipt service should not send two receipts. If `PaymentCaptured` is processed twice, fulfillment should not ship twice.
 
@@ -165,7 +191,7 @@ EventBridge routes facts. Your application still owns safe reaction.
 
 ## Ordering
 
-Events often arrive in the order you hope for, until the day they do not. Distributed systems can retry, buffer, parallelize, and redeliver. If a workflow needs strict ordering, design for it explicitly.
+Events often arrive in the order you hope for, until the day they do not. Distributed systems can retry, buffer, parallelize, and redeliver. EventBridge is a routing service, not a strict ordering engine for a business workflow. If a workflow needs strict ordering, design for it explicitly.
 
 For example, `PaymentCaptured` should not be processed as if the order is ready if `OrderCreated` has not committed. A consumer that receives `PaymentCaptured` can fetch the current order state before acting. That is often safer than assuming event arrival order tells the whole truth.
 
@@ -217,13 +243,17 @@ Each target owns its reaction. The producer owns the truth of the event it publi
 
 The opening system had too many interested parties for direct calls from checkout. Receipts, analytics, fraud, shipping, schedules, and reconciliation all cared about order facts in different ways.
 
-Event-driven architecture gives those facts a routing layer. Events describe what happened. Event buses receive and route them. Rules match patterns. Targets receive the matching events. Schedules turn time into invocations. Idempotency protects side effects from duplicates. Ordering is designed where the business needs it. Step Functions coordinates processes that need explicit state, branching, retries, and history.
+Event-driven architecture gives those facts a routing layer. Events describe what happened. Event buses receive and route them. Rules match patterns. Targets receive the matching events. Delivery failures are handled per target with retries, DLQs, and redrive ownership. Schedules turn time into invocations. Idempotency protects side effects from duplicates. Ordering is designed where the business needs it. Step Functions coordinates processes that need explicit state, branching, retries, and history.
 
 The design is healthy when producers publish stable facts, consumers own safe reactions, and workflows are used only where the process itself deserves coordination.
 
 ## What's Next
 
 Application integration creates more paths for work to move. The next module, Observability, explains how to see those paths in production: logs, metrics, traces, dashboards, alarms, and correlation across API calls, queues, events, and workflows.
+
+![Six-tile event-driven checklist covering event fact, event bus, rules, targets, idempotency, and Step Functions](/content-assets/articles/article-cloud-providers-aws-application-integration-event-driven-architecture/event-driven-checklist.png)
+
+*Use this as the event-driven checklist: publish stable facts, route through an event bus, match with precise rules, choose targets by work shape, make reactions idempotent, and use Step Functions when the process itself needs visible state.*
 
 ---
 

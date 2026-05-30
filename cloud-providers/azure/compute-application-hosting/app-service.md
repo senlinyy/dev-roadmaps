@@ -51,13 +51,17 @@ Treat App Service as a managed runtime that wraps your application process. Even
 
 An App Service Plan (ASP) represents the physical compute host for your web applications. When you create an ASP, you are creating a Virtual Machine Scale Set (VMSS) managed by Azure's fabric, hidden behind the PaaS abstraction layer. The tier you choose (Basic, Standard, Premium v3, or Isolated) dictates the availability of advanced features, such as regional virtual network integration, deployment slots, custom domains, and autoscale rules.
 
+![An infographic showing several web apps sharing the capacity boundary of one App Service plan](/content-assets/articles/article-cloud-providers-azure-compute-application-hosting-app-service-web-backends/plan-capacity-boundary.png)
+
+*The App Service plan is the capacity boundary; multiple web apps inside it can compete for the same CPU and memory.*
+
 Because the ASP provides the physical RAM and CPU allocations, you must monitor it using host-level metrics. If a Web App returns a gateway timeout or becomes unresponsive, inspect the App Service Plan's overall CPU and Memory utilization. Scaling up the ASP changes the size of the worker VMs (e.g., shifting from 2 cores and 8 GB of RAM to 4 cores and 16 GB of RAM), whereas scaling out increases the number of running VM instances.
 
 For production workloads, isolate critical services on dedicated App Service Plans. Placing an internal administrative portal, a slow-running batch utility, and a high-throughput checkout API on the same plan introduces unnecessary operational risk. Dedicated plans ensure that resource consumption remains isolated and predictable.
 
 ## Web App
 
-The Web App is the logical configuration unit where your code, deployment artifacts, and runtime settings reside. It defines how the system starts and how traffic interacts with the process. For a standard Linux-based Node.js runtime, the platform executes a Kestrel or Nginx process that reverse-proxies requests directly to your application port. App Service uses a default port contract, typically mapping inbound traffic to port `8080` inside the container. Your code must bind to the environment-injected port variable or target the correct port to receive traffic.
+The Web App is the logical configuration unit where your code, deployment artifacts, and runtime settings reside. It defines how the system starts and how traffic interacts with the process. For built-in runtime stacks, App Service starts the selected language runtime and routes HTTP traffic through the platform front ends to your process. For custom Linux containers, your container must listen on the port App Service expects, often configured through the platform's port settings for the container. A failed startup command, wrong listening port, or missing environment setting can make a healthy deployment package unreachable.
 
 To maintain operational clarity during incidents, document a stable profile of each Web App. This avoids confusion when troubleshooting configuration issues or deployment failures.
 
@@ -82,15 +86,15 @@ Some settings must be marked as slot settings. When you create a deployment slot
 
 ## Managed Identity
 
-Managed Identity eliminates the need to store long-lived credentials (like passwords, client secrets, or certificate files) inside your application code or App Settings. When you enable a system-assigned managed identity on a Web App, Azure's Fabric Controller registers a distinct cryptographic principal in Microsoft Entra ID and assigns it to your Web App resource.
+Managed Identity eliminates the need to store long-lived credentials (like passwords, client secrets, or certificate files) inside your application code or App Settings. When you enable a system-assigned managed identity on a Web App, Azure creates a Microsoft Entra service principal associated with that Web App resource.
 
-Under the hood, the Web App accesses this identity through a local link-local endpoint. When your application code utilizes an Azure SDK to authenticate (such as `DefaultAzureCredential`), the SDK makes an HTTP request to the local Instance Metadata Service (IMDS) endpoint (`169.254.169.254`) on a specialized port. The hypervisor interceptor verifies that the socket request originates from the authorized Web App process, calls Entra ID to retrieve a cryptographically signed JSON Web Token (JWT), and returns it to your application code.
+Under the hood, the Web App accesses this identity through a local managed identity endpoint exposed to the app by the App Service platform. When your application code uses an Azure SDK credential such as `DefaultAzureCredential`, the SDK requests an access token through the endpoint and platform-provided headers. Microsoft Entra ID issues the token for the managed identity, and your app presents that token to services such as Key Vault or Azure SQL. This is different from a Virtual Machine's Instance Metadata Service path, even though the SDK can hide that difference from your code.
 
 The identity does not grant permission by itself. Creating a system-assigned managed identity only gives the app a principal. Someone still has to grant that principal the right access to the target resource. When a secret read fails, check both halves: does the app have an identity, and does the target service allow that identity?
 
 ## Logs And Health
 
-App Service captures standard output and standard error streams from your application process, piping them to a managed log stream. In Linux-based App Service containers, console logs are collected by a host docker daemon and can be streamed in real-time or forwarded directly to an Azure Log Analytics workspace. 
+App Service captures standard output and standard error streams from your application process, piping them to a managed log stream. In Linux-based App Service containers, console logs are collected by a host docker daemon and can be streamed in real-time or forwarded directly to an Azure Log Analytics workspace.
 
 An active Health Check is critical to prevent routing traffic to degraded worker instances. When you configure a Health Check path (such as `/healthz`), the platform's load balancers poll the endpoint on every running instance at regular intervals. The endpoint must verify that the process is warm, configurations are parsed, and core socket connections are established.
 
@@ -120,32 +124,83 @@ If an instance fails to return a `200 OK` response multiple times, the load bala
 
 Deployment slots are fully functional, independent Web App instances that run under the same App Service parent resource. A slot has its own unique hostnames, environment configuration settings, and deployment history, but it shares the underlying worker VM resources of the App Service Plan by default.
 
-When you swap deployment slots (such as swapping `staging` with `production`), you are not moving your application code or files between physical directories. Instead, the swap is a logical routing table change executed at the Front-End load-balancing gateway. The gateway shifts the target routing IP mapping, swapping the public-facing URL path to point to the staging worker processes.
+![An infographic showing a staging slot warming up before a production slot swap](/content-assets/articles/article-cloud-providers-azure-compute-application-hosting-app-service-web-backends/slot-swap-safety.png)
 
-This swap process avoids cold starts through an automated warmup sequence. The platform controller first updates the App Settings in the staging slot that are not slot-specific, using the production settings. It then warms up the staging worker process by sending HTTP requests to the configured health check path. Only after the staging processes respond successfully does the Front-End gateway update its routing table to swap the URL maps. If the staging process crashes during warmup, the swap aborts, protecting the production site from downtime.
+*Deployment slots are safest when the candidate slot is warmed, checked, and only then swapped into production traffic.*
+
+When you swap deployment slots (such as swapping `staging` with `production`), App Service runs a controlled swap workflow rather than a blind URL flip. It applies target-slot settings that must be tested on the source slot, restarts and warms the source instances as needed, and then switches routing so the warmed source slot becomes the production target. After the routing switch, the previous production app is moved into the other slot.
+
+This swap process avoids many cold-start failures through an automated warmup sequence. The platform can send warmup requests to the source slot before completing the swap. If the source instances fail to restart or warm successfully, the swap can stop and revert the settings applied to the source slot. The important design habit is to mark environment-specific settings as slot settings and to test the app under production-like settings before completing a swap.
+
+:::expand[Slot-Sticky Settings Discipline]{kind="pattern"}
+Azure App Service deployment slots permit zero-downtime releases by warming up code in a staging slot and swapping routing targets at the Front-End gateway. However, during a swap, all Web App configurations (App Settings and Connection Strings) swap with the code *unless* they are explicitly marked as **Slot-Sticky**.
+
+This contrasts with AWS, where deployment slots do not exist natively. In AWS ECS or Elastic Beanstalk, you achieve blue-green deployments by spinning up a separate service and swapping ALB target groups or Route 53 DNS records. Because AWS environment variables are permanently bound to the respective task definition or environment, there is no risk of configuration swapping—though it demands more complex pipeline scripting.
+
+If you forget to mark environment-specific configurations as sticky in Azure, the swap leads to critical misalignment:
+
+```text
+Before Swap:
+  Staging Slot ──> DB_CONN="staging-db" (Non-sticky)
+  Production Slot ──> DB_CONN="prod-db" (Non-sticky)
+
+After Swap (The Misconfiguration Failure):
+  Staging Slot (now pointing to old prod code) ──> DB_CONN="prod-db"
+  Production Slot (now hosting new code) ──> DB_CONN="staging-db" (CRITICAL: Prod calls Staging database)
+```
+
+To prevent this, mark all environment-sensitive properties as sticky:
+
+| App Setting / Connection String Type | Should Be Sticky? | Architectural Reason |
+| :--- | :--- | :--- |
+| **Database Connection String** | **Yes** | Prevents production from writing to staging database. |
+| **`ASPNETCORE_ENVIRONMENT` / `NODE_ENV`** | **Yes** | Keeps runtime telemetry mapped to the correct environment. |
+| **Feature Flag (e.g., `EnableBetaFeatures`)** | **No** | Allows the new feature flag to promote to production with the code. |
+| **Key Vault Reference URI (scoped per slot)** | **Yes** | Ensures each slot reads secrets from its respective vault. |
+
+**The Fix:** In your Bicep templates, set the `slotSetting` boolean flag to `true` on the configuration block:
+```bicep
+resource appSettings 'Microsoft.Web/sites/config@2022-03-01' = {
+  name: 'web/appsettings'
+  properties: {
+    DB_CONN: {
+      value: 'prod-db-string'
+      slotSetting: true // Prevents swapping
+    }
+  }
+}
+```
+
+**Rule of thumb:** If the value of an App Setting differs between your staging and production environments, it **must** be marked as slot-sticky.
+:::
 
 ## Scaling
 
 App Service scaling operates at the App Service Plan level, providing two modes: vertical scaling (scaling up) and horizontal scaling (scaling out). Scaling up changes the CPU, memory, and performance tier of the VM instances. Scaling out provisions additional VM instances to distribute traffic across a larger resource pool.
 
-Horizontal autoscaling is governed by rules that monitor specific performance indicators, such as average CPU utilization, memory pressure, or TCP queue length. When a scaling threshold is breached, the scale controller tells the Fabric Controller to provision a new worker VM in the App Service Plan. 
+Horizontal autoscaling is governed by rules that monitor specific performance indicators, such as average CPU utilization, memory pressure, or TCP queue length. When a scaling threshold is breached, Azure adds worker capacity to the App Service Plan according to the configured scale rule.
 
-Under the hood, provisioning a new instance does not require copying your application files onto the new VM's local drive. Instead, all worker VM instances mount your application files from a shared Azure Storage scale unit via secure internal SMB or NFS connections. The new VM boots, mounts this network volume, starts the runtime engine, executes your startup command, and registers its local IP address with the Front-End load balancer once the health probe validates readiness.
+Under the hood, provisioning a new instance does not require you to manually copy application files onto the new worker. App Service manages the deployment content and host startup path for the selected runtime or container model. The new worker starts the runtime or container, loads the configured app settings, executes your startup command, and enters the routing pool once the platform can send traffic to it successfully.
 
 ## Putting It All Together
 
 Understanding the physical architecture of App Service prevents common deployment and operational assumptions.
 
 * **Plan vs. Logical Isolation**: The App Service Plan is the physical VM compute boundary; the Web App is a logical configuration workspace.
-* **Slot Swapping Physics**: Deployment slot swaps represent logical routing updates at the Front-End gateway after an automated worker process warmup.
-* **Network-Mounted Code**: Scaling out VM instances relies on mounting a shared application code volume from an Azure Storage scale unit via internal SMB/NFS connections.
-* **Managed Credentials**: Managed Identities use link-local IMDS requests intercepting VM sockets to fetch Entra ID JWT tokens.
+* **Slot Swap Workflow**: Deployment slot swaps apply target settings, warm source instances, then switch routing when the app is ready.
+* **Managed Startup**: Scaling out relies on App Service's managed deployment and startup path for the selected runtime or container model.
+* **Managed Credentials**: Managed Identities use an App Service local identity endpoint to fetch Microsoft Entra access tokens without storing client secrets.
 
 By designing your applications around these physical realities, you can construct deployment slot configurations, autoscale thresholds, and resource plans that guarantee high performance and high availability.
 
 ## What's Next
 
-In the next chapter, we will transition to Azure Container Apps. We will package our application as a Docker image, configure a serverless Container Apps Environment, inspect Envoy proxy routing edges, manage revisions, and configure KEDA-driven autoscaling.
+In the next chapter, we will transition to Azure Container Apps. We will package our application as a container image, configure a Container Apps environment, manage revisions, and configure event-driven autoscaling.
+
+![An infographic showing App Service Plan capacity, a Web App runtime, app settings, managed identity, logs, health checks, deployment slots, and scale out](/content-assets/articles/article-cloud-providers-azure-compute-application-hosting-app-service-web-backends/app-service-runtime-map.png)
+
+*Use this as the App Service runtime map: the plan supplies capacity, the web app runs your code, and runtime settings, identity, health, logs, slots, and scale controls surround it.*
+
 
 ---
 

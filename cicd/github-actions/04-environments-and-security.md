@@ -241,6 +241,10 @@ Fourth, restrict cloud trust relationships. Design AWS IAM trust policies that v
 
 Fifth, scope GITHUB_TOKEN permissions. Enforce the principle of least privilege by explicitly defining your workflow `permissions` blocks, enabling `id-token: write` only where OIDC token exchange is required.
 
+![GitHub Actions environments and security summary showing secret scopes, protected environments, approvals, OIDC, trust policy, and permissions](/content-assets/articles/article-cicd-github-actions-environments-and-security/actions-security-summary.png)
+
+*Use this as the Actions security checklist: scope secrets narrowly, protect environments, require reviewers and wait timers where needed, prefer OIDC over static keys, and grant only the permissions a job needs.*
+
 ---
 
 **References**

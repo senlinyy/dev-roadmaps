@@ -1,6 +1,7 @@
 ---
 title: "Terraform"
-description: "Learn Terraform and OpenTofu through a deeper AWS-first path: foundations, configuration blocks, values, state and plans, modules, environments, and automation."
-tags: ["Terraform", "OpenTofu", "AWS", "State", "Modules"]
+description: "Master Infrastructure as Code with Terraform. Build, change, and version infrastructure safely and efficiently."
+tags: ["terraform", "iac", "aws", "infrastructure"]
+icon: "Box"
 order: 1
 ---

@@ -1215,11 +1215,15 @@ function articleMatchesKey(article: ArticleCatalogItem, key: string): boolean {
     || article.aliases.includes(key);
 }
 
-function resolveChallengeArticleId(group: ChallengeGroupMeta, catalog: ArticleCatalogItem[]): string | undefined {
+type ChallengeArticleResolution =
+  | { status: 'resolved'; articleId?: string }
+  | { status: 'skipped'; reason: string };
+
+function resolveChallengeArticleLink(group: ChallengeGroupMeta, catalog: ArticleCatalogItem[]): ChallengeArticleResolution {
   const articleKey = group.articleId ?? group.articleSlug;
 
   if (!articleKey) {
-    return undefined;
+    return { status: 'resolved' };
   }
 
   const matches = catalog.filter((article) => articleMatchesKey(article, articleKey));
@@ -1230,29 +1234,45 @@ function resolveChallengeArticleId(group: ChallengeGroupMeta, catalog: ArticleCa
   const candidates = scopedMatches.length > 0 ? scopedMatches : matches;
 
   if (candidates.length === 1) {
-    return candidates[0].id;
+    return { status: 'resolved', articleId: candidates[0].id };
   }
 
   if (candidates.length > 1) {
-    throw new Error(`Challenge group ${group.category}/${group.id} has ambiguous article key ${articleKey}. Add articleId.`);
+    return { status: 'skipped', reason: `ambiguous article key ${articleKey}. Add articleId.` };
   }
 
-  throw new Error(`Challenge group ${group.category}/${group.id} links to unknown article key ${articleKey}.`);
+  return { status: 'skipped', reason: `unknown article key ${articleKey}` };
 }
 
 function resolveArticleIdsForGroups(
   groupsByCategory: Record<string, ChallengeGroupMeta[]>,
   catalog: ArticleCatalogItem[],
 ): Record<string, ChallengeGroupMeta[]> {
-  return Object.fromEntries(
+  const skippedGroups: string[] = [];
+  const resolvedGroupsByCategory = Object.fromEntries(
     Object.entries(groupsByCategory).map(([categoryId, groups]) => [
       categoryId,
-      groups.map((group) => {
-        const articleId = resolveChallengeArticleId(group, catalog);
-        return articleId ? { ...group, articleId } : group;
+      groups.flatMap((group) => {
+        const resolution = resolveChallengeArticleLink(group, catalog);
+
+        if (resolution.status === 'skipped') {
+          skippedGroups.push(`${group.category}/${group.id}: ${resolution.reason}`);
+          return [];
+        }
+
+        return resolution.articleId ? [{ ...group, articleId: resolution.articleId }] : [group];
       }),
     ]),
   );
+
+  if (skippedGroups.length > 0) {
+    console.warn([
+      `Skipping ${skippedGroups.length} challenge group(s) with unresolved article links:`,
+      ...skippedGroups.map((group) => `- ${group}`),
+    ].join('\n'));
+  }
+
+  return resolvedGroupsByCategory;
 }
 
 function writeArticleArtifacts(versionRoot: string, roadmapData: RootModule[]): void {

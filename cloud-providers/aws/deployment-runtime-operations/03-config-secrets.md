@@ -69,7 +69,7 @@ These values are non-sensitive. It is completely safe for operators to read them
 
 ## Securing Sensitive Credentials with Secrets Manager
 
-Sensitive credentials must be stored securely outside the task definition plain-text. AWS provides Amazon Secrets Manager, which encrypts values at rest using Customer Managed Keys via Key Management Service (KMS).
+Sensitive credentials must be stored securely outside the task definition plain-text. AWS provides Amazon Secrets Manager, which encrypts values at rest using KMS keys. Many workloads use the AWS managed key for Secrets Manager; customer managed keys are useful when you need custom key policies, cross-account access patterns, or stricter audit boundaries.
 
 For ECS tasks, instead of writing plain-text passwords, you store the secure Amazon Resource Name (ARN) coordinate reference inside the `secrets` array of the container definition:
 
@@ -89,7 +89,7 @@ $ aws secretsmanager get-secret-value \
     --secret-id "orders/prod/db"
 ```
 
-The terminal returns the encrypted payload securely over HTTPS:
+The terminal returns the decrypted secret payload securely over HTTPS to the authorized caller:
 
 ```json
 {
@@ -104,8 +104,8 @@ The terminal returns the encrypted payload securely over HTTPS:
 This output provides critical operational coordinates:
 
 * `ARN`: The unique, immutable resource path of the secret used inside your task definitions.
-* `VersionId`: The active, cryptographically hashed version identifier, allowing you to trace credential revisions.
-* `SecretString`: The highly sensitive JSON payload containing database ports, hosts, and passwords.
+* `VersionId`: The active version identifier, allowing you to trace credential revisions.
+* `SecretString`: The highly sensitive plaintext JSON payload containing database ports, hosts, and passwords. Do not paste this output into tickets, chats, or logs.
 
 ## ECS Delivery: Task Execution Roles vs. Task Roles
 
@@ -132,11 +132,15 @@ Task Ingestion vs. Application Code Permissions:
 | Role Coordinates | Task Execution IAM Role | Task IAM Role |
 | :--- | :--- | :--- |
 | **Who Uses It** | The AWS ECS agent host daemon at boot time. | The application code process at runtime. |
-| **Operational Job** | Pulls images from ECR, writes logs to CloudWatch, and decrypts Secrets Manager JSONs. | Writes files to S3, publishes messages to SQS, and queries DynamoDB. |
+| **Operational Job** | Pulls images from ECR, writes logs to CloudWatch, and fetches configured secret values for startup injection. If a customer managed KMS key protects the secret, this path also needs key permission. | Writes files to S3, publishes messages to SQS, and queries DynamoDB. |
 | **Common Outage** | Task fails to boot, throwing `SecretsManagerException` or ECR pull timeout. | Task boots successfully but returns `AccessDenied` when writing receipt PDFs. |
 | **Example Policy** | `secretsmanager:GetSecretValue`<br/>`kms:Decrypt` (on secret KMS keys) | `s3:PutObject`<br/>`sqs:SendMessage` |
 
 If Fargate cannot boot the task because it cannot pull the image or fetch the database password, check the Task Execution Role permissions. If the container boots successfully but application API requests return access errors, check the Task Role permissions.
+
+![Config and secrets boundary infographic showing the same container image, environment variables, secret references, Secrets Manager, execution role startup delivery, task boot, task role, and AWS API calls](/content-assets/articles/article-cloud-providers-aws-deployment-runtime-operations-runtime-config-secrets-and-environment-variables/config-secrets-boundary.png)
+
+*The startup path and runtime path use different trust boundaries. The execution role helps the platform fetch image, logs, and startup secret material; the task role is what the application code uses later when it calls AWS APIs.*
 
 ## Enforcing Startup Validation and Fail-Fast Habits
 
@@ -216,7 +220,7 @@ Any child process spawned by the primary container task inherits a full copy of 
 
 If your primary container task spawns background shell wrappers or third-party diagnostic scripts, those child processes gain access to every database password and Stripe key loaded in the environment. Even worse, if the application experiences a core dump crash, the OS writes the stack memory to disk, leaving plaintext passwords stored inside the container's volatile block storage layers.
 
-To minimize process memory leaks, high-security applications bypass environment variable injection completely. Instead of injecting secrets via the task definition `secrets` array at boot time, the application code imports the AWS SDK directly. At runtime, the code calls Secrets Manager dynamically, decrypts the credentials in memory, uses them to establish connection pools, and immediately garbage collects the plaintext credentials, keeping sensitive secrets out of the operating system's environment stack.
+To minimize process memory leaks, high-security applications may bypass environment variable injection completely. Instead of injecting secrets via the task definition `secrets` array at boot time, the application code imports the AWS SDK directly. At runtime, the code calls Secrets Manager dynamically, receives the credentials in memory, uses them to establish connection pools, and avoids placing the values in the operating system's environment stack. This does not make plaintext disappear magically, but it narrows where it can leak.
 
 ## The Coordination of Secret Rotation
 
@@ -224,7 +228,7 @@ Secret rotation is the security practice of changing sensitive credentials regul
 
 * **Startup Injection Caveat**: If secrets are injected as environment variables at task boot time, running containers will continue to use the old password until they are replaced. You must trigger an ECS service deployment (`forceNewDeployment`) to force Fargate to spin up new task replicas that fetch the rotated password.
 * **Dynamic API Fetching**: If your application fetches secrets dynamically over the SDK, configure your client wrappers with a local cache TTL (such as 1 hour) and a database retry trigger. If a database transaction fails due to authentication errors, the client must bypass the cache, fetch the rotated password from Secrets Manager, re-establish the pool, and resume transactions without downtime.
-* **Reversible Rotation Windows**: When rotating database credentials, configure the database engine to accept both the old and new passwords concurrently for a brief window. This overlap window ensures that active tasks continue to run during the rolling update without dropping database connections.
+* **Reversible Rotation Windows**: When the database engine and rotation strategy support it, configure a brief overlap where old and new credentials can both work. This overlap window helps active tasks continue during the rolling update without dropping database connections.
 
 ## Putting It All Together
 
@@ -240,6 +244,10 @@ Decoupling configuration from code packaging is the foundation of secure cloud o
 ## What's Next
 
 We have established secure configuration delivery, execution role boundaries, and startup validation habits. However, once a service is live, the operational environment changes constantly. In the next article, we will go deep into runtime controls: desired counts, Application Auto Scaling target tracking, SQS queue backlog monitoring, EventBridge Scheduler pipelines, and pause controls.
+
+![Config checklist covering environment variables, secret references, execution role, task role, fail-fast validation, and rotation](/content-assets/articles/article-cloud-providers-aws-deployment-runtime-operations-runtime-config-secrets-and-environment-variables/config-checklist.png)
+
+*Use this as the config and secrets checklist: keep ordinary settings in environment variables, store credentials behind secret references, separate execution and task roles, fail fast at startup, and coordinate rotation with running tasks.*
 
 ---
 

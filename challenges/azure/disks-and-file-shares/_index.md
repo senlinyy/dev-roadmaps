@@ -1,7 +1,7 @@
 ---
 title: "Disks and File Shares"
 description: "Practice attached disk and shared file path decisions for VM-shaped workloads and legacy migration paths."
-articleId: article-cloud-providers-azure-storage-databases-managed-disks-azure-files
+articleId: article-cloud-providers-azure-storage-databases-disks-file-shares
 articleSlug: disks-and-file-shares
 difficulty: medium
 order: 28

@@ -284,6 +284,10 @@ Fifth, enforce clean cache invalidation. Pair cache keys with cryptographic lock
 
 Securing pipeline orchestrations and runners ensures that our packages are built inside safe boundaries. But once these artifacts are compiled, we must deploy them to our servers without manual mistakes. In the next chapter, **Continuous Delivery**, we will explore the golden rule of building once and deploying everywhere, manage stateless configurations, isolate environments, and design automated rollbacks.
 
+![Pipeline runtime summary showing scheduler, runner, workspace, services, cache, and artifacts](/content-assets/articles/article-cicd-fundamentals-pipelines-runners-and-artifacts/pipeline-runtime-summary.png)
+
+*Use this as the pipeline-runtime checklist: know who schedules work, where it runs, what the workspace contains, when services are temporary, and what persists as cache or artifact.*
+
 ---
 
 **References**

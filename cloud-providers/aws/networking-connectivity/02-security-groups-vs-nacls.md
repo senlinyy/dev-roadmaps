@@ -56,6 +56,10 @@ flowchart TD
 
 If both layers are active, a packet must successfully pass through both the subnet NACL and the resource's Security Group to reach its destination.
 
+![Packet filter layer infographic showing a packet crossing a subnet NACL, workload ENI security group, stateful return traffic, stateless rules, and ephemeral ports](/content-assets/articles/article-cloud-providers-aws-networking-connectivity-security-groups-vs-nacls/packet-filter-layers.png)
+
+*Think of packet filtering as two gates in series. The subnet NACL checks boundary rules without remembering connections, while the workload security group stays attached to the resource and remembers allowed return traffic.*
+
 ## Mapping Your Application's Network Conversations
 
 Before you begin configuring firewall rules in the AWS console, you must clearly outline the specific network conversations your application needs to conduct. Configuring rules port-by-port without a map leads to overly permissive rules that can compromise security.
@@ -72,7 +76,7 @@ The application servers do not need to accept connections from arbitrary develop
 
 ## Security Groups: Stateful Resource-Level Firewalls
 
-A Security Group acts as an virtual firewall attached directly to your resource's Elastic Network Interface (ENI). For virtual servers, serverless containers running on ECS Fargate, database instances, and load balancers, the Security Group is the primary line of defense.
+A Security Group acts as a virtual firewall attached directly to your resource's Elastic Network Interface (ENI). For virtual servers, serverless containers running on ECS Fargate, database instances, and load balancers, the Security Group is the primary line of defense.
 
 Security Groups possess five foundational characteristics that govern their behavior:
 
@@ -129,7 +133,7 @@ If you create a custom NACL, it begins with only the catch-all deny rules. If yo
 
 ## The Return Traffic Challenge and Ephemeral Ports
 
-Because NACLs are stateless, they do not track connection state. Every single conversation must be cabled with both an inbound route and an outbound route.
+Because NACLs are stateless, they do not track connection state. Every single conversation must be allowed with both an inbound rule and an outbound rule.
 
 When a client browser establishes a connection with your Application Load Balancer, the browser selects a temporary, short-lived port from its own operating system to initiate the request. This temporary port is called an ephemeral port. 
 
@@ -138,13 +142,13 @@ The client's request travels from its ephemeral port (for example, port 51544) t
 To allow this conversation through a stateless subnet NACL, you must configure two separate rules:
 
 * **The Inbound Request Rule**: Allows incoming packets from any source (`0.0.0.0/0`) on destination port 443.
-* **The Outbound Response Rule**: Allows outgoing packets to return to the client browser on its ephemeral ports. Depending on the client's operating system, this range spans ports 1024 to 65535, though modern Linux hosts and AWS resources typically use ports 32768 to 65535.
+* **The Outbound Response Rule**: Allows outgoing packets to return to the client browser on its ephemeral ports. Public-facing NACLs often allow the broad `1024-65535` range because clients, load balancers, NAT gateways, Lambda environments, and operating systems can use different ephemeral ranges. Narrow ranges should be based on the exact traffic source documented for that path.
 
 ```mermaid
 flowchart TD
     subgraph StatelessNACL["Stateless Subnet NACL Gate"]
         InboundRule["Rule 100 Inbound:<br/>Src Port * -> Dst Port 443"]
-        OutboundRule["Rule 110 Outbound:<br/>Src Port 443 -> Dst Port 32768-65535"]
+        OutboundRule["Rule 110 Outbound:<br/>Src Port 443 -> Dst Port 1024-65535"]
     end
     Browser["Client Browser<br/>(Port 51544)"] -->|1. Request packet| InboundRule
     InboundRule --> ALB["Load Balancer ENI"]
@@ -158,9 +162,9 @@ Because managing ephemeral return ranges across dozens of microservices is opera
 
 ## VPC Flow Logs: Deciphering Network Evidence
 
-When a network connection fails, you must determine whether the packets are actually reaching your workload interfaces, and if they are, which packet filter layer is dropping them. VPC Flow Logs capture detailed metadata about all IP traffic traversing your VPC network interfaces.
+When a network connection fails, you must determine whether packets are reaching your workload interfaces and whether AWS packet filters are accepting or rejecting the flow. VPC Flow Logs capture detailed metadata for many IP flows traversing monitored VPC network interfaces.
 
-VPC Flow Logs do not perform deep packet inspection. They do not record HTTP headers, SQL query texts, TLS certificates, or application payloads. 
+VPC Flow Logs do not perform deep packet inspection. They do not record HTTP headers, SQL query texts, TLS certificates, or application payloads. They also do not capture every possible VPC traffic type, so use them as strong packet metadata evidence rather than as a complete packet recorder.
 
 Instead, they record flow metadata, including source and destination IP addresses, ports, protocol, packet counts, and the decisive action taken on the flow.
 
@@ -182,7 +186,7 @@ Rather than looking at plain text logs in a monospace block, we can interpret th
 Reviewing these log fields allows you to gather diagnostic evidence:
 
 * **Correlate with Timestamps**: Line up the log entry window with your application's error log to confirm if traffic was attempting to route.
-* **Identify Inbound Blocks**: A `REJECT` action on an inbound connection (as seen in Example 2 where an external client attempts to SSH into the load balancer on port 22) indicates that either a Security Group rule or a NACL rule explicitly blocked the packet.
+* **Identify Inbound Blocks**: A `REJECT` action on an inbound connection (as seen in Example 2 where an external client attempts to SSH into the load balancer on port 22) indicates that a Security Group or NACL blocked the packet. Flow Logs show the decision, but they do not always prove which layer caused the rejection without comparing the active rules.
 * **Diagnose Ephemeral Return Blocks**: If you see `ACCEPT` on inbound traffic but a corresponding `REJECT` on outbound traffic to high-numbered ports, you are likely facing a stateless NACL configuration error that is blocking return ephemeral packets.
 
 ## Choosing the Right Network Control Layer
@@ -197,7 +201,7 @@ Securing your VPC is a matter of choosing the correct tool for each specific pac
   * **Rationale**: Blocks malicious traffic at the subnet boundary, protecting all resources within the subnet before they can process the packet.
 * **Gathering Connection Audits**:
   * **Layer**: VPC Flow Logs.
-  * **Rationale**: Captures definitive traffic metadata and filter decisions for security compliance and debugging.
+  * **Rationale**: Captures traffic metadata and accept/reject decisions for security compliance and debugging.
 * **Diagnosing App Logic Errors (HTTP 500)**:
   * **Layer**: Application logs and system metrics.
   * **Rationale**: The network successfully cabled and permitted the packets; the application simply returned a bad response.
@@ -222,11 +226,15 @@ By separating routing from packet permissions, AWS networking transforms from a 
 
 ## What's Next
 
-We have now designed a secure private network topology and locked down its traffic lanes using precise packet filters. However, as your cloud platform grows, your VPC cannot remain a isolated island. 
+We have now designed a secure private network topology and locked down its traffic lanes using precise packet filters. However, as your cloud platform grows, your VPC cannot remain an isolated island.
 
 Your workloads will eventually need to reach external regional AWS APIs, share databases with sibling VPCs in other accounts, or connect directly to legacy mainframes in your physical offices.
 
 In the next article, we will move beyond the boundaries of a single VPC. We will examine **AWS PrivateLink** interface endpoints, direct **VPC Peering** links, regional **Transit Gateway** routing hubs, and hybrid **VPN/Direct Connect** tunnels. We will also learn how to configure Route 53 Resolver to resolve private DNS names across hybrid networks.
+
+![Packet control summary infographic showing conversation maps, security groups, security group references, NACL boundaries, ephemeral ports, and flow logs](/content-assets/articles/article-cloud-providers-aws-networking-connectivity-security-groups-vs-nacls/packet-control-summary.png)
+
+*Use this as the packet-control checklist: map each conversation first, protect resources with security groups, prefer security group references over fixed IPs, use NACLs for subnet guardrails, remember ephemeral return ports, and confirm evidence with flow logs.*
 
 ---
 
@@ -240,5 +248,5 @@ In the next article, we will move beyond the boundaries of a single VPC. We will
 - [Infrastructure security in Amazon VPC](https://docs.aws.amazon.com/vpc/latest/userguide/infrastructure-security.html) - Details AWS best practices for layering stateful security groups and stateless subnet NACLs.
 - [Logging IP traffic using VPC Flow Logs](https://docs.aws.amazon.com/vpc/latest/userguide/flow-logs.html) - Focuses on flow logging scopes, CloudWatch/S3 destinations, and packet filtering audits.
 - [Flow log records](https://docs.aws.amazon.com/vpc/latest/userguide/flow-log-records.html) - Details flow log record structures, default and custom fields, and protocol codes.
-- [Flow log record examples](https://docs.aws.gravity.com/vpc/latest/userguide/flow-logs-records-examples.html) - Provides realistic walk-throughs of accepted and rejected flow logs.
+- [Flow log record examples](https://docs.aws.amazon.com/vpc/latest/userguide/flow-logs-records-examples.html) - Provides realistic walk-throughs of accepted and rejected flow logs.
 - [Flow log limitations](https://docs.aws.amazon.com/vpc/latest/userguide/flow-logs-limitations.html) - Outlines traffic types that are not captured, including instance metadata and DNS traffic.

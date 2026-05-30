@@ -1,275 +1,239 @@
 ---
-title: "Outputs"
-description: "Expose selected Terraform results for humans, automation, and parent modules without turning every resource attribute into a public contract."
-overview: "Outputs are the values a module intentionally sends outward after Terraform plans or applies. This article uses the orders AWS environment to expose VPC, security group, and instance details with enough context for review and reuse."
-tags: ["terraform", "opentofu", "outputs", "modules", "aws"]
-order: 5
-id: article-infrastructure-as-code-terraform-outputs
+title: "Output Values"
+description: "Expose important information from your Terraform configuration so operators and other modules can use it."
+overview: "Outputs are how a Terraform configuration or module surfaces results — IP addresses, DNS names, resource IDs, ARNs — to the outside world. This article explains how to declare outputs, how to reference them between modules, how to protect sensitive outputs, and how to query outputs after an apply."
+tags: ["outputs", "output values", "modules", "terraform", "hcl"]
+order: 3
+id: article-iac-terraform-values-outputs
 ---
 
 ## Table of Contents
 
-1. [What Should Leave the Module](#what-should-leave-the-module)
-2. [Outputs](#outputs)
-3. [Root Module Outputs](#root-module-outputs)
-4. [Child Module Outputs](#child-module-outputs)
-5. [Output Shape](#output-shape)
-6. [Reading Outputs](#reading-outputs)
-7. [Common First Mistakes](#common-first-mistakes)
+1. [What Outputs Are For](#what-outputs-are-for)
+2. [Declaring an Output](#declaring-an-output)
+3. [Viewing Outputs After an Apply](#viewing-outputs-after-an-apply)
+4. [Sensitive Outputs](#sensitive-outputs)
+5. [Using Module Outputs in the Root Configuration](#using-module-outputs-in-the-root-configuration)
+6. [Passing Outputs Between Root Configurations](#passing-outputs-between-root-configurations)
+7. [What to Output and What to Leave Private](#what-to-output-and-what-to-leave-private)
 8. [Putting It All Together](#putting-it-all-together)
 9. [What's Next](#whats-next)
 
-## What Should Leave the Module
+## What Outputs Are For
 
-The orders Terraform module can now receive values and derive internal names and tags. After apply, it creates real AWS objects: a VPC, a security group, and an EC2 instance.
+When `terraform apply` finishes, the infrastructure exists — but you often need specific pieces of information about what was just created. What is the load balancer's DNS name so you can create a CNAME record? What is the RDS database's connection endpoint? What is the auto-scaling group's name so you can configure a monitoring alert?
 
-That creates a different question: which results should other people or tools be allowed to depend on?
+![Output values expose selected facts across the boundary between resources, callers, and automation.](/content-assets/articles/article-iac-terraform-values-outputs/output-boundary.png)
 
-The answer is usually smaller than the full resource. A deployment script may need the instance ID. A parent module may need the VPC ID. A runbook may need the security group ID when checking network rules. Nobody needs every computed attribute from every resource printed after every apply.
+Without outputs, you would have to log into the AWS console and hunt for these values manually after every apply. Outputs let you declare exactly which values are important and have Terraform surface them automatically at the end of every apply.
 
-Outputs make that boundary explicit. They say which values leave the module as part of its interface.
+Outputs also serve a second purpose: they are the mechanism by which one Terraform module passes information to another. A network module that creates a VPC and subnets needs to hand the VPC ID and subnet IDs to a database module that places an RDS instance inside that network. Outputs are how that handoff happens. The network module declares the VPC ID as an output. The root configuration references `module.network.vpc_id` and passes it as an input to the database module.
 
-## Outputs
+Without outputs, modules would be isolated — each one creating resources but unable to share the results of those resources with anything else. Outputs are what turn a collection of independent modules into a connected system.
 
-An output block gives a name to a value that Terraform should expose from the module.
+## Declaring an Output
+
+Outputs are declared with `output` blocks, typically in a file called `outputs.tf`:
 
 ```hcl
+output "load_balancer_dns" {
+  value       = aws_lb.main.dns_name
+  description = "The DNS name of the application load balancer. Point your domain CNAME record here."
+}
+
 output "vpc_id" {
-  description = "ID of the VPC created for this environment."
   value       = aws_vpc.main.id
+  description = "The ID of the VPC. Pass this to modules that need to place resources inside the network."
+}
+
+output "db_endpoint" {
+  value       = aws_db_instance.main.endpoint
+  sensitive   = true
+  description = "The connection endpoint for the RDS database in host:port format."
 }
 ```
 
-The name `vpc_id` is how callers and humans refer to the output. The description explains what the value is for. The `value` expression can refer to resources, variables, locals, data sources, and other expressions available inside the module.
+Each `output` block has a label (the output name) and a `value` attribute containing any valid Terraform expression. The expression most commonly references an attribute of a resource created in the same configuration, but it can also be a computed value — a string interpolation, a function call, or a conditional expression.
 
-For the orders environment, useful outputs might be:
+The `description` attribute explains what the output represents and how a caller should use it. Like variable descriptions, this is documentation that saves everyone time.
 
-```hcl
-output "vpc_id" {
-  description = "ID of the VPC created for this environment."
-  value       = aws_vpc.main.id
-}
+The label you give an output becomes the key you use to reference it from outside the configuration. If you name an output `vpc_id`, callers reference it as `module.<module_name>.vpc_id` (when inside a module) or view it with `terraform output vpc_id` (when it is a root-level output).
 
-output "web_security_group_id" {
-  description = "ID of the security group attached to the web instance."
-  value       = aws_security_group.web.id
-}
+## Viewing Outputs After an Apply
 
-output "web_instance_id" {
-  description = "ID of the web EC2 instance."
-  value       = aws_instance.web.id
-}
+Root-level outputs — outputs declared in the root configuration rather than inside a child module — are printed automatically at the end of a successful `terraform apply`:
 
-output "web_instance_private_ip" {
-  description = "Private IPv4 address assigned to the web instance."
-  value       = aws_instance.web.private_ip
-}
 ```
-
-These outputs are chosen because someone outside the resource block has a realistic reason to use them. The VPC ID can connect later networking resources. The security group ID can be passed to another module or inspected in AWS. The instance ID and private IP can help operations find the running server.
-
-## Root Module Outputs
-
-When outputs live in the root module, Terraform shows them after apply and makes them available through the `terraform output` command.
-
-A simple apply result might end like this:
-
-```text
-Apply complete! Resources: 4 added, 0 changed, 0 destroyed.
+Apply complete! Resources: 3 added, 0 changed, 0 destroyed.
 
 Outputs:
 
-vpc_id = "vpc-0abc1234def567890"
-web_instance_id = "i-0123456789abcdef0"
-web_instance_private_ip = "10.0.12.45"
-web_security_group_id = "sg-0789abcd1234ef567"
+load_balancer_dns = "my-app-1234567890.us-east-1.elb.amazonaws.com"
+vpc_id = "vpc-0abc123def456789"
+db_endpoint = <sensitive>
 ```
 
-The output is not a separate AWS object. It is Terraform showing selected values from state. If the instance is replaced later, the output value can change because it points at the current resource attribute.
+Sensitive outputs show `<sensitive>` instead of their value in this summary.
 
-This is useful for humans, but it also creates dependencies. If a runbook, script, dashboard, or another Terraform module starts using `web_instance_private_ip`, that output becomes part of the module contract. Rename it or remove it carefully.
-
-## Child Module Outputs
-
-Outputs become more important when modules are reused.
-
-Imagine the VPC resources move into a child module:
-
-```hcl
-module "network" {
-  source = "../modules/network"
-
-  environment = var.environment
-  vpc_cidr    = var.vpc_cidr
-  tags        = local.common_tags
-}
-```
-
-The child module can expose the VPC ID:
-
-```hcl
-output "vpc_id" {
-  description = "ID of the VPC created by this module."
-  value       = aws_vpc.main.id
-}
-```
-
-The parent module can then use that output:
-
-```hcl
-resource "aws_security_group" "web" {
-  name        = "${local.name_prefix}-web"
-  description = "Web ingress for the orders service."
-  vpc_id      = module.network.vpc_id
-}
-```
-
-The reference `module.network.vpc_id` means the network module intentionally exposed `vpc_id`. The parent does not need to know the child module's internal resource name. The child can keep `aws_vpc.main` as an implementation detail while still giving the parent the VPC ID it needs.
-
-For a root module to show a child module output through `terraform output`, the root module must define its own output:
-
-```hcl
-output "vpc_id" {
-  description = "ID of the orders environment VPC."
-  value       = module.network.vpc_id
-}
-```
-
-That extra step is useful. It lets the root module decide which child outputs are part of the environment's public surface.
-
-## Output Shape
-
-Outputs can return simple strings, numbers, booleans, lists, maps, or objects. The shape should match how the value will be used.
-
-Several separate outputs are easy to read in the CLI:
-
-```hcl
-output "vpc_id" {
-  description = "ID of the VPC created for this environment."
-  value       = aws_vpc.main.id
-}
-
-output "web_security_group_id" {
-  description = "ID of the security group attached to the web instance."
-  value       = aws_security_group.web.id
-}
-```
-
-An object output can make related values travel together:
-
-```hcl
-output "web_instance" {
-  description = "Selected identifiers and addresses for the web instance."
-
-  value = {
-    id         = aws_instance.web.id
-    private_ip = aws_instance.web.private_ip
-    name       = "${local.name_prefix}-web"
-  }
-}
-```
-
-The object form is helpful when automation wants one structured payload. The separate form is helpful when humans use `terraform output` interactively. Choose the shape based on the consumer, not on how many attributes are available.
-
-Avoid outputting whole resources:
-
-```hcl
-output "web_instance" {
-  value = aws_instance.web
-}
-```
-
-That makes the module leak provider-specific implementation details. It also exposes many values the module never meant to promise. A focused output is easier to keep stable.
-
-## Reading Outputs
-
-The `terraform output` command reads output values from state.
-
-Listing all root outputs is useful after apply:
+After an apply, you can query outputs at any time with the `terraform output` command:
 
 ```bash
+# Show all outputs
 terraform output
-```
 
-Reading one value by name is useful in scripts:
+# Show a specific output
+terraform output load_balancer_dns
 
-```bash
-terraform output -raw web_instance_id
-```
+# Show a sensitive string output as raw text (reveals the value)
+terraform output -raw db_endpoint
 
-Reading JSON is useful when automation needs structured data:
+# Output as raw text (no quotes, useful for shell scripting)
+terraform output -raw load_balancer_dns
 
-```bash
+# Output as JSON (useful for scripts that parse the results)
 terraform output -json
 ```
 
-These commands do not ask AWS for fresh values. They read Terraform state. If state is stale, outputs are stale too. A normal plan refreshes provider data before showing changes, but the output command itself is a state reader.
+The `terraform output` command reads from the state file. It does not contact cloud APIs by itself. It shows the values stored during the last apply or state refresh. If someone made a change outside of Terraform that modified one of these values, such as a load balancer being replaced with a different DNS name, the output can remain stale until you run a plan or apply that refreshes state.
 
-That behavior matters during debugging. If the EC2 instance was changed outside Terraform, an old output can mislead you until Terraform refreshes state during a plan or apply.
+The `-raw` flag is particularly useful in automation scripts. It strips the surrounding quotes and newline from string outputs, making it easy to use a Terraform output directly in a shell variable:
 
-## Common First Mistakes
+```bash
+LB_DNS=$(terraform output -raw load_balancer_dns)
+echo "Configuring DNS CNAME record pointing to ${LB_DNS}"
+```
 
-**Outputting every attribute.** Outputs should expose values with a real outside consumer. A module that prints everything is harder to change safely.
+## Sensitive Outputs
 
-**Using outputs for internal wiring.** Resources inside the same module can reference each other directly. Outputs are for values leaving the module.
+Mark an output as sensitive when its value should not appear in terminal output or CI/CD logs:
 
-**Forgetting root module re-exports.** A child module output is available to the parent as `module.<name>.<output>`. It appears in `terraform output` only if the root module defines an output for it.
+![Sensitive outputs redact display values while still requiring careful handling because state can store the real value.](/content-assets/articles/article-iac-terraform-values-outputs/sensitive-output-flow.png)
 
-**Changing output names casually.** Scripts and parent modules may depend on output names. Rename outputs with the same care as variable names.
+```hcl
+output "db_password" {
+  value     = random_password.db.result
+  sensitive = true
+}
 
-**Printing secrets as ordinary outputs.** A password output should be rare and marked sensitive when it is truly needed. The next article explains why that still does not make it safe storage.
+output "db_endpoint" {
+  value     = aws_db_instance.main.endpoint
+  sensitive = true
+}
+```
+
+In `terraform apply` output, in the plain `terraform output` listing, and in any plan or apply logs, sensitive outputs appear as `<sensitive>`. The actual value is hidden.
+
+However, the value is still accessible. Running `terraform output -raw db_endpoint` for a sensitive string output reveals the value, and the `-json` flag also includes sensitive values for tools that parse output. The sensitive marking is a guardrail against accidental display, not a hard encryption wall.
+
+When a module output is sensitive, any configuration that references it inherits the sensitivity. If `module.database.db_endpoint` is a sensitive output, using it in another resource's attribute makes that attribute sensitive too — Terraform will hide it in plan output even without you explicitly marking anything in the calling configuration.
+
+## Using Module Outputs in the Root Configuration
+
+The most important use of outputs is passing information between modules in the root configuration. When the root configuration chains multiple modules, each module's outputs become the inputs for downstream modules.
+
+Here is a complete example that wires a network module, a database module, and a compute module together using outputs:
+
+```hcl
+module "network" {
+  source = "./modules/network"
+
+  region          = var.region
+  cidr_block      = "10.0.0.0/16"
+  web_subnet_cidr = "10.0.1.0/24"
+  db_subnet_cidr  = "10.0.2.0/24"
+}
+
+module "database" {
+  source = "./modules/database"
+
+  vpc_id    = module.network.vpc_id
+  subnet_id = module.network.db_subnet_id
+  password  = var.db_password
+}
+
+module "compute" {
+  source = "./modules/compute"
+
+  vpc_id      = module.network.vpc_id
+  subnet_id   = module.network.web_subnet_id
+  db_endpoint = module.database.endpoint
+}
+
+output "app_load_balancer_dns" {
+  value       = module.compute.load_balancer_dns
+  description = "Point your domain CNAME record here."
+}
+```
+
+When Terraform reads these module blocks, it sees that `module.database` references `module.network.vpc_id` and `module.network.db_subnet_id`. This creates an implicit dependency: the network module must complete before the database module can be planned. Terraform's dependency engine handles the ordering automatically — you do not write any explicit sequencing.
+
+The final `output` block re-exports the compute module's load balancer DNS name as a root-level output. Child module outputs are not shown to the user at the end of apply unless they are re-exported from the root module this way. Only root-level outputs appear in the apply summary and in `terraform output`.
+
+## Passing Outputs Between Root Configurations
+
+When your infrastructure is split across multiple root configurations — separate state files for the network layer, the database layer, and the application layer — you need a way to pass information from one root configuration to another without hardcoding values.
+
+The most direct way to do this is to look up the other configuration's state using the `terraform_remote_state` data source:
+
+```hcl
+data "terraform_remote_state" "network" {
+  backend = "s3"
+  config = {
+    bucket = "my-company-terraform-state"
+    key    = "production/network/terraform.tfstate"
+    region = "us-east-1"
+  }
+}
+
+resource "aws_db_subnet_group" "main" {
+  name       = "main-db-subnet-group"
+  subnet_ids = data.terraform_remote_state.network.outputs.db_subnet_ids
+}
+```
+
+`data.terraform_remote_state.network.outputs` gives you access to every output declared in the network configuration's root module. No API calls to the cloud provider are needed because Terraform reads the remote state file directly from S3.
+
+This approach tightly couples the two configurations: the database configuration must know the exact S3 bucket and key where the network configuration stores its state. It also gives the caller access to the state snapshot, so state backend permissions need to be treated as sensitive. Some teams prefer to decouple this by publishing values somewhere narrower, such as a parameter store, DNS record, or service discovery registry, or by querying the actual cloud resource with a provider data source like `data "aws_vpc" "main"` using tags. Both approaches work; the right choice depends on how tightly you want to couple the configurations and how much state access you are willing to grant.
+
+## What to Output and What to Leave Private
+
+Not everything a module creates needs to be an output. The goal is to expose enough for callers to do their job, without leaking internal implementation details.
+
+The right outputs to expose are:
+
+Resource identifiers that callers need to attach to other resources. A VPC ID, a subnet ID, a security group ID, an IAM role ARN — anything that a downstream resource or module needs to reference.
+
+Computed information that the caller cannot predict before the apply. A load balancer's DNS name assigned by AWS. A database's connection endpoint. A generated password. An auto-assigned IP address.
+
+Diagnostic information that operators need to verify the deployment worked correctly. The public IP of a bastion host. The URL of an application endpoint. The S3 bucket name where logs are stored.
+
+Outputs to avoid:
+
+Internal implementation details that no caller needs. The ARN of an internally-used IAM role. The ID of a private security group that is never referenced outside the module. The name of a CloudWatch log group that callers do not interact with.
+
+Duplicate outputs that mirror information already available elsewhere. If the caller already has the subnet ID (they passed it in as a variable), there is no reason to output it back.
+
+Keeping outputs minimal makes the module's interface stable. When you later refactor the module's internals — splitting a resource into two, or replacing one resource type with another — callers are unaffected as long as the outputs remain the same.
 
 ## Putting It All Together
 
-The orders module now has values moving in both directions.
+Outputs do two jobs. For operators, they surface the key results of an infrastructure deployment — the addresses, names, and IDs that are needed to configure DNS, set up monitoring, or connect applications. For modules, they are the mechanism that passes computed values between modules so each piece of the infrastructure can reference the pieces it depends on.
 
-Inputs bring environment choices in:
+The pattern is consistent: the network module declares its VPC ID and subnet IDs as outputs. The database module accepts them as inputs. The compute module accepts both network and database information as inputs. The root configuration assembles them, wiring outputs to inputs through module references like `module.network.vpc_id`. Terraform reads these references, infers the dependency order, and applies everything in the correct sequence.
 
-```hcl
-variable "vpc_cidr" {
-  description = "IPv4 CIDR block for this environment VPC."
-  type        = string
-}
-```
-
-Locals name internal decisions:
-
-```hcl
-locals {
-  name_prefix = "orders-${var.environment}"
-}
-```
-
-Outputs send selected results out:
-
-```hcl
-output "vpc_id" {
-  description = "ID of the VPC created for this environment."
-  value       = aws_vpc.main.id
-}
-
-output "web_security_group_id" {
-  description = "ID of the security group attached to the web instance."
-  value       = aws_security_group.web.id
-}
-
-output "web_instance_id" {
-  description = "ID of the web EC2 instance."
-  value       = aws_instance.web.id
-}
-```
-
-That gives the module a clear interface. A caller can provide the VPC CIDR and instance type. The module can derive names and tags. After apply, the module can expose the VPC ID, security group ID, and instance ID without exposing every internal detail.
+Root-level outputs appear in the apply summary and are queryable with `terraform output`. Sensitive outputs are hidden from casual display but accessible when queried explicitly or consumed by other Terraform configurations.
 
 ## What's Next
 
-The final article in this values submodule covers sensitive values. Variables and outputs can hide values from normal display, but Terraform state and automation logs still need careful handling, especially for database passwords and other secrets.
+You now have the full values layer: input variables bring external information in, locals compute intermediate derived values, and outputs send information back out. The next article covers expressions and functions — the full set of built-in tools for computing, transforming, and querying values inside Terraform configurations.
+
+
+![Output values summary: expose useful facts, hide internals, and mark sensitive values deliberately.](/content-assets/articles/article-iac-terraform-values-outputs/outputs-summary.png)
 
 ---
 
 **References**
 
-- [Use outputs to expose Terraform data](https://developer.hashicorp.com/terraform/language/values/outputs) - Terraform guide to output values and how parent modules consume child module outputs.
-- [Output block reference](https://developer.hashicorp.com/terraform/language/block/output) - Language reference for output block arguments, including descriptions, value expressions, sensitivity, and validation.
-- [terraform output command reference](https://developer.hashicorp.com/terraform/cli/commands/output) - CLI reference for reading root module output values from state.
-- [Manage values in modules](https://developer.hashicorp.com/terraform/language/values) - Terraform overview of how inputs, locals, and outputs define module boundaries.
+- [Output Values (HashiCorp Documentation)](https://developer.hashicorp.com/terraform/language/values/outputs) — Complete reference for output blocks, sensitive outputs, and how outputs integrate with module chaining.
+- [Command: output (HashiCorp Documentation)](https://developer.hashicorp.com/terraform/cli/commands/output) — Reference for the `terraform output` command, including `-raw` and `-json` flags.
+- [The terraform_remote_state Data Source (HashiCorp Documentation)](https://developer.hashicorp.com/terraform/language/state/remote-state-data) — Reference for reading another configuration's outputs via remote state.

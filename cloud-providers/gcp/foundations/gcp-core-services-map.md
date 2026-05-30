@@ -13,231 +13,145 @@ aliases:
 
 ## Table of Contents
 
-1. [The Problem](#the-problem)
-2. [Job-Based Map](#job-based-map)
-3. [Orders API](#orders-api)
-4. [Traffic](#traffic)
-5. [Compute](#compute)
-6. [State](#state)
-7. [Access](#access)
-8. [Signals](#signals)
-9. [Deployment](#deployment)
-10. [Cost And Recovery](#cost-and-recovery)
-11. [Debugging With The Map](#debugging-with-the-map)
-12. [Putting It All Together](#putting-it-all-together)
+1. [Job-Centric Mapping over Service Inventories](#job-centric-mapping-over-service-inventories)
+2. [Compute Choices and Responsibility](#compute-choices-and-responsibility)
+3. [Persistence and State: Relational vs. Object](#persistence-and-state-relational-vs-object)
+4. [Service Identity and Metadata Tokens](#service-identity-and-metadata-tokens)
+5. [Observability Signals and Release Operations](#observability-signals-and-release-operations)
+6. [Tracing a Single Request](#tracing-a-single-request)
 
-## The Problem
+## Job-Centric Mapping over Service Inventories
 
-The team can now place a GCP workload and identify exact resources. The last foundation step is service choice.
+Looking at a public cloud provider's product catalog for the first time can be an overwhelming experience. If you want to deploy a simple web application to Google Cloud, you are immediately confronted with a long, confusing list of brand names: Cloud Run, Compute Engine, Google Kubernetes Engine, Cloud SQL, Cloud Storage, Firestore, BigQuery, and Secret Manager. The natural temptation is to try to memorize what each product does, or attempt a mechanical, product-by-product translation from another cloud provider you already know.
 
-This is where the product list gets noisy. A beginner opens Google Cloud and sees Cloud Run, Compute Engine, GKE, Cloud Functions, Cloud SQL, Cloud Storage, Firestore, BigQuery, Cloud Load Balancing, Cloud DNS, Secret Manager, IAM, Cloud Logging, Cloud Monitoring, Artifact Registry, Cloud Build, Billing, and more.
+![Start from the application job, then choose the service family that owns that job.](/content-assets/articles/article-cloud-providers-gcp-foundations-gcp-core-services-map/service-jobs-map.png)
 
-The mistake is to ask for direct replacements too early:
+*The service map is easier to use when each product owns a clear application job.*
 
-```text
-What is the GCP ECS?
-What is the GCP S3?
-What is the GCP CloudWatch?
+Rather than trying to memorize arbitrary brand names, the key to mastering cloud architecture is to focus on the actual engineering job your application needs help with. In the physical world, your software requires processing power, a persistent place to save files, a structured database to record transactions, a secure safe to hold passwords, and a way for users to connect. Once you group cloud services around these core responsibilities, the product catalog transforms from a chaotic inventory into a logical map:
+
+| App Job | AWS Equivalent | Azure Equivalent | GCP Primary Service |
+| :--- | :--- | :--- | :--- |
+| HTTPS Traffic Entry | Application Load Balancer | Azure Front Door / Application Gateway | Cloud Load Balancing |
+| Containerized Runtime | Amazon ECS / AWS Fargate | Azure Container Apps | Cloud Run |
+| Virtual Machine Infrastructure | Amazon EC2 | Azure Virtual Machines | Compute Engine |
+| Relational Storage | Amazon RDS | Azure SQL Database | Cloud SQL |
+| Object Storage | Amazon S3 | Azure Blob Storage | Cloud Storage |
+| Configuration Secrets | AWS Secrets Manager | Azure Key Vault | Secret Manager |
+
+By framing your architecture around these functional jobs before selecting services, you ensure that every resource you launch has a defined role in your system's design.
+
+## Compute Choices and Responsibility
+
+Compute is the processing heart of your application. GCP offers three primary models for running your backend code:
+
+*   **Virtual Machines (Compute Engine)**: Provides raw, virtualization-level control. You configure the virtual CPU cores, memory limits, and operating system kernels. This is a fit when you must manage custom OS kernels, run legacy stateful software, or require direct hardware access.
+*   **Kubernetes (Google Kubernetes Engine / GKE)**: Houses complex, microservice-based clusters. GKE gives you deep control over container orchestrations, service meshes, and shared cluster networking, but introduces significant administrative and configuration complexity.
+*   **Serverless Containers (Cloud Run)**: Runs containerized web applications and APIs without managing underlying host systems or scaling parameters. It automatically scales your instance pools up to handle spikes and down to zero when idle.
+
+The practical difference between these services is responsibility. Compute Engine gives you the operating system, so you own patching, process supervision, startup scripts, disk layout, and many scaling choices. GKE gives you Kubernetes, so you own the workload objects and cluster design while Google manages the control plane. Cloud Run gives you a service or job boundary, so you supply source code or a container image and Google manages placement, request routing, and autoscaling within the documented service limits.
+
+For beginners, the best first question is not which product is most powerful. Ask what part of the runtime your team truly needs to control. A normal HTTPS API that can listen on a port, read environment variables, and write logs to standard output usually fits Cloud Run. A legacy daemon that expects direct OS access or custom kernel settings usually fits Compute Engine. A platform that needs Kubernetes APIs, sidecars, admission policies, or shared cluster networking usually fits GKE.
+
+## Persistence and State: Relational vs. Object
+
+Once your compute layer is running, you must establish secure zones for your application's state. GCP divides persistence services by data shape and access pattern:
+
+*   **Relational Records (Cloud SQL)**: Manages transactional database engines like PostgreSQL, MySQL, and SQL Server. Cloud SQL takes over automated backups, cross-zone high availability replication, and kernel patching, while exposing standard SQL sockets to your application.
+*   **Object Storage (Cloud Storage)**: Stores unstructured binary files (such as customer receipts, images, or log archives) within regional Buckets. Data is accessed via HTTPS API calls rather than file system paths, enabling near-infinite horizontal scale.
+*   **Document Databases (Firestore)**: Persists unstructured, JSON-style document schemas. It is designed for high-concurrency client applications that require simple key-value or document searches without relational joins.
+
+A critical trade-off in cloud persistence is the split between local disk I/O and network-attached storage. In Compute Engine, virtual machines attach to Persistent Disks. Under the hood, these disks are not local hardware drives; they are network-attached storage blocks cabled across Google's datacenter routers.
+
+This means disk write performance is affected by the machine type, disk type, disk size, and service limits instead of a single local drive. Cloud SQL and Compute Engine expose different storage controls, so avoid copying an AWS-style “provisioned IOPS” mental model into every GCP service. The beginner rule is simpler: keep transactional data in a managed database when you want Google to own backups, patching, and high availability, and use Persistent Disk when a VM needs durable block storage attached to its operating system.
+
+## Service Identity and Metadata Tokens
+
+Securing application resources requires you to eliminate static credentials. Rather than hardcoding private keys or access tokens inside application configuration files, GCP runtimes can use an attached service account. Google client libraries usually discover this identity through Application Default Credentials and request short-lived tokens when the app calls Google APIs.
+
+![The runtime asks local metadata for a short-lived token instead of storing a static key.](/content-assets/articles/article-cloud-providers-gcp-foundations-gcp-core-services-map/imds-token-exchange.png)
+
+*The credential path is local first, then globally validated.*
+
+Many runtimes expose a metadata server that the workload can query for information and credentials tied to its attached service account. Compute Engine documents this metadata server at `metadata.google.internal`, and Cloud Run also provides metadata access for service identity. The important contract is that the app receives short-lived credentials for the service account without storing a long-lived key file.
+
+When your application startup script or SDK client needs to access a secret in Secret Manager or read an object from Cloud Storage, it negotiates access through a secure local handshake:
+
+```mermaid
+flowchart TD
+    subgraph ContainerSandbox["1. Compute Instance (App Container)"]
+        SDKClient["App SDK Client"]
+    end
+    subgraph RuntimeLayer["2. Managed Runtime Metadata"]
+        LocalIMDS["Local Metadata Server<br/>(169.254.169.254)"]
+    end
+    subgraph ControlPlane["3. Google Identity Services"]
+        TokenService["Token Service"]
+    end
+
+    SDKClient -->|1. HTTP GET /token| LocalIMDS
+    LocalIMDS -->|2. Check attached service account| TokenService
+    TokenService -->|3. Issue short-lived OAuth2 token| LocalIMDS
+    LocalIMDS -->|4. Return Bearer Token| SDKClient
 ```
 
-Those questions can orient you, but they are too narrow. The better beginner question is:
+1.  **Local Query**: The application or Google client library requests a token for the attached service account.
+2.  **Runtime Check**: The managed runtime knows which service account is attached to the workload.
+3.  **Token Generation**: Google returns a short-lived OAuth2 token for that service account.
+4.  **Credential Return**: The application uses the token when calling Google APIs such as Secret Manager or Cloud Storage.
 
-> Which GCP service family should I look at first for this app need?
+## Observability Signals and Release Operations
 
-This article builds that map around `devpolaris-orders-api`. Each section starts with the app job, then names the GCP services that usually belong in the first conversation.
+To operate a production system, you must ensure that release flows and operational signals are cabled directly into your infrastructure map.
 
-## Job-Based Map
+*   **Artifact Registry**: Serves as your central repository for container images and language packages, acting as the bridge between build tools and compute environments.
+*   **Cloud Logging**: Aggregates structured logs emitted to standard output (`stdout`) and standard error (`stderr`) by your container engines. Logging parses JSON logs automatically to extract severity levels, making error tracing highly searchable.
+*   **Cloud Monitoring**: Collects system metrics (such as CPU consumption, memory allocation, request latency, and container instance scaling counts) to feed alerting dashboards.
 
-Read the map from left to right. The job comes first. The service family comes second. The exact service name comes last.
+By ensuring that your deployment pipeline builds container images directly into Artifact Registry and deploys them as immutable Cloud Run revisions, you establish a clear audit trail. If a release degrades performance, you can quickly correlate monitoring metrics with log traces to identify the exact change that triggered the failure.
 
-| Guiding question | GCP service family | GCP services to recognize |
-| --- | --- | --- |
-| What handles public traffic? | Traffic entry | Cloud Load Balancing, Cloud DNS, certificates, Cloud Run service URL, API Gateway. |
-| Where does code run? | Compute | Cloud Run, Compute Engine, GKE, Cloud Functions. |
-| Where does state live? | Storage and databases | Cloud SQL, Cloud Storage, Firestore, BigQuery, Persistent Disk. |
-| Who grants access? | Identity and secrets | IAM, service accounts, Secret Manager. |
-| Where do logs, metrics, traces, and alerts live? | Observability | Cloud Logging, Cloud Monitoring, Cloud Trace, Error Reporting. |
-| Which services help deployment? | Release operations | Artifact Registry, Cloud Build, Cloud Deploy, CI/CD tools. |
-| Which services help cost and recovery? | Cost and resilience | Cloud Billing, budgets, labels, backups, redundancy, service-specific recovery. |
+## Tracing a Single Request
 
-An AWS or Azure bridge can sit beside this, but it should not drive the design alone.
+To verify your mental model, trace the physical flow of a single user request traversing your core GCP services:
 
-| If AWS or Azure made you think of... | Ask this GCP job question |
-| --- | --- |
-| ALB, Route 53, Front Door, Application Gateway | What owns DNS, TLS, routing, and backend health? |
-| ECS, Lambda, App Service, Container Apps | What runtime shape does this code need? |
-| S3, Blob Storage, RDS, Azure SQL | What kind of state is this: object, relational, document, disk, or analytic? |
-| IAM roles, managed identities, Key Vault | Which principal needs which permission or secret? |
-| CloudWatch, Azure Monitor | Where will logs, metrics, traces, and alerts live? |
-
-The comparison is a bridge. The GCP mechanism still has to be checked in GCP terms.
-
-## Orders API
-
-The running example is `devpolaris-orders-api`. It receives checkout requests, writes order records, creates receipt files, reads a database secret, emits logs, and needs repeatable releases.
-
-Before choosing services, write the jobs in app language:
-
-```text
-orders API needs:
-  public traffic to reach the app
-  backend code to keep running
-  order records to persist
-  receipt files to persist
-  private config to stay private
-  logs and metrics after the process exits
-  container images before runtime deploy
-  cost and recovery controls before the app grows
+```mermaid
+flowchart TD
+    subgraph TrafficEntry["1. Traffic Entry"]
+        ClientRequest["User HTTPS Request"] --> LoadBalancer["Cloud Load Balancing<br/>(TLS Termination)"]
+    end
+    subgraph ComputeSandbox["2. Compute Sandbox"]
+        LoadBalancer --> CloudRun["Cloud Run Instance"]
+        IMDS["Local Metadata Server<br/>(169.254.169.254)"] -->|OAuth2 Access Token| CloudRun
+    end
+    subgraph DataState["3. Persistent State"]
+        CloudRun -->|Configured SQL connection| CloudSQL["Cloud SQL Database"]
+        CloudRun -->|HTTPS API| Bucket["Cloud Storage Bucket"]
+    end
+    subgraph SignalPlane["4. Signal Plane"]
+        CloudRun -->|Structured JSON stdout| Logging["Cloud Logging"]
+    end
 ```
 
-That list is more useful than a product menu. It tells you what question each service is supposed to answer.
+1.  **Traffic Entry**: A user initiates a checkout request. The request is intercepted by Google Cloud Load Balancing, which terminates the TLS session at the global edge and routes the HTTP payload to the active region.
+2.  **Compute Execution**: The load balancer hands off the request to your Cloud Run service. Cloud Run runs the configured revision on managed infrastructure and applies the service's scaling settings.
+3.  **Identity Negotiation**: The application SDK queries the local Metadata Server (`169.254.169.254`) to fetch an OAuth2 Bearer token for its runtime Service Account.
+4.  **Database Transaction**: The app connects to Cloud SQL through a configured connection path and still uses the database authentication model you chose.
+5.  **File Persistence**: The app writes a backup copy of the transaction receipt to a regional Cloud Storage Bucket.
+6.  **Evidence Emission**: The container writes a structured JSON log entry to standard output. The local container host forwards this log to Cloud Logging, rendering it immediately searchable for troubleshooting.
 
-## Traffic
+By tracing this execution path, you verify that every service has a logical place in the request lifecycle, ensuring your system remains secure, observable, and highly resilient.
 
-Traffic is the path from users to healthy code. In GCP, the first traffic conversation depends on the runtime and exposure pattern.
+![A six-part summary infographic for core services summary covering Traffic entry, Compute host, Durable state, Runtime identity, Logs and metrics, Release evidence](/content-assets/articles/article-cloud-providers-gcp-foundations-gcp-core-services-map/core-services-summary.png)
 
-Cloud Run can expose an HTTPS service URL and can also sit behind external Application Load Balancers for custom routing, shared entry points, security controls, or more complex traffic management. Cloud DNS can own the public name. Certificates handle TLS. API Gateway can sit in front of APIs when the gateway job matters.
+*Use this summary as the quick mental checklist before designing or debugging the service.*
 
-For the first Orders API, traffic might be:
-
-```text
-api.devpolaris.example -> HTTPS entry -> Cloud Run service
-```
-
-The habit is to separate name, TLS, routing, and runtime. A DNS record can be correct while the Cloud Run service is unhealthy. A Cloud Run service can be healthy while the load balancer target or certificate is wrong.
-
-## Compute
-
-Compute is where code runs. GCP gives several shapes:
-
-| Runtime | Good first mental model |
-| --- | --- |
-| Cloud Run | Run a containerized service without managing servers. |
-| Compute Engine | Run VM-shaped workloads when the machine shape matters. |
-| GKE | Run Kubernetes when the team needs Kubernetes control and ecosystem. |
-| Cloud Functions | Run event-triggered code for small function-shaped work. |
-
-Cloud Run is often the easiest first fit for a containerized backend. It creates revisions when you deploy, can route traffic between revisions, and scales service instances based on requests and configuration.
-
-The gotcha is that "serverless" still has operating choices. Concurrency, CPU, memory, minimum instances, service account, environment variables, VPC connectivity, and revision traffic all affect behavior and cost.
-
-## State
-
-State is everything the app must remember after a process exits.
-
-For the Orders API:
-
-| Data shape | GCP service to inspect first |
-| --- | --- |
-| Relational order records | Cloud SQL. |
-| Receipt files | Cloud Storage. |
-| Document-style app data | Firestore. |
-| Analytics tables | BigQuery. |
-| VM-attached disk state | Persistent Disk. |
-
-Cloud SQL is a managed relational database service for MySQL, PostgreSQL, and SQL Server. Cloud Storage stores objects inside buckets. BigQuery is for analytic tables, not a normal request-path application database. Firestore is document-oriented.
-
-Choose by data shape and access pattern, not by which service name feels familiar from another cloud. A receipt file and an order row are both "data," but they do not want the same service.
-
-## Access
-
-Access decides who or what can act. GCP IAM grants roles to principals on resources or hierarchy scopes. Service accounts are principals for machine workloads.
-
-The Orders API needs at least two access stories:
-
-| Caller | Access question |
-| --- | --- |
-| Deployment caller | Can it deploy Cloud Run, read images, and update the right service? |
-| Runtime service account | Can the app read its secret, connect to the database path, and write receipts? |
-
-Secret Manager belongs in this conversation because secrets are resources with versions and access policies. A Cloud Run service can have the right image and still fail because its runtime service account cannot access the secret or database path.
-
-Do not fix access problems by making the app broadly powerful. Match the role to the job and the scope to the resource.
-
-## Signals
-
-Signals are the evidence the team uses after the request leaves one terminal. GCP's first observability services are Cloud Logging, Cloud Monitoring, Cloud Trace, and Error Reporting.
-
-For the Orders API, useful signals might include:
-
-| Signal | What it answers |
-| --- | --- |
-| Request logs | Did checkout receive requests and what status did it return? |
-| Error logs | What failed and where? |
-| Metrics | Is latency, error rate, instance count, CPU, memory, or database pressure changing? |
-| Traces | Which downstream call made a request slow? |
-| Alerts | Who is notified when the service promise is at risk? |
-
-Signals should be tied to the service map. If checkout fails, the team should know whether to inspect Cloud Run logs, Cloud SQL metrics, load balancer health, Secret Manager access, or deployment revisions first.
-
-## Deployment
-
-Deployment is how code becomes runtime. For a containerized GCP app, the basic flow often includes:
-
-```text
-source -> build -> container image -> Artifact Registry -> Cloud Run revision -> traffic
-```
-
-Artifact Registry stores container images and other build artifacts. Cloud Build can build from source. Existing CI/CD tools can also build and deploy. Cloud Run creates an immutable revision when the service configuration changes.
-
-The key foundation idea is that deployment has resources too. The image repository, deployer identity, runtime service account, revision, and traffic split are all part of the service. When a release goes wrong, the team needs evidence across that path.
-
-## Cost And Recovery
-
-Cost and recovery are not later paperwork. They are part of the first service map.
-
-Cost starts with the project and billing account, then becomes visible through service usage and labels. A Cloud Run service with minimum instances behaves differently from one that scales to zero. Cloud Logging volume can grow with noisy logs. Cloud Storage cost grows with objects, versions, locations, and operations. Cloud SQL cost follows instance configuration, storage, backups, and availability choices.
-
-Recovery starts with the data and runtime promises. Cloud SQL backups, Cloud Storage object protection, multi-zone or regional choices, and tested restore steps all matter. A service can be "managed" and still lack a recovery plan that the team has practiced.
-
-The foundation habit is to ask:
-
-```text
-What does this service cost when idle?
-What does it cost when busy?
-What data must recover?
-What signal proves recovery worked?
-```
-
-## Debugging With The Map
-
-The map is a debugging tool.
-
-If customers cannot reach checkout, start with traffic and compute. If the app starts but cannot read the database URL, inspect access and secrets. If orders are accepted but missing from reports, inspect state and downstream jobs. If the bill jumps, group cost by project, service, label, and time. If a release changed behavior, inspect Artifact Registry image, Cloud Run revision, traffic split, runtime config, and logs.
-
-The service name matters after the job is clear.
-
-| Symptom | First map area |
-| --- | --- |
-| `404` or TLS error | Traffic. |
-| Container starts then exits | Compute and runtime config. |
-| Permission denied on secret | Access and Secret Manager. |
-| Slow checkout writes | State and Cloud SQL. |
-| Missing request evidence | Signals. |
-| Wrong version serving traffic | Deployment and Cloud Run revisions. |
-| Cost spike after release | Cost, labels, logs, scaling, and storage. |
-
-## Putting It All Together
-
-Return to the noisy product list.
-
-- Traffic became DNS, TLS, routing, and backend health.
-- Compute became Cloud Run, Compute Engine, GKE, or Cloud Functions depending on runtime shape.
-- State became Cloud SQL, Cloud Storage, Firestore, BigQuery, or disks depending on data shape.
-- Access became IAM principals, service accounts, roles, and Secret Manager.
-- Signals became logs, metrics, traces, alerts, and request evidence.
-- Deployment became image, repository, revision, and traffic.
-- Cost and recovery became part of the operating map from the start.
-
-The GCP product list is easier once every service has a job in the Orders API story. That closes the foundation module: the next GCP modules can now go deeper into identity, networking, compute, and data without re-teaching the map every time.
 
 ---
 
 **References**
 
-- [Cloud Run revisions](https://cloud.google.com/run/docs/managing/revisions)
-- [Cloud Run concurrency](https://cloud.google.com/run/docs/about-concurrency)
-- [Cloud SQL overview](https://docs.cloud.google.com/sql/docs/introduction)
-- [Cloud Storage overview](https://cloud.google.com/storage/docs/introduction)
-- [Artifact Registry overview](https://cloud.google.com/artifact-registry/docs/overview)
-- [Service accounts overview](https://cloud.google.com/iam/docs/service-account-overview)
+- [What Is Cloud Run](https://cloud.google.com/run/docs/overview/what-is-cloud-run) - Explains Cloud Run services, jobs, worker pools, and managed infrastructure.
+- [Cloud Run Execution Environments](https://cloud.google.com/run/docs/about-execution-environments) - Describes execution environment choices and sandbox differences.
+- [Cloud Run Service Identity](https://cloud.google.com/run/docs/securing/service-identity) - Explains attached service accounts for Cloud Run workloads.
+- [Application Default Credentials](https://cloud.google.com/docs/authentication/application-default-credentials) - Explains how client libraries find credentials in local and managed runtimes.
+- [Connect from Cloud Run to Cloud SQL](https://cloud.google.com/sql/docs/postgres/connect-run) - Describes supported Cloud SQL connection paths from Cloud Run.

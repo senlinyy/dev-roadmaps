@@ -12,171 +12,127 @@ aliases:
 
 ## Table of Contents
 
-1. [The Problem](#the-problem)
-2. [Public DNS](#public-dns)
-3. [HTTPS](#https)
-4. [Cloud Run URL](#cloud-run-url)
-5. [Load Balancing](#load-balancing)
-6. [Serverless Backends](#serverless-backends)
-7. [Health](#health)
-8. [Entry Evidence](#entry-evidence)
-9. [Putting It All Together](#putting-it-all-together)
-10. [What's Next](#whats-next)
+1. [Public Entry Points](#public-entry-points)
+2. [HTTPS and Google-Managed SSL Certificates](#https-and-google-managed-ssl-certificates)
+3. [Cloud Load Balancing and URL Maps](#cloud-load-balancing-and-url-maps)
+4. [Serverless Network Endpoint Groups](#serverless-network-endpoint-groups)
+5. [What the Load Balancer Can See](#what-the-load-balancer-can-see)
+6. [Putting It All Together](#putting-it-all-together)
+7. [What's Next](#whats-next)
 
-## The Problem
+## Public Entry Points
 
-The Orders API is deployed and healthy from the team's point of view. It responds when someone calls the generated service URL. Production users need a deliberate public entry path.
+When you deploy a backend application to the cloud, you cannot let public internet users connect directly to your private servers. Doing so would expose your database ports, make your system highly vulnerable to security scans, and cause your application to crash if thousands of users flooded the system at once. Instead, you need a secure, managed gateway at the front of your network. Think of this public entry point like the secure front lobby of a large corporate office building. Public visitors (user requests) are stopped at the lobby desk (load balancer), where the receptionist terminates their session, verifies their ID (verifies the HTTPS security certificate), and then guides them safely to the correct room (application container) using an internal guide (Serverless NEG).
 
-- Customers need a stable name such as `orders.devpolaris.com`, not a platform-generated URL.
-- The browser needs a valid HTTPS certificate for that name.
-- Traffic should reach the intended backend, not a stale test service.
-- When a backend revision is unhealthy, the entry point should stop sending traffic to it or make the failure visible.
+![A user reaches a service through DNS, edge TLS, a load balancer rule, and a backend target.](/content-assets/articles/article-cloud-providers-gcp-networking-connectivity-dns-custom-domains-https-load-balancing/public-entry-path.png)
 
-Public entry is the path from a user-facing name to the service that handles the request. In GCP, that path can be simple for Cloud Run, or it can include Cloud DNS, certificates, an external Application Load Balancer, serverless network endpoint groups, and health evidence. The design goal is not to collect products. It is to make the public request path stable, secure, and explainable.
+*Public entry is a chain of routing decisions, not just a service URL.*
 
-## Public DNS
+By decoupling traffic entry from runtime execution, your application remains completely private. When a user queries your website domain, their request is intercepted at the global edge of Google's network. The high-latency network connection is safely terminated, inspected for security compliance, and then routed over Google's private internal fiber cables directly to your private backend containers.
 
-DNS gives a name an answer. When a user types `orders.devpolaris.com`, DNS tells the client where to send the next connection. That answer might point directly at a service-supported domain mapping, or it might point at a load balancer frontend.
+This secure public ingress pipeline is built by coordinating several layers. First, a naming system (Cloud DNS) translates your custom domain name into a public IP address. Second, a certificate service (Google-managed SSL) handles encrypting and decrypting the traffic. Third, an external load balancer evaluates your request URLs to route them to the right backend. Finally, a logical adapter (Serverless Network Endpoint Group) connects this load balancer directly to your serverless container runtimes.
 
-DNS does not prove the backend is correct. It does not encrypt the request. It does not know whether the service is healthy. It only maps the name to the next destination. That narrow job is why DNS problems can look simple and still hurt production. A wrong record can send all users to the wrong entry point.
+:::expand[Under the Hood: GFE Edge Nodes and Anycast BGP Routing]{kind="design"}
+To understand how GCP handles public requests, you must understand the **Google Edge Front End (GFE)** network architecture.
 
-For public services, review DNS with three questions:
+In traditional cloud routing, when you provision a public load balancer, it is assigned a regional IP address. A user in Tokyo calling a server in Virginia must initiate a TCP handshake that travels across the public internet, traversing multiple third-party ISP routers, resulting in high packet loss and latency.
 
-| Question | Why it matters |
-| --- | --- |
-| Which zone owns the name? | Prevents editing the wrong hosted zone or registrar record |
-| What does the record point to? | Shows whether traffic goes to Cloud Run directly or to a load balancer |
-| How long can caches keep the answer? | TTL affects rollout and rollback timing |
+GCP load balancers utilize **Global Anycast IP addresses**. Google advertises a single, unified public IP address from every physical Point of Presence (PoP) edge node worldwide using Border Gateway Protocol (BGP) routing.
 
-The first evidence for public entry is boring and valuable: the name resolves to the thing you intended.
-
-## HTTPS
-
-HTTPS does two jobs. It encrypts the request in transit, and it lets the client verify that the certificate belongs to the name it is calling. Without HTTPS, a public API is asking users to trust a path they cannot verify.
-
-In GCP, certificates may be managed for you in some Cloud Run domain mapping paths, or attached to a load balancer frontend when you use a load balancer. The exact resource changes by design. The mental model does not: the certificate must cover the public name, be served by the public entry point, and be renewed before it expires.
-
-The common mistake is to treat HTTPS as a backend setting only. A container can listen on an internal port while the public entry point terminates TLS. Users care about the certificate they receive at `orders.devpolaris.com`, not the private port the container uses behind the entry point.
+This Anycast IP routing model is a unique GCP feature. In other clouds, a public load balancer is commonly assigned a regional IP address. To achieve a similar global footprint in AWS, you must pair an Application Load Balancer with Amazon CloudFront (CDN) for edge caching and global entry. In Azure, you commonly pair Azure Front Door with a regional Application Gateway. GCP's external Application Load Balancer terminates global traffic at the Anycast edge natively, removing the administrative complexity of multi-layered CDN and gateway integrations.
 
 ```mermaid
-sequenceDiagram
-    participant User as User
-    participant DNS as DNS
-    participant Entry as HTTPS entry
-    participant Backend as Backend
+flowchart TD
+    ClientTokyo["User in Tokyo"]
+    ClientLondon["User in London"]
 
-    User->>DNS: orders.devpolaris.com?
-    DNS-->>User: Entry address
-    User->>Entry: TLS handshake for orders.devpolaris.com
-    Entry->>Backend: Forward allowed request
+    subgraph GoogleEdgePoPs["Google Global Anycast Edge (GFE)"]
+        PoPTokyo["Tokyo Edge PoP<br/>(Terminates TCP/TLS)"]
+        PoPLondon["London Edge PoP<br/>(Terminates TCP/TLS)"]
+    end
+
+    subgraph RegionalVPC["GCP Region (us-central1)"]
+        VPCBackend["VPC Subnet Backend<br/>(Cloud Run App)"]
+    end
+
+    ClientTokyo -->|1. Short Public Hop| PoPTokyo
+    ClientLondon -->|1. Short Public Hop| PoPLondon
+
+    PoPTokyo -->|2. Persistent HTTP Keep-Alive Pool<br/>Over Google Private Fiber Backbone| VPCBackend
+    PoPLondon -->|2. Persistent HTTP Keep-Alive Pool<br/>Over Google Private Fiber Backbone| VPCBackend
 ```
 
-If DNS points at the wrong entry point, the certificate may be wrong. If the certificate is right but the backend is wrong, users still get the wrong service. Public entry review needs both.
+When a user in Tokyo requests `orders.devpolaris.com`, BGP routes the request to the physically closest Google Tokyo Edge PoP. The GFE edge node terminates the TCP session and SSL/TLS handshake locally within milliseconds.
 
-## Cloud Run URL
+Once terminated, the GFE proxies the HTTP payload over Google's private, dedicated fiber optic backbone directly to the active VPC region. By terminating the high-latency public handshake at the edge, GCP minimizes round-trip latency and insulates the backend from public transport jitter.
+:::
 
-Every Cloud Run service has a service URL. For early development, that URL is useful because it proves the service can receive HTTPS requests through Cloud Run's managed entry path.
+## HTTPS and Google-Managed SSL Certificates
 
-The generated URL is not always the public product URL you want users to bookmark. It exposes platform naming, may not match your brand or API domain, and may bypass the load balancer controls you want in front of production. Cloud Run can still be the backend. The question is whether users should call Cloud Run directly, a custom domain mapping, or a load balancer frontend.
+Public entry points require SSL/TLS encryption to protect data in transit. Google Cloud Load Balancing manages the complexity of certificate provisioning, validation, and renewal automatically.
 
-Use the generated URL as evidence, not as the whole design:
+When you configure a Google-managed certificate, Google obtains, manages, and renews a domain-validated certificate for the names you configure. Your job is to point DNS at the load balancer and wait for provisioning to complete.
 
-| Use the Cloud Run URL for | Avoid using it as |
-| --- | --- |
-| Quick service smoke tests | The only production name when a stable domain is required |
-| Checking service-level ingress and auth behavior | A substitute for DNS and certificate review |
-| Internal team debugging | A public API contract that clients hardcode forever |
+Once issued, the certificate is served by the load balancer's frontend. TLS terminates at the frontend so your containers do not manage public private keys. Encryption from the load balancer to backends depends on the backend type and protocol you configure, so describe backend encryption as a configuration choice rather than automatic re-encryption for every path.
 
-The URL proves Cloud Run can answer. It does not prove the public entry architecture is finished.
+## Cloud Load Balancing and URL Maps
 
-## Load Balancing
+Central to public traffic routing is the **External Application Load Balancer**. The load balancer operates at Layer 7 (HTTP/HTTPS) and uses a structured routing engine called a URL Map.
 
-A load balancer receives traffic before the backend does. In GCP, an external Application Load Balancer can provide a public frontend, HTTPS certificate handling, routing rules, and backend integration. It is often the right shape when a team wants one stable public entry point across multiple backends, paths, or services.
+A URL Map evaluates the path and headers of incoming HTTP requests and directs them to the appropriate backend service. For example, you can configure a single URL Map to route traffic based on path rules:
 
-For an Orders API, the load balancer might route `orders.devpolaris.com/api/*` to Cloud Run and another path to a static frontend or a different service. The user sees one domain. The backend design can evolve behind it.
+*   **`orders.devpolaris.com/api/*`**: Routed to a containerized API running on Cloud Run.
+*   **`orders.devpolaris.com/static/*`**: Routed directly to a static Cloud Storage bucket.
+*   **`orders.devpolaris.com/legacy/*`**: Routed to an internal VM instance group.
 
-A load balancer spreads traffic and acts as an entry policy boundary. It can centralize TLS, URL routing, logging, and security controls that would otherwise be scattered across services.
+By centralizing routing rules inside the URL Map, you avoid exposing separate domain endpoints for each service, presenting a clean, unified API contract to public users while maintaining architectural flexibility behind the scenes.
 
-| Without a load balancer | With a load balancer |
-| --- | --- |
-| Each service exposes its own public entry choices | One frontend can route to multiple backends |
-| Custom domain logic may be service-specific | DNS points to a shared entry point |
-| Security and logging can be uneven | Entry evidence is centralized |
+## Serverless Network Endpoint Groups
 
-The tradeoff is more moving parts. For a small service, direct Cloud Run custom domain mapping may be enough. For a platform with multiple services and shared entry controls, the load balancer becomes easier to explain than many separate public edges.
+A major challenge in serverless environments is that runtimes like Cloud Run do not expose stable VM backend IP addresses in your VPC subnets. To let an external Application Load Balancer target a serverless service, GCP uses **Serverless Network Endpoint Groups (Serverless NEGs)**.
 
-## Serverless Backends
+![A serverless NEG lets the global load balancer target regional serverless services.](/content-assets/articles/article-cloud-providers-gcp-networking-connectivity-dns-custom-domains-https-load-balancing/url-map-neg-cold-start.png)
 
-Cloud Run can sit behind an external Application Load Balancer through a serverless network endpoint group, often called a serverless NEG. The NEG is the load balancer backend object that points to the serverless service.
+*The NEG is the bridge between edge routing and Cloud Run capacity.*
 
-This is a different shape from a VM instance group. There are no backend VMs to patch or place in subnets. The load balancer still has a frontend and routing rules, but the backend target is the Cloud Run service through the serverless backend integration.
+A Serverless NEG is a logical backend object that points to a specific Cloud Run, Cloud Run Functions, or App Engine service. When the load balancer's URL Map selects that backend, Google Cloud routes the request to the regional serverless service behind the NEG.
 
-That distinction matters for health and troubleshooting. If a VM backend is unhealthy, you may inspect VM ports, firewall rules, and health check paths. If a Cloud Run backend is failing, you also need to inspect Cloud Run revision health, ingress settings, authentication, and service logs.
+The Serverless NEG lets the load balancer target the regional serverless service without registering static VM IPs. It preserves useful request metadata through standard proxy headers, such as `X-Forwarded-For`, so your application can still inspect the traffic's origin for security auditing.
 
-```mermaid
-flowchart LR
-    User["User"] --> DNS["DNS"]
-    DNS --> LB["External Application Load Balancer"]
-    LB --> NEG["Serverless NEG"]
-    NEG --> Run["Cloud Run service"]
-```
+The Serverless NEG functions as the logical adapter that allows the global load balancer to hand off requests to serverless backends without requiring VM target registrations. A key gotcha is health checking: Google Cloud health checks are not supported for serverless NEG backends, so use Cloud Run service health, logs, metrics, and load-balancer behavior such as outlier detection where applicable.
 
-The backend is still a real backend. It is just not a group of machines you manage.
+## What the Load Balancer Can See
 
-## Health
+One of the primary latency penalties in serverless computing is the "cold start," which occurs when a service must scale from zero instances to serve an incoming request. The external Application Load Balancer can route requests to the right regional serverless backend, apply URL map rules, serve the public certificate, and enforce frontend traffic policy.
 
-Public entry needs health evidence. A request can fail because DNS points to the wrong place, the certificate is invalid, the load balancer route is wrong, the backend service is unhealthy, or the Cloud Run revision is not ready.
-
-Health checks are straightforward for many VM or container backends. Serverless backends have service-specific health behavior and logging. The practical lesson is that public entry review should include the frontend and the backend together.
-
-Ask:
-
-| Layer | Evidence |
-| --- | --- |
-| DNS | Name resolves to the intended entry |
-| Certificate | Certificate covers the name and is not expired |
-| Load balancer | Frontend, URL map, backend, and route point to the intended service |
-| Cloud Run | Revision is ready, traffic allocation is correct, ingress allows the entry path |
-| Logs | Request reached the entry point and, if forwarded, the backend |
-
-When users say "the site is down," this table keeps the team from starting at the container every time.
-
-## Entry Evidence
-
-A healthy public entry review can fit in a small note:
-
-```text
-name: orders.devpolaris.com
-dns target: external HTTPS load balancer frontend
-certificate: managed certificate covers orders.devpolaris.com
-route: /api/* -> orders-api serverless backend
-backend: Cloud Run service devpolaris-orders-api
-ingress: allows load balancer path
-logs: load balancer and Cloud Run request logs enabled
-```
-
-This evidence does not replace automated monitoring. It gives humans the shared map. When production changes, reviewers can compare the new path to this expected shape and catch accidental public entry changes before users do.
+The load balancer cannot inspect your Cloud Run process like a VM health check agent. It does not know whether your handler will open a database connection quickly or whether a new instance will have a cold start. For serverless backends, monitor Cloud Run request latency, instance startup behavior, error rates, and logs alongside load-balancer metrics. If you need to prevent users from bypassing the load balancer, pair the Serverless NEG with Cloud Run ingress settings that allow load-balancer traffic while blocking direct public calls to the raw service URL.
 
 ## Putting It All Together
 
-Return to the opening problems.
+Let's trace the physical path of a request calling `https://orders.devpolaris.com/api/v1/checkout`.
 
-Customers need a stable name. DNS supplies the answer for `orders.devpolaris.com`, and the answer should point to the intended public entry.
+First, public DNS resolves the domain name to the load balancer's Global Anycast IP address. The user's browser initiates a connection, which is instantly routed to the nearest physical GFE edge node (e.g. in London).
 
-Browsers need a valid certificate. HTTPS is served at the entry point the user reaches, so certificate review belongs with DNS, load balancer review, and backend code.
+The GFE terminates the TLS session using Google-managed certificates and evaluates the URL Map, identifying `/api/v1/checkout` as a serverless backend target. Google Cloud then forwards the request to the region where your Serverless NEG is provisioned.
 
-Traffic should reach the intended backend. A load balancer with a serverless NEG can route to Cloud Run while keeping the public entry stable.
-
-Unhealthy backends should be visible. Health, readiness, routing, and logs show whether the request stopped at DNS, TLS, load balancing, Cloud Run ingress, or the service itself.
+The serverless backend receives the request with standard proxy metadata, such as forwarded client IP headers. The entire flow is terminated, validated, routed, and delivered securely, leaving your container to do one job: process the checkout logic.
 
 ## What's Next
 
-Public entry covers how users reach a service. The same Cloud Run service also has an outbound side: it calls databases, private services, and Google APIs. Next we look at Cloud Run networking through ingress, IAM, egress, Direct VPC egress, and private range choices.
+Establishing the public entry path secures inbound traffic. However, the container running inside Cloud Run must also initiate outbound calls to databases and private services. In the next article, we detail Cloud Run networking, focusing on Direct VPC egress, ingress restriction settings, and runtime service identity.
+
+![A six-part summary infographic for public entry summary covering DNS, Certificate, URL map, Load balancer, Serverless NEG, Cold starts](/content-assets/articles/article-cloud-providers-gcp-networking-connectivity-dns-custom-domains-https-load-balancing/public-entry-summary.png)
+
+*Use this summary as the quick mental checklist before designing or debugging the service.*
+
 
 ---
 
 **References**
 
-- [Google Cloud: Cloud DNS overview](https://cloud.google.com/dns/docs/overview)
-- [Google Cloud: Set up a global external Application Load Balancer with Cloud Run](https://cloud.google.com/load-balancing/docs/https/setup-global-ext-https-serverless)
-- [Google Cloud: Serverless network endpoint groups overview](https://cloud.google.com/load-balancing/docs/negs/serverless-neg-concepts)
+- [Google Cloud: Cloud DNS overview](https://cloud.google.com/dns/docs/overview) - Technical specification for GCP hosted DNS zones.
+- [Google Cloud: Global external Application Load Balancer overview](https://cloud.google.com/load-balancing/docs/https) - Core guide to Anycast IP routing and GFE edge nodes.
+- [Google Cloud: Serverless NEGs overview](https://cloud.google.com/load-balancing/docs/negs/serverless-neg-concepts) - Guide to bridging HTTP load balancers to serverless runtimes.
+- [Google Cloud: Google-managed SSL certificates](https://cloud.google.com/load-balancing/docs/ssl-certificates/google-managed-certs) - Explains provisioning and renewal behavior for Google-managed certs.
+- [Google Cloud: Encryption to the backends](https://cloud.google.com/load-balancing/docs/ssl-certificates/encryption-to-the-backends) - Explains frontend TLS and backend encryption options.
+- [Google Cloud: URL map concepts](https://cloud.google.com/load-balancing/docs/url-map-concepts) - Documents URL map routing behavior.

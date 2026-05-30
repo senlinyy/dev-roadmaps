@@ -249,6 +249,10 @@ Fifth, leverage local toolcaches. Use official language setup actions to provisi
 
 Configuring secure, repeatable execution environments ensures our code is validated safely. However, as our organization grows to manage dozens of repositories, copy-pasting the same YAML configurations creates maintenance bottlenecks. In the next chapter, **Actions and Reusability**, we will explore how to write custom composite actions, handle inputs and outputs, and design reusable compliance workflows.
 
+![GitHub Actions runner execution summary showing runner polling, host choices, isolation, checkout, and toolcache](/content-assets/articles/article-cicd-github-actions-runners-and-execution/runner-execution-summary.png)
+
+*Use this as the runner-execution checklist: know how runners poll, choose hosted or self-hosted capacity deliberately, isolate risky code, choose shell or container execution, understand checkout, and manage toolcaches.*
+
 ---
 
 **References**
