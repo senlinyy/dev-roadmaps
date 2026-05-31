@@ -25,11 +25,7 @@ In system administration and configuration management, host facts are structured
 
 To see why host introspection is critical for robust automation, consider our scenario. You are managing a configuration playbook that deploys web server software across a mixed server cluster containing both Debian-based (Ubuntu) and Red Hat-based (Rocky Linux) operating systems:
 
-If your playbooks lack fact-gathering and conditional checks:
-- A task attempting to use `apt` to install packages on a Rocky Linux server will crash immediately because Rocky Linux does not have the apt package manager.
-- An application trying to bind to the host's primary network interface might fail because the private IP address is hardcoded to a static value that belongs to a different host.
-- A task might waste time downloading huge package repositories even when the server already has the software installed under a different namespace.
-- You must write separate, highly redundant playbook files for each operating system version, creating massive repository duplication.
+Without fact-gathering and conditional checks, a task that calls `apt` on a Rocky Linux host crashes immediately because that package manager does not exist there. Hardcoding a network interface address works only until a host is reprovisioned with a different IP, at which point the binding fails silently. Without branching, every OS variant requires its own separate playbook file, turning a two-node mixed fleet into a maintenance burden that doubles with every new distribution added.
 
 Ansible solves this by using the `setup` module to discover facts and the `when` keyword to evaluate conditions. This allows a single playbook to adapt dynamically: installing packages via `apt` on Ubuntu nodes, using `dnf` on Rocky Linux nodes, and binding network configurations to whichever active IP address the host reports during the run.
 
@@ -68,9 +64,7 @@ Here is an early, comment-free preview of a playbook task block demonstrating ho
 When a playbook has `gather_facts: true` (which is the default configuration for almost all Ansible plays), the very first task executed is a hidden system step commonly labeled `Gathering Facts`.
 
 Under the hood, this task executes the built-in `ansible.builtin.setup` module on the managed server:
-- The control plane transfers the setup module payload over the active connection.
-- The remote Python interpreter runs the setup module, executes system introspection queries, and compiles the discovered variables into a single JSON dictionary.
-- The JSON block is written back to the control plane, populating the `ansible_facts` variable namespace for that specific host thread.
+When a play begins, the control node opens an SSH channel to each target and transfers the setup module as a temporary Python script. The remote Python interpreter executes the script, which reads OS release files, queries the kernel for CPU architecture and memory size, enumerates network interfaces, and collects any mounted filesystem paths. The resulting fact dictionary is serialized as a JSON blob and written back to the control node over the same SSH channel, where Ansible stores it in the host's variable scope for the rest of the play.
 
 While fact gathering is incredibly useful, it is not free. Initiating the setup module, reading operating system data, and transferring the JSON block across the network adds latency.
 
@@ -100,10 +94,7 @@ You implement dynamic conditional branching in Ansible using the `when` keyword.
 when: ansible_facts["os_family"] == "Debian"
 ```
 
-When you write conditionals, you must follow several strict conventions:
-- **No Jinja2 Brackets**: The `when` clause is already processed in an active Jinja2 compilation context under the hood. You must never wrap the condition in double curly braces. Writing `when: "{{ my_var }}"` is a syntax error. You write the variable name directly: `when: my_var`.
-- **String Boolean Conversion**: If you are testing a boolean-like string, pass it through the `bool` filter for predictable evaluation: `when: maintenance_mode | bool`. This makes strings like `"true"`, `"yes"`, or `"1"` resolve to a clean Python `True` value.
-- **Logical Operators**: You can combine multiple conditions using standard logical operators: `and` (which can also be written as a YAML list of separate conditions), `or`, and `not`.
+When you write conditionals, you must follow several strict conventions. The `when` clause is already processed inside an active Jinja2 compilation context, so wrapping the condition in double curly braces is a syntax error. You write the variable name directly: `when: my_var` rather than `when: "{{ my_var }}"`. When testing a boolean-like string, pass it through the `bool` filter for predictable evaluation: `when: maintenance_mode | bool`. This ensures that strings like `"true"`, `"yes"`, or `"1"` resolve to a clean Python `True`. You can also combine multiple conditions using standard logical operators: `and` (which can be written as a YAML list of separate conditions), `or`, and `not`.
 
 Each target host evaluates the conditional individually. If the expression resolves to `false`, Ansible skips the task entirely, logging a quiet `skipped` status in stdout and ensuring that the task blast radius is strictly managed.
 

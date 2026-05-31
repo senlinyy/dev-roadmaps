@@ -36,7 +36,7 @@ To survive and operate virtual machines safely in the cloud, you must stop treat
 
 ## What Is EC2
 
-Amazon Elastic Compute Cloud, commonly known as EC2, is the baseline AWS service for provisioning virtual servers, which AWS calls instances. When you launch an EC2 instance, AWS does not allocate a dedicated physical server to you; instead, it uses a hypervisor to slice a massive, physical host computer into isolated virtual machines (VMs) sharing the physical CPU, memory, and hardware interfaces.
+Amazon Elastic Compute Cloud, commonly known as EC2, is the baseline AWS service for provisioning virtual servers, which AWS calls instances. In the normal shared-tenancy model, AWS does not allocate a dedicated physical server to you; instead, it uses a hypervisor to slice a massive, physical host computer into isolated virtual machines (VMs) sharing the physical CPU, memory, and hardware interfaces. If licensing or placement rules require dedicated physical hardware, EC2 also offers Dedicated Hosts and Dedicated Instances, but those are deliberate tenancy choices with separate cost and placement behavior.
 
 From your application team's perspective, EC2 feels close to renting a private Linux server because you get broad guest operating system control and administrative root privileges. This server-shaped environment is exactly what specialized, host-shaped workloads demand. With EC2, you can:
 * Load proprietary Linux kernel modules (`.ko` binary drivers via `insmod`/`modprobe`) to capture low-level kernel event loops or audit raw network socket buffers.
@@ -101,7 +101,7 @@ To enable this secure SSM connection and authorize your application code to call
 
 A replaceable cloud server must be able to boot, configure itself, and start your application automatically without any manual keyboard input. In EC2, this first-boot automation is handled using User Data.
 
-User Data is a shell script or cloud-init configuration that you pass to EC2 at launch. The guest operating system automatically executes this script as the root user during the instance's very first boot lifecycle.
+User Data is a shell script or cloud-init configuration that you pass to EC2 at launch. The guest operating system usually executes this script as the root user during the instance's first boot lifecycle. Treat it as a small bootstrap handoff rather than a giant installer: EC2 user data is limited to 16 KB before base64 encoding, and default execution behavior is first launch unless you configure the operating system launch agent or cloud-init to run it again.
 
 A clean bootstrap script should perform only a few explicit tasks:
 
@@ -210,5 +210,7 @@ We now understand what it means to own and operate a server-shaped runtime using
 **References**
 
 - [Amazon EC2 User Guide for Linux Instances](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/concepts.html) - Comprehensive documentation on operating Linux-based virtual servers.
+- [Amazon EC2 Dedicated Hosts](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/dedicated-hosts-overview.html) - Explains dedicated physical host placement, host affinity, and BYOL licensing support.
+- [Run commands when you launch an EC2 instance with user data input](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/user-data.html) - Documents user data execution behavior, first-launch defaults, and size limits.
 - [AWS Systems Manager Session Manager](https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager.html) - Guide on opening secure, auditable shell tunnels without port 22 or SSH keys.
 - [systemd Service Unit Files](https://www.freedesktop.org/software/systemd/man/latest/systemd.service.html) - Official freedesktop specifications for configuring supervised background services.

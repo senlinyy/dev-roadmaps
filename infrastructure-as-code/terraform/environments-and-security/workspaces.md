@@ -32,6 +32,8 @@ Workspaces offer a different approach. Instead of three copies of the configurat
 
 A workspace is a named state within a backend. When you run `terraform init` and `terraform apply` without specifying a workspace, you are working in the default workspace. Terraform stores state in whatever key you configured in the backend.
 
+![Workspaces let one configuration directory select separate state snapshots for different named contexts.](/content-assets/articles/article-iac-terraform-environments-workspaces/workspace-state-split.png)
+
 When you create a new workspace, Terraform creates a separate state storage location within the same backend. For the S3 backend, the workspace state goes into a path that includes the workspace name. For a configuration with key `production/app/terraform.tfstate`, the `dev` workspace stores its state at `env:/dev/production/app/terraform.tfstate`.
 
 Every workspace has its own completely separate state. Resources created in the `dev` workspace do not appear in the `staging` workspace's state and cannot affect them. A `terraform destroy` in the `dev` workspace destroys only the dev resources — the staging and production resources are untouched.
@@ -233,6 +235,8 @@ Short-lived environments. Spinning up a new workspace for a feature branch, test
 
 Workspaces have several concrete limitations that matter in real production setups.
 
+![Workspaces split state, but shared code, backend settings, and credentials can still limit true environment isolation.](/content-assets/articles/article-iac-terraform-environments-workspaces/workspace-risk-boundary.png)
+
 **Credentials are not isolated by the workspace feature.** The provider configuration is shared. If your security policy requires that production runs with different IAM roles, Azure subscriptions, or stricter permissions than development, workspaces cannot enforce that separation by themselves. Any separation depends on how you configure providers and runner credentials outside the workspace mechanism.
 
 **No workspace-level variable files.** Terraform does not automatically load different `.tfvars` files per workspace. You can pass different files manually with `-var-file`, but there is no built-in mechanism to say "load dev.tfvars when in the dev workspace." You end up managing that in your deployment scripts rather than in Terraform itself.
@@ -250,6 +254,9 @@ For teams just starting out, or for environments that genuinely share a cloud se
 ## What's Next
 
 The next article covers how to organize your Terraform repository using a file-layout strategy that keeps environments cleanly separated using separate directories and separate backends — the approach that scales better as organizations grow and security requirements increase.
+
+
+![Workspaces summary: one configuration can have many states, but workspaces are not full production isolation by themselves.](/content-assets/articles/article-iac-terraform-environments-workspaces/workspaces-summary.png)
 
 ---
 

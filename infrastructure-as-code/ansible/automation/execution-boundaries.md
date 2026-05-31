@@ -30,11 +30,7 @@ aliases:
 
 When automating the deployment of a secure customer notification system, system engineering teams must coordinate tasks across different physical environments. The notification service package is compiled as a compressed software tarball on a centralized integration server or resides in a local build directory on the control machine. The target production fleet consists of several remote virtual machines situated behind strict network firewalls.
 
-To deploy the update successfully, the playbook cannot start by modifying the remote servers. It must execute a series of preparatory tasks first:
-- Check for the existence of the compiled tarball on the local build filesystem.
-- Calculate the SHA256 checksum of the local software archive.
-- Read a version manifest file to determine which target version to deploy.
-- Query a central configuration database or key-value store to retrieve active deployment routing rules.
+To deploy the update successfully, the playbook cannot start by modifying the remote servers. Before touching any production server, it must verify that the compiled tarball exists on the local build filesystem, calculate its SHA256 checksum against the expected value, read a version manifest file to determine which target version to deploy, and query a central configuration database or key-value store to retrieve active deployment routing rules. None of these operations can run on the remote nodes because they depend on local files or internal APIs that the remote servers cannot reach.
 
 If the playbook attempts to execute these tasks using the standard SSH connection pipeline, the tasks will run on the remote target nodes. The remote nodes do not have access to the local build directory on the control plane, resulting in task failures.
 
@@ -181,7 +177,7 @@ Because `delegate_to: localhost` runs the work on the control plane, those paral
 
 This sudden process spike can exhaust the control plane's operating system process table, saturate its CPU cores, and trigger out-of-memory crashes:
 
-```text
+```plain
 OSError: [Errno 12] Cannot allocate memory
 ```
 

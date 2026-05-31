@@ -67,6 +67,8 @@ The four settings inside `lifecycle` are:
 
 With `create_before_destroy = true`, Terraform reverses the order of operations during a replacement. It creates the new resource first and then destroys the old one after the provider reports creation complete.
 
+![create_before_destroy changes the replacement order so the new resource can pass health checks before the old one is removed.](/content-assets/articles/article-iac-terraform-advanced-zero-downtime/create-before-destroy-timeline.png)
+
 ```hcl
 resource "aws_instance" "app" {
   ami           = var.ami_id
@@ -105,6 +107,8 @@ resource "aws_security_group" "app" {
 ## Blue-Green Deployments with Auto-Scaling Groups
 
 A more sophisticated zero-downtime strategy for application servers is a blue-green deployment. You maintain two complete sets of servers — blue and green — and switch traffic between them.
+
+![A traffic cutover shifts users from the old environment to the healthy new environment with a rollback path.](/content-assets/articles/article-iac-terraform-advanced-zero-downtime/traffic-cutover-boundary.png)
 
 In the blue-green model, only one color is active at a time and receives production traffic. The other color is either shut down (to save cost) or running with the previous version. To deploy a new version:
 
@@ -292,6 +296,9 @@ The `lifecycle` block gives you fine-grained control over Terraform's create, up
 ## What's Next
 
 With advanced configuration techniques covered, the final module moves into automation: how to run Terraform in CI/CD pipelines, how to enforce organization-wide policies using Policy as Code, and how to test Terraform configurations to catch mistakes before they reach production.
+
+
+![Zero-downtime deployment summary: create first, check health, shift traffic, and protect critical resources.](/content-assets/articles/article-iac-terraform-advanced-zero-downtime/zero-downtime-summary.png)
 
 ---
 

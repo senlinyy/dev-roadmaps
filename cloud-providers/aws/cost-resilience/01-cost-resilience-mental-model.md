@@ -71,7 +71,7 @@ AWS resources bill teams using different pricing structures. Recognizing the cos
 * **Running Capacity (Fixed-Time Charge)**: Resources that bill a flat rate per hour while provisioned, regardless of actual work processed. Examples include RDS instance hours, ECS Fargate task allocations, and active NAT Gateways.
 * **Usage Volume (Transaction Charge)**: Charges driven entirely by application activity. Examples include Lambda execution counts, SQS request APIs, and data transfer rates between Availability Zones.
 * **Storage Growth (Accumulating Charge)**: Spending that increases continuously over time as files accumulate. Examples include S3 object storage, EBS volumes, and RDS databases.
-* **Hidden Support (Quiet Aggregators)**: Auxiliary services that grow behind the scenes. Examples include Kinesis log shipping, CloudWatch Logs ingestion, and NAT Gateway data processing fees.
+* **Hidden Support (Quiet Aggregators)**: Auxiliary services that grow behind the scenes. Examples include log delivery streams, CloudWatch Logs ingestion, and NAT Gateway data processing fees.
 * **Recovery Options (Insurance Charge)**: The cost of maintaining secondary recovery points. Examples include AWS Backup vaults, database snapshots, and cross-Region replication volumes.
 
 One service often contains multiple cost shapes. Amazon S3 bills for object storage size (Storage Growth), PUT/GET API transactions (Usage Volume), and cross-Region replication paths (Recovery Options). Treating "S3 is expensive" as a single problem is too blunt. You must optimize the specific cost shape driving the invoice.
@@ -116,7 +116,7 @@ Waste is any cloud spending that does not serve a measured workload, support ope
 
 The safest cost-saving actions are completely boring:
 * **Shutdown Dev Environments**: Write automated shell scripts to scale staging ECS desired counts to zero during weekends and non-business hours, eliminating fixed-time running capacity hours when developers are offline.
-* **Enforce Storage Lifecycles**: Apply strict S3 lifecycle rules to transition temporary exports or build logs to Glacier or deletion paths after a set period.
+* **Enforce Storage Lifecycles**: Apply strict S3 lifecycle rules to transition temporary exports or build logs to S3 Glacier storage classes or deletion paths after a set period.
 * **Audit Orphaned Resources**: Delete unattached EBS volumes, forgotten snapshots, and unused load balancers.
 
 The practical rule: never delete or downsize a resource unless you can prove exactly who owns it, what business purpose it serves, and what recovery strategy it supports.

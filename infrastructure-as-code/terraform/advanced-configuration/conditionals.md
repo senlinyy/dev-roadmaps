@@ -32,6 +32,8 @@ Conditionals let you write one configuration that creates different sets of reso
 
 The foundation of all conditionals in Terraform is the ternary expression. You have already seen it in examples throughout the previous articles. The syntax is:
 
+![Conditional expressions choose between true and false values before the final resource argument is built.](/content-assets/articles/article-iac-terraform-advanced-conditionals/conditional-evaluation.png)
+
 ```
 condition ? value_if_true : value_if_false
 ```
@@ -146,6 +148,8 @@ If `aws_sns_topic.alerts` has `count = 1`, `one()` returns the ARN. If `count = 
 ## Conditional Attribute Values
 
 Not all conditionals toggle a whole resource. Often you need to change a specific attribute based on a condition while keeping the rest of the resource the same.
+
+![null omits an argument, while an empty string is still sent as a real value to the provider.](/content-assets/articles/article-iac-terraform-advanced-conditionals/null-vs-omitted-boundary.png)
 
 A database resource that uses multi-AZ replication in production but not in development:
 
@@ -299,6 +303,9 @@ Each condition in the configuration is a documented design decision: "this alarm
 ## What's Next
 
 Loops create multiple resources. Conditionals decide which resources exist. The final advanced configuration topic combines both techniques: how to deploy infrastructure changes — especially changes that would normally require a brief outage — in a way that keeps your application running throughout the update.
+
+
+![Conditionals summary: choose values, toggle optional resources, handle missing outputs, and avoid tangled logic.](/content-assets/articles/article-iac-terraform-advanced-conditionals/conditionals-summary.png)
 
 ---
 

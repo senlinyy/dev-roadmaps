@@ -35,10 +35,7 @@ To understand how a playbook is organized, consider our scenario. You are settin
 - A local security configuration file must be deployed.
 - A utility background service must be kept active and enabled.
 
-If you configure this workspace by hand, you must remember the commands, package names, directory paths, and permission octals. A playbook records these details in a highly structured hierarchy. The hierarchy contains three main structural layers:
-- The **Playbook** file, which holds a list of one or more plays.
-- The **Play** block, which specifies which hosts to target and configures global behaviors like privilege levels and login users.
-- The **Task** list, which contains ordered steps that call specific, state-aware modules to perform modifications.
+If you configure this workspace by hand, you must remember the commands, package names, directory paths, and permission octals. A playbook records these details in a highly structured hierarchy. A playbook contains one or more plays; each play targets a set of hosts and holds an ordered list of tasks.
 
 ## The Playbook Blueprint and Code Preview
 
@@ -119,9 +116,7 @@ While a task represents the human-readable step in a playbook, the **module** is
 
 Ansible ships with thousands of built-in modules, covering everything from files and packages to services, users, and cloud providers. The major benefit of using these modules over raw shell commands is that modules are state-aware:
 
-- **State Check**: A package module (like `apt`) queries the local package manager database to see if the package is already present.
-- **Metadata Check**: A file module (like `file` or `copy`) queries the file system to check owner, group, permissions, and content checksums.
-- **Idempotent Decision**: If the system already matches the requested parameters, the module does nothing and reports `ok`. It only executes modification system calls when the host has drifted, reporting `changed`.
+When a module runs, it first performs a read operation to determine the current state of the resource: querying a package manager, reading file metadata, or inspecting a service status. It then compares the observed state against the declared desired state in the task arguments. Only when the two differ does the module issue a write operation. This read-before-write discipline is what makes every module invocation idempotent by default.
 
 If you write shell commands to modify configuration files, you must write complicated search-and-replace logic to prevent duplicating text lines on subsequent runs. An Ansible file module (like `lineinfile`) handles this check automatically, searching for target expressions and only modifying the file if the line is missing or incorrect.
 
@@ -131,16 +126,14 @@ In modern Ansible, all modules are organized into distinct packages called colle
 
 An FQCN is a structured, dot-separated string containing three distinct parts:
 
-```text
-  ansible . builtin . apt
-  |____|   |_____|   |_|
-    |         |       |
-Namespace Collection Module
+```mermaid
+flowchart LR
+    A["ansible"] -->|namespace| B["builtin"]
+    B -->|collection| C["apt"]
+    C -->|module| D["ansible.builtin.apt"]
 ```
 
-- **Namespace**: The high-level package owner (such as `ansible` or `community`).
-- **Collection**: The specific group of related modules (such as `builtin` for core utilities, or `posix` for system tools).
-- **Module**: The individual program that executes on the remote host (such as `apt`, `copy`, or `service`).
+The FQCN follows a three-part dotted path. The first segment is the namespace, which identifies the organization or individual that maintains the collection. The second segment is the collection name, grouping modules that serve a common purpose. The third segment is the module name itself.
 
 Using the full FQCN (like `ansible.builtin.copy` instead of the short name `copy`) keeps your playbooks more stable. If a third-party collection introduces a custom module also named `copy`, the FQCN tells Ansible to run the built-in core module you intended, preventing module-name ambiguity.
 

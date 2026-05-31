@@ -32,6 +32,8 @@ This process is the same as the software development workflow your team already 
 
 A production Terraform CI/CD pipeline has two phases tied to two Git events.
 
+![A CI/CD pipeline should plan on pull requests, pass through review, and apply only after the merge gate.](/content-assets/articles/article-iac-terraform-automation-cicd/ci-plan-apply-gates.png)
+
 The first phase runs on every pull request and is read-only. It runs `terraform plan` and makes the output visible to reviewers. No changes are made to real infrastructure. The purpose is to let engineers and reviewers see exactly what will change before approving the pull request.
 
 The second phase runs when a pull request is merged to the main branch and is write. It runs `terraform apply` — using the same plan output from the first phase if possible, or regenerating the plan if not — and makes the actual infrastructure changes.
@@ -150,6 +152,8 @@ The `setup-terraform` action installs a specific Terraform version range (`~1.6`
 ## Handling Credentials in CI/CD
 
 Giving a CI/CD pipeline access to AWS requires credentials. There are two approaches: long-lived access keys stored as secrets, and short-lived tokens generated through OIDC federation.
+
+![Pipeline jobs should use short-lived identity and approval gates instead of long-lived secret keys.](/content-assets/articles/article-iac-terraform-automation-cicd/pipeline-identity-approval.png)
 
 **Long-lived access keys** are the simpler option. You create an IAM user, generate access keys, and store `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` as GitHub Actions secrets. The pipeline injects these as environment variables. The problem is that these keys do not expire. If they are leaked — through a log file, a compromised machine, or a security breach — they remain valid until you manually rotate them.
 
@@ -281,6 +285,9 @@ The pipeline itself is code, stored in version control, subject to the same revi
 ## What's Next
 
 Automated pipelines enforce process. Policy as code enforces rules. The next article covers Open Policy Agent (OPA) and HashiCorp Sentinel — tools that evaluate your Terraform plans against organization-wide policies before allowing an apply to proceed, blocking configurations that violate security or compliance requirements.
+
+
+![Terraform CI/CD summary: plan on pull requests, review the diff, apply after merge, and keep lock and audit trails.](/content-assets/articles/article-iac-terraform-automation-cicd/cicd-summary.png)
 
 ---
 

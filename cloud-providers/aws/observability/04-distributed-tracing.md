@@ -20,10 +20,11 @@ aliases:
 4. [Spans: Segments and Subsegments](#spans-segments-and-subsegments)
 5. [OpenTelemetry: The Industry Standard](#opentelemetry-the-industry-standard)
 6. [Tracing Across Asynchronous Queue Boundaries](#tracing-across-asynchronous-queue-boundaries)
-7. [Visualizing Topologies: X-Ray Service Maps](#visualizing-topologies-x-ray-service-maps)
-8. [Connecting Traces Directly to Logs](#connecting-traces-directly-to-logs)
-9. [Dynamic Trace Sampling and Cost Controls](#dynamic-trace-sampling-and-cost-controls)
-10. [Putting It All Together](#putting-it-all-together)
+7. [Under-the-Hood: Thread-Local State Mechanics](#under-the-hood-thread-local-state-mechanics)
+8. [Visualizing Topologies: X-Ray Service Maps](#visualizing-topologies-x-ray-service-maps)
+9. [Connecting Traces Directly to Logs](#connecting-traces-directly-to-logs)
+10. [Dynamic Trace Sampling and Cost Controls](#dynamic-trace-sampling-and-cost-controls)
+11. [Putting It All Together](#putting-it-all-together)
 
 ## The Distributed Silent Wait
 
@@ -34,7 +35,7 @@ In a distributed cloud environment, this simplicity is completely lost. Imagine 
 * The Application Load Balancer metrics show a successful request handoff to the backend API.
 * The containerized orders API logs report that checkout processing started, followed eight seconds later by a database write abort.
 * The RDS database metrics show a brief, harmless CPU utilization blip, with no record of slow, active queries.
-* The Kinesis queue buffers jobs successfully, and the downstream serverless worker tasks execute without error.
+* The SQS queue buffers jobs successfully, and the downstream serverless worker tasks execute without error.
 
 Every isolated team inspects their own charts and text files, declares their system healthy, and blames adjacent services. Because request timing data is siloed behind network boundaries, the source of the 8-second delay remains a mystery. To locate bottlenecks in a distributed cloud environment, you must establish a system that traces the complete, end-to-end journey of a single request as it hops across network borders.
 
@@ -99,11 +100,11 @@ When instrumenting your applications for distributed tracing, you must select th
 * **The Maintenance Stance (Older X-Ray SDKs)**: The legacy AWS X-Ray SDKs and the host X-Ray daemon entered official maintenance mode on February 25, 2026. AWS strongly advises against using these older libraries for new application deployments.
 * **The Forward-Looking Standard (OpenTelemetry)**: OpenTelemetry (OTel) is the open-source, vendor-neutral industry standard for instrumenting, collecting, and exporting traces, metrics, and logs. AWS distributes the AWS Distro for OpenTelemetry (ADOT), which is a secure, production-grade distribution of the OTel SDK and collector optimized for AWS systems.
 
-To instrument an application using OpenTelemetry, you import the OTel API and configure the tracer provider. Below is a complete, production-grade initialization block for a Node.js API:
+To instrument an application using OpenTelemetry, you import the OTel API and configure the tracer provider. Below is a simplified Node.js initialization block that shows the moving parts. Production services usually add resource attributes, error handling, batching, and deployment-specific collector configuration.
 
 ```javascript
 import { NodeTracerProvider } from '@opentelemetry/sdk-trace-node';
-import { SimpleSpanProcessor } from '@opentelemetry/sdk-trace-base';
+import { BatchSpanProcessor } from '@opentelemetry/sdk-trace-base';
 import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-grpc';
 import { registerInstrumentations } from '@opentelemetry/instrumentation';
 import { HttpInstrumentation } from '@opentelemetry/instrumentation-http';
@@ -115,7 +116,7 @@ const provider = new NodeTracerProvider({
 });
 
 provider.addSpanProcessor(
-  new SimpleSpanProcessor(new OTLPTraceExporter({ url: 'http://localhost:4317' }))
+  new BatchSpanProcessor(new OTLPTraceExporter({ url: 'http://localhost:4317' }))
 );
 
 provider.register({
@@ -131,7 +132,7 @@ registerInstrumentations({
 This configuration initializes the tracing environment step-by-step:
 
 * `AWSXRayIdGenerator`: Enforces the strict X-Ray trace ID format, allowing timing data to correlate inside AWS systems.
-* `SimpleSpanProcessor` & `OTLPTraceExporter`: Captures in-memory timing data and ships it over high-performance gRPC (port 4317) to a local OpenTelemetry Collector daemon.
+* `BatchSpanProcessor` & `OTLPTraceExporter`: Batches in-memory timing data and ships it over high-performance gRPC (port 4317) to a local OpenTelemetry Collector daemon.
 * `AWSXRayPropagator`: Configures the global propagation runner to parse and inject the `X-Amzn-Trace-Id` HTTP headers.
 * `registerInstrumentations`: Automatically hooks into the built-in HTTP module, capturing and propagating context across all incoming and outgoing network calls.
 
@@ -240,7 +241,7 @@ processors:
           status_code: {status_codes: [ERROR]}
         },
         {
-          name: filter_latency,
+          name: filter_5xx,
           type: numeric_attribute,
           numeric_attribute: {key: "http.status_code", value_condition: {greater_than_or_equal: 500}}
         },
@@ -255,10 +256,10 @@ processors:
 This configuration applies tail-based sampling, evaluating the full trace before making a storage decision:
 
 * `decision_wait`: Buffers trace timing spans for ten seconds in memory, allowing all microservice hops to check in before evaluating rules.
-* `filter_errors` & `filter_latency`: Enforces a 100% collection rule for any transaction that returns an error status code or experiences a high-severity checkout timeout.
+* `filter_errors` & `filter_5xx`: Keeps traces that report an error status or an HTTP 5xx response.
 * `sample_success`: Discards 95% of healthy, rapid transactions, keeping a small 5% baseline sample to measure operational latencies.
 
-This hybrid sampling approach guarantees that you preserve critical, granular diagnostic evidence for every single system failure, while saving your cloud storage budget by discarding redundant traces of successful checkouts.
+This hybrid sampling approach greatly improves the chance that critical failures are preserved while saving your cloud storage budget by discarding many redundant traces of successful checkouts. It is still not a mathematical guarantee. Instrumentation gaps, collector overload, or unsupported async boundaries can lose trace detail, so logs and metrics must remain part of the incident evidence path.
 
 ## Putting It All Together
 
@@ -282,4 +283,5 @@ Request correlation is the final layer that transforms disconnected cloud teleme
 * [AWS X-Ray Concepts](https://docs.aws.amazon.com/xray/latest/devguide/xray-concepts.html) - AWS technical reference for traces, segments, subsegments, and propagation headers.
 * [X-Ray to OpenTelemetry Migration Guide](https://docs.aws.amazon.com/xray/latest/devguide/xray-sdk-migration.html) - Official instructions on migrating application instrumentation to portable OpenTelemetry SDKs.
 * [AWS Distro for OpenTelemetry (ADOT)](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/CloudWatch-OpenTelemetry-Sections.html) - Production-grade documentation on deploying OTel collectors on AWS.
+* [OpenTelemetry batch span processor](https://opentelemetry.io/docs/specs/otel/trace/sdk/#batching-processor) - Explains why production tracing usually batches spans before export.
 * [CloudWatch ServiceLens Integration](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/ServiceLens.html) - Guide on correlating time-series metrics, trace service maps, and structured JSON logs.

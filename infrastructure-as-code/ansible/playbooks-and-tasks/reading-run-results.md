@@ -28,10 +28,7 @@ Ansible's command-line output is a structured audit trail that provides real-tim
 
 To understand why analyzing this feedback loop is critical, consider our scenario. You are executing a configuration update across a three-node database and application cluster containing `db-node-01`, `app-node-01`, and `app-node-02`. The playbook installs a security library, modifies a cluster config file, and reloads the service.
 
-If you treat the output as a simple binary pass-or-fail:
-- You might miss that the security library task succeeded on two nodes but silently failed on the third due to a broken system repository, leaving that host vulnerable.
-- A connection timeout on a database node might be hidden behind a wall of green task names, causing you to assume the whole cluster was updated.
-- You might not realize that a specific task is continuously applying modifications on every run, slowly wearing down your storage drives with unnecessary writes.
+If you treat the output as a simple binary pass-or-fail, you might miss that the security library task succeeded on two nodes but silently failed on the third due to a broken system repository, leaving that host vulnerable. A task that continuously applies modifications on every run hides behind a wall of green status lines, giving no indication that storage is being worn down by unnecessary writes.
 
 A professional operations workflow relies on this status stream. By looking at the colors, codes, and recap summaries that Ansible outputs, you can instantly see which hosts already matched your desired state, which ones required active modifications, which ones connection failures blocked, and which tasks triggered error-handling paths.
 
@@ -39,7 +36,7 @@ A professional operations workflow relies on this status stream. By looking at t
 
 Here is an early, comment-free console output preview of a playbook run against our three-node cluster. This output demonstrates a mixed run where different hosts produce different results:
 
-```text
+```plain
 PLAY [Standardize application and database cluster] ****************************
 
 TASK [Gathering Facts] *********************************************************
@@ -83,7 +80,7 @@ Understanding these two indicators helps you analyze what is happening under the
 
 When a task encounters an error during a playbook execution, Ansible marks the host status as `fatal` and outputs one of two distinct failure states: `UNREACHABLE` or `FAILED`. Distinguishing between these two conditions is the fastest way to isolate operational problems:
 
-```text
+```plain
   fatal: [host-01]: UNREACHABLE!
   |____________________________|
                  |
@@ -98,17 +95,12 @@ When a task encounters an error during a playbook execution, Ansible marks the h
 ```
 
 ### 1. Transport-Layer Failures (UNREACHABLE)
-An `UNREACHABLE` status indicates that the control plane could not connect to the host through the selected connection path. The task did not get a chance to run on the host. The issue usually resides in the network or transport layer:
-- The control node could not resolve the host's DNS name or route packets to its IP address.
-- The SSH cryptographic handshake failed because the remote host key was unknown or mismatched.
-- The private key file was rejected, or the configured login username does not exist on the remote host.
+The `UNREACHABLE` status always originates before the module runs. Ansible failed to establish the transport channel. The most common cause is a DNS resolution failure, where the inventory hostname does not resolve to a reachable address. The next most common is an SSH handshake rejection, where the host key does not match the known_hosts record or the server is simply unreachable on port 22. Private key mismatches produce the same UNREACHABLE status because the authentication layer rejects the connection before the channel opens.
 
 ### 2. Execution-Layer Failures (FAILED)
-A `FAILED` status indicates that the connection was successful, but the module encountered an error while attempting to inspect or modify the host. The issue resides in the task parameters, module runtime, interpreter setup, or operating system boundaries:
-- The task attempted to copy a configuration file to a directory that does not exist on the host.
-- The package manager returned an error because the requested package name was misspelled or missing from system repositories.
-- The module attempted to write a file to a protected directory but privilege escalation (`become: true`) was omitted, triggering a permission error.
-- The remote Python interpreter required by a Python module is missing or not discovered correctly, causing the module bootstrap to fail after the connection succeeds.
+A `FAILED` status indicates that the connection was successful, but the module encountered an error while attempting to inspect or modify the host. The task may have tried to copy a configuration file into a directory that does not exist on the host. The package manager may have returned an error because the requested package name was misspelled or absent from system repositories. A module that writes to a protected directory will fail with a permission error if privilege escalation (`become: true`) was omitted from the play. In each of these cases the network channel opened cleanly; the problem is in the task parameters or the host's runtime environment.
+
+A fourth class of FAILED errors originates in the module bootstrap itself. If the remote Python interpreter required by a Python-based module is missing or not discovered correctly, the module payload cannot initialize even after the connection succeeds.
 
 When a host encounters either failure state, Ansible drops it from the active run pool for the remainder of the play by default. Error-handling features such as `ignore_errors`, `ignore_unreachable`, `rescue`, and `clear_host_errors` can alter that flow, so always read the task message before assuming what happened next.
 
@@ -116,9 +108,11 @@ When a host encounters either failure state, Ansible drops it from the active ru
 
 Ansible's runtime output also captures execution branching, which occurs when playbooks use conditionals, error handling, or error overrides to control task flow:
 
-- **`skipped`**: A skipped status indicates that a task was evaluated, but a conditional statement (like a `when` block checking the host's operating system) resolved to `false`. Skipped tasks do not run on the host, consume zero execution time, and are completely healthy when configuring heterogeneous environments.
-- **`rescued`**: A rescued status appears when you group tasks inside a `block` and configure a `rescue` section. If a task inside the block fails, the execution does not stop; instead, the control plane catches the failure, runs the rescue tasks to clean up or recover, and allows the play to continue successfully.
-- **`ignored`**: An ignored status occurs when a task fails but you have set `ignore_errors: true` on that step. Ansible logs the failure in standard out but allows the playbook to proceed. You must use this override sparingly, as ignoring failures can hide critical configuration bugs.
+| Status | Meaning |
+|---|---|
+| `skipped` | Task did not run because a `when` condition evaluated to false |
+| `rescued` | Task failed but a `rescue` block in the same play handled the error |
+| `ignored` | Task failed but `ignore_errors: true` allowed execution to continue |
 
 ## Under the Hood: Standard Out Capture and JSON Parsing
 

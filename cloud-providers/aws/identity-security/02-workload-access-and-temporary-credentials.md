@@ -118,12 +118,12 @@ Your application will fail to read the rotated credentials issued by the hosting
 
 When deploying containerized applications on AWS ECS, developers frequently encounter credential failures because they confuse the two distinct roles assigned to a single task definition.
 
-To run a container successfully, ECS requires you to configure both a Task Role and a Task Execution Role:
+Most production ECS services use two different roles, and each role exists for a different caller:
 
-* **Task Execution Role (Infrastructure Startup)**: Used by the ECS agent before your application code starts. It grants the ECS platform permission to pull your container image from the private ECR registry and write startup container signals to CloudWatch Logs.
+* **Task Execution Role (Infrastructure Startup)**: Used by the ECS agent before your application code starts. It grants the ECS platform permission to pull your container image from the private ECR registry, write startup container signals to CloudWatch Logs, and fetch secrets that are injected from the task definition at startup.
 * **Task Role (Application Runtime)**: Used by your application code *inside* the container after it boots. It grants your JavaScript, Python, or Go code permission to call AWS APIs, such as uploading files to S3 or reading passwords from Secrets Manager.
 
-This distinction is the source of many common deployment errors. For example, if your Node.js application receives an Access Denied error when calling S3, adding S3 permissions to the Task Execution Role will not resolve the issue. 
+This distinction is the source of many common deployment errors. For example, if your Node.js application receives an Access Denied error when calling S3, adding S3 permissions to the Task Execution Role will not resolve the issue.
 
 The ECS agent will have the permission, but the application code running inside the container will still be blocked because its Task Role lacks the required S3 policy.
 
@@ -139,6 +139,8 @@ ECS Role Separations:
   * Operational Job: Authorize the application's runtime business logic.
 
 Always map your permissions based on who performs the action. If the platform needs to perform a boot action, assign it to the Task Execution Role. If your application code calls an API at runtime, assign it strictly to the Task Role.
+
+One security detail matters when ECS runs on EC2 capacity: containers are not a hard security boundary. Tasks on the same EC2 host share the underlying instance, so platform teams must protect instance metadata access and avoid assuming that one container can never affect another. Fargate reduces this host-management surface for most beginner workloads, but least-privilege task roles still matter.
 
 ## Putting It All Together
 
@@ -164,5 +166,6 @@ Now that our application container runs securely under a workload role and signs
 **References**
 
 - [IAM Roles for Amazon ECS Tasks](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-iam-roles.html) - Documentation on how to assign runtime roles to ECS container tasks.
+- [Amazon ECS task execution IAM role](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task_execution_IAM_role.html) - Documents platform startup permissions for pulling images, writing logs, and injecting startup secrets.
 - [AWS SDK Default Credential Provider Chain](https://docs.aws.amazon.com/sdk-for-javascript/v3/developer-guide/setting-credentials-node.html) - Explanation of how the AWS SDK automatically resolves credentials across environment variables, ECS metadata, and EC2 hosts.
 - [AWS Security Token Service (STS) Overview](https://docs.aws.amazon.com/STS/latest/APIReference/welcome.html) - Technical details on how STS generates short-lived, temporary security credentials.

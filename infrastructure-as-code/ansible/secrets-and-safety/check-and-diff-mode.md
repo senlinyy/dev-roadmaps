@@ -29,13 +29,7 @@ aliases:
 
 In a fast-moving operations team, automated infrastructure tools are highly efficient but carry a severe risk. When a developer runs a playbook designed to update network interfaces, modify secure socket layer configurations, or migrate system services, the changes are applied immediately to target nodes. If a port variable is mistyped, a security group config is misconfigured, or a template maps to the wrong target directory, a single execution run can bring down the entire web cluster.
 
-Before executing modifications in production, system administrators need to answer several critical operational questions:
-- Which target hosts will this run actually connect to and modify?
-- Which specific tasks will predict a change on the operating systems?
-- What exact text modifications will occur inside configuration files?
-- Are any sensitive credentials or secrets at risk of appearing in the output?
-
-Without a reliable dry-run and auditing mechanism, applying infrastructure changes is blind and dangerous. Teams are forced to hope that their variables are correctly mapped, which often leads to outages during maintenance windows.
+Before executing modifications in production, system administrators need to know which target hosts the run will actually connect to and modify, which specific tasks will predict a change on the operating systems, what exact text modifications will occur inside configuration files, and whether any sensitive credentials or secrets are at risk of appearing in the output. Without a reliable dry-run and auditing mechanism, applying infrastructure changes is blind and dangerous. Teams are forced to hope that their variables are correctly mapped, which often leads to outages during maintenance windows.
 
 To solve this, Ansible provides two distinct auditing modes: Check Mode and Diff Mode. These modes allow you to preview likely task changes and inspect configuration diffs before modifying your systems.
 
@@ -55,7 +49,7 @@ Running this command produces standard execution output, displaying which tasks 
 
 The recap block at the end summarizes these predictions:
 
-```text
+```plain
 web-server-01.internal : ok=12 changed=3 unreachable=0 failed=0 skipped=2
 ```
 
@@ -125,7 +119,7 @@ If a community module does *not* declare this support, Ansible's execution engin
 
 The console output logs a warning:
 
-```text
+```plain
 skipping: [web-server-01.internal] => {"skipped": true, "msg": "remote module (custom_dns_record) does not support check mode"}
 ```
 
@@ -273,7 +267,7 @@ By explicitly setting `diff: false`, you instruct the task to suppress diff outp
 
 As a crucial security configuration tip on Linux-based systems, administrators can prevent other unprivileged users from auditing active processes and inspecting arguments by mounting the `/proc` filesystem with the `hidepid=2` option:
 
-```text
+```plain
 UUID=proc /proc proc defaults,hidepid=2 0 0
 ```
 
@@ -298,6 +292,6 @@ By coordinating these validation modes with selective task overrides, you make a
 
 **References**
 
-- [Ansible Documentation: Check Mode and Diff Mode](https://docs.ansible.com/ansible/latest/playbook_guide/playbooks_checkmode.html)
-- [Controlling Playbook Execution with check_mode](https://docs.ansible.com/ansible/latest/playbook_guide/playbooks_checkmode.html#information-about-check-mode-in-playbooks)
-- [Ansible Task Diffs and Secure Logging](https://docs.ansible.com/ansible/latest/reference_appendices/logging.html)
+- [Ansible Documentation: Check Mode and Diff Mode](https://docs.ansible.com/ansible/latest/playbook_guide/playbooks_checkmode.html) - Complete reference for enabling check mode and diff mode, including module support requirements and known limitations.
+- [Controlling Playbook Execution with check_mode](https://docs.ansible.com/ansible/latest/playbook_guide/playbooks_checkmode.html#information-about-check-mode-in-playbooks) - Explains the `check_mode` task override parameter and the `ansible_check_mode` variable for conditional skipping.
+- [Ansible Task Diffs and Secure Logging](https://docs.ansible.com/ansible/latest/reference_appendices/logging.html) - Covers logging configuration and how to prevent sensitive task output from reaching log targets.

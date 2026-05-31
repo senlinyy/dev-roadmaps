@@ -98,29 +98,29 @@ When you configure metrics, you must select the appropriate collection resolutio
 When monitoring application response times, the statistic you choose to measure determines whether you detect real customer pain. A common operational failure is relying on the Average (or Mean) latency statistic. Relying on averages creates a dangerous tail latency illusion that conceals severe outages.
 
 Imagine a microservice that processes 1,000 checkout requests over a 1-minute period:
-* 950 requests are processed in a rapid 50 milliseconds.
-* 50 requests encounter database lock contention and hang for a painful 10,000 milliseconds (10 seconds) before completing.
+* 940 requests are processed in a rapid 50 milliseconds.
+* 60 requests encounter database lock contention and hang for a painful 10,000 milliseconds (10 seconds) before completing.
 
-If you calculate the mathematical average response time, you sum all durations and divide by 1,000. The average displays as a healthy 547 milliseconds. On your high-level dashboard, a 547ms average response time looks completely green. 
+If you calculate the mathematical average response time, you sum all durations and divide by 1,000. The average displays as 647 milliseconds. On a loose high-level dashboard, a 647 ms average response time can still look acceptable.
 
-However, in reality, 5% of your customers just experienced a catastrophic 10-second timeout, causing them to abandon their shopping carts. The average statistic has completely smoothed out and hidden this failure.
+However, in reality, 6% of your customers just experienced a catastrophic 10-second timeout, causing them to abandon their shopping carts. The average statistic has smoothed out and hidden this failure.
 
 Percentile statistics solve this illusion by sorting all data points in order of value:
 
 * **p50 (Median)**: The exact middle value. Half of the requests were faster than this value, and half were slower.
-* **p95 (95th Percentile)**: The boundary where 95% of requests were faster, and 5% were slower. This is the primary industry standard for monitoring normal tail latency.
+* **p95 (95th Percentile)**: The boundary where roughly 95% of requests were at or below this value, and the slowest 5% were above it. This is a common industry standard for monitoring normal tail latency.
 * **p99 (99th Percentile)**: The boundary where 99% of requests were faster, and 1% experienced the worst bottlenecks.
 
 Latency Metric Distribution:
 
 | Metric Statistic | Reported Latency | Operational Conclusion | Actual Customer Experience |
 | :--- | :--- | :--- | :--- |
-| **Average (Mean)** | 547 ms | Healthy performance, no actions required. | 50 customers suffered severe 10-second hangs. |
+| **Average (Mean)** | 647 ms | Looks acceptable on a loose dashboard. | 60 customers suffered severe 10-second hangs. |
 | **p50 (Median)** | 50 ms | Lightning fast for the typical user. | Confirms the core runtime is highly optimized. |
 | **p95** | 10,000 ms | Immediate operational failure; queue or lock bottleneck. | Identifies that 5% of the fleet is completely stalled. |
 | **p99** | 10,000 ms | Severe outlier saturation; database connection starvation. | Exposes absolute worst-case performance limits. |
 
-To operate a reliable cloud architecture, you must completely avoid average latency measurements. All latency dashboard charts and automated threshold alarms must be configured to evaluate the `p95` or `p99` statistics.
+To operate a reliable cloud architecture, do not use average latency as your primary customer-experience signal. Latency dashboard charts and automated threshold alarms should evaluate percentile statistics such as `p95` or `p99`, while averages can remain as secondary context.
 
 ![Tail latency infographic showing many fast requests, a small slow cluster, average latency looking healthy, p95 exposing pain, and an alarm on p95](/content-assets/articles/article-cloud-iac-observability-metrics-dashboards/tail-latency-percentiles.png)
 
@@ -140,7 +140,7 @@ $ aws cloudwatch put-metric-data \
 
 Running this command securely ships a single numeric event to CloudWatch over HTTPS. The parameters are defined explicitly:
 
-* `--namespace`: The logical logical wrapper `Custom/OrdersApp` isolating these records from other applications.
+* `--namespace`: The logical wrapper `Custom/OrdersApp` isolating these records from other applications.
 * `--metric-data`: A JSON array containing the actual telemetry payload.
 * `MetricName`: The name of the measurement parameter (`CompletedCheckouts`).
 * `Dimensions`: Low-cardinality metadata partitioning the series by staging environment and gateway partner, allowing you to isolate payment failures.
@@ -161,7 +161,7 @@ You must design dashboards like an aircraft cockpit, arranging charts in a stric
 | ROW 2: INGRESS GATEWAYS (Network Traffic / Connection Counts)      |
 | [ ALB RequestCount ]       [ ALB TargetResponseTime ]              |
 +-------------------------------------------------------------------+
-| ROW 3: COMPUTE RUNTIME (Resource Saturaion / Scale Counts)        |
+| ROW 3: COMPUTE RUNTIME (Resource Saturation / Scale Counts)       |
 | [ ECS CPUUtilization ]     [ ECS MemoryUtilization ]               |
 +-------------------------------------------------------------------+
 | ROW 4: DATA LAYER (Database Pressure / API Latencies)             |
@@ -248,6 +248,7 @@ Metrics and alarms show us when and where a cloud environment is breaking down, 
 **References**
 
 * [Amazon CloudWatch Metrics Concepts](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/cloudwatch_concepts.html) - AWS guide to namespaces, dimensions, and datapoints.
+* [Statistics definitions in CloudWatch](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/Statistics-definitions.html) - Explains average, percentile, and extended statistic behavior.
 * [Amazon CloudWatch Alarms Guide](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/AlarmThatSendsEmail.html) - Documentation on configuring alarms, statistics, and evaluation periods.
 * [Creating CloudWatch Dashboards](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/CloudWatch_Dashboards.html) - AWS guide on building cockpit layouts.
 * [AWS SDK PutMetricData Reference](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/publishingMetrics.html) - Guide to publishing custom application metrics.

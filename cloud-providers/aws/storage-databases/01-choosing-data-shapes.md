@@ -114,7 +114,7 @@ Certain cloud workloads cannot communicate with databases or web APIs. Operating
 Attached storage provides this local filesystem interface directly to compute hosts, split into two primary AWS services:
 
 * **Amazon Elastic Block Store (EBS)**: This service provides raw virtual disk volumes that attach to EC2 instances inside one Availability Zone and appear to the operating system like local block devices. EBS delivers low-latency disk access for operating system boot drives, high-speed application caches, and raw database directories. However, standard EBS volumes are single-AZ resources and are normally attached to one instance at a time. Multi-Attach exists for specific io1/io2 volumes and clustered applications, but most apps should treat EBS as single-writer storage.
-* **Amazon Elastic File System (EFS)**: This service provides a managed, regional network directory. EFS supports standard operating system folder actions, including concurrent file locking, directory traversal, and raw appends. EFS can be mounted simultaneously by hundreds of virtual machines and container tasks across multiple Availability Zones in the Region. This regional scope makes EFS the correct choice for shared folders, collaborative processing jobs, and legacy vendor applications that expect a common, shared filesystem folder tree.
+* **Amazon Elastic File System (EFS)**: This service provides a managed network directory. Regional EFS file systems store data across multiple Availability Zones and can be mounted simultaneously by hundreds of virtual machines and container tasks across the Region. EFS One Zone file systems store data within one Availability Zone for lower cost when the workload can tolerate that narrower resilience boundary. EFS supports standard operating system folder actions, including concurrent file locking, directory traversal, and raw appends, making it the correct choice for shared folders, collaborative processing jobs, and legacy vendor applications that expect a common filesystem folder tree.
 
 Choosing between EBS, EFS, and S3 comes down to the interface your application code expects. If the workload can fetch files by name via web APIs, S3 is simpler and cheaper. If it truly needs local disk blocks, use EBS. If multiple workers must read and write to the same shared directory path, use EFS.
 
@@ -160,7 +160,7 @@ Our e-commerce orders application did not have a single storage problem; it had 
 | **Amazon RDS** | Relational rows (SQL tables) | Dynamic query (SQL) | Multi-table Transactions | Single-digit milliseconds | Point-in-Time Recovery logs |
 | **Amazon DynamoDB** | Schema-flexible items | Partition Key hashing | Single-key conditional writes | Single-digit milliseconds for well-designed key access | PITR & continuous backups |
 | **Amazon EBS** | Raw virtual disk sectors | Block read/write (OS) | Direct sector update | Low-latency AZ-local block I/O | Incremental block snapshots |
-| **Amazon EFS** | Network directories | POSIX path walks (NFS) | Concurrent file locks/appends | Single-digit milliseconds | Regional filesystem replication |
+| **Amazon EFS** | Network directories | POSIX path walks (NFS) | Concurrent file locks/appends | Single-digit milliseconds | Regional replication for Regional file systems; single-zone resilience for One Zone |
 
 Understanding these stateful interfaces forms the baseline for secure cloud application design. By allowing each piece of data to explain its own operational requirements in plain English, you bypass the common architectural error of choosing a database out of habit, and establish a decoupled, resilient, and highly secure storage layer.
 
@@ -181,4 +181,5 @@ Now that we have established the overall data shape taxonomy, our next step is t
 - [Amazon DynamoDB core components](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/HowItWorks.CoreComponents.html) - Explains DynamoDB partitions, key structures, serverless tables, and partition key routing mechanics.
 - [Amazon EBS volumes](https://docs.aws.amazon.com/ebs/latest/userguide/ebs-volumes.html) - Details block-level virtual volumes, single-zone attachment rules, and SSD performance characteristics.
 - [Amazon EFS features](https://docs.aws.amazon.com/efs/latest/ug/whatisefs.html) - Explains EFS elastic filesystems, NFSv4 protocol support, and multi-client regional mounting.
+- [Availability and durability of EFS file systems](https://docs.aws.amazon.com/efs/latest/ug/features.html) - Explains Regional and One Zone EFS file system types.
 - [AWS Backup concepts](https://docs.aws.amazon.com/aws-backup/latest/devguide/whatisbackup.html) - Focuses on centralized backup schedules, backup plans, recovery points, and protected vaults.

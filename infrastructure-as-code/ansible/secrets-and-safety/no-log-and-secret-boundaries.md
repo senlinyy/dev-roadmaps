@@ -43,13 +43,14 @@ An output boundary is any system point where Ansible translates its internal, de
 
 A standard refund processor deployment exposes secrets along several parallel paths:
 
-```text
-Control Plane Memory (Decrypted Variable)
-  -> Task Invocations (Command Arguments)
-  -> Target Host Standard Input/Output Pipes
-  -> Rendered Configuration Files (Managed Disk)
-  -> Callback Manager Plugins (Stdout Formatter)
-  -> Syslog Sockets and Remote Log Forwarders
+```mermaid
+flowchart TD
+    Secret["Control Plane Memory: Decrypted Variable"]
+    Secret --> Args["Task Invocations: Command Arguments"]
+    Secret --> Pipes["Target Host: Standard Input/Output Pipes"]
+    Secret --> Files["Rendered Configuration Files: Managed Disk"]
+    Secret --> Callback["Callback Manager Plugins: Stdout Formatter"]
+    Callback --> Syslog["Syslog Sockets and Remote Log Forwarders"]
 ```
 
 To secure this pipeline, you cannot rely on a single tool. Encrypting the source file only protects the repository. Once the variable is decrypted, you must apply output boundaries to prevent the value from reaching the console, template diffs, or debug streams.
@@ -94,7 +95,7 @@ The following task invokes a script that processes database schema migrations fo
 
 When this task executes, the engine hides the command arguments and the resulting stdout stream. If the task fails or succeeds, the console output simply reports:
 
-```text
+```plain
 changed: [database-node-01]
 ```
 
@@ -183,9 +184,7 @@ def main():
     # Module execution logic continues here...
 ```
 
-By setting `no_log=True` inside the argument specification dictionary, you tell Ansible's module utilities that the parameter is sensitive:
-1. **Result Masking**: The module utility layer can mask the parameter in invocation data and normal module results.
-2. **Module Author Boundary**: Custom module code must still avoid writing the value to its own logs, exception messages, external commands, or files.
+By setting `no_log=True` inside the argument specification dictionary, you tell Ansible's module utilities that the parameter is sensitive. The module utility layer can then mask the parameter in invocation data and normal module results, but custom module code must still avoid writing the value to its own logs, exception messages, external commands, or files. The argument spec declaration does not sanitize code paths the module author controls directly.
 
 If a developer fails to set `no_log=True` in the Python argument spec, the parameter can appear in module invocation output or error details, creating an operational leak that bypasses the playbook author's expectations.
 
@@ -273,7 +272,7 @@ When integrating with these platforms, engineers must ensure that the logging pi
 
 If a task is marked `no_log: true`, the engine replaces the log string with:
 
-```text
+```plain
 ansible-command: [safe log data omitted]
 ```
 
@@ -302,7 +301,7 @@ By coordinating these execution boundaries, your team can automate complex syste
 
 **References**
 
-- [Ansible Documentation: Masking Sensitive Tasks](https://docs.ansible.com/ansible/latest/reference_appendices/logging.html#protecting-sensitive-data-no-log)
-- [Managing Secrets and Variable Precedence](https://docs.ansible.com/ansible/latest/playbook_guide/playbooks_variables.html)
-- [Syslog Socket Configuration and Logging](https://docs.ansible.com/ansible/latest/reference_appendices/logging.html)
-- [Ansible Task Diffs and Templates](https://docs.ansible.com/ansible/latest/playbook_guide/playbooks_checkmode.html#diff-mode)
+- [Ansible Documentation: Masking Sensitive Tasks](https://docs.ansible.com/ansible/latest/reference_appendices/logging.html#protecting-sensitive-data-no-log) - Explains the `no_log` directive, what it suppresses, and its documented limitations for debug tasks and callbacks.
+- [Managing Secrets and Variable Precedence](https://docs.ansible.com/ansible/latest/playbook_guide/playbooks_variables.html) - Covers Ansible variable precedence, vault integration patterns, and structuring secret variables alongside public configuration.
+- [Syslog Socket Configuration and Logging](https://docs.ansible.com/ansible/latest/reference_appendices/logging.html) - Reference for configuring `ANSIBLE_LOG_PATH`, syslog callback integration, and log format behavior.
+- [Ansible Task Diffs and Templates](https://docs.ansible.com/ansible/latest/playbook_guide/playbooks_checkmode.html#diff-mode) - Documents how diff mode interacts with template tasks and how to disable diff output on secret-bearing tasks.

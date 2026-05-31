@@ -36,11 +36,11 @@ To store, retrieve, and secure files over the cloud network, S3 unifies object s
 * **Objects**: The immutable binary payloads themselves, representing files like receipt PDFs or images.
 * **Keys**: Unique flat character strings, such as `invoices/2026/05/order-104.pdf`, used to address and locate the object.
 
-Because S3 is a highly distributed regional service, it automatically replicates objects across multiple physical datacenter facilities within the active region. When an application container issues an API request to write or read a file, S3 resolves the path and delivers the payload over the network. This network-based delivery ensures that your files survive the termination of individual compute nodes, remaining instantly accessible to thousands of concurrent microservice instances without the bottleneck of local host storage.
+Because S3 is a highly distributed service, most general-purpose storage classes such as S3 Standard store data redundantly across multiple Availability Zones within the selected Region. Some lower-cost classes, such as S3 One Zone-Infrequent Access, intentionally store data in one Availability Zone and should only be used when that narrower resilience boundary is acceptable. When an application container issues an API request to write or read a file, S3 resolves the path and delivers the payload over the network. This network-based delivery ensures that your files survive the termination of individual compute nodes, remaining accessible to thousands of concurrent microservice instances without the bottleneck of local host storage.
 
 ## Buckets as Administrative Boundaries
 
-Before your application can write a single file to the regional S3 API, you must provision an administrative container called a bucket. When you create a bucket, you assign it a globally unique name that is registered across the entire AWS cloud network. Because this name forms the base URL for every file address, it cannot be changed after creation and must adhere to strict DNS naming rules.
+Before your application can write a single file to the regional S3 API, you must provision an administrative container called a bucket. For general purpose buckets in the shared namespace, the name must be unique across all AWS accounts within the AWS partition, such as commercial AWS, AWS GovCloud, China Regions, or the European Sovereign Cloud partition. Because this name forms the base URL for every file address, it cannot be changed after creation and must adhere to strict DNS naming rules. Newer S3 account regional namespaces can reserve bucket names for one account and Region, but the beginner habit remains the same: choose stable, specific bucket names and do not delete buckets casually because names can become available for reuse in their namespace.
 
 A common beginner mistake is creating a separate bucket for every application subdirectory. A better operational habit is to define buckets strictly around administrative boundaries:
 
@@ -68,7 +68,7 @@ Because S3 is an HTTP-based service cabled to the regional cloud network, securi
 * **IAM Workload Policies**: Define what an individual application server, container task, or developer identity is allowed to do. For example, a background billing server is granted permission to write receipts but is explicitly blocked from deleting them.
 * **Bucket Policies**: Define rules attached directly to the bucket itself, governing who can call the bucket, from what network paths, and under what conditions. A robust bucket policy should explicitly deny any HTTP requests that do not utilize secure SSL/TLS connections.
 
-To prevent accidental public exposure, AWS enforces a powerful administrative barrier: **S3 Block Public Access**. When enabled, this blockade overrides all other settings, completely blocking any attempts to apply public access control lists (ACLs) or public bucket policies. In modern cloud architecture, you should keep Block Public Access enabled globally across all buckets, bypassing it only for specific buckets built explicitly to serve static public web assets.
+To prevent accidental public exposure, AWS enforces a powerful administrative barrier: **S3 Block Public Access**. Since April 2023, new buckets have Block Public Access enabled by default and access control lists (ACLs) disabled by default. Keep those defaults for private application data. When enabled, Block Public Access overrides public ACLs or public bucket policies. In modern cloud architecture, bypass it only for specific buckets built explicitly to serve static public web assets, and review that exception as a security-sensitive change.
 
 ```json
 {
@@ -176,13 +176,13 @@ $ aws s3api complete-multipart-upload --bucket my-app-uploads --key video.mp4 --
 }
 ```
 
-The `create-multipart-upload` command registers the upload with S3 and returns a unique `UploadId` that acts as the transaction identifier. Next, you call `upload-part` for each chunk, specifying the `UploadId`, a sequential `part-number` (which S3 uses to assemble the file in the correct order), and the local body file. S3 returns an `ETag` (a unique checksum value representing the uploaded chunk) upon successful write. Finally, the `complete-multipart-upload` command passes the list of part numbers and ETags back to S3, prompting the system to merge the chunks transactionally into a single, cohesive file within the regional network.
+The `create-multipart-upload` command registers the upload with S3 and returns a unique `UploadId` that acts as the transaction identifier. Next, you call `upload-part` for each chunk, specifying the `UploadId`, a sequential `part-number` (which S3 uses to assemble the file in the correct order), and the local body file. S3 returns an `ETag` for each uploaded part. Treat ETags as S3 response identifiers needed to complete the multipart upload, not as a universal file checksum. For multipart uploads and some encryption or copy cases, an ETag is not the MD5 digest of the object bytes. Use S3's checksum features when you need explicit integrity verification. Finally, the `complete-multipart-upload` command passes the list of part numbers and ETags back to S3, prompting the system to merge the chunks into a single object.
 
 Operating multipart uploads introduces a critical billing trap: if an upload is initiated but never completed or aborted, the uploaded chunks remain stored in S3 staging space indefinitely, and AWS will charge you for the storage. To prevent this, always place a bucket lifecycle rule that automatically purges incomplete multipart uploads after 7 days.
 
 ## Direct Uploads via Presigned URLs
 
-Even with parallel multipart uploads cabled, routing large user file transfers directly through your application API servers is a dangerous architectural mistake. When a user uploads a 500 megabyte file to your API server, the server must buffer those incoming bytes in system memory before writing them to S3. This memory buffering consumes valuable CPU cycles, exhausts server network bandwidth, and leaves your API servers highly vulnerable to denial-of-service memory crashes.
+Even with parallel multipart uploads cabled, routing large user file transfers directly through your application API servers is often a dangerous architectural mistake. A well-written server can stream bytes instead of buffering the entire file in memory, but it still spends CPU, network bandwidth, connection slots, and failure-handling effort on a transfer that S3 can receive directly. Large uploads through the API tier also make rate limiting and retry behavior harder to reason about.
 
 To protect your API servers, you must delegate secure upload permissions directly to the client's web browser using **Presigned URLs**. A presigned URL is tied to one HTTP method. A URL signed for `GET` downloads an object, while a URL signed for `PUT` uploads object bytes. For browser uploads, your API server should generate a short-lived signed `PUT` URL or a presigned POST policy.
 
@@ -224,7 +224,7 @@ flowchart TD
     API -->|2. Validate & sign S3 PUT URL| SignedURL["Signed HTTP PUT URL"]
     SignedURL -->|3. Return URL to browser| Browser
     Browser -->|4. Upload raw bytes directly| S3["S3 Bucket (direct)"]
-    S3 -->|5. Fire upload success event| API
+    S3 -->|5. Event notification| Notify["SNS, SQS, Lambda, or EventBridge"]
 ```
 
 ![S3 object path showing browser signed upload, private bucket, object key, version stack, multipart chunks, lifecycle cleanup, and Block Public Access](/content-assets/articles/article-cloud-providers-aws-storage-databases-s3-object-storage-buckets/s3-object-path.png)
@@ -257,9 +257,13 @@ S3 is the premier home for complete, unstructured files. However, when applicati
 **References**
 
 - [Amazon S3 user guide](https://docs.aws.amazon.com/AmazonS3/latest/userguide/Welcome.html) - Compiles all S3 features, object limits, and durability guidelines.
+- [General purpose bucket naming rules](https://docs.aws.amazon.com/console/s3/bucket-naming) - Documents bucket name uniqueness across AWS accounts within a partition and account regional namespace behavior.
 - [Object key names](https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-keys.html) - Explains flat character namespaces, folder simulations, and S3 prefix structures.
+- [Access control in Amazon S3](https://docs.aws.amazon.com/AmazonS3/latest/userguide/access-management.html) - Explains default private access, Block Public Access defaults, and ACL-disabled defaults for new buckets.
 - [S3 Block Public Access](https://docs.aws.amazon.com/AmazonS3/latest/userguide/access-control-block-public-access.html) - Details the Block Public Access barrier and its priority overrides.
 - [S3 Versioning concepts](https://docs.aws.amazon.com/AmazonS3/latest/userguide/Versioning.html) - Focuses on version IDs, delete marker behaviors, and historical file recovery.
 - [Managing object lifecycles](https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-lifecycle-mgmt.html) - Outlines transition and expiration actions for current and noncurrent versions.
 - [Multipart upload overview](https://docs.aws.amazon.com/AmazonS3/latest/userguide/mpuoverview.html) - Details parallel chunk uploads, assembly commands, and incomplete chunk retention.
+- [Checking object integrity in Amazon S3](https://docs.aws.amazon.com/AmazonS3/latest/userguide/checking-object-integrity-upload.html) - Explains checksums and when ETags are or are not MD5 digests.
 - [Presigned URLs](https://docs.aws.amazon.com/AmazonS3/latest/userguide/using-presigned-url.html) - Explains temporary credential delegation and direct client upload protocols.
+- [Event notification types and destinations](https://docs.aws.amazon.com/AmazonS3/latest/userguide/notification-how-to-event-types-and-destinations.html) - Documents S3 notification destinations, including SNS, SQS, Lambda, and EventBridge.

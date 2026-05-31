@@ -1,196 +1,244 @@
 ---
-title: "Dockerfiles"
-description: "Understand a Dockerfile as the recipe that turns application source into a repeatable image filesystem and runtime defaults."
-overview: "A Dockerfile gathers the knowledge needed to run an application into one build recipe. This article follows one small service through the instructions that create its filesystem and container defaults."
+title: "Dockerfiles and Build Context"
+description: "Write clean Dockerfiles, optimize the build context, and use .dockerignore files to build reproducible images."
+overview: "An image is only as good as its recipe. This article explains build context mechanics, .dockerignore security filters, and how to write efficient, clean Dockerfiles."
 tags: ["docker", "dockerfile", "images"]
 order: 1
 id: article-containers-orchestration-docker-dockerfiles
 aliases:
-  - dockerfiles
-  - containers-orchestration/docker/dockerfiles.md
+  - build-context-and-dockerignore
+  - article-containers-orchestration-docker-build-context-and-dockerignore
+  - containers-orchestration/docker/images/build-context-and-dockerignore.md
 ---
 
 ## Table of Contents
 
-1. [The Problem](#the-problem)
-2. [The Recipe](#the-recipe)
-3. [Base Image](#base-image)
-4. [Working Directory](#working-directory)
-5. [Copy and Run](#copy-and-run)
-6. [Runtime Defaults](#runtime-defaults)
-7. [Multi-Stage Builds](#multi-stage-builds)
-8. [Failure Modes](#failure-modes)
-9. [Putting It All Together](#putting-it-all-together)
-10. [What's Next](#whats-next)
+1. [The Bloated Image Problem](#the-bloated-image-problem)
+2. [The Build Context TAR Pipeline](#the-build-context-tar-pipeline)
+3. [Securing the Gate: The `.dockerignore` File](#securing-the-gate-the-dockerignore-file)
+4. [Anatomy of a Dockerfile Recipe](#anatomy-of-a-dockerfile-recipe)
+5. [Under the Hood: How Instructions Execute](#under-the-hood-how-instructions-execute)
+6. [Core Instructions: Operations and Tradeoffs](#core-instructions-operations-and-tradeoffs)
+7. [Putting It All Together](#putting-it-all-together)
+8. [What's Next](#whats-next)
 
-## The Problem
+## The Bloated Image Problem
 
-The team has agreed to use Docker, but the first Dockerfile becomes another hidden setup script. It copies the whole repository, installs dependencies, runs a build, and starts the application. It works on the first laptop. Then the image becomes large, rebuilds are slow, CI sometimes uses stale files, and production starts with development-only packages still present.
+When you write a build recipe for your application, you are designing a repeatable, clean virtual filesystem. A common beginner habit is to treat the build as a simple command that copies the local repository folder directly into an image. 
 
-The problem is not that the Dockerfile is complicated. The problem is that a Dockerfile is doing two different kinds of work, and the difference is easy to miss:
+If your local folder contains heavy binary dependencies, local database dumps, compiler caches, or sensitive private SSH keys, copying the folder directly creates two critical engineering hazards:
 
-- Some instructions create the image filesystem.
-- Some instructions set defaults that containers will read later.
-- Some files are needed only while building and should not remain in the final runtime image.
+* **Massive Image Footprints**: An image can easily bloat to several gigabytes because it inherits hundreds of megabytes of local developer garbage that the application process does not require at runtime.
+* **Security Leaks**: Sensitive developer credentials, private environmental configurations, or local system tools are baked permanently into the immutable image layers, exposing them to anyone who pulls the image from a registry.
 
-A Dockerfile is a recipe with build steps and image metadata. Docker reads it instruction by instruction, creates intermediate build states, records filesystem changes, and stores image configuration. If you understand which instruction affects which output, the file becomes a readable build plan instead of a pile of commands.
+Suppose you compile a basic API image without filtering. The build console output reveals the scale of the transfer before a single line of code is executed:
 
-## The Recipe
+```plain
+Sending build context to Docker daemon  4.12GB
+Step 1/6 : FROM node:22-alpine
+...
+```
 
-Here is a small Dockerfile for an API that compiles TypeScript and starts a Node server:
+The four-gigabyte transfer is not the compiled image. The transfer is the raw build context being packaged from your host laptop and sent to the Docker engine. 
+
+To build secure, fast, and repeatable images, you must isolate the build pipeline. You do this by configuring `.dockerignore` filters to screen out host garbage, and using structured Dockerfile instructions to declare the assembly steps.
+
+## The Build Context TAR Pipeline
+
+To optimize your image build speed, you must understand how the Docker Client and the Docker Daemon interact during a build run. When you execute the build command, the first parameter is the build context directory, typically represented by a single dot:
+
+```plain
+$ docker build -t app:local .
+```
+
+The dot represents the source directory on your host laptop. When the command starts, the Docker Client does not compile the files in place. Instead, it serializes the entire context directory into a single, uncompressed TAR archive stream.
+
+```mermaid
+flowchart TD
+    subgraph HostRepository["Host Project Directory"]
+        AppCode["src/ (Application Code)"]
+        LocalDeps["node_modules/ (Heavy Local Cache)"]
+        GitHistory[".git/ (Large Repo History)"]
+        EnvSecrets[".env (Sensitive Credentials)"]
+    end
+    subgraph ClientFilter["Docker Client Serialization"]
+        TarPacker["TAR Stream Packer"]
+        IgnoreRules[".dockerignore glob matching"]
+    end
+    subgraph EngineDaemon["Docker Daemon Store (/var/lib/docker)"]
+        Builder["BuildKit Compilation Engine"]
+    end
+
+    AppCode --> TarPacker
+    LocalDeps -.->|Blocked by .dockerignore| TarPacker
+    GitHistory -.->|Blocked by .dockerignore| TarPacker
+    EnvSecrets -.->|Blocked by .dockerignore| TarPacker
+    TarPacker -->|1. Transmits clean TAR archive| UNIXSocket["UNIX Socket (/var/run/docker.sock)"]
+    UNIXSocket --> Builder
+```
+
+The client transmits this TAR archive over the local UNIX socket (`/var/run/docker.sock`) or a network socket to the background Docker Daemon. The daemon extracts this archive into a temporary working directory within its local storage path. 
+
+When your Dockerfile calls a `COPY` instruction, the daemon retrieves the files from this temporary context directory, not from your laptop's live filesystem.
+
+This serialization explains why massive host directories stall the build. If your host folder contains a 2GB `node_modules` folder, a 1GB `.git` history, or heavy test data files, the Docker Client spends minutes packing these files into a TAR stream, writing them across the socket, and forcing the daemon to extract them. 
+
+This slowdown occurs even if your Dockerfile never references those folders. The transfer bottleneck exists because the entire context is sent before the Dockerfile is parsed.
+
+## Securing the Gate: The `.dockerignore` File
+
+You solve the transfer bottleneck by placing a `.dockerignore` file in the root directory of your build context. The `.dockerignore` file acts as a pre-serialization filter. Before the Docker Client packs the context into a TAR stream, it parses the `.dockerignore` rules and excludes matching files from the archive.
+
+A secure, production-ready `.dockerignore` template blocks local dependencies, repository history, secrets, and IDE configurations:
+
+```plain
+# Version control
+.git
+.gitignore
+
+# Local dependencies
+node_modules
+npm-debug.log
+
+# Build outputs and cache
+dist
+.npm
+.cache
+
+# Sensitive secrets
+.env
+*.pem
+id_rsa
+
+# IDE and system garbage
+.DS_Store
+.vscode
+.idea
+```
+
+The `.dockerignore` file supports standard glob matching patterns:
+* **`node_modules`**: Excludes the specified folder at the root level of the context.
+* **`**/*.pem`**: Excludes any file ending with `.pem` inside the root folder or any of its nested subdirectories.
+* **`!src/main.js`**: An exclamation mark acts as an exception rules. It ensures that the specified file is included, even if a broader pattern would otherwise exclude it.
+
+By applying this filter, you reduce the build context from gigabytes to megabytes, accelerating the transfer over the socket and ensuring that sensitive local keys cannot be accidentally baked into the image.
+
+## Anatomy of a Dockerfile Recipe
+
+Once the filtered build context is received by the daemon, the compilation engine reads the `Dockerfile` to build the filesystem layers. A Dockerfile is a declarative text document containing ordered instructions that build an image step-by-step:
 
 ```dockerfile
 FROM node:22-alpine
-
-WORKDIR /app
-
+WORKDIR /usr/src/app
 COPY package*.json ./
 RUN npm ci
-
-COPY tsconfig.json ./
-COPY src ./src
-RUN npm run build
-
-ENV NODE_ENV=production
+COPY src/ ./src
 EXPOSE 3000
-CMD ["node", "dist/server.js"]
+CMD ["node", "src/server.js"]
 ```
 
-Read it from top to bottom as a chain of filesystem states. The base image provides a starting filesystem with Node installed. `WORKDIR` chooses where later commands run. `COPY` brings files from the build context into the image. `RUN` executes commands inside a temporary build container and records the resulting filesystem. The final `ENV`, `EXPOSE`, and `CMD` lines shape containers created from the image.
+Each instruction in this recipe serves a specific role in the compilation pipeline:
+* **`FROM node:22-alpine`**: Declares the parent base image. This imports a minimal Alpine Linux distribution pre-configured with the Node 22 runtime environment.
+* **`WORKDIR /usr/src/app`**: Establishes the active working directory for all subsequent instructions.
+* **`COPY package*.json ./`**: Copies package descriptor files from the clean build context into the container's active working directory.
+* **`RUN npm ci`**: Spawns a shell and installs the exact application dependencies declared in the lockfile.
+* **`COPY src/ ./src`**: Copies the application source files from the context.
+* **`EXPOSE 3000`**: Documents that the application listens on network port 3000 inside the namespace.
+* **`CMD ["node", "src/server.js"]`**: Configures the default execution command that runs when a container starts.
 
-The Dockerfile has two outputs:
+The order of these instructions is not accidental. By copying package manifests and installing dependencies *before* copying the application source files, you exploit Docker's cache validation rules to accelerate future builds.
 
-| Output | Built by | Used when |
-| --- | --- | --- |
-| Image filesystem | `FROM`, `COPY`, `RUN` | A container starts and reads files |
-| Image configuration | `WORKDIR`, `ENV`, `EXPOSE`, `CMD`, `ENTRYPOINT` | Docker creates the container |
+## Under the Hood: How Instructions Execute
 
-Many Dockerfile mistakes come from treating those outputs as one thing. Installing dependencies changes the filesystem. Setting `CMD` does not start the server during the build. Exposing a port documents container intent. It does not publish a host port.
+To write high-quality Dockerfiles, you must trace how the build engine executes these instructions under the hood. When the daemon processes a build instruction (such as a `RUN` command), it does not edit the existing filesystem. 
 
-## Base Image
+Instead, it launches an isolated, temporary container to execute the change:
 
-Every normal Dockerfile starts with `FROM`. The base image is the filesystem and metadata your image begins with:
+```mermaid
+flowchart TD
+    subgraph ImageBase["Parent Image Layer (node:22-alpine)"]
+        BaseFS["Base Linux Filesystem"]
+    end
+    subgraph BuildExecution["Intermediate Scratch Container"]
+        ScratchNS["Isolated PID & mount namespace"]
+        ExecStep["Run 'npm ci' inside namespace"]
+    end
+    subgraph CompiledLayer["New Read-Only Layer"]
+        DiffFS["node_modules/ directory difference"]
+    end
 
-```dockerfile
-FROM node:22-alpine
+    ImageBase --> BuildExecution
+    BuildExecution -->|Commit changes| CompiledLayer
 ```
 
-This line says the image should start from a published Node image variant. The tag matters because it controls which operating-system packages, runtime version, package manager behavior, and default metadata enter your build. A broad tag can move over time. A narrow tag is more predictable but still points to a mutable name unless you pin by digest, which the registry article covers later.
+The engine's compilation workflow follows a distinct three-step loop for every instruction:
+1. **Spawn**: The engine creates an intermediate scratch container namespace, mounting the filesystem state compiled by the previous instruction as its base.
+2. **Execute**: It runs the instruction's command (e.g., compiling code or creating directories) inside this sandboxed container.
+3. **Commit**: The engine stops the scratch container, captures the write directory differences (the file modifications or additions created during execution), commits these differences as a new read-only image layer, and destroys the scratch container record.
 
-The base image choice is an architecture decision. A very small base can reduce image size and attack surface, but it may lack shell tools, certificates, native libraries, or debugging utilities. A larger base may be easier to debug but carries more packages than the application needs. The right choice depends on the runtime, dependency needs, and how the image will be maintained.
+This intermediate container model explains why environment variables must be declared using the `ENV` instruction rather than simple shell exports. 
 
-The non-obvious rule is that the base image is part of your application supply chain. If the base image changes, your image can change even when your source code does not. Rebuilds include inputs from your repository and from the image you inherit.
+If you run `RUN export DB_HOST=db.internal`, the variable is set in the environment memory of that temporary scratch container. As soon as the instruction exits, the container is destroyed, and the variable is lost. 
 
-## Working Directory
+To persist runtime variables in the image metadata, you must use the `ENV` instruction, which writes the variables directly into the permanent image manifest JSON file.
 
-`WORKDIR` sets the directory for later build instructions and for the default container process unless runtime settings override it:
+## Core Instructions: Operations and Tradeoffs
 
-```dockerfile
-WORKDIR /app
-```
+Writing professional Dockerfiles requires choosing the correct instruction for each file operation and understanding their systems-level tradeoffs.
 
-If `/app` does not exist, Docker creates it. After this point, `COPY package*.json ./` copies into `/app`, and `RUN npm ci` runs from `/app`. Without a stable working directory, commands depend on whatever directory the base image happens to define.
+### 1. File Transfer: `COPY` vs. `ADD`
+Both instructions transfer files into the image filesystem, but they support different source types:
+* **`COPY`**: Transfers local files or folders from the verified build context directory. It is simple, explicit, and highly secure. Use `COPY` for almost all standard file transfers.
+* **`ADD`**: Supports remote URL download paths and automatic archive extraction. If you specify a local compressed tarball (e.g., `ADD archive.tar.gz /app`), the engine automatically extracts the archive files into the target path.
 
-That sounds small, but it removes a class of build bugs. Dependency installers, compilers, and relative paths all assume a current directory. The Dockerfile should choose that directory explicitly so future base image changes do not silently move the build.
+The tradeoff is that `ADD` remote URL fetches do not validate cache signatures efficiently and can download unverified binaries. 
 
-## Copy and Run
+For safety, use `COPY` for local files. If you need to download remote packages, use `RUN wget` or `RUN curl` within a shell step so you can clean up intermediate tarballs in the same layer.
 
-`COPY` brings files from the build context into the image. `RUN` executes a command during the build and records the filesystem changes:
+### 2. Startup Paths: `CMD` vs. `ENTRYPOINT`
+Both instructions configure the process that starts when the container boots, but they handle overrides differently:
+* **`CMD`**: Declares the default command and arguments. If a user runs `docker run app:local npm run test`, the argument `npm run test` completely overrides the default `CMD` array.
+* **`ENTRYPOINT`**: Declares the immutable executable binary. If you configure `ENTRYPOINT ["/app/bin/start"]`, the container will always execute that binary. Any arguments passed during `docker run` are appended to the entrypoint array rather than overriding it.
 
-```dockerfile
-COPY package*.json ./
-RUN npm ci
+### 3. Directory Management: `WORKDIR`
+The `WORKDIR` instruction sets the target path for all subsequent instructions. It is tempting to write manual path loops like `RUN mkdir /app && cd /app` in your scripts. However, the intermediate container loop destroys working directories between steps. 
 
-COPY tsconfig.json ./
-COPY src ./src
-RUN npm run build
-```
+The next instruction will revert to the image root. 
 
-The order is deliberate. Dependency installation depends on the package manifests, so those files are copied first. Source files change more often, so they are copied later. That order lets Docker reuse the dependency layer when source changes do not affect dependencies.
+Always use `WORKDIR /app`. If the target directory does not exist, the engine automatically creates it, applying the standard default parent system file permissions (typically `0755` for root paths) to ensure the application process can access it.
 
-`RUN` is build time. It should create files the final image needs, such as installed packages or compiled output. It should not start a long-running application server as the main service. If `RUN npm start` appears in a Dockerfile, the build will try to run the server while building the image, then hang or exit. The server belongs in `CMD` or `ENTRYPOINT`, which Docker reads later when creating a container.
+### 4. Diagnostic Documentation: `EXPOSE`
+The `EXPOSE 3000` instruction writes metadata into the image manifest noting that the container listens on port 3000. 
 
-The other subtlety is that `COPY . .` is rarely the best first copy. It makes every file in the context part of the cache key for the next steps. A README edit, local test artifact, or generated directory can invalidate work that did not logically depend on it. A later article focuses on build context and `.dockerignore`, but the Dockerfile already shows the core idea: copy stable inputs before noisy inputs.
+It does not publish or bind ports on the host. 
 
-## Runtime Defaults
-
-The final lines do not install anything:
-
-```dockerfile
-ENV NODE_ENV=production
-EXPOSE 3000
-CMD ["node", "dist/server.js"]
-```
-
-They set defaults. `ENV` records an environment value that containers inherit unless the run command overrides it. `EXPOSE` records the container port the application expects to listen on. `CMD` records the default process.
-
-The process model is worth making explicit. A container lives as long as its main process lives. If `node dist/server.js` exits, the container stops. If the command points at a missing file, the container exits quickly. If the command starts a wrapper script that does not handle signals properly, stopping the container can become slow or unreliable.
-
-The JSON-array form of `CMD` is usually preferred because Docker can start the executable directly without a shell interpreting the command string. That reduces quoting surprises and makes signal delivery clearer.
-
-## Multi-Stage Builds
-
-Some files are useful for building but unnecessary at runtime. A TypeScript service may need the compiler, source files, and development dependencies to produce `dist`. The running service may only need the Node runtime, production dependencies, and compiled output.
-
-Multi-stage builds let one Dockerfile use separate stages:
-
-```dockerfile
-FROM node:22-alpine AS build
-WORKDIR /app
-COPY package*.json ./
-RUN npm ci
-COPY tsconfig.json ./
-COPY src ./src
-RUN npm run build
-
-FROM node:22-alpine AS runtime
-WORKDIR /app
-ENV NODE_ENV=production
-COPY package*.json ./
-RUN npm ci --omit=dev
-COPY --from=build /app/dist ./dist
-EXPOSE 3000
-CMD ["node", "dist/server.js"]
-```
-
-The first stage has everything needed to compile. The second stage starts fresh and copies only the result it needs. The final image does not automatically include every file from the build stage. That makes the image smaller and reduces the chance that source files, caches, or build-only tools ship to production.
-
-This is the same Dockerfile mechanism used with more discipline. Stages are named build states. `COPY --from=build` crosses from one state into another deliberately.
-
-## Failure Modes
-
-Dockerfile failures usually point to a specific part of the recipe.
-
-If `COPY` cannot find a file, the file is probably outside the build context, excluded by `.dockerignore`, or named differently than the Dockerfile expects. Dockerfiles cannot copy arbitrary host paths unless those paths are part of a context or named build source.
-
-If dependency installation is slow after every source edit, instruction order is probably tying stable dependency work to noisy source files. Copy package manifests before copying the rest of the application.
-
-If a container exits with "file not found," the image may not contain the file that `CMD` references, or `WORKDIR` may differ from the path assumed by the command. Inspect the Dockerfile as a filesystem story: which instruction created the file, and where?
-
-If a secret appears in image history, it was probably copied or echoed during a build step. Removing it in a later layer is not enough because earlier layer data can still exist in the image. Keep secrets out of the context or use BuildKit secret mounts when a build step genuinely needs temporary credentials.
+Think of `EXPOSE` as a diagnostic documentation note for developers. The actual port binding is decided exclusively at runtime using the `docker run -p` command.
 
 ## Putting It All Together
 
-The Dockerfile is the contract between source code and image artifact.
+Writing clean image recipes means moving from direct, permissive copies to deliberate, filtered boundaries. By structuring your Dockerfiles around context boundaries and the intermediate container model, you ensure your builds remain fast and reproducible.
 
-- `FROM` chooses the starting filesystem and supply-chain base.
-- `WORKDIR` makes paths predictable for later instructions and containers.
-- `COPY` controls which build-context files enter the image.
-- `RUN` performs build-time work and records filesystem changes.
-- `ENV`, `EXPOSE`, and `CMD` record runtime defaults for containers.
-- Multi-stage builds separate build-only tools from the final runtime image.
+* **Build Context**: Represents the host directory packaged as a TAR stream and transmitted to the daemon over socket interfaces.
+* **Filter Ignoration**: The `.dockerignore` file screens out host garbage, local dependencies, and secrets before serialization, protecting image size and credential privacy.
+* **Intermediate Assembly**: The build engine spawns isolated scratch containers to execute instructions, committing the filesystem differences as read-only image layers.
+* **Explicit Transfers**: `COPY` provides secure, explicit context file transfers, while `ADD` handles tar archive auto-extraction and remote URL downloads.
+* **Directory State**: `WORKDIR` declares a persistent, kernel-created working directory, preventing directory state loss across intermediate steps.
+* **Diagnostic Metadata**: `ENV` writes permanent runtime variables to the image manifest, whereas `EXPOSE` documents port requirements without creating active host bindings.
 
-The team from the opener did not need a longer Dockerfile. They needed a Dockerfile where each instruction had a clear job and each job matched the artifact they wanted to ship.
+Understanding the assembly pipeline guarantees that your compiled artifacts remain clean and minimal.
 
 ## What's Next
 
-The next article zooms in on the build context and `.dockerignore`. A Dockerfile can only copy what the builder can see, and that visibility boundary decides whether your image is clean, fast to build, and free of accidental local files.
+Now that we have mastered Dockerfile instructions and build context optimization, our next step is to examine how image layers are stored and cached. To build images efficiently, you must understand how Docker stacks these layers and how to structure instructions to prevent cache invalidation.
+
+In the next chapter, we will dive deep into **Image Layers and Cache**. We will study the OverlayFS storage driver in active system detail, trace how cache invalidation propagates down the instruction stack, and leverage multi-stage builds to minimize production image footprints.
 
 ---
 
 **References**
 
-- [Docker Docs: Dockerfile overview](https://docs.docker.com/build/concepts/dockerfile/)
-- [Docker Docs: Dockerfile reference](https://docs.docker.com/reference/dockerfile/)
-- [Docker Docs: Multi-stage builds](https://docs.docker.com/build/building/multi-stage/)
-- [Docker Docs: Docker overview](https://docs.docker.com/get-started/docker-overview/)
+- [Dockerfile reference](https://docs.docker.com/reference/dockerfile/) - Comprehensive official reference covering Dockerfile syntax, instruction sets, and build parameters.
+- [Optimize builds with .dockerignore](https://docs.docker.com/build/building/context/#dockerignore-files) - Official guide on .dockerignore file patterns, glob matching syntax, and context exclusion rules.
+- [Docker build context](https://docs.docker.com/build/building/context/) - Technical details on client-daemon context TAR serialization and Socket transport channels.
+- [OCI Image Format Specification](https://github.com/opencontainers/image-spec) - Industry standards defining OCI image manifests, layer stacks, and descriptor arrays.
+- [Best practices for writing Dockerfiles](https://docs.docker.com/develop/develop-images/dockerfile_best-practices/) - Guidelines for writing efficient, clean, and secure Dockerfiles with optimized caching layers.

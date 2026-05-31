@@ -58,6 +58,8 @@ To make sense of the vast AWS console catalog, translate your familiar local lap
 * **Durable Database**: Your local database running on `localhost` maps to transactional RDS relational databases in the cloud.
 * **Observability Logs**: Your local terminal stdout scrollback maps to persistent CloudWatch log groups in the cloud, keeping your logs readable after the process exits.
 
+This split is the beginner version of the AWS shared responsibility model. AWS operates the physical facilities, hardware, and managed-service foundations. Your team still owns the choices that make the application safe: which service to use, which Region to place it in, which identity can call it, what network path is open, how long logs are retained, and how the app handles failure. The amount you own changes by service. An EC2 server leaves operating system patching and process supervision with you. S3 and DynamoDB remove more server work, but you still own access policies, data layout, lifecycle rules, and application behavior.
+
 ![An infographic showing a local laptop stack of process, env file, files, database, and terminal logs moving into specialized AWS services inside an account boundary](/content-assets/articles/article-cloud-providers-aws-foundations-aws-mental-model/local-laptop-to-aws-services.png)
 
 *The important shift is separation of responsibilities. The laptop bundles execution, files, secrets, data, and logs into one machine; AWS splits those jobs into managed services that cooperate inside network and permission boundaries.*
@@ -90,7 +92,7 @@ When you test an application locally, troubleshooting is simple because the proc
 
 In the cloud, you do not have a terminal window to watch. Runtimes are headless and automated. If a container encounters a database connection error and exits, the scheduler may stop the task and replace it with a fresh task. The terminal scrollback history disappears with the stopped runtime unless the logs were already shipped somewhere durable.
 
-To diagnose failures, you must route all operational evidence to a persistent location that exists outside the compute runtime. CloudWatch Logs acts as this permanent vault, capturing the application's stdout and stderr streams and preserving them even after the container ceases to exist. CloudWatch Metrics tracks numeric trends, like database connection limits and memory leaks, while CloudTrail records management API events in the account and can be configured for additional data events where needed. Observability is the continuous practice of collecting these signals to verify that your system is performing as intended, turning mysterious cloud behavior into visible, debuggable evidence.
+To diagnose failures, you must route all operational evidence to a persistent location that exists outside the compute runtime. CloudWatch Logs captures the application's stdout and stderr streams into log groups, where they remain available until the log group's retention policy deletes them. CloudWatch Metrics tracks numeric trends, like database connection limits and memory leaks, while CloudTrail records management API events in the account and can be configured for additional data events where needed. Observability is the continuous practice of collecting these signals to verify that your system is performing as intended, turning mysterious cloud behavior into visible, debuggable evidence.
 
 ![An infographic showing stdout, stderr, metrics, and CloudTrail events streaming from an app container into persistent evidence stores after the container stops](/content-assets/articles/article-cloud-providers-aws-foundations-aws-mental-model/observability-outside-runtime.png)
 
@@ -128,3 +130,5 @@ Now that the local-to-cloud mental model is clear, the next question is placemen
 - [What is Amazon VPC](https://docs.aws.amazon.com/vpc/latest/userguide/what-is-amazon-vpc.html) - Documentation on virtual private networks, subnets, and routing boundaries.
 - [AWS IAM Overview](https://docs.aws.amazon.com/IAM/latest/UserGuide/introduction.html) - Introduction to default-deny access gates and identity-based security policies.
 - [Amazon CloudWatch Logs Overview](https://docs.aws.amazon.com/AmazonCloudWatch/latest/logs/WhatIsCloudWatchLogs.html) - Guide on routing stdout streams to persistent diagnostic groups.
+- [AWS Shared Responsibility Model](https://aws.amazon.com/compliance/shared-responsibility-model/) - Explains how responsibility is divided between AWS and the customer.
+- [CloudWatch Logs log groups and retention](https://docs.aws.amazon.com/AmazonCloudWatch/latest/logs/Working-with-log-groups-and-streams.html) - Documents log groups, log streams, and retention settings.

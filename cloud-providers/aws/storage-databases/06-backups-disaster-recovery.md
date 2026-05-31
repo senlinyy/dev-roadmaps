@@ -103,7 +103,7 @@ $ aws backup list-backup-plans
 }
 ```
 
-Centralizing schedules through AWS Backup eliminates custom scripting overhead and guarantees that every stateful resource in your cloud topology inherits a secure backup plan automatically, providing a single consolidated audit trail for compliance reports.
+Centralizing schedules through AWS Backup reduces custom scripting overhead and gives supported, assigned resources a single backup policy and audit trail. It does not protect a resource merely because the resource exists. The resource must be supported, included through tags or explicit assignment, and successfully backed up according to the plan. Operators should monitor backup job failures just like production application failures.
 
 ## Recovery Models: S3 Object Versioning vs. Block Snapshots
 
@@ -122,7 +122,9 @@ With S3 versioning and EBS snapshots centralizing your historical data protectio
 To defend against administrative compromise, you must implement secure cloud deletion blockades:
 
 * **AWS Backup Vault Lock**: Vault Lock applies a strict write-once policy to your backup vaults that prevents any backup from being deleted or modified during the retention period. Once locked in compliance mode, the policy cannot be deleted, altered, or bypassed by anyone, including the AWS root account. Even an administrator cannot delete a backup until its configured retention window has naturally expired.
-* **S3 Object Lock**: Enforces identical deletion protection directly at the S3 bucket level, preventing object versions from being deleted or overwritten for a specified retention period.
+* **S3 Object Lock**: Enforces write-once-read-many protection directly at the S3 bucket level, preventing protected object versions from being deleted or overwritten for a specified retention period. Object Lock requires bucket versioning, and a normal delete request can still add a delete marker that hides the current object from ordinary reads. The protected version remains recoverable until its retention period expires.
+
+For ransomware planning, AWS Backup also supports logically air-gapped vaults. These vaults add extra backup isolation, come equipped with Vault Lock compliance mode, and can be shared for restore access across accounts. They are useful when the recovery plan assumes the primary account may be impaired during an incident.
 
 ```bash
 $ aws backup put-backup-vault-lock-configuration \
@@ -192,6 +194,7 @@ A storage architecture is incomplete until the data recovery path is fully desig
 * **Unified Backup Vaults**: Tag stateful assets to inherit automated AWS Backup plans, eliminating custom backup scripts across your cloud network.
 * **Granular Recovery Models**: Rebuild individual files using S3 version stack history, and reconstruct system boot drives via block EBS snapshots.
 * **Compliance Locks**: Secure S3 Object Lock and AWS Backup Vault Lock to defend historical snapshots against compromised administrative credentials.
+* **Isolated Backup Copies**: Use cross-account copy or logically air-gapped vaults when recovery must survive compromise of the primary account.
 * **GDPR vs. Backups**: Coordinate database deletions with post-restore grace window scripts to satisfy CCPA/GDPR obligations across backup archives.
 * **Audited Drills**: Run regular, documented restore drills in isolated staging subnets to verify that KMS keys, schemas, and credentials function perfectly.
 
@@ -207,6 +210,7 @@ Durable, reliable cloud systems are constructed around the assumption of failure
 
 - [AWS Backup concepts](https://docs.aws.amazon.com/aws-backup/latest/devguide/whatisbackup.html) - Focuses on centralized backup schedules, backup plans, recovery points, and protected vaults.
 - [AWS Backup Vault Lock](https://docs.aws.amazon.com/aws-backup/latest/devguide/vault-lock.html) - Outlines vault policies, compliance locks, and write-once backup blockades.
+- [Logically air-gapped vaults in AWS Backup](https://docs.aws.amazon.com/aws-backup/latest/devguide/logicallyairgappedvault.html) - Explains isolated backup vaults, built-in compliance mode, and cross-account restore sharing.
 - [Amazon RDS backups](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_WorkingWithAutomatedBackups.html) - Explains automated snapshots, transaction log archiving, and point-in-time recovery pipelines.
 - [S3 Object Lock](https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-lock.html) - Details bucket-level retention modes, compliance scopes, and legal hold locks.
 - [S3 Versioning concepts](https://docs.aws.amazon.com/AmazonS3/latest/userguide/Versioning.html) - Focuses on version IDs, delete marker behaviors, and historical file recovery.

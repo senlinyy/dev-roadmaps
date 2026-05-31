@@ -71,9 +71,9 @@ In self-managed Kubernetes, operating this control plane requires significant ef
 
 The **Worker Capacity** is the actual compute infrastructure where your application containers execute. The control plane does not run your code; it only schedules where the containers should go. Your team must choose how to provision and manage this worker capacity:
 
-* **Managed Node Groups**: EKS provisions and operates groups of EC2 virtual servers that register as Kubernetes nodes in your cluster. Your team chooses the instance types, but AWS handles node updates, AMI lifecycle, and draining tasks during maintenance.
+* **Managed Node Groups**: EKS provisions and lifecycle-manages groups of EC2 virtual servers that register as Kubernetes nodes in your cluster. Your team chooses the instance types, scaling shape, subnet placement, and many node settings, while EKS automates common node-group operations such as creating, updating, terminating, and draining nodes.
 * **Fargate Profiles**: You define selective namespaces and labels, and EKS automatically runs those specific pods on AWS Fargate serverless compute, eliminating EC2 virtual nodes completely.
-* **EKS Auto Mode**: An automated compute model where AWS dynamically provisions, sizes, and updates the worker nodes based on active pod resource requests, reducing infrastructure overhead.
+* **EKS Auto Mode**: An automated cluster infrastructure model where AWS manages more of the routine work for compute, pod networking, load balancing, storage integration, and other core components. Auto Mode still runs resources in your AWS account, but it changes the operational contract because AWS takes on more day-to-day node and add-on management.
 
 This division is an essential operational checkpoint. The EKS control plane can be 100% healthy while your application is completely offline because the worker nodes are out of memory, subnets are exhausted, or your pod manifests requested resources that the capacity group cannot fulfill.
 
@@ -119,9 +119,9 @@ However, this architecture introduces a severe subnet capacity hazard:
 * **Rapid IP Address Exhaustion**: A single large EC2 worker node can run dozens of pods. If you run a cluster with 10 nodes and each node runs 30 pods, you consume 300 private IP addresses from your subnet instantly.
 * **Warm IP Pre-allocation**: To speed up container launch times, the CNI pre-allocates and holds a pool of warm private IP addresses on each node. Even if you only run 5 active pods, the nodes may hold 60 VPC IP addresses host-bound, quickly draining smaller subnets.
 
-If you build your EKS cluster inside tight `/24` subnets (which only provide 251 usable IP addresses), your cluster will quickly fail to scale. Nodes will refuse to schedule new pods, and deployments will get stuck because the VPC subnet has run completely out of private IP addresses. 
+If you build your EKS cluster inside tight `/24` subnets (which only provide 251 usable IPv4 addresses), your cluster can fail to scale long before the worker nodes run out of CPU or memory. Nodes can refuse to schedule new pods, and deployments can get stuck because the VPC subnet has run completely out of private IP addresses.
 
-When designing for EKS, you must size your private application subnets generously (using at least `/20` or `/19` CIDR blocks) to provide the massive IP address runway that Kubernetes workloads demand.
+When designing for EKS, size your private application subnets from expected pod count, warm IP settings, instance type ENI limits, Availability Zone spread, and growth room rather than copying a fixed CIDR size. Large clusters often need much larger subnets or IPv4-saving features such as prefix delegation, but the correct answer is a capacity calculation: every pod needs an address path, and every warm pool consumes addresses before an application uses them.
 
 ![EKS cluster layers showing managed control plane, worker nodes, pods, service label routing, and VPC subnet IP pool consumption](/content-assets/articles/article-cloud-providers-aws-compute-application-hosting-eks/eks-cluster-layers.png)
 
@@ -165,7 +165,7 @@ Amazon EKS is a powerful container orchestrator that bridges the vast Kubernetes
 
 * **Differentiate the Plane from Node**: Separate control plane health (managed by AWS) from worker node capacity (managed by your team).
 * **Align Your Selectors**: Enforce perfect label selectors across your Deployment replicas and Service routers to guarantee successful traffic paths.
-* **Size Your VPC Subnets Generously**: Plan for rapid IP consumption under the Amazon VPC CNI. Allocate large private application subnets to prevent IP exhaustion.
+* **Size Your VPC Subnets Generously**: Plan for rapid IP consumption under the Amazon VPC CNI. Calculate pod IP demand, warm pools, node count, and Availability Zone spread before choosing subnet sizes.
 * **Enforce Scoped Pod Identity**: Never attach broad AWS permissions to your EC2 node profiles. Associate IAM roles directly with specific Pod Service Accounts.
 * **Choose by Complexity**: Select ECS with Fargate for straightforward AWS-native container backends, and reserve EKS for multi-team platforms that demand the Kubernetes standard.
 
@@ -181,4 +181,7 @@ By mastering EKS control structures, optimizing your VPC subnet IP footprints, a
 
 - [Amazon EKS User Guide](https://docs.aws.amazon.com/eks/latest/userguide/what-is-eks.html) - Technical documentation on setting up and managing Kubernetes on AWS.
 - [Amazon VPC CNI plugin for Kubernetes](https://docs.aws.amazon.com/eks/latest/userguide/managing-vpc-cni.html) - Guide on managing IP address allocation for pods on AWS nodes.
+- [Amazon VPC CNI best practices](https://docs.aws.amazon.com/eks/latest/best-practices/vpc-cni.html) - Explains warm IP behavior, ENI allocation, and pod IP capacity planning.
+- [Simplify node lifecycle with managed node groups](https://docs.aws.amazon.com/eks/latest/userguide/managed-node-groups.html) - Documents managed node group lifecycle automation and customer-owned node settings.
+- [Automate cluster infrastructure with EKS Auto Mode](https://docs.aws.amazon.com/eks/latest/userguide/automode.html) - Explains how Auto Mode extends AWS management to cluster infrastructure.
 - [EKS Pod Identity User Guide](https://docs.aws.amazon.com/eks/latest/userguide/pod-identities.html) - Technical details on mapping IAM roles to Kubernetes service accounts.

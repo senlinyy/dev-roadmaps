@@ -91,7 +91,7 @@ The first essential runtime habit is to identify the specific controller respons
 
 A container image is the compiled package containing your application code, runtime libraries, and system dependencies. In AWS, these images are stored in Amazon ECR. 
 
-An image is completely static and immutable. This immutability is highly valuable because it guarantees that the exact same bytes compiled in staging run in production. However, because the image is static, it cannot answer environment-specific questions:
+A built container image is a static package, and an image digest identifies its exact bytes. This immutability is highly valuable because it lets staging and production run the same artifact when both reference the same digest. Human-friendly tags such as `latest` or `production` can still move unless your repository disables tag mutation, so production runtime contracts should pin the digest they intend to run. However, because the image package is static, it cannot answer environment-specific questions:
 
 Image Boundaries and Missing Information:
 
@@ -189,4 +189,5 @@ We have established the foundational mental model of runtime operations, separat
 * [Amazon ECS Services](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/ecs_services.html) - AWS developer guide to compute controllers and load balancer targets.
 * [Amazon ECS Task Definitions](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task_definitions.html) - Documentation on versioning container parameters and resource boundaries.
 * [Task Definition Parameters](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task_definition_parameters.html) - Technical reference for image, port, role, log, and memory parameters.
+* [Preventing image tag overwrites in Amazon ECR](https://docs.aws.amazon.com/AmazonECR/latest/userguide/image-tag-mutability.html) - Explains mutable and immutable image tag behavior in ECR.
 * [Amazon ECS Application Auto Scaling](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/service-auto-scaling.html) - Guide to configuring horizontal scale limits.

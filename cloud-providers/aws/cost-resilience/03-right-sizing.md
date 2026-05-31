@@ -81,12 +81,12 @@ If database query performance is poor, look for missing query indexes or redunda
 
 ## Storage Optimization: Aligning Prefix Lifecycles
 
-Storage right-sizing means applying automated retention rules rather than executing manual deletions. In Amazon S3, you configure Lifecycle Rules to transition files to cheaper storage tiers (like Glacier) or expire them permanently.
+Storage right-sizing means applying automated retention rules rather than executing manual deletions. In Amazon S3, you configure Lifecycle Rules to transition files to cheaper S3 Glacier storage classes or expire them permanently.
 
 To configure lifecycle rules safely, you must align your S3 key prefixes with the data class and business lifecycle:
 
-* `receipts/`: Customer-facing invoices that must be retrieved instantly. Retain on S3 Standard for 90 days, transition to Glacier Instant Retrieval for 7 years to satisfy audit rules, and expire.
-* `exports/monthly/`: Financial reports compiled once per month. Retain on S3 Standard for 30 days, transition to Glacier Flexible Retrieval, and expire after 1 year.
+* `receipts/`: Customer-facing invoices that must be retrieved instantly. Retain on S3 Standard for 90 days, transition to S3 Glacier Instant Retrieval for 7 years to satisfy audit rules, and expire.
+* `exports/monthly/`: Financial reports compiled once per month. Retain on S3 Standard for 30 days, transition to S3 Glacier Flexible Retrieval, and expire after 1 year.
 * `exports/tmp/`: Temporary processing chunks created during multipart uploads. Set an automated lifecycle rule to delete incomplete multipart uploads after 7 days, eliminating hidden storage fees.
 
 The gotcha is bucket-level rules. If you apply a single, overriding lifecycle rule to an entire bucket without matching key prefixes, you can accidentally delete critical compliance files or customer documents, creating legal and operational liability. Structure S3 keys by explicit prefixes first.
@@ -99,7 +99,7 @@ Instead, you right-size logs by improving signal quality:
 
 * **Eradicate Error Loops**: A single application bug that writes a traceback string 1,000 times per second under load will generate gigabytes of log noise. Fix the underlying error loop to reduce log volume instantly.
 * **Manage Ingress Log Levels**: Standardize your logging frameworks to run on `INFO` or `WARN` levels in production, restricting verbose `DEBUG` logging strictly to isolated staging environments.
-* **Set Tiered Retention**: By default, CloudWatch Logs retains all files permanently. Enforce a strict 7-day retention policy for development groups, 30 days for production APIs, and stream long-term compliance trails to cheap S3 S3 buckets via Kinesis.
+* **Set Tiered Retention**: By default, CloudWatch Logs retains all files permanently. Enforce a strict 7-day retention policy for development groups, 30 days for production APIs, and stream long-term compliance trails to S3 through Amazon Data Firehose.
 
 ## Analyzing Background Queue Worker Efficiency
 
@@ -116,8 +116,8 @@ If the queue is backed up due to failing work, scaling your worker fleet will mu
 
 AWS provides native tools to identify optimization opportunities:
 
-* **AWS Compute Optimizer**: Consolidates and analyzes historical utilization metrics to provide instance, Lambda, Fargate, and EBS size recommendations.
-* **Cost Optimization Hub**: Consolidated visual dashboard that aggregates cost recommendations across accounts and regions, prioritizing actions by estimated savings.
+* **AWS Compute Optimizer**: Consolidates and analyzes historical utilization metrics to provide recommendations for supported resources such as EC2 instances, Auto Scaling groups, EBS volumes, Lambda functions, ECS services on Fargate, RDS databases, and certain commercial software licenses.
+* **Cost Optimization Hub**: A consolidated dashboard that aggregates cost recommendations across accounts and Regions, prioritizing actions by estimated savings.
 
 Compute Optimizer is highly valuable because it identifies utilization patterns that operators may miss, such as a Fargate task that is permanently over-allocated on RAM. However, automated recommendations lack critical business context:
 

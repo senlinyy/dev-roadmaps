@@ -40,7 +40,7 @@ To bypass these relational scaling limits, you can move high-frequency, key-base
 
 DynamoDB is a serverless, non-relational (NoSQL) database service. While relational database engines like RDS PostgreSQL organize data into normalized tables cabled together dynamically using complex SQL joins, DynamoDB takes a completely different path. It is built explicitly for high-velocity, single-digit millisecond performance at a traffic scale that would exhaust traditional SQL database connection and CPU pools.
 
-The easiest way to visualize DynamoDB is as a massive spreadsheet cabled directly to the cloud network. Instead of managing rows with uniform column schemas, DynamoDB stores independent items. Every item in your table must be identified and written using a unique primary row key (the Partition Key). Outside of this Partition Key, the items in the same table can hold entirely different attributes without any structural checks or schema validations.
+The easiest way to visualize DynamoDB is as a massive spreadsheet cabled directly to the cloud network. Instead of managing rows with uniform column schemas, DynamoDB stores independent items. Every item in your table must be identified by its primary key. In a simple-key table, the partition key alone must be unique. In a composite-key table, the combination of partition key and sort key must be unique, which allows many related items to share the same partition key. Outside of the primary key attributes, the items in the same table can hold entirely different attributes without uniform column requirements.
 
 Because DynamoDB is completely serverless, you do not manage virtual servers, provision disk sizes, or configure connection pools. Instead, your application communicates with the database over secure HTTP APIs, and AWS handles backend capacity scaling, physical hardware replication, and server maintenance automatically. By trading the dynamic query flexibility of SQL joins for managed horizontal scaling, DynamoDB can deliver predictable single-digit millisecond responses for well-designed key access patterns. While it is not designed for unpredictable business analytics, it represents the premier AWS home for high-velocity, key-based application state like customer sessions, API idempotency tokens, and active shopping carts.
 
@@ -90,17 +90,17 @@ You can observe this transaction behavior by running a PUT command with a condit
 $ aws dynamodb put-item \
     --table-name StoreOrders \
     --item '{"PK": {"S": "ORDER#1042"}, "SK": {"S": "METADATA"}}' \
-    --condition-expression "attribute_not_exists(PK)"
+    --condition-expression "attribute_not_exists(PK) AND attribute_not_exists(SK)"
 
 $ aws dynamodb put-item \
     --table-name StoreOrders \
     --item '{"PK": {"S": "ORDER#1042"}, "SK": {"S": "METADATA"}}' \
-    --condition-expression "attribute_not_exists(PK)"
+    --condition-expression "attribute_not_exists(PK) AND attribute_not_exists(SK)"
 
 An error occurred (ConditionalCheckFailedException) when calling the PutItem operation: The conditional request failed
 ```
 
-The first command executes successfully, saving the item to the database. The second command fails immediately because the Partition Key `ORDER#1042` already exists, causing DynamoDB to abort the write and throw a `ConditionalCheckFailedException`. This optimistic concurrency control provides an atomic claim on a key. In a payment workflow, the safer pattern is to claim an idempotency key before running the external payment side effect, then make retries check the stored result. DynamoDB can block duplicate state writes, but exactly-once business behavior still depends on the surrounding workflow.
+The first command executes successfully, saving the item to the database. The second command fails immediately because the exact composite primary key pair, `PK = ORDER#1042` and `SK = METADATA`, already exists. DynamoDB evaluates the condition against that item key and aborts the write with a `ConditionalCheckFailedException`. This optimistic concurrency control provides an atomic claim on a key. In a payment workflow, the safer pattern is to claim an idempotency key before running the external payment side effect, then make retries check the stored result. DynamoDB can block duplicate state writes, but exactly-once business behavior still depends on the surrounding workflow.
 
 ```mermaid
 flowchart TD
@@ -117,7 +117,7 @@ A composite primary key structure forces you to query data by its primary Partit
 
 To query by attributes other than your primary key without running slow, cost-prohibitive full-table scans, you must deploy **Global Secondary Indexes (GSIs)**.
 
-A GSI is a secondary partition layout of your table's data, cabled with its own custom Partition Key and Sort Key, such as using an email address as the index partition key. When you define a GSI, you choose which attributes from the main table are projected (copied) into the index. When your application writes an item to the main table, DynamoDB automatically and asynchronously copies the item to the GSI partition layout. Your application can then query the GSI directly, locating items by the secondary key. Note that GSIs are read-only; you cannot write directly to a GSI.
+A GSI is a secondary partition layout of your table's data, cabled with its own custom Partition Key and Sort Key, such as using an email address as the index partition key. When you define a GSI, you choose which attributes from the main table are projected (copied) into the index. When your application writes an item to the main table, DynamoDB automatically and asynchronously copies the item to the GSI partition layout. Your application can then query the GSI directly, locating items by the secondary key. GSI reads are eventually consistent, so a just-written item may not appear in the index for a short moment. Note that GSIs are read-only; you cannot write directly to a GSI.
 
 Global Secondary Indexes are powerful tools that provide alternative query paths. However, because they replicate data, they incur additional write costs and consume extra storage. Use GSIs deliberately to satisfy core access patterns, and keep index projections as slim as possible to minimize costs.
 
@@ -137,7 +137,7 @@ Unlike managed RDS instances where you pay for continuous running virtual server
 | **On-Demand** | Automatic, with burst handling and account/table limits | Per-request fee (RCUs/WCUs read/written) | Unpredictable spikes, development sandboxes, low-traffic apps |
 | **Provisioned** | Minutes (scaling rules) | Flat hourly rate per pre-allocated capacity | Steady production traffic, predictable loads, high-volume workloads |
 
-Starting with On-Demand capacity during development allows your table to handle many testing spikes without manual capacity planning, though extreme jumps above recent traffic can still throttle until capacity adapts. Once your production traffic profiles stabilize and display a steady baseline load, switching to Provisioned Capacity with Auto Scaling can lower throughput costs while keeping capacity aligned with expected demand.
+Starting with On-Demand capacity during development allows your table to handle many testing spikes without manual capacity planning. On-demand mode instantly accommodates traffic up to previously reached peaks and up to double the previous peak, but very abrupt jumps above that can still throttle while DynamoDB allocates more capacity. Hot partition keys can also throttle a table even when the overall table mode is on-demand because too much traffic is aimed at one key. Once your production traffic profiles stabilize and display a steady baseline load, switching to Provisioned Capacity with Auto Scaling can lower throughput costs while keeping capacity aligned with expected demand.
 
 ## Putting It All Together
 
@@ -168,5 +168,8 @@ DynamoDB, RDS, and S3 cover all API, database, and object storage requirements. 
 - [Primary key design guidelines](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/HowItWorks.NamingRulesDataTypes.html) - Explains simple keys, composite PK/SK keys, and item collection boundaries.
 - [Best practices for DynamoDB design](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/best-practices.html) - Focuses on NoSQL denormalization, access pattern mapping, and single-table modeling.
 - [Working with conditional writes](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/WorkingWithItems.html#WorkingWithItems.ConditionalWrites) - Details atomic condition assertions, evaluation logic, and concurrency controls.
+- [Condition expressions](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/Expressions.ConditionExpressions.html) - Documents `attribute_not_exists` behavior for simple and composite primary keys.
 - [Global secondary indexes](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/GSI.html) - Outlines asynchronous replication, projection sets, and secondary lookup query paths.
+- [DynamoDB read consistency](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/HowItWorks.ReadConsistency.html) - Explains eventual consistency and why GSIs do not support strongly consistent reads.
 - [DynamoDB capacity modes](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/HowItWorks.ReadWriteCapacityMode.html) - Explains Read and Write Capacity Units, On-Demand per-request billing, and Provisioned Auto Scaling.
+- [DynamoDB on-demand capacity mode](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/on-demand-capacity-mode.html) - Explains previous-peak scaling behavior, double-peak guidance, and throttling during abrupt traffic growth.

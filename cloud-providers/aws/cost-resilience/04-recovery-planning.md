@@ -187,7 +187,9 @@ S3 Resilience Layer:
 | :--- | :--- | :--- |
 | **S3 Versioning** | Retains multiple versions of an object under the same key. A delete operation merely adds a temporary "delete marker." | Allows you to recover from accidental deletions or overwrites by removing the delete marker. |
 | **S3 Lifecycle Rules** | Automatically transitions or deletes object versions after a defined number of days. | Prevents ballooning storage bills by cleaning up old, non-current versions. |
-| **MFA Delete** | Requires multi-factor authentication (MFA) to permanently delete any object version or change bucket versioning. | Prevents a compromised AWS credential from executing a malicious, permanent wipe of your data assets. |
+| **S3 Object Lock** | Prevents protected object versions from being deleted or overwritten until the retention period or legal hold allows it. | Provides stronger write-once-read-many protection for critical archives and compliance records. |
+
+MFA Delete exists, but it is awkward as a general recovery pattern. Only the root user can enable it, it cannot be enabled from the console, and S3 lifecycle configurations are not supported on buckets configured with MFA Delete. For most beginner production designs, S3 Versioning plus Object Lock on the buckets that need write-once protection is the clearer model.
 
 If S3 Versioning is disabled, a delete operation permanently erases the physical data blocks from the AWS storage grid. Enabling versioning is your primary insurance policy against human error in object storage.
 
@@ -237,7 +239,7 @@ Operating a resilient cloud system requires transitioning from simple backups to
 * **Match Strategy to Budget**: Select the appropriate recovery tier along the disaster recovery ladder—balancing the low cost of Backup and Restore against the near-zero downtime of Active-Active.
 * **Leverage Point-in-Time Recovery**: Use Amazon RDS PITR to recover from application corruption events by replaying logs near the chosen restore timestamp.
 * **Understand the Performance Impact**: Plan for the lazy block loading first-touch latency penalty on newly restored EBS volumes, avoiding instant production traffic routing.
-* **Enforce Storage Resilience**: Enable S3 Versioning and MFA Delete to protect object storage assets from accidental or malicious deletion scripts.
+* **Enforce Storage Resilience**: Enable S3 Versioning and use S3 Object Lock where retention rules require protected object versions. Be cautious with MFA Delete because it conflicts with lifecycle-managed buckets.
 * **Validate with Drills**: Conduct scheduled, end-to-end recovery drills to measure actual RTO against your target objectives, tearing down test resources immediately to avoid billing leaks.
 
 ## What's Next
@@ -254,4 +256,6 @@ In the next module, we will pivot to dynamic application orchestration. We will 
 * [Disaster Recovery Options in the Cloud](https://docs.aws.amazon.com/whitepapers/latest/disaster-recovery-workloads-on-aws/disaster-recovery-options-in-the-cloud.html) - Detailed architectural whitepaper on the DR ladder.
 * [Amazon RDS Point-in-Time Recovery Documentation](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_PIT.html) - Reference for restoring database instances.
 * [Amazon S3 Versioning User Guide](https://docs.aws.amazon.com/AmazonS3/latest/userguide/Versioning.html) - Core concepts for protecting S3 bucket object assets.
+* [Amazon S3 Object Lock](https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-lock.html) - Documents retention modes, legal holds, and write-once-read-many protection for object versions.
+* [Configuring MFA Delete](https://docs.aws.amazon.com/AmazonS3/latest/userguide/MultiFactorAuthenticationDelete.html) - Documents MFA Delete limitations, including root-user setup and lifecycle incompatibility.
 * [AWS Backup Developer Guide](https://docs.aws.amazon.com/aws-backup/latest/devguide/whatisbackup.html) - Centralized backup vault and policy management reference.

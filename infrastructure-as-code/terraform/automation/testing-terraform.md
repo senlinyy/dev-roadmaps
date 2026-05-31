@@ -24,6 +24,8 @@ id: article-iac-terraform-automation-testing
 
 A Terraform plan that succeeds does not mean the configuration is correct. A plan with no errors might create an S3 bucket with public access enabled, configure a security group that accepts traffic from anywhere on all ports, or set up a database with no backup retention. The plan succeeds — Terraform can execute those operations — but the resulting infrastructure is insecure or misconfigured.
 
+![Terraform testing works best as layers, from fast formatting and validation checks to slower applied tests.](/content-assets/articles/article-iac-terraform-automation-testing/terraform-test-pyramid.png)
+
 Testing Terraform means checking the configuration against expectations before those expectations hit production. Some checks take milliseconds and run entirely locally. Others deploy real resources and check their behavior. The right testing strategy uses a combination of both, applying fast checks early (to catch obvious mistakes quickly) and slow integration tests later (to verify complex interactions that only appear when real resources exist).
 
 The other argument for testing Terraform is refactoring confidence. When you restructure a large module — moving resources, renaming variables, changing how outputs are computed — tests tell you whether the refactoring preserved the correct behavior. Without tests, you find out at the next production deploy.
@@ -140,6 +142,8 @@ The skip comment documents the conscious decision to accept the finding for this
 ## Plan-Based Testing: Asserting on the Plan Output
 
 `terraform plan -out=plan.tfplan` saves the plan to a binary file. `terraform show -json plan.tfplan` converts it to JSON. That JSON contains every planned operation — which resources will be created, destroyed, or modified, and what their attributes will be. You can parse this JSON in a test script to assert that the plan matches your expectations.
+
+![Plan-based tests inspect the generated plan artifact before any real apply happens.](/content-assets/articles/article-iac-terraform-automation-testing/plan-fixture-flow.png)
 
 A simple shell script that checks the plan:
 
@@ -284,6 +288,9 @@ Each layer adds depth. The fast static checks catch obvious mistakes early. The 
 ## What's Next
 
 The final article in this module covers Policy as Code — using tools like Open Policy Agent (OPA) and HashiCorp Sentinel to enforce organization-wide rules on Terraform configurations, preventing non-compliant infrastructure from being applied regardless of who writes the code.
+
+
+![Terraform testing summary: start fast, scan statically, assert the plan, and test modules.](/content-assets/articles/article-iac-terraform-automation-testing/testing-summary.png)
 
 ---
 

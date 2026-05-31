@@ -22,188 +22,237 @@ aliases:
 
 ## Table of Contents
 
-1. [The Problem](#the-problem)
-2. [The Mental Model](#the-mental-model)
-3. [Containers and VMs](#containers-and-vms)
-4. [Images](#images)
-5. [Containers](#containers)
-6. [The Docker Engine](#the-docker-engine)
-7. [Where Isolation Ends](#where-isolation-ends)
-8. [Seeing the Boundary](#seeing-the-boundary)
-9. [Failure Modes](#failure-modes)
-10. [Putting It All Together](#putting-it-all-together)
-11. [What's Next](#whats-next)
+1. [Local Processes vs. Container Boundaries](#local-processes-vs-container-boundaries)
+2. [The Process Isolation Container](#the-process-isolation-container)
+3. [Under the Hood: Linux Namespaces](#under-the-hood-linux-namespaces)
+4. [Resource Enforcement: Control Groups](#resource-enforcement-control-groups)
+5. [The Client-Daemon Architecture](#the-client-daemon-architecture)
+6. [Ephemeral Filesystems: The Layer Stack](#ephemeral-filesystems-the-layer-stack)
+7. [Putting It All Together](#putting-it-all-together)
+8. [What's Next](#whats-next)
 
-## The Problem
+## Local Processes vs. Container Boundaries
 
-An API works on one developer laptop and fails everywhere else. The code is the same, but the machine around it is not. One person has Node 22, another has Node 20, CI has an older package manager, and the staging host is missing an operating-system library used by an image processing dependency. The service itself is small. The environment required to run it is the part nobody can see clearly.
+When you develop a web application on your local laptop, the execution environment is highly permissive. You run a startup command, and the resulting process has full visibility into your laptop's filesystem, network cards, host libraries, and active system configuration. If your code needs a database, you points its client to a port on the local machine, assuming the database service is running and configured correctly.
 
-The same pattern appears in several forms:
+This direct access is private, fast, and simple for local iteration. However, because the application is leaning on the specific, accidental state of your local machine, this model breaks down when moving to a production environment. 
 
-- A teammate clones the repository, runs the setup commands, and gets a dependency error that nobody else sees.
-- CI passes the unit tests but fails when the application starts because a system package is missing.
-- A staging host has an old build output directory, so the process starts code that is not the code that was reviewed.
+A development machine might run Node 22 with specific operating system libraries installed. When you deploy the same code, the production server might run Node 20 or lack the exact image-processing libraries your dependencies expect. This environmental drift creates failures that are difficult to reproduce or diagnose from your local machine.
 
-Docker solves this by making the application environment an explicit artifact. Instead of asking every machine to recreate the right runtime by hand, Docker lets the team build an image that contains the application files, dependencies, runtime, and default startup command. A container is what happens when that image is started as a process on a host.
+```plain
+$ node src/server.js
+Error: Cannot find module 'sharp'
+    at Function.Module._resolveFilename (internal/modules/cjs/loader.js:880:15)
+```
 
-That distinction matters. Docker gives the deployment command a packaging and runtime model. The image answers, "What filesystem and defaults should this app have?" The container answers, "What isolated process is running from that image right now?"
+The error is not in the source code itself. The error is in the surrounding host environment, which is missing the required library bindings. 
 
-## The Mental Model
+Docker solves this by packaging the application and its entire running environment into a single, repeatable artifact called an image. When you start this image, Docker runs the application inside an isolated sandbox called a container. 
 
-Start with a normal process. When you run `node dist/server.js` on your laptop, the process sees your laptop's filesystem, network interfaces, environment variables, process table, users, and installed libraries. Some of those details are intentional. Many are accidental. Your application can pass locally because it is leaning on something your machine happens to have.
+By defining the boundary deliberately, you isolate the process from host-level differences and ensure that it executes identically on every system.
 
-Docker puts a boundary around that process. Inside the boundary, the process sees a filesystem assembled from the image, a network namespace chosen by Docker, environment values passed at creation time, and a process tree that looks mostly like its own small machine. Outside the boundary, the host still owns the real kernel, CPU, memory, disk, and network hardware.
+## The Process Isolation Container
+
+To understand what Docker creates when you run an image, you must compare it to a standard virtual machine. Both options draw boundaries around your application to prevent resource interference, but they place the boundary in fundamentally different layers of the system.
+
+A virtual machine draws its boundary around an entire guest operating system. It virtualizes the physical hardware, boots a dedicated guest kernel, loads system initialization scripts, starts background services, and runs your application within that massive OS container. This approach is highly secure and isolated, but it introduces massive resource overhead. A virtual machine requires gigabytes of disk space for the guest OS files, minutes to boot, and continuous memory overhead just to keep the guest kernel and operating system daemons running.
+
+A container draws its boundary directly around a process running on the host system. There is no guest operating system, no virtualized hardware, and no secondary kernel. The application process runs directly on the host operating system's CPU and memory, sharing the host kernel with all other processes. Docker simply instructs the host kernel to apply strict runtime namespaces and resource filters around that specific process tree.
+
+| System Property | Process Container | Virtual Machine |
+| --- | --- | --- |
+| Operating System | Shares the host kernel directly | Boots a full guest operating system |
+| Startup Latency | Milliseconds (starts a normal process) | Minutes (boots guest BIOS and OS) |
+| Disk Footprint | Megabytes (app binaries and libraries) | Gigabytes (guest OS kernel and tools) |
+| Resource Utilization | Near-zero idle overhead | Constant guest kernel idle CPU and RAM |
+| System Boundary | Logical namespace separation | Physical hardware hypervisor partition |
+
+This process-level boundary makes containers highly lightweight. Because they share the host kernel, you can boot hundreds of containers on a single virtual machine node without running out of CPU or memory. 
+
+However, sharing the host kernel means that containers do not provide absolute hardware isolation. If a process inside a container exploits a vulnerability in the shared host kernel, it can break through the logical boundaries and reach host system resources. For standard microservices, this shared model is a powerful efficiency win, but you must configure permissions and user namespaces carefully.
+
+## Under the Hood: Linux Namespaces
+
+Docker does not use virtualization to isolate processes. Instead, the engine calls first-party Linux kernel features called namespaces to control what a process is allowed to see. When a program starts inside a container, the engine utilizes the `clone()` or `unshare()` system calls to launch the process within a set of isolated namespaces.
+
+```mermaid
+flowchart TD
+    subgraph HostSystem["Host Operating System Kernel"]
+        subgraph LogicalNamespace1["Container Namespace A"]
+            ProcessA["isolated-process (PID 1)"]
+            NetNS1["net: 172.17.0.2"]
+            MountNS1["mnt: /usr/src/app"]
+        end
+        subgraph LogicalNamespace2["Container Namespace B"]
+            ProcessB["isolated-process (PID 1)"]
+            NetNS2["net: 172.17.0.3"]
+            MountNS2["mnt: /var/lib/mysql"]
+        end
+        subgraph PhysicalTier["Physical Hardware Layer"]
+            Cpu["Host CPU"]
+            Ram["Host Memory"]
+            Disk["Host Storage Devices"]
+        end
+    end
+    ProcessA --> PhysicalTier
+    ProcessB --> PhysicalTier
+```
+
+A namespace limits the visibility of system-level tables for a process. Under the hood, Linux supports six primary namespaces that Docker applies to every container process:
+
+* **Process ID (PID) Namespace**: Restricts visibility of the system process table. Inside the container, the application process is assigned PID 1, making it look like the root process of the machine. The container process cannot see any processes running on the host or inside other containers, protecting the host system tree.
+* **Network (NET) Namespace**: Isolates network resources, including virtual network cards, routing tables, and port bindings. The container process receives its own private loopback interface and virtual ethernet adapters, binding to ports independently of the host's ports.
+* **Mount (MNT) Namespace**: Sandboxes the process's view of the filesystem. The process can only see the filesystem paths mounted from its image, completely hiding the host's root directory and preventing unauthorized read or write access to system files.
+* **Interprocess Communication (IPC) Namespace**: Restricts shared memory tables, message queues, and semaphores. This prevents a compromised container process from intercepting memory messages sent between host services.
+* **UNIX Timesharing System (UTS) Namespace**: Allows the container to declare its own hostname and domain name independently of the host's system name.
+* **User (USER) Namespace**: Maps container user IDs (UIDs) and group IDs (GIDs) to different IDs on the host. This allows a process to run as `root` (UID 0) inside the container while mapping it to an unprivileged user (e.g., UID 10001) on the host, neutralizing the host privilege risk.
+
+If you inspect a container's namespaces from the host terminal, you can trace where these boundaries are declared:
+
+```plain
+$ lsns -p 14205
+        NS TYPE   NPROCS   COMMON_NAME
+4026531835 mnt         1   /usr/src/app
+4026531836 uts         1   orders-api
+4026531837 ipc         1   
+4026531838 pid         1   isolated-process
+4026531839 net         1   172.17.0.2
+4026531840 user        1   
+```
+
+These namespace IDs show that the process running under host PID 14205 is completely sandboxed. To that process, the outside world does not exist. It sees only the files, network interfaces, and process IDs mapped into its specific namespace structures.
+
+## Resource Enforcement: Control Groups
+
+Namespaces control what a container process is allowed to *see*, but they do not control what that process is allowed to *consume*. Without a resource limit, an isolated process inside a container can consume 100% of the host's CPU and memory, starving other containers and freezing the host system.
+
+To prevent this "noisy neighbor" problem, Docker uses a Linux kernel feature called control groups, commonly known as cgroups. A cgroup groups processes together and enforces strict limits on CPU shares, memory allocation, block device I/O throughput, and network traffic.
 
 ```mermaid
 flowchart LR
-    Source["Application source"]
-    Image["Image<br/>filesystem plus defaults"]
-    Container["Container<br/>running process"]
-    Host["Host kernel<br/>CPU, memory, disk, network"]
-
-    Source --> Image --> Container --> Host
+    subgraph ControlGroups["cgroup Limits Layer"]
+        CpuLimit["cpu.max: 150000 100000<br/>(1.5 CPU quota)"]
+        MemLimit["memory.max: 536870912<br/>(512MB limit)"]
+    end
+    subgraph HostResources["Physical Hardware Resources"]
+        HostCpu["Host CPU"]
+        HostRam["Host RAM"]
+    end
+    ProcessA["Container Process"] --> ControlGroups
+    ControlGroups -->|Enforced quotas| HostResources
 ```
 
-This is the central Docker model. You build an image from source and a Dockerfile. You create containers from that image. The host runs those containers using operating-system isolation features.
+On a Linux host, cgroup configurations are exposed directly through the virtual filesystem under `/sys/fs/cgroup/`. When you set memory or CPU limits on a container, the Docker engine creates a dedicated sub-directory inside this path and writes the resource quota values directly into the kernel's configuration files.
 
-That host relationship is the reason Docker gets compared to virtual machines. Both create boundaries around work, but they put the boundary in a different place.
+For example, if you run a container with a 512MB memory limit, the engine creates a directory structure and sets the limit in the memory control files:
 
-## Containers and VMs
-
-Docker is often introduced next to virtual machines because both give teams a boundary around work. The boundary sits in a different place.
-
-A virtual machine draws the boundary around a whole guest operating system. It has virtual hardware, a guest kernel, OS services, users, packages, and the application. That shape is useful when the workload expects to own the machine: system services, kernel settings, a Windows or Linux OS contract, or several processes that are managed together.
-
-A container draws the boundary around a process and the filesystem view it needs. The process can see its image files, environment variables, network namespace, users, and mounts, but the host kernel still does the real operating-system work. That shape is useful when the workload is one application service with clear runtime inputs and durable state somewhere else.
-
-| Boundary question | Container | Virtual machine |
-| --- | --- | --- |
-| Kernel | Shares the host kernel | Has a guest kernel |
-| Startup | Starts a process after Docker prepares isolation | Boots an OS before services start |
-| Resource shape | Lightweight per service instance | Machine-shaped and heavier |
-| Workload fit | API, worker, CI job, short-lived task | Legacy server, OS service bundle, kernel-specific workload |
-| Main risk | Weak runtime settings can expose host resources | More OS patching, bootstrapping, and machine drift |
-
-For the orders API, a container is the natural unit. The service needs Node, application files, environment variables, a port, logs, and an external database. It does not need its own kernel or a full init system.
-
-That does not mean VMs disappear. Many production container platforms run containers on VMs. Kubernetes worker nodes are often virtual machines, and each node runs many containers. The VM gives the platform a machine boundary for capacity, patching, network placement, and node identity. Docker gives the application a smaller boundary for packaging and replacement.
-
-## Images
-
-An image is the packaged environment. It contains the files, binaries, libraries, and configuration needed to start a container. For a Node API, that may include a Linux base filesystem, the Node runtime, dependency files, compiled application code, and metadata such as the default command.
-
-Images are read-only templates. Running the image does not edit the image. Docker creates a container with a writable layer on top, starts the configured process, and keeps the original image available for future containers. This means ten containers can start from the same image without each one owning a separate full copy of the base filesystem.
-
-An image usually comes from a Dockerfile:
-
-```dockerfile
-FROM node:22-alpine
-WORKDIR /app
-COPY package*.json ./
-RUN npm ci
-COPY . .
-CMD ["node", "server.js"]
+```plain
+$ cat /sys/fs/cgroup/docker/<container-id>/memory.max
+536870912
 ```
 
-The Dockerfile is a build recipe. It says which base image to start from, which files to copy, which commands to run while building, and which command should run later by default. The image is the result of following that recipe.
+The host kernel's memory management subsystem monitors every allocation request made by the container's process tree. If the application process leaks memory and attempts to allocate more than the configured limit, the kernel rejects the request and invokes the Out-Of-Memory (OOM) killer. The kernel immediately terminates the process inside the container namespace, returning exit code 137 to the Docker engine.
 
-The non-obvious part is that image contents are supposed to be boring. An image should not depend on a developer's untracked local file, hidden package cache, or shell history. If the Dockerfile and build context cannot reproduce the image on a clean machine, the image has only moved the environment problem into a new place.
+Similarly, CPU limits are enforced using the Completely Fair Scheduler (CFS) period and quota controllers. If you limit a container to 1.5 CPUs, the kernel allocates a period window (typically 100,000 microseconds) and grants the container process a quota window (150,000 microseconds). Once the process consumes its allocated time within that window, the kernel throttle scheduler blocks the process from executing until the next period cycle begins, preventing CPU starvation across the node.
 
-## Containers
+## The Client-Daemon Architecture
 
-A container is a running instance of an image. If the image is the packaged filesystem and defaults, the container is the actual process using them.
+The Docker system is built on a decoupled client-server architecture. The `docker` command you type into your terminal is a client CLI tool. It does not perform any container isolation, image layer storage, or network routing itself. Instead, it translates your commands into REST API calls and forwards them to a background engine process called the Docker Daemon (`dockerd`).
 
-When Docker starts a container, it chooses an image, creates a writable container layer, applies runtime settings, and starts the main process. That process is special inside the container because it is the container's reason to exist. If the process exits, the container stops. Docker is not booting a full server and then running your app as one service among many. It is starting the configured process directly.
+```mermaid
+flowchart LR
+    subgraph UserInterface["Client Tier"]
+        Client["Docker Client<br/>(CLI Tool)"]
+    end
+    subgraph EngineTier["Engine Daemon Tier"]
+        Daemon["Docker Daemon<br/>(dockerd)"]
+        Socket["UNIX Socket<br/>(/var/run/docker.sock)"]
+    end
+    subgraph RuntimeTier["Container Runtime Tier"]
+        Containerd["containerd<br/>(Supervisor)"]
+        Shim["containerd-shim<br/>(Zombie control)"]
+        RunC["runC<br/>(OCI Engine)"]
+    end
 
-This explains why container state can surprise new users. If a process writes a file inside the container and then the container is removed, that write disappears with the container's writable layer. The image remains unchanged. Persistent data needs an explicit storage boundary, such as a Docker volume or bind mount, which later articles cover in detail.
-
-Containers also have runtime configuration that is separate from the image. A single image can run with different environment variables, different port publishing rules, different names, and different mounts:
-
-```bash
-docker run --name orders-api -p 8080:3000 -e NODE_ENV=production orders-api:local
+    Client -->|REST API over TCP/UNIX| Socket
+    Socket --> Daemon
+    Daemon -->|gRPC RPC Calls| Containerd
+    Containerd --> Shim
+    Shim --> RunC
+    RunC -->|Syscalls (clone, setns)| KernelProcess["Isolated Process"]
 ```
 
-The image may say the app listens on port 3000 inside the container. The run command decides that host port 8080 should forward to it. The image may set a default environment value. The run command can override it for a specific environment. This split keeps the artifact stable while allowing each runtime environment to supply local facts.
+The Docker Daemon acts as the system manager. It listens on a local UNIX socket (`/var/run/docker.sock`) or a configured network port, authenticates clients, verifies schemas, pulls images from registries, and manages local storage volumes and bridge networks.
 
-## The Docker Engine
+However, the daemon itself does not directly manage the lifecycle of container processes. Instead, it delegates process execution to specialized lower-level runtime services following Open Container Initiative (OCI) standards:
 
-Docker has a client and a server-side engine. The `docker` command you type is the client. It sends requests to the Docker daemon or engine. The engine builds images, pulls images, creates containers, attaches networks, mounts storage, and asks the underlying container runtime to start processes.
+* **containerd**: A highly stable, industry-standard container supervisor. It manages image distribution, local network namespaces, metadata storage, and supervises active shim instances.
+* **containerd-shim**: A tiny, persistent wrapper process spawned for every running container. The shim remains active even if the parent Docker Daemon restarts, ensuring that the container process can write to stdout/stderr and receive signals without depending on a running daemon process.
+* **runC**: The reference OCI-compliant runtime binary. It performs the direct, low-level operating system work of creating namespaces, applying cgroup quotas, and executing the container's entrypoint, then exits immediately after launching the application process.
 
-That separation explains why a Docker command can fail even when the command syntax is correct. If the engine is not running, the client has nobody to talk to. If the engine runs inside Docker Desktop's Linux VM on macOS or Windows, the filesystem and networking boundary includes that VM. A bind mount from your laptop still works, but it is being mediated through Docker Desktop rather than directly through a native Linux host.
+This architecture has important operational gotchas for development workflows. If you develop on macOS or Windows, the host operating system does not support native Linux namespaces or cgroups. 
 
-The engine also owns local image and container state. When you run `docker images`, you are not listing files in your project directory. You are asking the engine which image records it has stored locally. When you run `docker ps`, you are asking which containers the engine is tracking. Removing a source directory does not remove an image, and deleting an image does not delete your source code.
+To bridge this gap, Docker Desktop boots a lightweight Linux utility virtual machine (typically running on a hypervisor like HyperKit or WSL2) to act as the true container host. The Docker Client on your laptop sends commands across a TCP port or named pipe to the Docker Daemon running *inside* that virtual machine.
 
-## Where Isolation Ends
+This virtualization layer is invisible during simple runs, but it introduces three gotchas:
+* **Bind Mount Performance**: Mounting host laptop directories into containers requires continuous filesystem translation between macOS/Windows and the Linux VM, which can slow down I/O-heavy applications like database compilation.
+* **Localhost Port Resolution**: Port mapping must be routed from your laptop's interface, through the VM's network bridge, and into the container namespace, occasionally masking network latency or masking firewall drops.
+* **Resource Allocations**: The cgroup memory and CPU limits enforce boundaries within the Linux VM's allocated pool, not your laptop's total hardware pool. If the VM is restricted to 4GB of RAM, a container with a 6GB limit will trigger an immediate OOM crash.
 
-Docker isolation is useful because it gives the process a controlled view of the system, but the boundary is not absolute. Containers share the host kernel. A container can consume host CPU and memory. Published ports become reachable through the host network. Bind mounts expose host files into the container. Privileged containers or broad capabilities weaken the boundary further.
+## Ephemeral Filesystems: The Layer Stack
 
-The practical lesson is to treat a container as an isolated process, not as a security force field. If you mount your project directory into a container, the container can change those files according to the mount permissions. If you publish a database port on all interfaces, other machines may be able to reach it. If you run as root inside the container and mount sensitive host paths, the blast radius grows.
+Every container process requires a root filesystem containing libraries, execution binaries, and application files. To keep disk usage low and startup times fast, Docker uses an ephemeral layer stack managed by the OverlayFS storage driver.
 
-The most useful Docker setups make boundaries explicit:
+An image is composed of one or more read-only layers. Each layer represents the difference introduced by a specific instruction in the build recipe (such as copying source code or running a package install). These layers are cryptographically verified by their SHA256 content hash and are stored as immutable, read-only tarballs in the Docker engine's local storage engine.
 
-| Boundary | What Docker controls | What you still decide |
-| --- | --- | --- |
-| Filesystem | Image layers and container writable layer | Volumes, bind mounts, secrets, generated files |
-| Network | Container network namespace | Published ports, network attachment, listening addresses |
-| Process | Container process tree | Entrypoint, command, restart policy, signal handling |
-| Resources | Runtime limits when configured | CPU and memory budgets, noisy-neighbor risk |
-
-The boundary is a tool. It keeps accidental machine differences away from the application, but it still needs careful choices.
-
-## Seeing the Boundary
-
-A short inspection can make the model visible. Suppose an image starts a web server:
-
-```bash
-docker run --name demo -d -p 8080:3000 orders-api:local
-docker ps
+```mermaid
+flowchart TD
+    subgraph ContainerMount["Virtual Merged Mount View (/app)"]
+        MergedView["Read-Write Unified Filesystem"]
+    end
+    subgraph StorageLayers["OverlayFS Directory Stack"]
+        UpperDir["Container Writable Layer (upperdir)<br/>(Writes & deletions exist here)"]
+        LowerDir2["App Source Layer (lowerdir 2)<br/>(Read-only src files)"]
+        LowerDir1["Runtime Environment (lowerdir 1)<br/>(Read-only Node base)"]
+    end
+    ContainerMount --> StorageLayers
 ```
 
-The `docker ps` output ties together the moving parts:
+When you start a container from an image, the engine does not duplicate these read-only layers. Instead, it mounts them as a read-only stack (`lowerdir`) and creates a thin, empty read-write directory (`upperdir`) on top. The OverlayFS driver merges these layers into a single virtual mount directory (`merged`), which becomes the root directory of the container's mount namespace.
 
-```text
-CONTAINER ID   IMAGE              COMMAND                  STATUS        PORTS
-7a3c1f0d91b2   orders-api:local   "node dist/server.js"    Up 4 seconds  0.0.0.0:8080->3000/tcp
-```
+This layer stack employs a copy-on-write (COW) optimization to handle filesystem edits:
+* **Read Operations**: If the container process reads a file (e.g., a node library), the OverlayFS driver searches the layers from top to bottom. It serves the file directly from the first read-only layer where it exists, introducing zero copy overhead.
+* **Write Operations**: If the container process attempts to modify a file that exists in the read-only image layers, the OverlayFS driver intercepts the system call. It copies the file from the read-only layer up to the writable container layer (`upperdir`) first, and then applies the write operation there. The original file in the image layer remains unchanged, protecting future containers.
+* **Deletions**: If the process deletes a file from the image layers, OverlayFS writes a special "whiteout" character record in the writable layer, hiding the file from the virtual merged view without modifying the immutable base image.
 
-The image column names the template. The command column shows the main process Docker started from the image defaults. The port mapping shows that host port 8080 forwards to container port 3000. None of those fields alone is Docker. Together, they show the artifact, process, and host boundary.
+The writable layer is bound strictly to the lifetime of the container. If you delete the container, its writable layer is permanently purged, and all generated logs, session tokens, or transaction files vanish. 
 
-If the process exits, `docker ps` no longer shows it by default because the container is stopped. `docker ps -a` still shows the container record, which lets you inspect logs or restart it. That difference is a common first debugging clue: "I cannot reach the app" may mean the port is wrong, but it may also mean the main process already exited.
-
-## Failure Modes
-
-Docker removes many environment differences, but it introduces a few failure modes that follow directly from the model.
-
-The first is confusing image build time with container run time. `RUN npm ci` happens while building the image. `CMD ["node", "dist/server.js"]` happens when a container starts. If a database is unavailable during `docker build`, the build should usually not care. If the app cannot reach the database during `docker run`, the runtime configuration or network is the place to look.
-
-The second is assuming container files persist because they look like normal files. A container can write to its own filesystem, but that writable layer belongs to that container. Remove the container, and those writes go with it unless they were written through a volume or bind mount.
-
-The third is treating `EXPOSE` as port publishing. `EXPOSE 3000` records that the image expects a service on port 3000. It does not make `localhost:3000` work on the host. Publishing happens when the container is created, usually with `-p HOST_PORT:CONTAINER_PORT`.
-
-The fourth is forgetting that Docker Desktop adds another host boundary on macOS and Windows. The Linux container still needs a Linux kernel. Docker Desktop provides that through a VM, so path sharing, network behavior, and file watching can differ from native Linux.
+To persist data across container replacements, you must declare explicit storage mount boundaries, which later chapters cover in detail.
 
 ## Putting It All Together
 
-Return to the API that behaved differently across machines. Docker gives the team a smaller set of moving parts to reason about.
+Return to the API that behaved differently across developers' laptops. Docker standardizes this environment by shifting the boundary from virtual machines down to isolated operating system processes.
 
-- The image packages the runtime, dependencies, application files, and default command.
-- The container starts one isolated process from that image.
-- Containers share the host kernel, while virtual machines carry a guest operating system and kernel.
-- Runtime settings supply local facts such as environment variables, port publishing, and storage mounts.
-- The Docker engine stores image and container state separately from the project directory.
-- Isolation removes accidental machine differences, but the host kernel, mounted files, published ports, and resource limits still matter.
+* **Process Isolation**: Containers share the host kernel, eliminating the heavy disk, CPU, and memory overhead of guest operating systems.
+* **Namespaces**: Act as the logical sight shields, using Linux kernel system calls to sandbox what a process can see across PIDs, networks, mount paths, and user roles.
+* **Control Groups**: Enforce strict CPU quotas and memory limit shields via cgroups, protecting the host system from resource starvation and noisy-neighbor processes.
+* **Engine Architecture**: Separates the client CLI from the Docker Daemon, which delegates OCI lifecycle execution to `containerd` and `runC` across host VM boundaries.
+* **Layer Stacks**: Combine read-only image tarballs with a thin, copy-on-write container layer via OverlayFS to ensure instant startup speeds and lightweight footprints.
 
-The starting question has grown from "how do we run a command?" into "how do we make the runtime environment visible and repeatable?" Docker's answer is image first, container second, runtime settings last.
+By utilizing these process isolation blocks, you make the runtime environment visible, repeatable, and secure.
 
 ## What's Next
 
-The next article follows the daily Docker workflow. Once the image and container model is clear, commands such as `build`, `run`, `logs`, `exec`, `stop`, and `rm` stop feeling like a memorized list. They become operations on a small lifecycle: create an artifact, start a process, inspect it, change the code, and repeat.
+Now that we have established the mental model of how Docker isolates a process on a host system, our next step is to examine the daily developer loop. We need to translate this theoretical boundary model into active operational commands.
+
+In the next chapter, we will follow a small application through the active **Docker Workflow**. We will examine the lifecycle commands used to build images, run containers in foreground and background modes, inspect logs, spawn diagnostic shells, and clean up retired resources without losing local development state.
 
 ---
 
 **References**
 
-- [Docker Docs: Docker overview](https://docs.docker.com/get-started/docker-overview/)
-- [Docker Docs: What is an image?](https://docs.docker.com/get-started/docker-concepts/the-basics/what-is-an-image/)
-- [Docker Docs: What is a container?](https://docs.docker.com/get-started/docker-concepts/the-basics/what-is-a-container/)
-- [Docker Docs: Run containers](https://docs.docker.com/engine/containers/run/)
+- [Docker overview](https://docs.docker.com/get-started/docker-overview/) - Official architecture overview covering client, daemon, registries, and runtime objects.
+- [Namespaces - Linux manual page](https://man7.org/linux/man-pages/man7/namespaces.7.html) - Technical manual detailing namespace types, API system calls, and isolation flags.
+- [Control Groups - Linux manual page](https://man7.org/linux/man-pages/man7/cgroups.7.html) - Technical documentation covering cgroups, resource limits, controllers, and virtual filesystems.
+- [Overlay Filesystem](https://www.kernel.org/doc/html/latest/filesystems/overlayfs.html) - Official Linux kernel documentation on OverlayFS stacked directory mounts and copy-on-write behavior.
+- [OCI Runtime Specification](https://github.com/opencontainers/runtime-spec) - The Open Container Initiative standards defining runtime configurations, filesystem layouts, and execution steps.

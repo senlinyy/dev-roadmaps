@@ -98,28 +98,26 @@ flowchart TD
     Deliver --> App[Application reads environment variable or SDK result]
 ```
 
-At container boot, the ECS agent can read the secret ARN from the task definition, call the Secrets Manager API to retrieve the value, and place it into the container as an environment variable. Some applications instead call Secrets Manager through the AWS SDK at runtime and cache the result carefully in memory. In both patterns, the secret value stays out of the code repository, build system, and deployment files.
+There are two different delivery paths, and the role boundary changes with the path. If ECS injects a secret from the task definition at startup, the task execution role needs permission to read that secret and use the KMS key if a customer managed key protects it. If application code calls Secrets Manager after the container boots, the task role needs that permission instead. In both patterns, the secret value stays out of the code repository, build system, and deployment files.
 
 ## KMS and Envelope Encryption
 
-When you write an encrypted parameter or secret to AWS storage, the plaintext value is never written to disk in its raw form. AWS enforces encryption at rest using the Key Management Service (KMS). To understand how this works in a high-capacity production system, you must look past simple key-locking concepts and inspect the underlying mechanism called Envelope Encryption.
+When you write an encrypted parameter or secret to AWS storage, the secret value is encrypted at rest. AWS Secrets Manager uses AWS Key Management Service, commonly called KMS, to protect secret values. The secret metadata, such as the name, description, tags, rotation settings, and KMS key ARN, is not the secret payload, so you should avoid putting sensitive information in those fields.
 
-Envelope Encryption is the practice of encrypting your sensitive data with a temporary symmetric key, and then encrypting that symmetric key itself with a persistent master key. To understand why AWS enforces this double-layer architecture rather than simply encrypting every secret directly with a master key, you must evaluate the performance and API limitations of a cloud-scale network:
+Envelope encryption is the mechanism behind this protection. The simple idea is that the secret value is encrypted with a data key, and that data key is itself protected by a KMS key. Beginners do not need to memorize every internal step first. The operational lesson is that an authorized read may require two permissions: permission to read the secret and permission to use the KMS key when the secret uses a customer managed key.
 
-* **The Network and Performance Bottleneck**: Symmetric encryption of large payloads requires significant CPU processing and network bandwidth. If an application had to send massive configuration files or database schemas directly to the KMS service over the network for encryption and decryption, the network latency would severely slow down container startup times.
-* **KMS API Quota Throttling**: The persistent master keys inside KMS live behind hardware security modules (HSMs) that have strict API request limits (throttling thresholds). If thousands of container instances scaled up during a traffic spike and paged KMS to decrypt their configurations simultaneously, the KMS APIs would throttle, crashing the deployment.
-* **Local Cryptographic Isolation**: By using envelope encryption, the master key never leaves the secure KMS boundary. KMS only decrypts a tiny, 256-bit symmetric key over the network. The actual heavy decryption of the secret payload happens locally in the memory space of Secrets Manager using that fast symmetric key, protecting your system from both network bottlenecks and API throttling.
+Envelope encryption does not remove the need to think about read volume. Secrets Manager and KMS have quotas, and applications that fetch secrets frequently should cache values carefully according to their rotation requirements. A service that calls Secrets Manager on every HTTP request can create unnecessary latency, cost, and throttling risk.
 
-To manage this process, you must choose between two distinct categories of master keys, known as Key Management styles:
+To manage this process, you must choose between two distinct categories of KMS keys:
 
-* **AWS Managed Keys**: Default encryption keys created and managed automatically by AWS on your behalf (such as `aws/secretsmanager` or `aws/ssm`). These keys are simple and require almost no configuration, but you cannot edit their key policies. That makes them a good default for many single-account workloads and a poor fit when you need custom key policies, external key grants, or carefully controlled cross-account access.
+* **AWS Managed Keys**: Default KMS keys created and managed automatically by AWS on your behalf (such as `aws/secretsmanager` or `aws/ssm`). These keys are simple and require almost no configuration, but you cannot edit their key policies. That makes them a good default for many single-account workloads and a poor fit when you need custom key policies, external key grants, or carefully controlled cross-account access.
 * **Customer Managed Keys**: Persistent keys that you create, own, and configure within your organization. Customer managed keys give you direct control over key policies, IAM grants, and rotation settings. They are commonly used for multi-account production systems because they let you authorize exact workload roles across account boundaries and audit key use more deliberately.
 
 The architectural elements of this envelope pattern include:
 
-* **KMS Key**: The persistent master key, stored securely inside the KMS boundary. It never leaves KMS.
+* **KMS Key**: The persistent key, stored securely inside the KMS boundary. It never leaves KMS.
 * **Data Key**: A unique, short-lived 256-bit symmetric key generated dynamically by KMS for the specific secret.
-* **Encrypted Data Key**: The Data Key after being encrypted by the Master Key. It is stored directly alongside the encrypted secret payload on disk.
+* **Encrypted Data Key**: The data key after being encrypted by the KMS key. It is stored alongside the encrypted secret payload.
 
 The operational lifecycle of envelope encryption is divided into two distinct phases.
 
@@ -196,6 +194,7 @@ Securing your runtime credentials is the final layer of your application's secur
 * **Isolate Secrets from Config**: Keep port numbers, debug levels, and URLs in ordinary environment variables. Reserve secure vaults strictly for database passwords and signing keys.
 * **Inject via ARNs**: Never copy raw secrets into your codebase, container images, or deployment tasks. Reference the secret ARN in your container configuration and let the ECS agent inject it at boot.
 * **Leverage Envelope Encryption**: Understand how Secrets Manager uses KMS-backed envelope encryption, and use customer managed keys when you need custom key policy control.
+* **Separate Startup and Runtime Roles**: Use the task execution role for ECS startup injection and the task role for application SDK reads.
 * **Scrub Your Output Logs**: Never log entire error objects, response payloads, or environment dumps to stdout. Keep your console scrollback clean of credentials.
 
 By implementing vaulted secrets, envelope encryption, and safe logging, you build a cloud system that is highly secure at rest, protected during delivery, and fully audited at runtime.
@@ -211,3 +210,6 @@ By implementing vaulted secrets, envelope encryption, and safe logging, you buil
 - [AWS Secrets Manager User Guide](https://docs.aws.amazon.com/secretsmanager/latest/userguide/intro.html) - Documentation on storing, rotating, and retrieving runtime secrets.
 - [What Is AWS KMS?](https://docs.aws.amazon.com/kms/latest/developerguide/overview.html) - Technical overview of the Key Management Service and envelope encryption mechanics.
 - [AWS CloudTrail User Guide](https://docs.aws.amazon.com/awscloudtrail/latest/userguide/cloudtrail-user-guide.html) - Instructions on tracking user and workload API activity across your AWS account.
+- [Amazon ECS sensitive data injection](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/specifying-sensitive-data.html) - Explains how ECS injects Secrets Manager and Parameter Store values into containers.
+- [Secrets Manager encryption](https://docs.aws.amazon.com/secretsmanager/latest/userguide/security-encryption.html) - Documents KMS encryption behavior and metadata caveats.
+- [Secrets Manager quotas](https://docs.aws.amazon.com/secretsmanager/latest/userguide/reference_limits.html) - Lists request quotas that affect high-volume secret retrieval designs.

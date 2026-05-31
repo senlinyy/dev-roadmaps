@@ -90,6 +90,8 @@ The stateful nature of Security Groups is their most powerful feature. When your
 
 Because Security Groups are stateful, the firewall automatically remembers the outbound request and allows the response packet to return safely. You do not need to open high-numbered ports to the entire internet to accept response packets.
 
+Security Groups are still not the only network control around an instance. AWS does not use security groups to filter several built-in VPC services, including AmazonProvidedDNS, DHCP, EC2 instance metadata, ECS task metadata endpoints, the Amazon Time Sync Service, and reserved addresses used by the default VPC router. That detail matters when a beginner tries to "block everything outbound" with one security group. The rule may block ordinary application traffic, but some platform services are handled outside the security group path and need their own controls, such as IAM, instance metadata options, resolver rules, or application configuration.
+
 ## Workload References: Eliminating Brittle IP Lists
 
 In early cloud setups, developers often allowed traffic by listing specific IP addresses, such as allowing database traffic from `10.40.10.15` (the current IP of an API worker). 
@@ -240,7 +242,7 @@ In the next article, we will move beyond the boundaries of a single VPC. We will
 
 **References**
 
-- [Control traffic to your AWS resources using security groups](https://docs.aws.amazon.com/vpc/latest/userguide/vpc-security-groups.html) - Focuses on security group association, resource mapping, and default group behaviors.
+- [Control traffic to your AWS resources using security groups](https://docs.aws.amazon.com/vpc/latest/userguide/vpc-security-groups.html) - Focuses on security group association, resource mapping, default group behaviors, and traffic types that security groups do not filter.
 - [Security group rules](https://docs.aws.amazon.com/vpc/latest/userguide/security-group-rules.html) - Details rule structure, allow-only permissions, and security group reference mechanics.
 - [Control subnet traffic with network access control lists](https://docs.aws.amazon.com/vpc/latest/userguide/vpc-network-acls.html) - Outlines NACL subnet associations, stateless routing, and ordered rule evaluation.
 - [Custom network ACLs for your VPC](https://docs.aws.amazon.com/vpc/latest/userguide/custom-network-acl.html) - Focuses on custom NACL default denies, ephemeral port requirements, and rule numbers.

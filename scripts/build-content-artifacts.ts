@@ -1244,11 +1244,18 @@ function resolveChallengeArticleLink(group: ChallengeGroupMeta, catalog: Article
   return { status: 'skipped', reason: `unknown article key ${articleKey}` };
 }
 
+function detachChallengeArticleLink(group: ChallengeGroupMeta): ChallengeGroupMeta {
+  const detached = { ...group };
+  delete detached.articleId;
+  delete detached.articleSlug;
+  return detached;
+}
+
 function resolveArticleIdsForGroups(
   groupsByCategory: Record<string, ChallengeGroupMeta[]>,
   catalog: ArticleCatalogItem[],
 ): Record<string, ChallengeGroupMeta[]> {
-  const skippedGroups: string[] = [];
+  const detachedGroups: string[] = [];
   const resolvedGroupsByCategory = Object.fromEntries(
     Object.entries(groupsByCategory).map(([categoryId, groups]) => [
       categoryId,
@@ -1256,8 +1263,8 @@ function resolveArticleIdsForGroups(
         const resolution = resolveChallengeArticleLink(group, catalog);
 
         if (resolution.status === 'skipped') {
-          skippedGroups.push(`${group.category}/${group.id}: ${resolution.reason}`);
-          return [];
+          detachedGroups.push(`${group.category}/${group.id}: ${resolution.reason}`);
+          return [detachChallengeArticleLink(group)];
         }
 
         return resolution.articleId ? [{ ...group, articleId: resolution.articleId }] : [group];
@@ -1265,10 +1272,10 @@ function resolveArticleIdsForGroups(
     ]),
   );
 
-  if (skippedGroups.length > 0) {
+  if (detachedGroups.length > 0) {
     console.warn([
-      `Skipping ${skippedGroups.length} challenge group(s) with unresolved article links:`,
-      ...skippedGroups.map((group) => `- ${group}`),
+      `Detached article links from ${detachedGroups.length} challenge group(s) with unresolved article links:`,
+      ...detachedGroups.map((group) => `- ${group}`),
     ].join('\n'));
   }
 
@@ -1310,6 +1317,7 @@ function writeGroupArtifacts(
       writeJson(path.join(versionRoot, 'groups', category.id, `${group.id}.json`), {
         ...fullGroup,
         articleId: group.articleId,
+        articleSlug: group.articleSlug,
       });
     }
   }

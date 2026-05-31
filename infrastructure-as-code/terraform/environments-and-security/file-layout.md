@@ -23,6 +23,8 @@ id: article-iac-terraform-environments-file-layout
 
 Terraform does not force you into any particular directory structure. You can put all your resources in a single `main.tf` file if you like. For a learning exercise or a quick prototype, that is fine. For a configuration that will live for years, be touched by multiple teams, and manage dozens or hundreds of resources across several environments, a flat single-file approach becomes a maintenance nightmare.
 
+![Environment directory boundaries keep dev, staging, and production roots tied to separate variables and state.](/content-assets/articles/article-iac-terraform-environments-file-layout/environment-directory-boundary.png)
+
 File layout communicates intent. When you open a repository with clearly organized directories, you immediately understand what the repository manages, how it is divided, and where to look for specific resources. When you open a repository where everything is in one directory — a single `main.tf` with hundreds of lines, every environment's resources mixed together — you have to read the entire file to understand what it does.
 
 The right layout also enforces safety. If dev, staging, and production resources each live in their own directory with their own backend configuration, running a command in the dev directory cannot possibly affect production. The backend configuration points to different state, and the Terraform command only processes the files in the directory where you run it. This structural separation is a genuine safeguard against accidental cross-environment changes.
@@ -65,6 +67,8 @@ This layout has no room for environments. It manages exactly one environment. If
 ## The Module-and-Environments Layout
 
 Once you have more than one environment, the module-and-environments layout is the most scalable approach:
+
+![A shared module can feed separate environment roots while each environment owns its own backend and variable values.](/content-assets/articles/article-iac-terraform-environments-file-layout/shared-module-layout.png)
 
 ```
 my-project/
@@ -245,6 +249,9 @@ The `.terraform.lock.hcl` file goes in version control to freeze provider versio
 ## What's Next
 
 The next article covers the third dimension of environment security: managing secrets. Database passwords, API keys, and private certificates inevitably appear somewhere in Terraform configurations. The next article examines the options — environment variables, Vault integration, AWS Secrets Manager data sources, and encrypted variable files — and explains which approach is appropriate in which situation.
+
+
+![File layout summary: separate roots, share modules, keep state isolated, and version only safe files.](/content-assets/articles/article-iac-terraform-environments-file-layout/file-layout-summary.png)
 
 ---
 

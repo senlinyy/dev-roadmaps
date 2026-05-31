@@ -51,7 +51,7 @@ ansible-playbook -i inventory/prod.ini playbooks/deploy_checkout.yml \
 
 The terminal output should explicitly list only the single canary node:
 
-```text
+```plain
 playbook: playbooks/deploy_checkout.yml
 
   play #1 (checkout_web): Deploy Checkout Service
@@ -103,15 +103,18 @@ To understand why `serial` is structurally superior to simple task-level loops, 
 
 In a normal playbook execution without the `serial` parameter, the engine loops vertically through tasks:
 
-```text
-Task 1 (All Hosts) -> Task 2 (All Hosts) -> Task 3 (All Hosts) -> Handlers (All Hosts)
+```mermaid
+flowchart LR
+    T1All["Task 1: All Hosts"] --> T2All["Task 2: All Hosts"] --> T3All["Task 3: All Hosts"] --> HAll["Handlers: All Hosts"]
 ```
 
 If a playbook uses `serial: 1`, the execution engine slices the matched inventory host array into independent execution subsets (batches) and runs the entire play horizontally from start to finish on the active batch before starting the play for the next batch:
 
-```text
-Batch 1 (Host 1): Task 1 -> Task 2 -> Task 3 -> Handlers (Host 1) -> Health Check
-Batch 2 (Host 2): Task 1 -> Task 2 -> Task 3 -> Handlers (Host 2) -> Health Check
+```mermaid
+flowchart LR
+    B1["Batch 1 - Host 1: Task 1 → Task 2 → Task 3 → Handlers → Health Check"]
+    B2["Batch 2 - Host 2: Task 1 → Task 2 → Task 3 → Handlers → Health Check"]
+    B1 --> B2
 ```
 
 This horizontal slicing is critical to system safety. The engine completes the play for the active batch before starting the next batch. If the health check fails on Host 1, the playbook stops before later batches are modified.
@@ -241,11 +244,7 @@ A truly robust canary check should query the load balancer's API to confirm that
   changed_when: false
 ```
 
-By querying the cloud load balancer target group with the provider API or an appropriate collection module, you verify that:
-- The local application process is active.
-- Nginx is listening and correctly routing traffic.
-- The host-level firewall and cloud security groups permit traffic.
-- The load balancer has completed its health checks and successfully marked the node active to receive customer requests.
+By querying the cloud load balancer target group with the provider API or an appropriate collection module, you verify that the local application process is active and accepting connections, that Nginx is listening and correctly routing traffic, that the host-level firewall and cloud security groups permit incoming requests, and that the load balancer has completed its own health checks and marked the node active to receive customer traffic. Only after all of these conditions are confirmed does the playbook proceed to the next batch.
 
 ## Failure Boundaries and the max_fail_percentage Algorithm
 

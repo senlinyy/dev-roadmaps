@@ -26,10 +26,7 @@ An Ansible workflow is a structured sequence of checks and commands that you exe
 
 To see why a structured workflow is essential, consider our concrete scenario. You are tasked with deploying an application software update across a dual-node web application cluster. You need to update an environment configuration file, install a new security utility package, and restart the backend services.
 
-If you run this playbook directly without any safety checks:
-- The inventory file might accidentally include a stale staging host that is no longer active, causing the run to hang.
-- An SSH configuration mismatch on one of the servers might trigger an access failure midway through the deployment, leaving your cluster in a half-configured, broken state.
-- A small typo in the backend systemd service name might cause the service reload task to fail on all nodes simultaneously, taking your entire application offline.
+Without a structured verification workflow, a mismatched SSH configuration silently excludes hosts from the run, a stale inventory entry directs tasks to the wrong machine, and a playbook with no dry-run step can push a broken configuration to the entire cluster before anyone notices.
 
 A professional operations pipeline removes this uncertainty. You do not treat the playbook run as a single giant step. Instead, you break the operation down into controlled validation steps: inspecting parsed target groups, confirming connection handshakes, dry-running state changes to view file differences, applying changes to a single target host first, reading the run recap metrics, and executing a second run to confirm that the hosts have settled.
 
@@ -63,7 +60,7 @@ ansible-inventory -i inventory/hosts.yml --graph
 
 For our dual-node web application cluster, the parsed graph outputs a clean structural layout:
 
-```text
+```plain
 @all:
   |--@ungrouped:
   |--@app_cluster:
@@ -144,10 +141,7 @@ You must keep in mind that check mode has structural limitations. While standard
 
 To appreciate the speed and efficiency of a professional Ansible workflow, it helps to understand the underlying networking protocols used by the control node. By default, running a playbook containing ten tasks against five hosts requires Ansible to execute fifty separate commands on the remote systems.
 
-Opening a new SSH connection for every single task introduces substantial latency:
-- A standard SSH handshake requires multiple network round trips to negotiate cryptographic algorithms, exchange host keys, and verify user credentials.
-- In high-latency cloud networks or multi-region environments, this handshake sequence can take anywhere from 200ms to 800ms.
-- If repeated fifty times, network handshakes alone can add several minutes to a simple playbook run.
+Opening a new SSH connection for every single task introduces substantial latency. A standard SSH handshake requires multiple network round trips to negotiate cryptographic algorithms, exchange host keys, and verify user credentials. In high-latency cloud networks or multi-region environments, this handshake sequence can take anywhere from 200ms to 800ms. If repeated fifty times across ten tasks and five hosts, network handshakes alone can add several minutes to a simple playbook run.
 
 To solve this problem, Ansible leverages a low-level SSH performance protocol known as **SSH Multiplexing** (often configured via the `ControlMaster` and `ControlPersist` SSH settings).
 
@@ -199,16 +193,21 @@ By targeting only `app-node-01`, you verify that the execution succeed on a real
 
 Once the limited run completes, you inspect the final Play Recap block:
 
-```text
+```plain
 PLAY RECAP
 app-node-01 : ok=15 changed=3 unreachable=0 failed=0 skipped=2
 ```
 
 You analyze these numbers to verify that the execution matches your expectations:
-- **`ok`**: The number of tasks that evaluated successfully (including tasks that made no changes).
-- **`changed`**: The number of tasks that modified system states. For our scenario, this should be exactly 3 (writing the config file, installing the package, and restarting the service).
-- **`failed`**: Must be 0. If this is higher, you pause and debug the specific task.
-- **`unreachable`**: Must be 0, proving the SSH multiplexing socket stayed stable.
+
+| Field | Meaning |
+|---|---|
+| `ok` | Task ran and the system was already in the correct state |
+| `changed` | Task ran and modified the system |
+| `failed` | Task ran but returned a non-zero exit code or module failure |
+| `unreachable` | Ansible could not establish a connection to the host |
+
+For our scenario, `changed` should be exactly 3 (writing the config file, installing the package, and restarting the service). Both `failed` and `unreachable` must be 0.
 
 Once you have verified the canary run, you can confidently run the playbook against the entire host group without the limit flag, rolling out the changes to the rest of your fleet.
 
@@ -222,15 +221,12 @@ ansible-playbook -i inventory/hosts.yml playbooks/deploy.yml --limit app-node-01
 
 During this second run, if your playbook is designed correctly, the output should display no active modifications. Every task should report `ok` and the `changed` count in the recap should be exactly 0:
 
-```text
+```plain
 PLAY RECAP
 app-node-01 : ok=15 changed=0 unreachable=0 failed=0 skipped=2
 ```
 
-If the second run reports changes:
-- A task might be using the `shell` module to append text to a file on every run, rather than using a state-aware file module.
-- A template task might be inserting a dynamic timestamp value or random variable into a configuration file, causing the content checksum comparison to fail and trigger a file rewrite on every run.
-- A handler might be executing service restarts continuously because a parent task reports changes on every run.
+If the second run reports changes, the cause is almost always a task that is not truly state-aware. A common pattern is using the `shell` module to append text to a file on every run rather than using a declarative file module that checks existing content first. Template tasks that embed dynamic timestamp values or random variables fail the content checksum comparison on every execution, causing a file rewrite even when nothing meaningful changed. Handlers can also misfire continuously if their parent task reports changes on every run, triggering service restarts that should only happen once.
 
 Fixing these issues ensures that your playbooks are safe to run continuously (such as in an automated cron loop or CI/CD environment) without causing constant service interruptions or configuration drift.
 

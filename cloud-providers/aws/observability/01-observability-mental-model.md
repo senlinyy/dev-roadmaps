@@ -47,7 +47,7 @@ Observability is the architectural practice of collecting, organizing, and corre
 
 Observability is not about installing a vendor dashboard tool and hoping it solves operational problems. It is a deliberate engineering practice of instrumenting your application code and cloud infrastructure to emit high-quality signals. A log line that simply reads `database error` is a weak signal that forces developers to search codebase directories. A high-quality signal is a structured record that names the failing host, the specific query, the latency in milliseconds, the active database connection count, and a unique correlation ID.
 
-To organize these signals, AWS provides Amazon CloudWatch, which acts as the central regional vault for logs, metrics, dashboards, and automated alarms. AWS also provides AWS X-Ray to handle distributed trace correlation. By treating these signals not as individual feature checklists, but as a unified map of operational questions, you ensure that every production incident can be systematically isolated and resolved.
+To organize these signals, AWS provides Amazon CloudWatch, which stores logs, metrics, alarms, and related telemetry in the AWS control plane. Logs and metrics are regional resources, while CloudWatch dashboards are global and can display data from multiple Regions. AWS X-Ray can receive trace data, and AWS now recommends OpenTelemetry through the AWS Distro for OpenTelemetry (ADOT) for new application instrumentation. By treating these signals not as individual feature checklists, but as a unified map of operational questions, you make production incidents much easier to isolate and resolve.
 
 ```mermaid
 flowchart TD
@@ -161,6 +161,7 @@ We have established the core mental model of cloud observability, separating the
 
 **References**
 
-* [What Is Amazon CloudWatch](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/WhatIsCloudWatch.html) - Official AWS overview of the central regional telemetry service.
+* [What Is Amazon CloudWatch](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/WhatIsCloudWatch.html) - Official AWS overview of the telemetry service.
+* [Using Amazon CloudWatch dashboards](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/CloudWatch_Dashboards.html) - Documents dashboards as global resources that can include metrics from multiple Regions.
 * [AWS Distro for OpenTelemetry](https://aws.amazon.com/otel/) - Guide to the production-grade, open-source distribution of the OpenTelemetry standard.
 * [AWS X-Ray Developer Guide](https://docs.aws.amazon.com/xray/latest/devguide/aws-xray.html) - Documentation on analyzing request pathways and distributed system timings.

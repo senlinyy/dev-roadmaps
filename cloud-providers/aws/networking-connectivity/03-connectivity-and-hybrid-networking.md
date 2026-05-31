@@ -26,7 +26,7 @@ aliases:
 5. [VPC Peering: Direct One-to-One Connections](#vpc-peering-direct-one-to-one-connections)
 6. [AWS Transit Gateway: Organization-Scale Hubs](#aws-transit-gateway-organization-scale-hubs)
 7. [Extending to Physical Datacenters: VPN vs. Direct Connect](#extending-to-physical-datacenters-vpn-vs-direct-connect)
-8. [Route 53 Resolver: Bridging Cloud and Local DNS](#route-53-resolver-bridging-cloud-and-local-dns)
+8. [Route 53 VPC Resolver: Bridging Cloud and Local DNS](#route-53-vpc-resolver-bridging-cloud-and-local-dns)
 9. [Solving the Four Silent Connectivity Killers](#solving-the-four-silent-connectivity-killers)
 10. [Putting It All Together](#putting-it-all-together)
 
@@ -62,9 +62,9 @@ flowchart TD
 
 The key to mastering cloud connectivity is to stop asking which networking product exists, and start by identifying the exact workload requirements: what needs to talk to what, and does the target look like a service, a sibling VPC, an enterprise hub, or a physical corporate network?
 
-![VPC connectivity choice infographic showing a private app VPC choosing PrivateLink, VPC peering, Transit Gateway, VPN, Direct Connect, and Route 53 Resolver paths](/content-assets/articles/article-cloud-providers-aws-networking-connectivity-connectivity-hybrid-networking/vpc-connectivity-choice-map.png)
+![VPC connectivity choice infographic showing a private app VPC choosing PrivateLink, VPC peering, Transit Gateway, VPN, Direct Connect, and Route 53 VPC Resolver paths](/content-assets/articles/article-cloud-providers-aws-networking-connectivity-connectivity-hybrid-networking/vpc-connectivity-choice-map.png)
 
-*Private connectivity starts with the target. Use PrivateLink for services, peering for one direct VPC relationship, Transit Gateway for many VPCs, VPN or Direct Connect for physical networks, and Route 53 Resolver when names must cross the boundary.*
+*Private connectivity starts with the target. Use PrivateLink for services, peering for one direct VPC relationship, Transit Gateway for many VPCs, VPN or Direct Connect for physical networks, and Route 53 VPC Resolver when names must cross the boundary.*
 
 ## Categorizing the Five Connectivity Workloads
 
@@ -81,7 +81,7 @@ AWS private connectivity becomes manageable once you assign each tool to a speci
   * **Network representation**: A central network hub and transit routing tables.
 * **Workload 4: Link your cloud VPC to a physical office over the internet**
   * **AWS Tool**: AWS Site-to-Site VPN.
-* **Network representation**: Encrypted IPsec tunnels over the public internet, terminated by virtual private gateways or Transit Gateway.
+  * **Network representation**: Encrypted IPsec tunnels over the public internet, terminated by virtual private gateways or Transit Gateway.
 * **Workload 5: Link your cloud VPC to a datacenter over a dedicated physical line**
   * **AWS Tool**: AWS Direct Connect.
   * **Network representation**: A physical dedicated fiber circuit bypassing the internet.
@@ -90,7 +90,7 @@ By aligning these tools with their specific connectivity jobs, you can construct
 
 ## Interface Endpoints and AWS PrivateLink
 
-Gateway Endpoints solve private access for S3 and DynamoDB by modifying subnet route tables. However, other AWS services, SaaS platforms, and third-party partner applications cannot integrate directly with your route tables in this manner. 
+Gateway Endpoints solve private access for S3 and DynamoDB by modifying subnet route tables. S3 and DynamoDB also have interface endpoint options, but gateway endpoints remain a common beginner default because they avoid additional hourly endpoint charges. Other AWS services, SaaS platforms, and third-party partner applications generally do not integrate directly with your route tables in this manner.
 
 For these services, you deploy Interface Endpoints cabled with AWS PrivateLink.
 
@@ -117,6 +117,8 @@ This model provides significant security advantages:
 * **Granular Network Interfaces**: Interface Endpoints have their own Security Groups. You can lock down the endpoint interface to accept traffic strictly from your application's Security Group, enforcing a zero-trust boundary.
 * **Secure Third-Party SaaS Access**: A service provider can host their application in their own VPC, publish it via an endpoint service, and allow your VPC to establish a PrivateLink Interface Endpoint. You see the service as a private IP in your network, while the provider never gains broad access to the rest of your VPC.
 
+AWS PrivateLink now includes more endpoint shapes than the original interface endpoint pattern. Resource endpoints can expose a specific shared resource, such as a database or private IP target, without putting a Network Load Balancer in front of it. Service-network endpoints can connect a VPC to a broader VPC Lattice service network. Beginners do not need to memorize every variant on day one, but they should recognize the decision: gateway endpoints are route-table shortcuts for S3 and DynamoDB, while PrivateLink endpoint types place private entry points into your network for services or shared resources.
+
 ## The Critical Hinge: Private DNS Support
 
 When you configure an Interface Endpoint, AWS provides you with a set of service-specific DNS hostnames, such as `vpce-0123456789abcdef-us-east-1.amazonaws.com`. 
@@ -127,7 +129,7 @@ AWS solves this through a feature called Private DNS Support. When you enable Pr
 
 This hosted zone makes the standard service hostname (such as `secretsmanager.us-east-1.amazonaws.com`) resolve to the private IP addresses of your endpoint interfaces inside your VPC. Your code keeps calling the ordinary AWS service name; the VPC DNS answer changes the packet path.
 
-This Private DNS hinge creates a common diagnostic gotcha. If your VPC does not have the `enableDnsHostnames` and `enableDnsSupport` attributes set to true, or if you are bypassing the default Route 53 Resolver with custom DNS servers, Private DNS cannot function. 
+This Private DNS hinge creates a common diagnostic gotcha. If your VPC does not have the `enableDnsHostnames` and `enableDnsSupport` attributes set to true, or if you are bypassing the default Route 53 VPC Resolver with custom DNS servers, Private DNS cannot function.
 
 Your application code may resolve the public IP of the AWS service, attempt to route the traffic through NAT or the public internet, and fail if the private subnet lacks that exit path. The same symptom can also appear when custom DNS servers do not forward AWS service names back to the VPC resolver.
 
@@ -217,7 +219,7 @@ Choosing the right hybrid path requires balancing deployment speed against perfo
 
 A resilient enterprise design often deploys a high-bandwidth Direct Connect circuit as the primary data highway, with an AWS Site-to-Site VPN configured in active-standby as a cost-effective, internet-based backup path.
 
-## Route 53 Resolver: Bridging Cloud and Local DNS
+## Route 53 VPC Resolver: Bridging Cloud and Local DNS
 
 Establishing hybrid tunnels or dedicated fiber circuits allows IP packets to travel between your cloud VPC and your physical datacenters. However, network paths are practically useless if servers cannot resolve domain names.
 
@@ -225,7 +227,7 @@ When a virtual instance in AWS attempts to write to a database on-premises, it c
 
 Conversely, when a physical database administrator on-premises attempts to monitor a private cloud worker, their local system cannot query private AWS Route 53 hosted zones.
 
-AWS resolves this DNS boundary using Route 53 Resolver Endpoints:
+AWS resolves this DNS boundary using Route 53 VPC Resolver Endpoints. This service was previously called Route 53 Resolver, and you will still see the older name in commands, APIs, and older architecture diagrams:
 
 ```mermaid
 flowchart TD
@@ -248,7 +250,7 @@ flowchart TD
 ```
 
 * **Inbound Resolver Endpoints**: Place private network interfaces inside your VPC subnets. You configure your physical, on-premises DNS servers to forward all queries for cloud-hosted domains (such as `*.aws.mycompany.internal`) to these inbound interface IPs.
-* **Outbound Resolver Endpoints**: Allow the Route 53 Resolver to forward queries outwards. You write a resolver forwarding rule inside the VPC: "If a workload queries a domain matching `*.corp.local`, forward the query through the Outbound Endpoint to the private IP of our physical, on-premises DNS servers."
+* **Outbound Resolver Endpoints**: Allow the Route 53 VPC Resolver to forward queries outwards. You write a resolver forwarding rule inside the VPC: "If a workload queries a domain matching `*.corp.local`, forward the query through the Outbound Endpoint to the private IP of our physical, on-premises DNS servers."
 
 By configuring hybrid DNS resolution alongside your tunnels or physical circuits, you ensure that name resolution and packet routing follow the same architectural intent.
 
@@ -270,8 +272,8 @@ When private connectivity fails, the root cause is usually one of four quiet gat
   * **The Cure**: Check the security policy on every hop, including the endpoint ENI, source workload, target workload, and external firewall.
 * **Killer 4: DNS Name Resolution Mismatch**
   * **The Symptom**: Tunnels are up, routing is perfect, but the application fails to connect, throwing a "Host Not Found" error.
-  * **The Cause**: Workloads are resolving domain names via the public internet rather than using private interface endpoints or hybrid Route 53 Resolver paths.
-  * **The Cure**: Verify that VPC DNS attributes are active, that private DNS is enabled for interface endpoints when intended, and that forwarding rules point through the correct Route 53 Resolver endpoints.
+  * **The Cause**: Workloads are resolving domain names via the public internet rather than using private interface endpoints or hybrid Route 53 VPC Resolver paths.
+  * **The Cure**: Verify that VPC DNS attributes are active, that private DNS is enabled for interface endpoints when intended, and that forwarding rules point through the correct Route 53 VPC Resolver endpoints.
 
 ## Putting It All Together
 
@@ -282,20 +284,21 @@ Securing and scaling an AWS network means systematically extending your private 
 * **VPC Peering**: Provides simple, direct one-to-one private routing between non-overlapping VPCs, though it remains non-transitive and difficult to scale as a mesh.
 * **Transit Gateway**: Acts as a centralized regional router, simplifying multi-VPC architectures and allowing you to segregate dev, prod, and shared traffic using transit route tables.
 * **Site-to-Site VPN & Direct Connect**: Bridge the gap to physical networks, combining the rapid deployment of encrypted internet VPN tunnels with the stable latency and massive bandwidth of dedicated Direct Connect fiber.
-* **Route 53 Resolver Endpoints**: Connect your cloud and on-premises DNS servers, ensuring that domain names resolve cleanly across hybrid networks.
+* **Route 53 VPC Resolver Endpoints**: Connect your cloud and on-premises DNS servers, ensuring that domain names resolve cleanly across hybrid networks.
 
 By mastering these connectivity patterns, you transform AWS networking from a collection of isolated servers into a seamless global architecture, cabled with clear traffic lanes, robust packet filters, and private naming.
 
-![VPC connectivity summary infographic showing PrivateLink, private DNS, VPC peering, Transit Gateway, VPN versus Direct Connect, and Route 53 Resolver](/content-assets/articles/article-cloud-providers-aws-networking-connectivity-connectivity-hybrid-networking/vpc-connectivity-summary.png)
+![VPC connectivity summary infographic showing PrivateLink, private DNS, VPC peering, Transit Gateway, VPN versus Direct Connect, and Route 53 VPC Resolver](/content-assets/articles/article-cloud-providers-aws-networking-connectivity-connectivity-hybrid-networking/vpc-connectivity-summary.png)
 
-*Use this as the connectivity checklist: keep service access private with PrivateLink, make DNS resolve to the intended private path, avoid peering sprawl, centralize large networks with Transit Gateway, choose VPN or Direct Connect deliberately, and bridge names with Route 53 Resolver.*
+*Use this as the connectivity checklist: keep service access private with PrivateLink, make DNS resolve to the intended private path, avoid peering sprawl, centralize large networks with Transit Gateway, choose VPN or Direct Connect deliberately, and bridge names with Route 53 VPC Resolver.*
 
 ---
 
 **References**
 
-- [AWS PrivateLink concepts](https://docs.aws.amazon.com/vpc/latest/privatelink/concepts.html) - Explains interface endpoints, endpoint services, and private DNS behavior.
-- [Route 53 Resolver](https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/resolver.html) - Documents inbound and outbound resolver endpoints and forwarding rules.
+- [AWS PrivateLink concepts](https://docs.aws.amazon.com/vpc/latest/privatelink/concepts.html) - Explains interface endpoints, resource endpoints, service-network endpoints, endpoint services, and private DNS behavior.
+- [Access VPC resources through AWS PrivateLink](https://docs.aws.amazon.com/vpc/latest/privatelink/privatelink-access-resources.html) - Documents resource endpoints for private access to shared resources such as databases, IP targets, and domain-name targets.
+- [Route 53 VPC Resolver](https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/resolver.html) - Documents the current VPC Resolver name, inbound and outbound resolver endpoints, and forwarding rules.
 - [How transit gateways work](https://docs.aws.amazon.com/vpc/latest/tgw/how-transit-gateways-work.html) - Describes attachments, route tables, propagation, and centralized routing.
 - [Direct Connect gateways](https://docs.aws.amazon.com/directconnect/latest/UserGuide/direct-connect-gateways-intro.html) - Explains how Direct Connect gateways connect private and transit virtual interfaces to AWS networks.
 - [Site-to-Site VPN quotas](https://docs.aws.amazon.com/vpn/latest/s2svpn/vpn-limits.html) - Lists tunnel and throughput quotas for VPN connectivity.

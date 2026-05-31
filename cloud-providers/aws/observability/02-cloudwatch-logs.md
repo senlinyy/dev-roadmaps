@@ -24,9 +24,10 @@ aliases:
 6. [The Structured Logging Standard](#the-structured-logging-standard)
 7. [Querying Telemetry with Logs Insights](#querying-telemetry-with-logs-insights)
 8. [Metric Filters: Non-Intrusive Extraction](#metric-filters-non-intrusive-extraction)
-9. [Retention, Governance, and Cost Controls](#retention-governance-and-cost-controls)
-10. [Putting It All Together](#putting-it-all-together)
-11. [What's Next](#whats-next)
+9. [Under-the-Hood: The Multiline Stack Trace Trap](#under-the-hood-the-multiline-stack-trace-trap)
+10. [Retention, Governance, and Cost Controls](#retention-governance-and-cost-controls)
+11. [Putting It All Together](#putting-it-all-together)
+12. [What's Next](#whats-next)
 
 ## The Disappearing Evidence Problem
 
@@ -77,7 +78,7 @@ Instead, your primary diagnostic entrance should always be the Log Group folder.
 Before your code can emit useful evidence, you must configure a durable networking path that ships standard print streams into CloudWatch Logs. AWS structures these paths differently depending on the compute runtime:
 
 * **Amazon ECS (Containers)**: Under the Fargate compute model, your container definition in the task blueprint declares the `awslogs` log driver. This driver automatically captures any text written by your application process to standard output (`stdout`) and standard error (`stderr`) streams inside the container, forwarding those lines directly to a configured Log Group (such as `/aws/ecs/orders-api`). This ensures your application code remains completely pure; you simply print to the console, and Fargate handles the cloud shipping in the background.
-* **AWS Lambda (Serverless)**: When a serverless Lambda function executes, the runtime environment automatically intercepts all print calls and console logs, streaming them to a dedicated Log Group named `/aws/lambda/<function-name>`. This path is managed entirely by the platform, but it requires that your Lambda function's IAM Execution Role includes explicit policy permissions to create log streams and put log events (`logs:CreateLogStream` and `logs:PutLogEvents`). If these permissions are missing, the function will execute successfully, but you will have zero log visibility in the console.
+* **AWS Lambda (Serverless)**: When a serverless Lambda function executes, the runtime environment automatically intercepts all print calls and console logs, streaming them to a dedicated Log Group named `/aws/lambda/<function-name>`. This path is managed by the platform, but it requires that your Lambda function's IAM Execution Role includes log permissions. If the log group does not already exist, the role needs `logs:CreateLogGroup`; it also needs `logs:CreateLogStream` and `logs:PutLogEvents` to create streams and write events. If these permissions are missing, the function can execute successfully while leaving you with zero log visibility in the console.
 * **Amazon EC2 (Virtual Servers)**: Unlike managed runtimes, an EC2 instance does not have an automatic print driver. To ship logs, you must install the Unified CloudWatch Agent as a background system daemon on the guest operating system. The agent is configured via a JSON file to monitor specific local files (such as `/var/log/nginx/access.log`), sweep new lines as they are written, and stream them securely to your specified CloudWatch Log Group.
 
 ## The Unified CloudWatch Agent Configuration
@@ -167,13 +168,6 @@ Executing this command runs a remote search against the specified Log Group, mer
       "eventId": "397193639504212345678901234567890",
       "ingestionTime": 1779836396120
     }
-  ],
-  "searchedLogStreams": [
-    {
-      "logStreamName": "ecs-task-a-4f22",
-      "searchedStartDateTime": 1779830000000,
-      "searchedEndDateTime": 1779840000000
-    }
   ]
 }
 ```
@@ -251,7 +245,7 @@ To build a cost-effective logging architecture, you must enforce strict retentio
 
 * **Staging and Development**: Set Log Group retention to 7 days, providing enough history for immediate sprint cycles while eliminating long-term storage fees.
 * **Production Standard**: Set Log Group retention to 30 or 90 days, capturing historical evidence for standard incident reviews and performance audits.
-* **Compliance Archiving**: If industry regulations require you to retain execution history for years, never store them permanently inside CloudWatch Logs. Set a short retention period (such as 30 days) and configure an automated Kinesis Data Firehose stream to continuously back up log events into cheap Amazon S3 Glacier archive buckets.
+* **Compliance Archiving**: If industry regulations require you to retain execution history for years, avoid storing all of that history permanently inside CloudWatch Logs. Set a short retention period (such as 30 days) and configure an automated Amazon Data Firehose delivery stream to continuously back up log events into Amazon S3, where lifecycle rules can transition older objects to S3 Glacier storage classes.
 
 Logs Ingest Matrix:
 
@@ -283,6 +277,9 @@ Configuring structured logs and Logs Insights queries provides high-resolution e
 **References**
 
 * [Amazon CloudWatch Logs User Guide](https://docs.aws.amazon.com/AmazonCloudWatch/latest/logs/WhatIsCloudWatchLogs.html) - Documentation on storing, monitoring, and querying application log files.
+* [Sending Lambda function logs to CloudWatch Logs](https://docs.aws.amazon.com/lambda/latest/dg/monitoring-cloudwatchlogs.html) - Documents Lambda log group, log stream, and execution role permission requirements.
+* [FilterLogEvents API](https://docs.aws.amazon.com/AmazonCloudWatchLogs/latest/APIReference/API_FilterLogEvents.html) - Documents current `FilterLogEvents` response fields.
 * [CloudWatch Agent Configuration File](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/CloudWatch-Agent-Configuration-File-Details.html) - Technical reference for configuring local file collection lists.
 * [CloudWatch Logs Insights Query Syntax](https://docs.aws.amazon.com/AmazonCloudWatch/latest/logs/CWL_QuerySyntax.html) - Documentation on the pipe-delimited Logs Insights query language.
+* [Amazon Data Firehose](https://docs.aws.amazon.com/firehose/latest/dev/what-is-this-service.html) - Documents the current Firehose service name and delivery stream behavior.
 * [Amazon CloudWatch Logs Pricing](https://aws.amazon.com/cloudwatch/pricing/) - Reference for logs standard and infrequent access storage costs.

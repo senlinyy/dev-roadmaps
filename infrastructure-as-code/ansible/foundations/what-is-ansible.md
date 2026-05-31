@@ -93,10 +93,7 @@ Here is an early, comment-free preview of an Ansible playbook that standardizes 
 
 In the world of system automation, most traditional tools rely on a client-server model that requires a resident background agent (often called a daemon) to be constantly running on every managed machine. This background process periodically polls a central management server for new instructions, compiles them locally, and applies changes.
 
-This resident agent model introduces several physical and operational operational issues:
-- **Resource Consumption**: Running a background service on hundreds of small virtual machines constantly consumes CPU cycles and system memory, which reduces the resources available for your actual applications.
-- **Maintenance Overhead**: The agent itself is a piece of software that must be installed, configured, updated, and secured. If the agent crashes or its local configuration becomes corrupted, you lose the ability to manage that machine.
-- **Security Footprint**: A background daemon that runs as root and listens on network ports for central commands introduces an active target for attackers. If the daemon has vulnerability bugs, your entire fleet is at risk.
+This resident agent model introduces several physical and operational issues. A resident agent process consumes memory and CPU on every managed node continuously, not just during automation runs, which reduces the resources available for your actual applications on small virtual machines. The agent software requires its own installation, version pinning, and upgrade cycle across the entire fleet, meaning a crashed or corrupted agent removes that machine from your management plane entirely. Each agent is also an additional network listener, expanding the attack surface by adding an open port and authentication credential to every managed machine.
 
 Ansible takes a fundamentally different path: it is agentless. For Linux hosts, this means the managed servers do not run any special Ansible background processes or daemons. They require no resident software updates, no local database files, and no dedicated ports listening for management traffic. Instead, Ansible leverages the network paths and access routes you already use. It connects over standard SSH, runs whatever tasks are needed, and then disconnects completely. When Ansible is not actively running a playbook, it occupies zero memory and zero CPU cycles on your servers.
 
@@ -112,7 +109,7 @@ Here is the step-by-step low-level sequence of how Ansible executes a single tas
 2. **Discover the Python Interpreter**: Ansible inspects the remote operating system to find a working Python execution environment. It scans standard system directories (searching for `/usr/bin/python3`, `/usr/bin/python`, or customized paths) and caches the location.
 3. **Assemble the Module in Memory**: On your control computer, Ansible takes the Python code representing the requested module (for example, the code that manages file directories) and merges it with the specific arguments you wrote in your playbook.
 4. **Package the Module Payload**: Ansible compresses this combined Python module code and argument data into a single payload. The payload is self-contained enough to carry the helper code required for that task.
-5. **Transfer the Payload**: Ansible writes a small bootstrapping script to the SSH channel, which creates a temporary directory on the managed host—typically hidden deep inside `/tmp/.ansible/tmp/`—and transfers the base64-encoded zip package using SFTP or SCP file protocols.
+5. **Transfer the Payload**: Ansible writes a small bootstrapping script to the SSH channel, which creates a temporary directory on the managed host (typically inside `/tmp/.ansible/tmp/`) and transfers the base64-encoded zip package using SFTP or SCP file protocols.
 6. **Execute the Code**: The bootstrapping script tells the remote Python interpreter to read and execute the module payload from the temporary directory. The remote Python process performs the real systems calls (like `stat()`, `mkdir()`, or modifying package lists) to align the host state.
 7. **Return Results and Clean Up**: The remote Python execution writes a JSON-formatted text block back to the SSH standard output stream containing the status (whether the task succeeded, if anything changed, or if an error occurred). By default, Ansible removes the temporary files after the module finishes, unless configuration such as remote-file retention is enabled for troubleshooting.
 
@@ -165,21 +162,17 @@ Here is a quick reference table showing the differences between these two roles:
 
 When you write automation files in Ansible, you use a set of hierarchy terms that describe how the work is organized. Understanding these terms prevents confusion when you read playbooks or debug run errors.
 
-The hierarchy flows from the largest file structure down to the individual units of work:
+The hierarchy flows from the largest file structure down to the individual units of work.
 
-- **Playbook**: A text file written in YAML format that holds one or more plays. Think of it as a complete automation book that details the setup rules for a portion of your infrastructure.
-- **Play**: A structural block inside a playbook that associates a specific group of servers (from your host catalog) with a specific list of tasks. A play answers the question: "Which hosts should get what work?"
-- **Task**: An individual step inside a play that has a clear name and calls a specific module. Every task should focus on one logical goal (like "Ensure Nginx is running").
-- **Module**: The pre-written program called by a task that understands how to interact with the operating system to perform actual work. Ansible ships with thousands of built-in modules that cover everything from package managers and file copying to user management and database manipulation.
+A playbook is the top-level file that groups all automation for a scenario into one document. Inside a playbook, a play maps a set of target hosts to an ordered list of steps. Each step in that list is a task, a human-readable instruction like "ensure the Nginx package is installed." A module is the compiled code behind each task, which performs the actual system operation and reports back whether anything changed.
 
-```text
-Playbook File (web-servers.yml)
-├── Play 1: Target [webservers] group
-│   ├── Task A: Install Nginx (uses apt module)
-│   └── Task B: Start Service (uses service module)
-└── Play 2: Target [databases] group
-    ├── Task C: Install PostgreSQL (uses apt module)
-    └── Task D: Create Database (uses postgresql_db module)
+```mermaid
+flowchart TD
+    Playbook["Playbook (.yml file)"] --> Play1["Play: web_servers"]
+    Playbook --> Play2["Play: db_servers"]
+    Play1 --> Task1["Task: install nginx"]
+    Play1 --> Task2["Task: start nginx"]
+    Play2 --> Task3["Task: install postgresql"]
 ```
 
 ## Idempotency: The Core Safety Principle

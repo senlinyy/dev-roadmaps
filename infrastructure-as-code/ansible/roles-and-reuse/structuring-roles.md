@@ -101,7 +101,7 @@ Ansible expects roles to follow a strict, conventional directory layout. When a 
 
 A fully structured role contains the following standard directories:
 
-```text
+```plain
 roles/
   security_hardening/
     defaults/
@@ -122,13 +122,16 @@ roles/
 ```
 
 Each directory in this structure has a dedicated purpose:
-- **defaults**: Contains low-precedence default variables. These variables serve as the public input contract for the role, allowing callers to easily customize behavior.
-- **vars**: Contains high-precedence variables. These are internal constants that are tightly coupled to the role implementation and should not be modified by external playbooks.
-- **tasks**: Contains the sequential list of tasks executed when the role is called. The `main.yml` file is the entry point.
-- **handlers**: Contains service reload or restart triggers. Tasks inside the role can notify these handlers when changes are made.
-- **templates**: Contains Jinja2 configuration templates. The `template` module resolves source files inside this folder automatically.
-- **files**: Contains static files that are copied to the managed hosts without modification. The `copy` module resolves files inside this directory.
-- **meta**: Contains role metadata, including author information, license terms, supported operating systems, and dependencies on other roles.
+
+| Directory | Purpose |
+|---|---|
+| `defaults/` | Lowest-priority variables; the public input contract for the role, safe to override from outside |
+| `vars/` | High-priority variables; internal constants tightly coupled to the role and not intended for external callers |
+| `tasks/` | The ordered list of tasks the role executes; `main.yml` is the entry point |
+| `handlers/` | Event-driven handlers notified by tasks inside this role |
+| `templates/` | Jinja2 template files rendered and pushed to targets; the `template` module resolves sources here automatically |
+| `files/` | Static files copied verbatim to targets; the `copy` module resolves sources here automatically |
+| `meta/` | Role metadata including author information, supported platforms, and dependencies on other roles |
 
 This layout makes the automation codebase predictable. If a security auditor requests a change to the secure shell configuration template, a developer knows immediately to open `templates/sshd_config.j2`. If a service fails to restart, the developer inspects `handlers/main.yml`.
 
@@ -226,10 +229,7 @@ security_hardening_allowed_groups: ["admin"]
 security_hardening_packages: ["ufw", "fail2ban"]
 ```
 
-Enforcing this prefix pattern provides several structural benefits:
-- **Collision Reduction**: Variables are much less likely to collide, even when a playbook executes dozens of different roles.
-- **Searchability**: Developers can search the entire repository for the prefix `security_hardening_` to locate every file, template, and inventory entry that configures the role.
-- **Self-Documentation**: When a developer reads an environment inventory file, the prefix makes it immediately clear which role will consume each variable.
+Enforcing this prefix pattern provides several structural benefits. Variables are much less likely to collide, even when a playbook executes dozens of different roles, because each role's variables occupy their own named namespace rather than competing in a shared flat pool. Developers can search the entire repository for the prefix `security_hardening_` to locate every file, template, and inventory entry that configures the role, making audits and dependency tracing straightforward. When a developer reads an environment inventory file, the prefix makes it immediately clear which role will consume each variable, turning the inventory into readable self-documenting configuration.
 
 Namespacing should also be applied to handler names. When a task calls the `notify` directive, Ansible searches for a matching handler name or listen topic. If two roles define a handler named `Restart service`, the notification can become ambiguous during review and may trigger the wrong operational action. Prefixing handler names, such as `Restart security_hardening sshd`, keeps notifications easier to trace.
 
@@ -275,10 +275,7 @@ dependencies:
 
 When the execution engine encounters a role containing dependency declarations, it resolves them recursively and runs the dependency roles before the role that declared them. Ansible also tracks role dependencies so the same dependency is not run repeatedly in the same context unless the role configuration requires a separate run.
 
-While dependencies are highly powerful, they must be used with caution to avoid architectural problems:
-- **Circular Dependencies**: If role A depends on role B, and role B depends on role A, the execution engine will detect the circular reference and halt with a compiler error to prevent an infinite loop.
-- **Hidden Execution**: When a playbook calls a single role, but that role silently imports five other roles through dependencies, the playbook reader loses visibility into what changes are actually being applied to their servers.
-- **Variable Overwrites**: Dependent roles share the host variable context, which increases the likelihood of variable collisions if namespacing prefixes are not maintained.
+While dependencies are highly powerful, they must be used with caution to avoid architectural problems. If role A depends on role B and role B depends on role A, the execution engine detects the circular reference and halts with a compiler error to prevent an infinite loop. When a playbook calls a single role that silently imports five other roles through metadata dependencies, the playbook reader loses visibility into what changes are actually being applied to their servers, making incidents harder to trace and playbook reviews harder to reason about. Dependent roles also share the host variable context, which increases the likelihood of variable collisions if namespacing prefixes are not maintained across every role in the chain.
 
 For simple environments, declaring dependencies explicitly within the playbook's `roles` list is often cleaner than nesting them inside the metadata layer. Listing roles sequentially in the playbook, such as applying `os_base_repos` followed by `security_hardening`, makes the execution order immediately visible to anyone reviewing the repository.
 
@@ -298,7 +295,7 @@ By enforcing these boundaries, you transform raw configuration files into a reli
 
 **References**
 
-- [Ansible Roles Documentation](https://docs.ansible.com/ansible/latest/playbook_guide/playbooks_reuse_roles.html)
-- [Understanding Variable Precedence](https://docs.ansible.com/ansible/latest/reference_appendices/general_precedence.html)
-- [Using Assertions for Playbook Validation](https://docs.ansible.com/ansible/latest/collections/ansible/builtin/assert_module.html)
-- [Role Dependencies and Metadata](https://docs.ansible.com/ansible/latest/playbook_guide/playbooks_reuse_roles.html#role-dependencies)
+- [Ansible Roles Documentation](https://docs.ansible.com/ansible/latest/playbook_guide/playbooks_reuse_roles.html) - Core role directory structure, defaults, vars, handlers, templates, and meta conventions.
+- [Understanding Variable Precedence](https://docs.ansible.com/ansible/latest/reference_appendices/general_precedence.html) - Explains how role defaults, role vars, and extra vars interact in the precedence chain.
+- [Using Assertions for Playbook Validation](https://docs.ansible.com/ansible/latest/collections/ansible/builtin/assert_module.html) - Covers the assert module for validating required variables before role execution begins.
+- [Role Dependencies and Metadata](https://docs.ansible.com/ansible/latest/playbook_guide/playbooks_reuse_roles.html#role-dependencies) - Documents the meta/main.yml format for declaring role dependencies and controlling execution order.

@@ -27,10 +27,7 @@ Idempotency is the core safety property of a modern configuration management sys
 
 To understand why idempotency is a vital operational safeguard, consider our scenario. You are managing the log storage directories, user security settings, and runtime configuration parameters on a fleet of three server machines.
 
-If your automation scripts are not idempotent:
-- Running the setup script a second time might append the same user definition line to `/etc/passwd`, corrupting the system login database.
-- A task that creates a directory might fail with an error because the directory already exists, blocking the rest of the script from executing.
-- The web server service might be forcefully restarted on every single run, dropping active application socket connections and triggering unnecessary service downtime for your users.
+If your automation scripts are not idempotent, running the same setup script a second time might append a duplicate user definition line to `/etc/passwd`, corrupting the login database, or fail outright because the log directory already exists, which blocks the rest of the script from executing. Worse, the web server service gets restarted on every single run regardless of whether any configuration changed, dropping active socket connections and causing unnecessary downtime for your users.
 
 An idempotent playbook changes this behavior completely. Instead of treating tasks as a sequence of aggressive command actions, you describe the target state you want the machines to settle into. The playbook can then be executed continuously (every day, or even every hour) to audit your servers. If a server is perfectly configured, the run executes instantly with zero modifications, keeping your environments completely stable.
 
@@ -72,27 +69,13 @@ Because Ansible is agentless and executes tasks using temporary module payloads 
 Here is the low-level systems depth of how different Ansible modules reconcile state under the hood:
 
 ### 1. The File Module and Inode Metadata
-When you call the `ansible.builtin.file` module to manage a directory path, the temporary Python script executes the low-level `stat()` system call on the target path:
-- The kernel returns a detailed status structure containing the inode metadata: file type, owner user ID (UID), group ID (GID), and permission bitmask (mode octal).
-- The module compares these numeric values with your playbook arguments.
-- If the path is missing, the module runs the `mkdir()` system call and reports `changed`.
-- If the path exists but the permissions bits differ (for example, the directory is set to `0777` but your playbook requires `0755`), the module executes `chmod()` and `chown()` system calls to align the metadata, reporting `changed`.
-- If all values match exactly, the module returns a status of `ok` with zero system modifications.
+When you call the `ansible.builtin.file` module to manage a directory path, the temporary Python script executes the low-level `stat()` system call on the target path. The kernel returns a status structure containing the inode metadata: file type, owner user ID (UID), group ID (GID), and permission bitmask. The module compares each of these numeric values against the arguments in your playbook task. If the path is missing entirely, the module issues a `mkdir()` system call to create it and reports `changed`. If the path exists but the permission bits differ -- for example, the directory is `0777` while the playbook requires `0755` -- the module corrects the attributes through `chmod()` and `chown()` system calls and reports `changed`. If every field already matches, the module returns `ok` and exits without touching the disk.
 
 ### 2. The Copy Module and Content Checksums
-When you use `ansible.builtin.copy` to write configuration content to a host, Ansible must avoid writing the file if the content is already correct:
-- Before transferring any files, the control node compiles the final text block and calculates a content checksum.
-- The remote Python script queries the target path on the managed host, executing the `stat()` system call to verify the file exists.
-- If the file exists, the script calculates a checksum of the remote file's contents.
-- The module compares the local and remote checksum strings in memory.
-- If the checksums match, the content is identical. The module skips the file transfer entirely and reports `ok`.
-- If the checksums differ, the module transfers the new content to a temporary file, calculates the checksum of the temporary file to verify integrity, and then executes an atomic `rename()` system call to replace the target file instantly, preventing file corruption if the network drops.
+When you use `ansible.builtin.copy` to write configuration content to a host, the control node first compiles the final text block and calculates a checksum before transferring anything. The remote Python script then executes a `stat()` call on the destination path to confirm the file exists. If it does, the script reads the existing file and calculates its own checksum. The module compares both strings in memory: when they match, the content is already correct and the module skips the transfer entirely, reporting `ok`. When they differ, the module writes the new content to a temporary file on the managed host, recalculates the checksum of that temporary file to verify integrity, and then issues an atomic `rename()` system call to swap it into place. The atomic rename prevents partial writes from leaving a corrupted configuration file on disk if the network drops mid-transfer.
 
 ### 3. The Package Module and System Catalogs
-When you manage packages using `ansible.builtin.apt`, the remote module queries local package directories and system catalogs (such as running internal searches equivalent to `dpkg-query -W` on Debian-based hosts):
-- The module parses the package manager output to inspect the installation status and version string.
-- If the package status is marked as uninstalled, the module calls the package manager API to download and install it, reporting `changed`.
-- If the status is already correct, the module reports `ok` and exits.
+When you manage packages using `ansible.builtin.apt`, the remote module queries local package directories and system catalogs by running internal searches equivalent to `dpkg-query -W` on Debian-based hosts. It parses the output to read the installation status and installed version string for the requested package. If the status shows the package is absent, the module invokes the package manager API to download and install it, then reports `changed`. If the status is already correct and the version satisfies the playbook constraint, the module reports `ok` and exits without invoking the package manager at all.
 
 ```mermaid
 flowchart TD
@@ -124,7 +107,7 @@ One of the clearest ways to verify that your playbooks are designed correctly is
 
 When you run a playbook against a freshly provisioned host, the first execution may apply many modifications:
 
-```text
+```plain
 PLAY RECAP
 server-01 : ok=12 changed=6 unreachable=0 failed=0 skipped=0
 ```
@@ -133,7 +116,7 @@ This output is completely healthy. A fresh server requires configuration files t
 
 However, when you run the exact same playbook command immediately afterward, the second execution should be completely quiet:
 
-```text
+```plain
 PLAY RECAP
 server-01 : ok=18 changed=0 unreachable=0 failed=0 skipped=0
 ```
@@ -165,10 +148,7 @@ handlers:
       state: restarted
 ```
 
-The execution flow of a handler is highly structured:
-- **No Change, No Restart**: If the configuration file already matches, the copy task reports `ok`. The handler is not notified, and the application service continues running without interruption.
-- **Change Triggers Notification**: If the configuration file differs, the copy task writes the file and reports `changed`. This alerts the handler named `Restart app service`.
-- **Deferred Batch Execution**: Ansible does not run the handler immediately when notified. It queues the notification in memory and completes the remaining tasks in the play first. At the next handler flush point, Ansible executes each notified handler once. If three separate configuration files are updated and all three notify the same restart handler, Ansible restarts the service once at that flush point, avoiding multiple service reboots.
+The execution flow of a handler is highly structured. If the configuration file already matches the desired content, the copy task reports `ok`, the handler receives no notification, and the application service continues running without interruption. If the file differs, the copy task writes the new content, reports `changed`, and queues a notification for the handler named `Restart app service`. Ansible does not invoke the handler immediately at that point. It completes all remaining tasks in the play first, then executes each notified handler once at the next flush point. If three separate configuration files are updated and all three notify the same restart handler, Ansible restarts the service a single time at that flush, avoiding multiple sequential service reboots.
 
 If a later task fails before handlers run, Ansible may skip the queued handler on that failed host unless you explicitly use handler failure controls such as `force_handlers`. That nuance matters when a changed configuration file must be followed by a reload to keep the running service aligned with the file on disk.
 
@@ -216,7 +196,7 @@ This override prevents a successful read-only command from reporting `changed`, 
 
 ## Putting It All Together
 
-We started by looking at how an non-idempotent automation script can corrupt system files, fail on existing directories, and cause service drops across your log host fleet.
+We started by looking at how a non-idempotent automation script can corrupt system files, fail on existing directories, and cause service drops across your log host fleet.
 
 Ansible solves these issues by placing the concept of idempotency at the center of its execution model:
 - **Declarative Modules**: Tasks describe desired final states, and built-in modules use low-level calls like `stat()` and checksum comparisons to verify if changes are actually required.

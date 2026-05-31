@@ -34,6 +34,8 @@ Policy as code solves this by expressing the rules in machine-readable form and 
 
 The flow is straightforward:
 
+![Policy as code evaluates a plan against rules and lets safe changes pass while risky changes are blocked.](/content-assets/articles/article-iac-terraform-automation-policy/policy-check-gate.png)
+
 1. Terraform generates a plan that describes exactly what changes it intends to make.
 2. The plan is converted to a machine-readable format (JSON).
 3. A policy engine reads the plan JSON and evaluates it against a set of rules.
@@ -282,6 +284,8 @@ For teams using OPA, the policy files belong in version control alongside the Te
 
 No set of policy rules is perfectly calibrated from the start. A new policy might block legitimate configurations that actually comply with the intent of the rule but not its literal expression. A security group that allows SSH only from a company VPN might be blocked by an overly broad rule that checks for any inbound rule on port 22 without checking the source CIDR.
 
+![A useful policy failure explains the failed rule and affected resource so the author can fix and rerun the plan.](/content-assets/articles/article-iac-terraform-automation-policy/policy-failure-feedback.png)
+
 There are several ways to handle legitimate exceptions.
 
 **Fix the policy to be more precise.** The most sustainable option. If the rule is blocking a valid configuration, the rule is probably not capturing the correct intent. Refine it.
@@ -307,6 +311,9 @@ Both approaches require the same organizational commitment: policies are code, r
 ## What's Next
 
 You have now covered the complete Terraform roadmap — from what Terraform is and why it exists, through configuration, state, modules, environments, advanced techniques, and automation. The next step is applying these concepts to real infrastructure projects, iterating on your module library, and building the CI/CD and policy enforcement layer that makes infrastructure changes as safe and reviewable as application code.
+
+
+![Policy as code summary: inspect the plan, encode rules, block risk, and return actionable feedback.](/content-assets/articles/article-iac-terraform-automation-policy/policy-summary.png)
 
 ---
 

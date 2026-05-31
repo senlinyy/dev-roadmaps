@@ -72,10 +72,7 @@ When you use the `import_tasks` module, Ansible treats the referenced file as st
 
 This is why static imports are visible to playbook inspection commands. The imported tasks are known early enough for Ansible to list them and apply task-level keywords to the expanded tasks.
 
-Because this compilation happens early, static imports are subject to several technical constraints:
-- **Variable Limitations**: You cannot use variables that are registered during runtime task execution to define the name of the imported file. The filename must be static or derived from variables known at compile time, such as playbook vars or inventory variables.
-- **Pre-Processed Inheritance**: If you apply a conditional `when` statement or a tag to an `import_tasks` block, the control plane duplicates that condition and applies it to every task compiled from the imported file.
-- **Earlier Syntax Visibility**: Because Ansible parses the tasks early, missing files and YAML syntax problems are usually caught before those tasks execute. Module-specific failures can still depend on runtime data and target state.
+Because this compilation happens early, static imports carry several technical constraints. You cannot use variables that are registered during runtime task execution to define the name of the imported file. The filename must be static or derived from variables known at compile time, such as playbook vars or inventory variables. If you apply a conditional `when` statement or a tag to an `import_tasks` block, the control plane duplicates that condition and applies it to every task compiled from the imported file, so every child task inherits the parent constraint. Because Ansible parses the tasks early, missing files and YAML syntax problems are usually caught before those tasks execute, though module-specific failures can still depend on runtime data and target state.
 
 Static imports are highly predictable. They provide a stable, unchanging execution blueprint that is fully transparent to static analysis tools.
 
@@ -106,10 +103,7 @@ When execution reaches the include task for a host, Ansible evaluates the task p
 
 This allows different target hosts to load different files or skip inclusion entirely based on facts, registered variables, or other runtime conditions.
 
-This deferral enables advanced runtime flexibility:
-- **Dynamic Filenames**: You can use variables gathered from the target host (such as `ansible_facts`) or registered from previous tasks to dynamically generate the filename of the included file.
-- **Conditional Loading**: If a conditional check on the `include_tasks` statement evaluates to false, the target file is never read from the control node filesystem. This is highly efficient when some files contain modules that are only installed on specific target platforms.
-- **On-the-Fly Processing**: The included tasks are parsed in-memory, allowing the system to adapt its execution structure based on the success or failure of preceding tasks.
+This deferral enables advanced runtime flexibility. You can use variables gathered from the target host (such as `ansible_facts`) or registered from previous tasks to dynamically generate the filename of the included file, so a single include statement can load different task files on different hosts in the same run. If a conditional check on the `include_tasks` statement evaluates to false, the target file is never read from the control node filesystem at all, which is highly efficient when some files contain modules installed only on specific target platforms. Because the included tasks are parsed in-memory when the include is reached, the system can adapt its execution structure based on the success or failure of preceding tasks.
 
 The trade-off for this flexibility is a loss of early visibility. Because the control plane does not know which tasks exist inside the included file until it reaches the include statement during execution, static validation tools and playbook inspection flags cannot view the included tasks before the run begins.
 
@@ -211,10 +205,7 @@ As you split playbooks into modular files, the tasks inside those files will ref
 
 Ansible distributes its modules inside structured packages called collections. For example, the core modules ship in the `ansible.builtin` collection, while community-supported utilities ship in namespaces like `community.general`.
 
-Using the FQCN, such as `ansible.builtin.template` instead of simply `template`, gives you several execution safeguards:
-- **Collision Prevention**: If a third-party collection defines a module named `copy` that behaves differently from the standard file copier, the FQCN tells Ansible exactly which module you intend to load.
-- **Documentation Links**: FQCNs make it easier to jump directly to the correct official module documentation.
-- **Clarity**: Developers reviewing the code immediately understand where the module originates, eliminating ambiguity during code reviews.
+Using the FQCN, such as `ansible.builtin.template` instead of simply `template`, eliminates a category of ambiguity that grows larger as a project installs more collections. If a third-party collection defines a module named `copy` that behaves differently from the standard file copier, the FQCN tells Ansible exactly which module to load, preventing silent behavior changes. It also makes it straightforward to navigate directly to the correct official module documentation, and developers reviewing the code immediately understand the module's origin without needing to trace the active collection search path.
 
 A modular project should also list its external collection requirements inside a `collections/requirements.yml` file, specifying precise versions to prevent breaking changes in production when a new control node is provisioned.
 
@@ -292,10 +283,10 @@ By choosing static imports for stable system structures and dynamic includes for
 
 **References**
 
-- [Reusing Ansible Artifacts](https://docs.ansible.com/ansible/latest/playbook_guide/playbooks_reuse.html)
-- [Statically Importing Tasks](https://docs.ansible.com/ansible/latest/collections/ansible/builtin/import_tasks_module.html)
-- [Dynamically Including Tasks](https://docs.ansible.com/ansible/latest/collections/ansible/builtin/include_tasks_module.html)
-- [Statically Importing Roles](https://docs.ansible.com/ansible/latest/collections/ansible/builtin/import_role_module.html)
-- [Dynamically Including Roles](https://docs.ansible.com/ansible/latest/collections/ansible/builtin/include_role_module.html)
-- [Ansible Collections Guide](https://docs.ansible.com/ansible/latest/collections_guide/index.html)
-- [Tags in Playbooks](https://docs.ansible.com/projects/ansible/latest/playbook_guide/playbooks_tags.html)
+- [Reusing Ansible Artifacts](https://docs.ansible.com/ansible/latest/playbook_guide/playbooks_reuse.html) - Official guide covering the full reuse model, including when to use imports, includes, and roles.
+- [Statically Importing Tasks](https://docs.ansible.com/ansible/latest/collections/ansible/builtin/import_tasks_module.html) - Module reference for `import_tasks`, including parameter options and parse-time behavior.
+- [Dynamically Including Tasks](https://docs.ansible.com/ansible/latest/collections/ansible/builtin/include_tasks_module.html) - Module reference for `include_tasks`, covering runtime loading, loops, and conditional inclusion.
+- [Statically Importing Roles](https://docs.ansible.com/ansible/latest/collections/ansible/builtin/import_role_module.html) - Module reference for `import_role` and how static role loading differs from the `roles:` key.
+- [Dynamically Including Roles](https://docs.ansible.com/ansible/latest/collections/ansible/builtin/include_role_module.html) - Module reference for `include_role`, including the `public` parameter for exposing role variables.
+- [Ansible Collections Guide](https://docs.ansible.com/ansible/latest/collections_guide/index.html) - Covers installing, requiring, and using collections, including the `requirements.yml` format.
+- [Tags in Playbooks](https://docs.ansible.com/projects/ansible/latest/playbook_guide/playbooks_tags.html) - Explains tag inheritance differences between static imports and dynamic includes.

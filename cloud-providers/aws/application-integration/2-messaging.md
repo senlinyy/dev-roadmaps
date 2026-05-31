@@ -174,6 +174,8 @@ A dead-letter queue, or DLQ, receives messages that could not be processed succe
 
 A DLQ prevents one bad message from looping forever in the main queue. It also creates evidence. Instead of saying "the worker is failing sometimes," the team can inspect the failed message, receive count, timestamps, and related logs.
 
+The redrive policy decides when a message moves. Its `maxReceiveCount` is not a universal magic number. A payment worker that fails because of malformed input may need a low count so poison messages leave the main queue quickly. A worker calling a flaky vendor may need more attempts or a longer visibility timeout before the message is quarantined. The number should match the failure pattern and the cost of retrying.
+
 The gotcha is that DLQ is not a trash can. It is a quarantine. Messages in a DLQ often represent customer-impacting work that did not complete. The team needs an owner and a review process.
 
 For receipt emails, a DLQ message might mean a customer did not receive a receipt. Deleting the message without a record may hide the failure. Redriving it blindly may send duplicate emails if the worker bug is still present.
@@ -182,7 +184,7 @@ For receipt emails, a DLQ message might mean a customer did not receive a receip
 
 SQS has standard queues and FIFO queues. Standard queues are the default starting point for many workloads because they support high throughput and at-least-once delivery. They may deliver messages more than once and can deliver them out of exact order.
 
-FIFO queues are for workloads that need first-in-first-out processing within a message group and stronger deduplication behavior. They ask more from the design because message group IDs decide ordering lanes.
+FIFO queues are for workloads that need first-in-first-out processing within a message group and stronger deduplication behavior. They ask more from the design because message group IDs decide ordering lanes. Ordering is per message group, not necessarily across the entire queue unless every message uses the same group. That single-group design protects global order but also limits parallelism. For FIFO workloads where exact order matters, be careful with DLQs because moving one failed message out of the main queue can let later messages continue and change the visible processing order.
 
 The beginner choice is:
 
@@ -267,7 +269,8 @@ Queues and topics move work between known components. The next article looks at 
 **References**
 
 - [Amazon SQS visibility timeout](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-visibility-timeout.html). Supports the receive, visibility timeout, retry, at-least-once delivery, FIFO message group, and timeout guidance.
-- [Configure a dead-letter queue using the Amazon SQS console](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-configure-dead-letter-queue.html). Supports the DLQ explanation and source queue relationship.
+- [Configure a dead-letter queue using the Amazon SQS console](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-configure-dead-letter-queue.html). Supports the DLQ explanation, `maxReceiveCount`, source queue relationship, and FIFO ordering warning.
+- [Amazon SQS FIFO queues](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-fifo-queues.html). Supports the per-message-group ordering and deduplication explanation.
 - [Fanout Amazon SNS notifications to Amazon SQS queues for asynchronous processing](https://docs.aws.amazon.com/sns/latest/dg/sns-sqs-as-subscriber.html). Supports the SNS-to-SQS fanout pattern and the distinction between SNS push and SQS polling.
 - [Amazon SNS message filtering](https://docs.aws.amazon.com/sns/latest/dg/sns-message-filtering.html). Supports the subscription filtering explanation.
 - [Amazon SNS features](https://aws.amazon.com/sns/features/). Supports the standard and FIFO topic behavior, fanout, subscription types, and message durability discussion.

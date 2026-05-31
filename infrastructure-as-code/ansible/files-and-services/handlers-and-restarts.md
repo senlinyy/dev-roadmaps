@@ -26,16 +26,7 @@ aliases:
 
 In configuration management, handlers are event-driven execution blocks designed strictly to perform deferred, host-specific actions (such as restarting system background processes or reloading web server routing tables) only when triggered by a parent task that has successfully modified a system parameter. In server orchestration, writing configuration files or compiling templates is only half the job. A service (like Nginx or an application API) typically reads its configuration parameters from disk only when it is initially launched or explicitly instructed to reload. If your playbook updates a configuration file but does not notify the service, your host enters a drifted state: the correct file exists on disk, but the active process in memory continues to run old, stale settings.
 
-To see why a disciplined, event-driven handler pipeline is essential, consider our scenario. You are deploying application updates across a three-node application cluster:
-- You must update virtual host configuration files.
-- You must adjust application startup environment variables.
-- You must redeploy systemd unit service descriptors.
-
-If you orchestrate these updates without handlers:
-- You might forcefully restart the application server on every playbook run, dropping active user connections and triggering service downtime even when no configuration files were changed.
-- You might reload the web server multiple times in a single run (once for each file copy task), creating redundant network spikes and configuration re-renders.
-- You might update an environment file but forget to reload the service, causing your application to run with stale variables in memory, leading to unpredictable runtime errors.
-- A task failure midway through a run might leave your system in a broken state with new configuration files on disk but old services running.
+To see why a disciplined, event-driven handler pipeline is essential, consider our scenario. A web server configuration change is only active after the server process restarts, but restarting on every configuration change is wasteful if the play touches multiple files. Without a notification system, an automation script restarts the service after each task, bouncing it three times for three file changes, causing unnecessary downtime windows and log noise. The alternative of never restarting leaves the running process serving a stale configuration that no longer matches the files on disk.
 
 Ansible solves this by using handlers and notifications. A task notifies a handler only when it returns a status of `changed`. Ansible queues these notifications in memory, deduplicates repeated triggers by handler name, and normally executes the service actions at the end of the play. This event-driven design helps your application services update only when their inputs actually changed.
 
@@ -83,10 +74,7 @@ Here is an early, comment-free YAML playbook preview demonstrating how to config
 
 The connection between a file update and a service action is established using the `notify` keyword. You place the `notify` parameter directly inside a task block, passing a string that matches the exact name of a handler defined at the bottom of the play.
 
-The execution flow of a notification is strictly event-driven:
-- **State Check**: When the task runs, the module compares the desired state with the active remote host.
-- **Changed Evaluation**: If the host is already correct, the task reports `ok`. The notification trigger is ignored, and the handler is not queued.
-- **Queue Notification**: If the module writes changes, the task reports `changed`. Ansible catches this status and queues the matched handler name in the active host's memory namespace.
+When a task with a `notify` directive runs, Ansible checks whether the task's result carries `changed: true`. If the task made no change, the notification is silently discarded. If the task did change something, Ansible records the handler name in a deferred notification queue for that host. The handler itself does not run immediately -- Ansible collects all notifications from the entire play and flushes them once, at the end of the play, running each handler exactly once regardless of how many tasks notified it.
 
 You must treat handler names as stable interfaces. A vague name like `Restart` is a safety hazard if your playbook manages Nginx, backend APIs, and database daemons in the same run. Use highly specific names (like `Restart application service` or `Reload Nginx web server`) so tasks clearly notify the intended target.
 
@@ -97,14 +85,10 @@ Alternatively, Ansible supports listening topics: a handler can listen for a gen
 When you configure service handlers, you must choose between two distinct operational actions: **Reload** and **Restart**. Selecting the wrong action can trigger service drops or fail to apply configuration changes:
 
 ### 1. The Reload Action (`state: reloaded`)
-A reload asks the service manager to reload configuration without a full stop/start cycle. The exact mechanism is service-specific: some services receive a signal, some run a reload command, and some service managers map reloads differently.
-- Web servers like Nginx handle reloads beautifully: Nginx verifies the syntax of the new file in memory, spawns new worker threads to handle subsequent incoming requests using the new configuration, and slowly retires old worker threads as they finish active connections.
-- A well-supported reload can keep the service online and reduce connection disruption, but you still need health checks because reload behavior is controlled by the service itself.
+A reload asks the service manager to reload configuration without a full stop/start cycle. The exact mechanism is service-specific: some services receive a signal, some run a reload command, and some service managers map reloads differently. Web servers like Nginx verify the syntax of the new file in memory, spawn new worker threads to handle subsequent incoming requests using the new configuration, and slowly retire old worker threads as they finish active connections. A well-supported reload can keep the service online and reduce connection disruption, but you still need health checks because reload behavior is controlled by the service itself.
 
 ### 2. The Restart Action (`state: restarted`)
-A restart stops the active process and starts a fresh process instance:
-- This is a heavy operation that triggers immediate, temporary service downtime.
-- You must use a restart when the target application reads its configurations *only* at process startup. For example, background Python or Go application binaries that parse environment files (like `/etc/app/app.env`) on startup usually need a restart unless the service explicitly implements a reload path.
+A restart stops the active process and starts a fresh process instance. This is a heavier operation that triggers immediate, temporary service downtime. Use a restart when the target application reads its configurations only at process startup -- background Python or Go application binaries that parse environment files (like `/etc/app/app.env`) on startup usually need a restart unless the service explicitly implements a reload path.
 
 ## systemd Daemon Reloads: Introspecting Unit Files
 
@@ -112,7 +96,7 @@ When you manage system services on modern Linux hosts, the services are controll
 
 If you update a systemd unit file using a template task, and then immediately call the service module to restart the service, systemd will ignore your changes and output a warning log:
 
-```text
+```plain
 Warning: The unit file, source configuration file or drop-ins of app.service changed on disk. Run 'systemctl daemon-reload' to reload units.
 ```
 

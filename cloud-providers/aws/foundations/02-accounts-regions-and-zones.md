@@ -19,6 +19,7 @@ aliases:
 5. [Zonal Subnets and Multi-AZ Design](#zonal-subnets-and-multi-az-design)
 6. [Global, Regional, and Zonal Scopes](#global-regional-and-zonal-scopes)
 7. [The Placement Review Habit](#the-placement-review-habit)
+8. [What's Next](#whats-next)
 
 ## Collaborating with Your Team: Logical Account Perimeters
 
@@ -42,6 +43,8 @@ The Account field shows the exact logical container targeted by your session. Th
 
 Understanding this boundary changes how your team collaborates. By treating the account as a strong logical security perimeter, you ensure that raw developer experiments do not share the same default administrative space as production. A developer can run testing scripts or break databases in a development account without a default path to live customer transactions, because cross-account access has to be granted on purpose.
 
+In a larger organization, these accounts should not be loose islands. AWS Organizations groups accounts into organizational units, and service control policies can set guardrails that accounts cannot opt out of. IAM Identity Center is the usual workforce access layer, giving humans temporary role sessions instead of long-lived IAM user keys. This keeps the beginner account model simple while matching how production AWS environments are normally governed.
+
 ![An infographic showing AWS placement as nested coordinates from account to Region to Availability Zone to subnet](/content-assets/articles/article-cloud-providers-aws-foundations-accounts-regions-availability-zones/aws-coordinate-nesting.png)
 
 *AWS placement starts with logical isolation, then physical geography, then physical resilience. Check the account first, then the Region, then the Availability Zone and subnet where the resource actually lives.*
@@ -64,7 +67,7 @@ Selecting your primary Region is a critical architectural decision based on user
 
 * **User Latency**: Place your compute systems close to where your primary customer base is physically located to minimize round-trip packet times.
 * **Compliance Regulations**: Ensure your data resides in physical territories that satisfy legal rules, such as European data residency laws.
-* **Service Availability**: Confirm that the specific services and feature tiers your systems require are supported in the target Region.
+* **Service Availability**: Confirm that the specific services and feature tiers your systems require are supported in the target Region. Some Regions or features require opt-in or have different availability.
 * **Disaster Recovery**: Establish standbys in a secondary Region only for critical recovery objectives, rather than splitting resources across Regions by accident.
 
 A common point of confusion is S3 object storage. While S3 bucket names are globally unique across all AWS accounts, you must still select a specific Region when creating a bucket. Your data remains physically locked to the data centers of that Region unless you explicitly configure replication rules.
@@ -73,7 +76,7 @@ A common point of confusion is S3 object storage. While S3 bucket names are glob
 
 Within every geographic Region, AWS physical infrastructure is divided into isolated data center clusters called Availability Zones, commonly abbreviated as AZs. A Region typically contains three or more AZs, identified in your account by letters at the end of the Region name, such as `eu-west-2a`, `eu-west-2b`, and `eu-west-2c`.
 
-An Availability Zone is not a single server rack. It is a physically separate cluster of data centers, sitting on distinct flood plains, utilizing independent power grids, and featuring dedicated cooling systems and backup generators. AZs are cabled together with high-bandwidth, redundant, low-latency private fiber lines, but they are physically distant enough that a localized disaster (like a grid outage or flood) in one zone will not affect the others.
+An Availability Zone is not a single server rack. AWS describes each AZ as one or more discrete data centers with independent power, networking, and connectivity. AZs are physically separated inside a Region and connected by high-bandwidth, low-latency private links. That separation is the reason a well-designed workload can survive a localized infrastructure problem in one zone.
 
 One cross-account gotcha matters early: AZ names are account-mapped. `us-east-1a` in one AWS account may not be the same physical zone as `us-east-1a` in another account. AWS also exposes stable AZ IDs, such as `use1-az1`, so platform teams can coordinate the same physical zone across accounts when they design shared networks or disaster recovery layouts.
 
@@ -129,6 +132,10 @@ By documenting and validating logical perimeters, geographic regions, and physic
 
 *Use this as the short placement checklist: isolate risk with accounts, split dev and prod, choose Regions deliberately, use AZ IDs for cross-account physical placement, spread resilient systems across AZs, remember subnets are zonal, and track every resource by scope.*
 
+## What's Next
+
+After you know which account, Region, and zone a system belongs in, you need a precise way to name the things you create there. The next article explains AWS resource identifiers, ARNs, tags, and naming habits so you can find the exact bucket, role, database, or subnet before changing it.
+
 ---
 
 **References**
@@ -137,3 +144,5 @@ By documenting and validating logical perimeters, geographic regions, and physic
 - [AWS Account Isolation Boundaries](https://docs.aws.amazon.com/whitepapers/latest/organizing-your-aws-environment/aws-account-isolation-boundaries.html) - Best practices on using multiple accounts to establish strong logical security and billing perimeters.
 - [AWS Regions and Availability Zones](https://docs.aws.amazon.com/vpc/latest/userguide/VPC_Subnets.html) - Documentation on Regional service endpoints, zonal subnets, and multi-zone deployment paths.
 - [AZ IDs in AWS](https://docs.aws.amazon.com/RAM/latest/userguide/working-with-az-ids.html) - Guide on using AZ IDs for consistent physical zone identification across separate AWS accounts.
+- [Service control policies](https://docs.aws.amazon.com/organizations/latest/userguide/orgs_manage_policies_scps.html) - Explains organization-level permission guardrails.
+- [AWS IAM Identity Center](https://docs.aws.amazon.com/singlesignon/latest/userguide/what-is.html) - Documents the recommended workforce access service for AWS accounts.

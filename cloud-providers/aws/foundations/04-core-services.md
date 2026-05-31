@@ -61,7 +61,7 @@ Before public requests can enter or internal systems can communicate, you must e
 
 To protect your system from threat actors, you must design a structured three-tier subnet architecture inside your VPC:
 
-* **Public Tier Subnets**: These narrow subnets host only public-facing entry points, such as Application Load Balancers and NAT gateways. Their route tables contain a default route to an Internet Gateway. Public reachability still depends on public IP mapping, security groups, network ACLs, and the service configuration.
+* **Public Tier Subnets**: These narrow subnets host only public-facing entry points, such as Application Load Balancers and zonal public NAT gateways. Their route tables contain a default route to an Internet Gateway. Public reachability still depends on public IP mapping, security groups, network ACLs, and the service configuration. AWS now also supports Regional NAT gateways, which do not require hosting the gateway inside a public subnet.
 * **Private Application Tier Subnets**: These subnets host core compute workloads, such as application containers or workers. Their route tables do not send internet-bound traffic directly to an Internet Gateway, so public clients cannot open direct inbound connections to the tasks. If the tasks require outbound access, they route through a NAT gateway or use VPC endpoints for supported AWS services.
 * **Isolated Data Tier Subnets**: These subnets host transactional database engines and caches. Their route tables have no internet exit, and their security groups accept traffic only from the application tier. This keeps database access dependent on private routes and explicit firewall rules.
 
@@ -97,7 +97,7 @@ For long-running checkout APIs, ECS Fargate is the standard choice.
 
 * **Task Definition**: The immutable blueprint declaring which Docker image version, processor limits, memory boundaries, log settings, and access roles your container requires to run.
 * **Task**: A single active container instance running in the cloud.
-* **Service**: The orchestrator that maintains your desired running task count, registers new tasks with the ALB target group, and manages zero-downtime rolling deployments.
+* **Service**: The orchestrator that tries to maintain your desired running task count, registers new tasks with the ALB target group, and manages rolling deployments within the health and capacity limits you configure.
 
 Fargate compute can scale under surges when you configure ECS Service Auto Scaling. If a Black Friday shopping promotion spikes traffic, Application Auto Scaling can watch ECS CPU, memory, or custom metrics and adjust the desired task count from 2 running containers to 10. ECS then launches replacement tasks, pulls images, assigns network interfaces, waits for target health, and shifts traffic to the healthy capacity.
 
@@ -105,7 +105,7 @@ Fargate compute can scale under surges when you configure ECS Service Auto Scali
 
 State represents the persistent business data that must survive after your dynamic compute tasks exit. In the cloud, compute tasks are ephemeral; they are constantly created and destroyed by the orchestrator. You must separate state entirely from the compute hosts, matching the storage service to your data contract:
 
-* **Amazon RDS**: Houses relational databases like PostgreSQL. RDS is cabled for highly consistent, transactional business ledgers (like order transaction tables) that require strict ACID compliance and relational SQL query engines.
+* **Amazon RDS**: Runs managed relational database engines like PostgreSQL and MySQL. The database engine provides SQL transactions and ACID behavior, while RDS automates infrastructure work such as provisioning, backups, patch windows, and failover features you configure.
 * **Amazon S3**: Houses serverless object storage buckets. S3 is designed for cost-efficient, high-volume file persistence, storing flat CSV exports, system logs, or user attachments indexed by text keys.
 * **DynamoDB**: Houses managed NoSQL tables. DynamoDB is cabled for single-digit millisecond latency at massive scale, using specific primary key queries rather than complex relational joins.
 
@@ -204,3 +204,4 @@ By following this functional map and tracing failures along the request path, yo
 - [Amazon S3 Buckets Overview](https://docs.aws.amazon.com/AmazonS3/latest/userguide/UsingBucket.html) - Guide on S3 bucket structure, global name requirements, and object key structures.
 - [AWS Secrets Manager Integration](https://docs.aws.amazon.com/secretsmanager/latest/userguide/integration.html) - Guide on securely vaulting credentials and dynamically injecting secrets into ECS runtimes.
 - [Amazon CloudWatch Logs Overview](https://docs.aws.amazon.com/AmazonCloudWatch/latest/logs/WhatIsCloudWatchLogs.html) - Documentation on centralized logging, agent setups, and log stream retentions.
+- [Regional NAT gateways](https://docs.aws.amazon.com/vpc/latest/userguide/nat-gateways-regional.html) - Documents regional NAT mode and how it differs from zonal NAT gateways.

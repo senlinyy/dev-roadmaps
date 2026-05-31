@@ -20,9 +20,10 @@ aliases:
 4. [Tuning the Lens: AWS Cost Explorer](#tuning-the-lens-aws-cost-explorer)
 5. [Configuring Proactive Budgets and Alerts](#configuring-proactive-budgets-and-alerts)
 6. [Decoding Spend Jumps with Operational Evidence](#decoding-spend-jumps-with-operational-evidence)
-7. [The Systemic Discipline of Cost Ownership](#the-systemic-discipline-of-cost-ownership)
-8. [Putting It All Together](#putting-it-all-together)
-9. [What's Next](#whats-next)
+7. [Under-the-Hood: The Billing Data Pipeline](#under-the-hood-the-billing-data-pipeline)
+8. [The Systemic Discipline of Cost Ownership](#the-systemic-discipline-of-cost-ownership)
+9. [Putting It All Together](#putting-it-all-together)
+10. [What's Next](#whats-next)
 
 ## The Utility Bill Illusion
 
@@ -45,7 +46,7 @@ A useful cost view answers a specific set of operational questions:
 * **Timing**: Did the cost rise gradually over several months (suggesting database accumulation) or jump instantly at a specific second (suggesting a bad software deployment)?
 * **Value Alignment**: Does the cost spike match verified application throughput, or does it represent idle waste?
 
-A critical Gotcha is delay. Billing data is not real-time telemetry. While CloudWatch metrics report system health in seconds, billing metrics suffer from an inherent processing lag. You use cost dashboards to locate macro spending trends, then immediately pivot to structured logs and deployment records to find the root cause of the shift.
+A critical gotcha is delay. Billing data is not real-time telemetry. While CloudWatch metrics report system health in seconds or minutes, billing data often arrives on an hourly-to-daily cadence depending on the report, service, and view. You use cost dashboards to locate macro spending trends, then immediately pivot to structured logs and deployment records to find the root cause of the shift.
 
 ## The Relational Coordinates: Cost Allocation Tags
 
@@ -165,7 +166,7 @@ $ aws budgets create-budget \
 
 This terminal execution establishes a tight financial firewall:
 
-* `--account-id`: The target AWS master account compiling the invoice.
+* `--account-id`: The target AWS management account or standalone account compiling the invoice.
 * `--budget`: References our local JSON configuration, limiting production orders service costs to $4,000.
 * `Threshold` & `ThresholdType`: Configures the alert to fire the moment actual spending crosses 80% of our limit ($3,200).
 * `Subscribers`: Decouples the alert using a regional SNS topic. The SNS topic routes the alert directly to engineering Slack channels, ensuring the team is notified immediately before the billing period ends.
@@ -230,4 +231,5 @@ We have established cost visibility, allocation tagging, and proactive budget al
 * [AWS Cost Explorer Documentation](https://docs.aws.amazon.com/cost-management/latest/userguide/ce-what-is.html) - Technical reference for analyzing billing trends.
 * [Organizing Costs Using Cost Allocation Tags](https://docs.aws.amazon.com/awsaccountbilling/latest/aboutv2/cost-alloc-tags.html) - AWS guide to activating billing tags.
 * [Managing Costs with AWS Budgets](https://docs.aws.amazon.com/cost-management/latest/userguide/budgets-managing-costs.html) - Documentation on configuring spending thresholds and subscriber lists.
-* [AWS Cost and Usage Report (CUR) User Guide](https://docs.aws.amazon.com/cur/latest/userguide/what-is-cur.html) - Reference for the master billing data pipeline.
+* [Viewing your costs with AWS Cost Explorer](https://docs.aws.amazon.com/cost-management/latest/userguide/ce-exploring-data.html) - Documents Cost Explorer cost data timing and report behavior.
+* [AWS Cost and Usage Report (CUR) User Guide](https://docs.aws.amazon.com/cur/latest/userguide/what-is-cur.html) - Reference for detailed billing data exports.

@@ -77,8 +77,9 @@ A principal is the authenticated identity that makes a request to AWS. In your l
 
 IAM recognizes several distinct categories of principals, each tailored to a specific operational role:
 
-* **Root User**: The absolute administrative owner of the AWS account, created when the account is first opened. The root user has unrestricted power and cannot be limited by policies. In a professional architecture, the root user is locked away with multi-factor authentication and is never used for daily development, deployment, or workload runtimes.
-* **IAM Users**: Long-lived individual identities representing specific people within an organization. Each user has static login credentials and optional access keys for terminal use.
+* **Root User**: The original administrative owner of the AWS account, created when the account is first opened. IAM identity policies do not restrict root, so the root user must be locked away with multi-factor authentication and never used for daily development, deployment, or workload runtimes. In AWS Organizations, service control policies can still place guardrails around member accounts, including root activity.
+* **Federated Human Roles**: Temporary role sessions for people, usually delivered through IAM Identity Center or another identity provider. This is the preferred model for workforce access because the person signs in through a central identity system and receives a time-limited AWS role session.
+* **IAM Users**: Long-lived individual identities with static login credentials or access keys. They still exist, but they should be rare in modern environments and avoided for normal human access when federation is available.
 * **Workload Roles**: Ephemeral identities assumed by running software, such as containers, serverless functions, or automated deployment pipelines. Roles do not have permanent passwords or keys; instead, the AWS hosting runtime dynamically hands temporary credentials to the workload.
 
 Keeping these principals separate is critical for operational safety. For example, if a developer named Maya is debugging a system, her human session principal carries different permissions than the running database container. 
@@ -128,6 +129,8 @@ To write effective policies, you must understand how IAM evaluates them. The eva
 * **Explicit Deny Overrides All**: If any applicable policy contains a statement that denies an action, the final decision is immediately denied, regardless of how many other policies explicitly allow it.
 * **Default Deny**: If no policy explicitly allows an action, the request is denied by default.
 * **Allow Requires Explicit Statement**: An action is only permitted if an applicable policy explicitly allows it and no policy explicitly denies it.
+
+These three rules are the center of IAM, but they are not the only boundary in a mature AWS organization. Service control policies can limit the maximum permissions available inside member accounts. Permission boundaries can limit what an IAM role or user can ever receive. Session policies can further narrow a temporary session. Resource-based policies can grant access from the resource side. When a beginner debugs access, the safe habit is to ask which layers apply before assuming one identity policy tells the whole story.
 
 Let us inspect a realistic, identity-based policy attached to our application container's workload role.
 
@@ -186,3 +189,6 @@ We now have a clean mental model of how AWS evaluates API requests against princ
 - [AWS IAM Overview](https://docs.aws.amazon.com/IAM/latest/UserGuide/introduction.html) - Introduction to the core AWS Identity and Access Management service.
 - [IAM Policy Evaluation Logic](https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_evaluation-logic.html) - Detailed breakdown of how IAM evaluates multiple policies to reach an allow or deny decision.
 - [Understanding Principals in AWS](https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_elements_principal.html) - Explanation of the different principal types and how they are evaluated in trust and resource policies.
+- [Root user best practices](https://docs.aws.amazon.com/IAM/latest/UserGuide/root-user-best-practices.html) - Guidance for securing and limiting use of the AWS account root user.
+- [Service control policies](https://docs.aws.amazon.com/organizations/latest/userguide/orgs_manage_policies_scps.html) - Documents organization guardrails for member accounts.
+- [AWS IAM Identity Center](https://docs.aws.amazon.com/singlesignon/latest/userguide/what-is.html) - Describes the recommended workforce access service.

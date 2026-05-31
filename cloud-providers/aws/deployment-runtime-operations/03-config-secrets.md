@@ -20,9 +20,10 @@ aliases:
 5. [ECS Delivery: Task Execution Roles vs. Task Roles](#ecs-delivery-task-execution-roles-vs-task-roles)
 6. [Enforcing Startup Validation and Fail-Fast Habits](#enforcing-startup-validation-and-fail-fast-habits)
 7. [Safe Debugging Without Plaintext Leaks](#safe-debugging-without-plaintext-leaks)
-8. [The Coordination of Secret Rotation](#the-coordination-of-secret-rotation)
-9. [Putting It All Together](#putting-it-all-together)
-10. [What's Next](#whats-next)
+8. [Under-the-Hood: Memory Allocations and Process Leaks](#under-the-hood-memory-allocations-and-process-leaks)
+9. [The Coordination of Secret Rotation](#the-coordination-of-secret-rotation)
+10. [Putting It All Together](#putting-it-all-together)
+11. [What's Next](#whats-next)
 
 ## The Credential Leaks Outage
 
@@ -198,7 +199,7 @@ This startup script enforces three essential operational boundaries:
 2. **Validate Syntax Boundaries**: Parses port parameters, verifying integer limits before binding process sockets.
 3. **Safe Logging**: Logs success and coordinates (`LOG_LEVEL`, `RECEIPTS_ENABLED`) without printing sensitive, plaintext values.
 
-By calling this validator at the absolute entrypoint of your application thread, you guarantee that a bad configuration deployment fails fast during the rolling update grace period, allowing the ECS circuit breaker to roll back automatically before users suffer outages.
+By calling this validator at the absolute entrypoint of your application thread, you make bad configuration deployments fail early, while the rolling update still has old capacity available. When the ECS deployment circuit breaker is enabled and the failure prevents the service from reaching steady state, ECS can mark the deployment failed and roll back automatically.
 
 ## Safe Debugging Without Plaintext Leaks
 
@@ -220,11 +221,11 @@ Any child process spawned by the primary container task inherits a full copy of 
 
 If your primary container task spawns background shell wrappers or third-party diagnostic scripts, those child processes gain access to every database password and Stripe key loaded in the environment. Even worse, if the application experiences a core dump crash, the OS writes the stack memory to disk, leaving plaintext passwords stored inside the container's volatile block storage layers.
 
-To minimize process memory leaks, high-security applications may bypass environment variable injection completely. Instead of injecting secrets via the task definition `secrets` array at boot time, the application code imports the AWS SDK directly. At runtime, the code calls Secrets Manager dynamically, receives the credentials in memory, uses them to establish connection pools, and avoids placing the values in the operating system's environment stack. This does not make plaintext disappear magically, but it narrows where it can leak.
+To minimize process memory leaks, high-security applications may bypass environment variable injection completely. Instead of injecting secrets via the task definition `secrets` array at boot time, the application code imports the AWS SDK directly. At runtime, the code calls Secrets Manager dynamically, receives the credentials in memory, uses them to establish connection pools, and avoids placing the values in the operating system's environment stack. The credential still exists in memory while the application uses it, but the leak surface is narrower than a process-wide environment variable inherited by every child process.
 
 ## The Coordination of Secret Rotation
 
-Secret rotation is the security practice of changing sensitive credentials regularly to minimize the blast radius of leaks. While Secrets Manager automates value rotation in the cloud vault, the running application tasks must coordinate to absorb the change:
+Secret rotation is the security practice of changing sensitive credentials regularly to minimize the blast radius of leaks. Secrets Manager can store multiple secret versions and can run rotation through a configured Lambda rotation function, but rotation is not automatic for every secret just because the value lives in Secrets Manager. The running application tasks must coordinate to absorb the change:
 
 * **Startup Injection Caveat**: If secrets are injected as environment variables at task boot time, running containers will continue to use the old password until they are replaced. You must trigger an ECS service deployment (`forceNewDeployment`) to force Fargate to spin up new task replicas that fetch the rotated password.
 * **Dynamic API Fetching**: If your application fetches secrets dynamically over the SDK, configure your client wrappers with a local cache TTL (such as 1 hour) and a database retry trigger. If a database transaction fails due to authentication errors, the client must bypass the cache, fetch the rotated password from Secrets Manager, re-establish the pool, and resume transactions without downtime.
@@ -255,5 +256,6 @@ We have established secure configuration delivery, execution role boundaries, an
 
 * [Systems Manager Parameter Store](https://docs.aws.amazon.com/systems-manager/latest/userguide/systems-manager-parameter-store.html) - AWS guide to centralized parameter and secret configurations.
 * [AWS Secrets Manager Developer Guide](https://docs.aws.amazon.com/secretsmanager/latest/userguide/intro.html) - Documentation on storing, rotating, and retrieving sensitive credentials.
+* [Rotate AWS Secrets Manager secrets](https://docs.aws.amazon.com/secretsmanager/latest/userguide/rotating-secrets.html) - Explains supported rotation patterns, rotation functions, and version stages.
 * [Amazon ECS Task Role Permissions](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-iam-roles.html) - Guide to defining IAM permissions for application container tasks.
 * [ECS Task Execution Role Guide](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task_execution_IAM_role.html) - Documentation on configuring orchestrator startup permissions.

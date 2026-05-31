@@ -93,7 +93,7 @@ This lifecycle is useful during debugging. A `403` before integration points to 
 
 An API in API Gateway is the collection of externally visible API behavior: endpoint, routes, stages, and integration rules. AWS has different API types, but the beginner split is enough for most decisions.
 
-HTTP APIs are often the simpler fit for modern HTTP routes to Lambda or HTTP backends. REST APIs have a larger older feature set, including usage plans and API keys. WebSocket APIs handle long-lived bidirectional connections where clients send messages that API Gateway routes by route key.
+HTTP APIs are often the simpler fit for modern HTTP routes to Lambda or HTTP backends. They usually have lower latency and a smaller feature surface. REST APIs are the older, larger feature set, including usage plans, API keys, request validation, request/response mapping options, and several mature deployment controls. WebSocket APIs handle long-lived bidirectional connections where clients send messages that API Gateway routes by route key.
 
 The important point is that API Gateway owns the contract callers see. If the backend is reorganized, the API can keep the same public route while its integration changes behind the front door.
 
@@ -144,6 +144,8 @@ Authorizers belong at the API boundary because they answer caller questions befo
 
 Authorization still needs backend discipline. Passing an authorizer does not mean every requested object belongs to the caller. The backend must still enforce domain rules such as "this customer can read only their own order."
 
+API keys deserve special caution. In API Gateway, an API key mainly identifies an API client for usage plans and metering. It is not a strong authentication method by itself because keys can be copied, leaked, or shared. Use an authorizer, IAM, OAuth/JWT, Cognito, or another real identity mechanism for caller trust, then use API keys and usage plans when you need per-client quota and traffic controls.
+
 The clean separation is:
 
 | Layer | Example question |
@@ -160,7 +162,7 @@ Throttling limits how quickly API Gateway accepts requests. This protects the ba
 
 API Gateway throttling can apply at several levels, including account, stage, method, and usage-plan settings depending on API type. When a limit is exceeded, callers can receive `429 Too Many Requests` instead of pushing unlimited traffic into Lambda, ECS, or a database.
 
-Throttling is the front-door pressure valve alongside backend scaling and abuse protection. The backend should still have capacity limits, queues where appropriate, and useful error handling. Throttling lets the API reject excess traffic before every downstream system pays the cost.
+Throttling is the front-door pressure valve alongside backend scaling and abuse protection. The backend should still have capacity limits, queues where appropriate, and useful error handling. Throttling lets the API reject excess traffic before every downstream system pays the cost. API Gateway throttling and quotas are important controls, but AWS documents quota enforcement as best-effort. Design critical abuse controls and billing protections with defense in depth rather than assuming one quota is a perfect hard wall.
 
 The practical habit is to set limits around the caller and route. A partner export route may need stricter limits than normal customer reads. A webhook route may need burst tolerance but careful retry behavior.
 
@@ -236,5 +238,7 @@ Some work should not happen while the caller waits. Receipt emails, export gener
 **References**
 
 - [Amazon API Gateway concepts](https://docs.aws.amazon.com/apigateway/latest/developerguide/api-gateway-basic-concept.html). Supports the API Gateway definitions for REST APIs, HTTP APIs, WebSocket APIs, deployments, stages, routes, API keys, and integrations.
+- [Choosing between REST APIs and HTTP APIs](https://docs.aws.amazon.com/apigateway/latest/developerguide/http-api-vs-rest.html). Supports the beginner distinction between simpler HTTP APIs and feature-rich REST APIs.
+- [Create and use usage plans with API keys](https://docs.aws.amazon.com/apigateway/latest/developerguide/api-gateway-api-usage-plans.html). Supports the API key and usage plan explanation, including key limitations and best-effort quota behavior.
 - [Private integrations for REST APIs in API Gateway](https://docs.aws.amazon.com/apigateway/latest/developerguide/private-integration.html). Supports the VPC link and private backend integration explanation.
 - [Throttle requests to your REST APIs for better throughput in API Gateway](https://docs.aws.amazon.com/apigateway/latest/developerguide/api-gateway-request-throttling.html). Supports the throttling explanation, including account, stage, method, and usage-plan throttling behavior.

@@ -25,11 +25,7 @@ Target selection in Ansible is the operational practice of using precise logical
 
 To see why a disciplined targeting strategy is essential, consider our scenario. You are deploying a critical security hotfix that must only apply to Nginx web hosts in your production environment, specifically targeting those located in a particular network zone, while staging and database servers must remain completely untouched.
 
-If your target selection is loose or relies on manual command inputs:
-- An operator might run a playbook targeted to the broad group `all`, deploying web configurations to production database servers and crashing them.
-- A slight typo in a command line might cause a playbook designed for the `staging` group to execute against the `production` group instead.
-- A rolling upgrade might reboot all application servers simultaneously, dropping all user traffic rather than taking nodes offline one at a time.
-- A team might lose track of which specific host alias a playbook is targeting, causing them to execute untested changes in the dark.
+Without precise targeting controls, a loose `hosts: all` pattern or a command-line typo can send production database servers the same tasks intended only for Nginx web hosts, crashing unrelated services and turning a focused security hotfix into a fleet-wide outage. A rolling upgrade with no batch controls reboots every application server at once, dropping all user traffic in a single sweep instead of taking nodes offline one at a time.
 
 Ansible solves this by using robust target matching rules. The playbook’s `hosts` parameter defines the primary group scope, the `--limit` CLI flag restricts active runs on demand, and pre-flight validation tools let you graph the resolved host list safely before sending a single network handshake.
 
@@ -62,10 +58,7 @@ When you write the `hosts` line inside a playbook or execute ad-hoc commands, An
 
 The four primary pattern matching rules are:
 
-- **Unions**: Indicated by a colon (`:`). The pattern `webservers:databases` selects all hosts that belong to *either* the `webservers` group *or* the `databases` group, merging their scopes.
-- **Intersections**: Indicated by an ampersand (`:&`). The pattern `production:&webservers` selects only the hosts that belong to *both* the `production` group *and* the `webservers` group. Any webserver outside of production is completely excluded.
-- **Exclusions**: Indicated by an exclamation mark (`:!`). The pattern `webservers:!staging` selects all hosts in the `webservers` group, *except* those that are also members of the `staging` group.
-- **Wildcards**: Indicated by an asterisk (`*`). The pattern `web-node-*` selects any host whose inventory name begins with that specific prefix, regardless of which group it belongs to.
+The colon operator combines two groups into a single target union. The pattern `webservers:databases` selects all hosts that belong to either the `webservers` group or the `databases` group, merging their scopes into one list. The ampersand symbol restricts the run to hosts that appear in both groups simultaneously. The pattern `production:&webservers` selects only hosts that belong to both the `production` group and the `webservers` group, excluding any web server that sits outside production entirely. The exclamation operator removes specific hosts or groups from the selection. The pattern `webservers:!staging` starts with every host in `webservers` and then subtracts those that are also members of the `staging` group. Wildcards match any host whose name fits the shell-style glob pattern. The pattern `web-node-*` selects any inventory entry whose name begins with that prefix, regardless of which group that host belongs to.
 
 While these logical patterns are extremely powerful, you must avoid writing overly complex or clever strings. If an intersection pattern requires multiple operators and is difficult to read out loud, it is a safety hazard. You must instead create a structured, named child group in your inventory file. A clean, descriptive group name like `production_web` is significantly safer to review in code pull requests.
 
@@ -75,12 +68,11 @@ One important beginner trap is the difference between an inventory host name and
 
 The `--limit` (or `-l`) command-line argument is a high-level safety guard that instructs Ansible to restrict the playbook run to a specific subset of hosts for the current execution.
 
-It is critical to understand the relationship between a playbook's `hosts` pattern and the `--limit` flag:
-- **Reductive Operation Only**: The `--limit` flag can only *reduce* the host list already compiled by the playbook. It cannot add new hosts that fall outside the playbook's target.
-- **Playbook Design Boundary**: If a playbook has `hosts: webservers`, and you execute it with `--limit db-node-01`, the run will execute zero tasks because `db-node-01` is not a member of the `webservers` group.
-- **Fragile Defaults**: A playbook designed with `hosts: all` under the assumption that operators will always remember to pass a `--limit` flag is highly fragile. If a developer runs the playbook and forgets the limit flag, the tasks will execute across your entire infrastructure fleet, creating a massive incident.
+It is critical to understand the relationship between a playbook's `hosts` pattern and the `--limit` flag.
 
-The playbook should always start as narrow as possible (targeting the specific service tier group), and the `--limit` flag should only be used as a secondary, active guard to restrict runs further for testing, debugging, or canary deployments.
+The flag performs a reductive operation only. It can narrow the host list that the playbook already compiled, but it cannot introduce hosts that fall outside the playbook's scope. If a playbook declares `hosts: webservers` and you run it with `--limit db-node-01`, the run executes zero tasks because `db-node-01` is not a member of the `webservers` group. A playbook designed with `hosts: all` under the assumption that operators will always remember to pass a limit flag is fragile by default. If a developer runs the playbook without the flag, the tasks execute across the entire infrastructure fleet and the blast radius, which is the total number of machines affected by a failure, becomes the entire estate.
+
+The playbook should always start as narrow as possible, targeting the specific service tier group, and the `--limit` flag should only be used as a secondary, active guard to restrict runs further for testing, debugging, or canary deployments.
 
 ## Pre-Flight Validation: Listing Matched Targets
 
@@ -96,7 +88,7 @@ ansible-playbook -i inventory/hosts.yml playbooks/deploy_hotfix.yml \
 
 The terminal prints a clean, parsed list of target nodes:
 
-```text
+```plain
   play #1 (production:&webservers): Apply Nginx security hotfix to production webservers
     hosts (2):
       web-node-01

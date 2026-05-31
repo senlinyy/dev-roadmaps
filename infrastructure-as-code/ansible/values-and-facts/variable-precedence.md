@@ -27,11 +27,7 @@ In system automation, variable precedence is the strict hierarchical set of rule
 
 To see why understanding this conflict resolution engine is critical, consider our scenario. You are executing a database migration task that requires a system timeout value (such as `db_timeout_seconds`) to be set.
 
-If you do not understand the rules of variable precedence:
-- You might define a safe database timeout of `30` seconds in your role defaults, but have it quietly overwritten by a stale staging group variable set to `10` seconds, causing your production migration to time out and fail.
-- You might attempt to configure a host-specific database exception in `host_vars`, only to find the setting ignored because a play-level variable block in the playbook has higher precedence, locking all hosts to the same value.
-- An operator might resolve a deployment emergency by passing a temporary command-line extra variable, only for the next automated run to revert to the old repository value, bringing back the failure.
-- Troubleshooting a broken task becomes an exercise in guesswork because you cannot tell which file provided the active value.
+Without a clear mental model of precedence, a safe timeout defined in role defaults can be silently overwritten by a stale group variable, causing a production migration to time out while the playbook gives no warning. A host-specific override written in `host_vars` may be ignored entirely because a play-level variable block sits higher in the chain, and when an operator injects an emergency fix via `-e` on the command line, the next automated run reverts it without notice.
 
 Ansible solves this by using a highly structured, 22-level variable precedence hierarchy. By separating values into distinct, predictable tiers (ranging from weak defaults to strong runtime overrides), you can customize host configurations safely, isolate environment differences, and audit exactly which value wins before modifying a single system.
 
@@ -73,15 +69,13 @@ Playbook variables (declared under `vars` inside a play, imported via `vars_file
 ### 4. Extra Variables (Strongest)
 Extra variables (passed at the command line using `-e` or `--extra-vars`) have the highest precedence among variables. They are a deliberate manual override, so use them carefully and avoid turning them into hidden production configuration.
 
-```text
-  Extra Variables (-e CLI flag)           [STRONGEST]
-    ▲
-  Playbook Variables (vars, set_fact)
-    ▲
-  Inventory Variables (group_vars, host_vars)
-    ▲
-  Role Defaults (defaults/main.yml)       [WEAKEST]
-```
+| Priority | Scope | Example source |
+|---|---|---|
+| Lowest | Role defaults | `roles/database/defaults/main.yml` |
+| Low | Inventory group vars | `group_vars/production.yml` |
+| Medium | Inventory host vars | `host_vars/db-node-02.yml` |
+| High | Playbook vars / set_fact | `vars:` block or `set_fact` task in the play |
+| Highest | Extra vars | `-e "db_timeout_seconds=120"` on the CLI |
 
 ## Specificity within Inventories
 
@@ -144,7 +138,7 @@ You can print the resolved value of a specific variable during a playbook execut
 
 When the playbook runs, the console output displays the exact winning value in memory for each host:
 
-```text
+```plain
 ok: [db-node-01] => {
     "db_timeout_seconds": 60
 }

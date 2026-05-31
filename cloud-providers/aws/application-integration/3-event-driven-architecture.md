@@ -139,7 +139,7 @@ Targets need permissions too. EventBridge must be allowed to invoke the target. 
 
 Event routing is not the same thing as guaranteed business success. EventBridge can successfully match a rule and still fail to deliver to a target because the target permission is missing, the target is throttling, or the target returns an error.
 
-For many target types, EventBridge retries failed invocations for a configured retry window. That is useful for temporary errors, but it also means targets can receive the same event more than once. Configure a dead-letter queue when failed events need inspection instead of disappearing into metrics and logs.
+For many target types, EventBridge retries failed invocations for a configured retry window. By default, EventBridge retries delivery for up to 24 hours and up to 185 attempts with exponential backoff and jitter. That is useful for temporary errors, but it also means targets can receive the same event more than once. If all retries are exhausted and no dead-letter queue is configured, EventBridge can drop the failed delivery after recording failure metrics. Configure a dead-letter queue when failed events need inspection instead of disappearing into metrics and logs.
 
 The failure model is per target. If one `OrderCreated` event matches three rules, the receipt target can fail while analytics succeeds and fraud review is delayed. EventBridge does not automatically roll back the successful targets because another target failed.
 
@@ -262,6 +262,8 @@ Application integration creates more paths for work to move. The next module, Ob
 - [Event buses in Amazon EventBridge](https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-event-bus.html). Supports the event bus, source, rule, pattern, multi-rule matching, and target routing explanation.
 - [Rules in Amazon EventBridge](https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-rules.html). Supports the rule, event pattern, target, and schedule rule explanation.
 - [Event bus targets in Amazon EventBridge](https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-targets.html). Supports the target examples including Lambda, SQS, SNS, ECS tasks, Step Functions, API destinations, and target input shaping.
+- [How EventBridge retries delivering events](https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-rule-retry-policy.html). Supports the 24-hour, 185-attempt default retry behavior and DLQ recommendation.
+- [Using dead-letter queues to process undelivered events in EventBridge](https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-rule-dlq.html). Supports the DLQ redrive and failed target delivery explanation.
 - [Using Amazon EventBridge Scheduler to start a Step Functions state machine execution](https://docs.aws.amazon.com/step-functions/latest/dg/using-eventbridge-scheduler.html). Supports the Scheduler explanation, including one-time and recurring schedules, flexible windows, retries, and target permissions.
 - [What is Step Functions?](https://docs.aws.amazon.com/step-functions/latest/dg/welcome.html). Supports the state machine, workflow, task, execution, service integration, and use-case explanations.
 - [Handling errors in Step Functions workflows](https://docs.aws.amazon.com/step-functions/latest/dg/concepts-error-handling.html). Supports the Step Functions retry, catch, timeout, and workflow error-handling explanation.

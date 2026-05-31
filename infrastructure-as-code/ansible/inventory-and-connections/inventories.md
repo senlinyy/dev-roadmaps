@@ -28,11 +28,7 @@ An Ansible inventory is a structured database file or dynamic script that acts a
 
 To see why maintaining an accurate inventory is critical, consider our scenario. You are managing a multi-tier production cluster containing two web application servers and a backend database server.
 
-If your host catalog is poorly designed or unmaintained:
-- A playbook meant to run database optimizations might target your web servers instead, bringing down your user-facing sites.
-- An administrator trying to test a configuration update might target a stale IP address belonging to a retired server, causing connection hangs.
-- A staging playbook might run against active production servers because the environments were merged in a single, messy host file.
-- The output recap logs might list raw, confusing IP addresses, making it difficult to verify which physical nodes were updated.
+If your host catalog is poorly designed or unmaintained, a playbook meant to run database optimizations might target your web servers instead, bringing down your user-facing sites, or a staging playbook might run against active production servers because the two environments share a single messy host file. Without clean host aliases, recap logs display raw IP addresses that leave you unable to verify which physical nodes were actually updated.
 
 Ansible solves this by separating human-friendly host aliases from physical connection parameters. The catalog acts as your first safety boundary, allowing you to define distinct environments (like staging and production) in isolated files, group servers by their operational roles, and query the entire network layout safely before executing changes.
 
@@ -98,10 +94,7 @@ One of the most powerful features of an Ansible inventory is **hierarchical grou
 
 You design groups using a parent-child structure. In our cluster scenario, we have a parent group named `production` that contains two child groups: `webservers` and `databases`.
 
-This structural grouping provides several key benefits:
-- **Scope Inheritance**: Any variable defined on the parent `production` group (such as the SSH port or user) is automatically inherited by the children groups (`webservers` and `databases`) and their hosts, preventing you from repeating parameters.
-- **Granular Targeting**: A playbook designed to secure the entire production network can target the broad parent `production` group. A playbook designed to deploy code can narrow its target to the child `webservers` group.
-- **Service Boundaries**: Broad, generic group names like `web` should be completely avoided. If multiple teams share a network, a generic `web` group might target unrelated services. You use highly descriptive names like `customer_portal_web` or `billing_api` to ensure that service blast radiuses are clear.
+Group variables cascade automatically from parent groups to every child host they contain. Declaring a variable once on the `production` group pushes it to every web server, database node, and cache instance in that environment without repeating it in each host entry. Nested group hierarchies also let you run a playbook against a specific sub-tier, such as only the `webservers` group, without touching any other part of the production fleet. Service boundary groups enforce a clean operational contract: broad, generic group names like `web` should be avoided entirely. If multiple teams share a network, a generic `web` group might target unrelated services, so you use highly descriptive names like `customer_portal_web` or `billing_api` to ensure that service blast radiuses are clear.
 
 ## Dynamic Inventories: Live Service Discovery
 
@@ -109,11 +102,7 @@ While static files are excellent for small or stable networks, they fail in mode
 
 Ansible solves this using **Dynamic Inventories**. A dynamic inventory is usually an inventory plugin, and older script-based inventories are also supported. Instead of reading a fixed host list from disk, the inventory source asks another system, such as AWS EC2, GCP Compute, Kubernetes, or NetBox, for the current host catalog and turns that response into Ansible groups and variables.
 
-When you run a playbook with a cloud dynamic inventory:
-1. **API Handshake**: The inventory plugin initiates a secure API call to the provider or service catalog.
-2. **Resource Query**: The plugin fetches matching resources, filters them based on rules you configured (such as selecting only instances with the tag `Env=production`), and reads their metadata.
-3. **Inventory Construction**: The plugin maps those resources into Ansible host names, groups, and variable blocks.
-4. **Optional Caching Layer**: If you enable inventory caching, Ansible can reuse a recent inventory result for a short period, reducing API calls and making repeated local runs faster.
+When Ansible calls a dynamic inventory plugin, it initiates a secure API call to the target platform (EC2, GCE, Azure, or a CMDB) and retrieves a snapshot of active resources with their addresses, tags, and metadata. The plugin filters those resources based on rules you configured, such as selecting only instances tagged `Env=production`, then maps them into Ansible host names, groups, and variable blocks held in memory. If inventory caching is enabled, Ansible stores that result for the duration of the run, reducing repeated API calls. If the platform tags a resource with `env=staging`, the plugin surfaces that as a group membership, letting you target `staging` in your playbook without editing any static file.
 
 This dynamic mapping means autoscaled hosts can appear and disappear through the source system instead of requiring constant manual edits to a static host file.
 
@@ -161,7 +150,7 @@ ansible-inventory -i inventory/production.yml --graph
 
 For our hierarchical cluster scenario, the command prints the clean, parsed relationships:
 
-```text
+```plain
 @all:
   |--@ungrouped:
   |--@production:

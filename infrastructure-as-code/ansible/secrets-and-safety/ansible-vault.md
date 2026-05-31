@@ -56,7 +56,7 @@ To maintain a clean, auditable repository, you should separate your public varia
 
 A group variables directory layout for the payments portal web group illustrates this split:
 
-```text
+```plain
 inventory/
   group_vars/
     payments_web/
@@ -89,7 +89,7 @@ To understand the strength of the encryption, we must examine the format of a va
 
 Opening the encrypted file reveals the specific schema header:
 
-```text
+```plain
 $ANSIBLE_VAULT;1.2;AES256;production
 6130333833343933363138356135303338316235376137363363633432303434
 3761323137656464353362323363386232613830646130326539306639353030
@@ -303,7 +303,7 @@ By coordinating Ansible Vault with strict execution and filesystem controls, you
 
 **References**
 
-- [Ansible Vault Guide](https://docs.ansible.com/projects/ansible/latest/vault_guide/vault.html)
-- [PBKDF2 Cryptographic Standards (RFC 2898)](https://datatracker.ietf.org/doc/html/rfc2898)
-- [Managing Secrets in Ansible Playbooks](https://docs.ansible.com/ansible/latest/playbook_guide/playbooks_variables.html#information-security-with-ansible-vault)
-- [AES256-CTR Cryptographic Block Cipher Mode](https://csrc.nist.gov/publications/detail/sp/800-38a/final)
+- [Ansible Vault Guide](https://docs.ansible.com/projects/ansible/latest/vault_guide/vault.html) - Full reference for creating, editing, encrypting, decrypting, and rekeying vault-protected files and variables.
+- [PBKDF2 Cryptographic Standards (RFC 2898)](https://datatracker.ietf.org/doc/html/rfc2898) - The IETF specification defining the password-based key derivation function used by Ansible Vault to generate AES keys from passwords.
+- [Managing Secrets in Ansible Playbooks](https://docs.ansible.com/ansible/latest/playbook_guide/playbooks_variables.html#information-security-with-ansible-vault) - Explains how to structure variable files to separate public configuration from vault-encrypted secrets.
+- [AES256-CTR Cryptographic Block Cipher Mode](https://csrc.nist.gov/publications/detail/sp/800-38a/final) - NIST special publication covering the counter mode (CTR) block cipher operation used to encrypt vault payloads.

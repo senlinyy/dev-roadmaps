@@ -78,7 +78,7 @@ However, scaling can also push failure downstream. If an external API is rate-li
 
 ## Desired Task Count Controls
 
-The desired count is the target number of task replicas the ECS Service Controller maintains. If the desired count is manually set to `4`, ECS guarantees that four tasks remain active.
+The desired count is the target number of task replicas the ECS Service Controller tries to maintain. If the desired count is manually set to `4`, ECS continually works toward four running tasks, but placement can still fail if subnets lack IP addresses, capacity providers lack room, images cannot be pulled, or health checks keep terminating replacements.
 
 For background worker fleets, manual desired count changes are the first operational lever during incidents:
 
@@ -91,11 +91,11 @@ Desired Count Operational Procedures:
 | **Poison message crash loop** | Scale desired count to zero. | Halts worker executions, buying time for developers to inspect payloads. |
 | **Database maintenance window** | Hold desired count low. | Minimizes query contention during database upgrades. |
 
-The gotcha of manual overrides is autoscaling policy drift. If you have enabled Application Auto Scaling target tracking, any manual desired count changes you execute from the command line will be overwritten by the auto-scaler's background loop within minutes. Responders must temporarily disable active scaling policies before executing manual task count overrides during incidents.
+The gotcha of manual overrides is autoscaling policy interaction. If you have enabled Application Auto Scaling target tracking, a manual desired count can later be adjusted by the auto-scaler when new CloudWatch datapoints and cooldown rules tell it to scale. Responders should know the service's minimum capacity, maximum capacity, active scaling policies, and cooldowns before executing manual task count overrides during incidents. In a true pause or controlled-drain incident, temporarily suspending dynamic scaling can make the manual move easier to reason about.
 
 ## Automated Target Tracking Scaling Policies
 
-Autoscaling automates capacity matching by evaluating real-time metrics against target values. For ECS, target tracking policies act like a home thermostat: if CPU utilization rises above 70%, the auto-scaler launches tasks; if CPU utilization drops below 30%, it terminates tasks.
+Autoscaling automates capacity matching by evaluating real-time metrics against target values. For ECS, target tracking policies act like a home thermostat: if CPU utilization stays above a 70% target, the auto-scaler can launch tasks; if utilization stays below the target after cooldown behavior and scale-in rules allow it, the auto-scaler can remove tasks. There is no special 30% scale-in line unless you configure a policy around that value.
 
 Autoscaling is highly effective when the metric you track has a stable, linear relationship with container capacity. It is highly dangerous when the metric is a symptom of a downstream bottleneck.
 
@@ -231,7 +231,7 @@ Operating live cloud environments requires a thorough understanding of capacity 
 
 * **Verify Bottlenecks Before Scaling**: Never scale compute task fleets if the bottleneck resides in a shared relational database or rate-limited external gateway.
 * **Trace Queue Backlog Age**: Base background worker alerts on SQS `ApproximateAgeOfOldestMessage` metrics rather than simple message counts.
-* **Enforce Queue Redrive Policies**: Implement SQS Dead Letter Queues (DLQs) with a strict Redrive Policy of 3 attempts to isolate poison payloads automatically.
+* **Enforce Queue Redrive Policies**: Implement SQS Dead Letter Queues (DLQs) with a `maxReceiveCount` chosen for the workload. A short count isolates poison payloads quickly; a longer count gives flaky dependencies more retry room.
 * **Secure and Version Schedules**: Treat scheduled jobs as active production writers, managing their triggers and permissions with release discipline.
 * **Defend Boundaries with Concurrency**: Enforce strict database connection pool limits to prevent auto-scaling tasks from exhausting database limits.
 * **Design Elegant Pause Controls**: Implement reversible, visible, and owned pause switches to buy diagnostic time during incidents.
@@ -245,6 +245,8 @@ Operating live cloud environments requires a thorough understanding of capacity 
 **References**
 
 * [Application Auto Scaling Guide](https://docs.aws.amazon.com/autoscaling/application/userguide/what-is-application-auto-scaling.html) - AWS guide to automated compute and task scaling.
+* [Target tracking scaling policies for Application Auto Scaling](https://docs.aws.amazon.com/autoscaling/application/userguide/application-auto-scaling-target-tracking.html) - Documents target values, cooldowns, and scale-in behavior.
 * [Amazon SQS Available CloudWatch Metrics](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-available-cloudwatch-metrics.html) - Technical reference for monitoring backlogs, message age, and DLQs.
+* [Using dead-letter queues in Amazon SQS](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-dead-letter-queues.html) - Explains redrive policy behavior and choosing `maxReceiveCount`.
 * [AWS EventBridge Scheduler](https://docs.aws.amazon.com/scheduler/latest/UserGuide/what-is-scheduler.html) - Documentation on scheduled task execution, retries, and states.
 * [Managing Lambda Reserved Concurrency](https://docs.aws.amazon.com/lambda/latest/dg/configuration-concurrency.html) - Guide to setting execution limits on serverless threads.

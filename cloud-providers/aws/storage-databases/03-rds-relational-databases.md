@@ -60,7 +60,7 @@ Once you provision an RDS instance, your application code needs a network path t
 
 In a secure cloud network topology, your relational database must live deep inside isolated private subnets with absolutely no route to the internet. Amazon RDS manages this network isolation using two distinct security controls.
 
-First, you configure DB Subnet Groups. A DB Subnet Group is a collection of private subnets across multiple Availability Zones in your VPC. When you launch your database, you assign it to this group. RDS automatically binds the database's network interfaces strictly inside these private subnets, ensuring the database never receives a public IP address and remains unreachable from outside the private network.
+First, you configure DB Subnet Groups. A DB Subnet Group is a collection of subnets across multiple Availability Zones in your VPC. For production databases, choose private subnets and set the database to **not publicly accessible**. The subnet group places the database network interfaces in the selected subnets, while the public accessibility setting controls whether the DB instance receives a public IP address. Both choices matter. A private subnet group plus `PubliclyAccessible=false` keeps the database reachable only through private VPC paths.
 
 Second, you restrict inbound traffic using security group whitelisting. Instead of opening database ports like TCP 5432 or 3306 to broad IP ranges, you write a stateful rule in the database security group (`sg-db`) that allows inbound traffic exclusively from the security group of your application servers (`sg-api`).
 
@@ -83,7 +83,7 @@ flowchart TD
     App -->|PostgreSQL 5432| RDS
 ```
 
-This layered isolation guarantees that even if an attacker discovers your database password, they cannot send packets to the database port because all network access from the public internet is physically blocked by the VPC network topology.
+This layered isolation means that even if an attacker discovers your database password, they still need a private network path and an allowed security group source before packets can reach the database port. Network isolation does not replace password rotation or least-privilege users, but it prevents a leaked password from becoming a direct internet login path.
 
 ## Dynamic Credential Injection via Secrets Manager
 
@@ -106,7 +106,7 @@ $ aws secretsmanager get-secret-value --secret-id production/db/credentials
 }
 ```
 
-The server parses the `SecretString` JSON payload at runtime, retrieving the host address, username, and password into process memory or a carefully controlled runtime configuration object. This design ensures the password never touches local disk or environment files. Furthermore, Secrets Manager can coordinate with RDS to rotate your database password on a recurring schedule (e.g. every 30 days), updating the credentials inside the database engine and the secret payload without requiring a code redeploy.
+The server parses the `SecretString` JSON payload at runtime, retrieving the host address, username, and password into process memory or a carefully controlled runtime configuration object. This design ensures the password never touches local disk or environment files. Furthermore, Secrets Manager can coordinate with supported RDS engines to rotate your database password on a recurring schedule, updating the credentials inside the database engine and the secret payload without requiring a code redeploy. Rotation still needs application coordination: connection pools must refresh credentials, and the rotation function must match the engine, user, and network path.
 
 ## Autoscaling and the DB Connection Exhaustion Limit
 
@@ -131,9 +131,9 @@ This multiplier explains why scaling app instances can quickly choke a database.
 
 Your database is now isolated, secure, and performant. However, datacenters can suffer physical failures, including power grid collapses, cooling failures, or hardware corruption. If your database runs on a single server inside a single datacenter, a hardware issue in that datacenter will instantly knock your application offline and risk permanent data loss.
 
-To guarantee high availability, you must deploy RDS using a **Multi-AZ** (Multi-Availability Zone) configuration.
+To improve high availability, deploy RDS using a **Multi-AZ** (Multi-Availability Zone) configuration when the database supports your uptime requirements and budget.
 
-When you enable Multi-AZ, RDS automatically provisions and maintains a synchronous standby replica of your database in a completely separate physical Availability Zone. When your application writes data, RDS ensures the changes are successfully written to both the primary and standby disks before returning a success signal to your application code.
+The classic Multi-AZ DB instance deployment provisions and maintains a synchronous standby replica of your database in a separate Availability Zone. When your application writes data, RDS ensures the changes are successfully written to both the primary and standby before returning a success signal to your application code. Multi-AZ DB clusters are a newer shape for supported engines such as MySQL and PostgreSQL: they use one writer and two readable standby instances across three Availability Zones, providing high availability plus read capacity from the reader endpoints.
 
 If the primary database instance suffers a hardware failure, RDS automatically triggers an automated failover. The system detects the failure and updates the database's DNS endpoint to point to the healthy standby instance. Many failovers complete in roughly 60 to 120 seconds, though the exact duration depends on engine, workload, and recovery state. Your application usually does not need to change endpoint names, but it must handle dropped connections and reconnect cleanly.
 
@@ -205,6 +205,8 @@ Amazon RDS transforms relational database administration from a manual hardware 
 
 RDS is the premier cloud container for structured SQL data. By treating the database as both a structured data model and a highly secured network service, you ensure your application's state remains accurate, performant, and durably protected.
 
+One operational cost gotcha is engine lifecycle. Open-source database major versions eventually leave standard support. Amazon RDS Extended Support can keep eligible MySQL and PostgreSQL databases receiving critical updates for an additional cost after standard support ends, but it should be treated as a temporary bridge, not a long-term plan. Schedule major-version upgrades before the support date whenever possible.
+
 ## What's Next
 
 RDS is the ideal starting point when application correctness depends on database transactions and structured tables. However, when application data is key-shaped and requires predictable low-latency lookups at massive scale without the limits of database connections, such as active session states or idempotency tokens, NoSQL key-value databases are often a better fit. In the next article, we will cover serverless NoSQL design in DynamoDB.
@@ -219,7 +221,10 @@ RDS is the ideal starting point when application correctness depends on database
 
 - [Amazon RDS user guide](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/Welcome.html) - Compiles all RDS features, database engines, and backup rules.
 - [Working with a DB instance in a VPC](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_VPC.WorkingWithRDSInstanceinaVPC.html) - Details DB subnet groups, private subnetting, and network interfaces.
+- [Setting up public or private access in Amazon RDS](https://docs.aws.amazon.com/AmazonRDS/latest/gettingstartedguide/security-public-private.html) - Explains public accessibility, public IP behavior, and private database access patterns.
 - [Controlling DB access with security groups](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/Overview.RDSSecurityGroups.html) - Explains database security group configurations and source group whitelisting.
 - [AWS Secrets Manager integration](https://docs.aws.amazon.com/secretsmanager/latest/userguide/integration_rds.html) - Outlines dynamic credential retrieval and automated password rotation.
 - [Managing connections with RDS Proxy](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/rds-proxy.html) - Details connection pooling, serverless scaling, and max connection limits.
 - [Multi-AZ DB deployments](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/Concepts.MultiAZ.html) - Explains synchronous replica mirroring, failover DNS updates, and read replicas.
+- [Multi-AZ DB clusters](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/multi-az-db-clusters-concepts.html) - Explains one-writer, two-readable-standby cluster architecture for supported engines.
+- [Amazon RDS Extended Support](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/extended-support.html) - Documents paid support after open-source engine major versions leave standard support.

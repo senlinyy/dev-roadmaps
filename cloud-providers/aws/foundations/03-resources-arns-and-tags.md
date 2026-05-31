@@ -21,6 +21,8 @@ aliases:
 6. [Enforcing a Consistent Tagging Standard](#enforcing-a-consistent-tagging-standard)
 7. [Safe Naming Conventions](#safe-naming-conventions)
 8. [The Operational Pre-Change Checklist](#the-operational-pre-change-checklist)
+9. [Putting It All Together](#putting-it-all-together)
+10. [What's Next](#whats-next)
 
 ## The Ambiguity of Friendly Labels
 
@@ -84,7 +86,7 @@ Global services, like Identity and Access Management, do not reside in a single 
 
 The double colon after `iam` indicates that the Region field is empty. IAM identities are global across the account partition, so no Region coordinate is required.
 
-S3 buckets also feature a unique structure. Because S3 bucket names are globally unique within their partition, the ARN omits both the Region and the account ID fields:
+S3 buckets also feature a unique structure. Because S3 bucket names are unique within their AWS partition, the ARN omits both the Region and the account ID fields:
 
 `arn:aws:s3:::devpolaris-orders-exports-prod`
 
@@ -134,6 +136,8 @@ Establish a locked-down, case-sensitive tagging matrix for all resources at crea
   * **Operational Purpose**: Warns engineers that manual console modifications will be overwritten by infrastructure-as-code pipelines.
 
 Apply these five keys consistently. Never store sensitive credentials, personal customer data, or operational passwords inside tags, as tag values are returned in plaintext by public API scans.
+
+Tagging is not automatic governance. Tag keys are case-sensitive, so `Owner` and `owner` are different keys. Tags also need to be activated as cost allocation tags before they can drive billing reports. For stronger organization-wide consistency, AWS Organizations tag policies can define allowed keys and values, but they do not turn tags into secret storage. Treat tags as visible business metadata, not as a place for passwords, tokens, customer emails, or private incident notes.
 
 ## Safe Naming Conventions
 
@@ -201,3 +205,5 @@ The next article is **AWS Core Services Map**. We will zoom out and build a comp
 - [Tagging Best Practices](https://docs.aws.amazon.com/whitepapers/latest/tagging-best-practices/tagging-best-practices.html) - Industry-standard whitepaper on designing and enforcing consistent tagging schemas for cost allocation and access control.
 - [AWS CLI STS Command Reference](https://docs.aws.amazon.com/cli/latest/reference/sts/get-caller-identity.html) - Documentation on verifying active session identities and account scopes via the command-line interface.
 - [AWS CloudTrail Event History](https://docs.aws.amazon.com/awscloudtrail/latest/userguide/view-cloudtrail-events-cli.html) - Guide on using CloudTrail to search management API calls and track changes to resource states.
+- [Amazon S3 bucket naming rules](https://docs.aws.amazon.com/AmazonS3/latest/userguide/bucketnamingrules.html) - Documents bucket-name uniqueness within a partition.
+- [AWS cost allocation tags](https://docs.aws.amazon.com/awsaccountbilling/latest/aboutv2/cost-alloc-tags.html) - Explains how tags become available for billing reports.

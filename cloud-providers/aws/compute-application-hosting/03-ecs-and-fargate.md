@@ -123,7 +123,7 @@ This routing challenge is solved by integrating the ECS Service with an Applicat
 * **Target Type IP**: You configure your load balancer target group with target type `ip`, not `instance`. This tells the load balancer that it is sending traffic directly to task ENI private IP addresses, bypassing any shared host interfaces.
 * **Automated Registration**: When the ECS service boots a new task, it waits for the container network interface to become active, retrieves the task's private IP, and automatically registers that IP and the container port (e.g., `10.0.2.14:3000`) in the Target Group.
 * **Dynamic Health Checks**: The target group periodically sends HTTP health requests (such as `GET /health`) directly to each registered task IP. Traffic is routed only to tasks that return successful responses.
-* **Connection Draining**: During deployments, when a task is scheduled for retirement, the ECS service deregisters the task IP from the target group. The load balancer stops sending new requests, drains active connections safely, and terminates the old task without dropping any user packets.
+* **Connection Draining**: During deployments, when a task is scheduled for retirement, the ECS service deregisters the task IP from the target group. The load balancer stops sending new requests and waits for in-flight requests during the target group's deregistration delay. Your application still needs to handle shutdown signals cleanly and finish or reject work before the container stops; connection draining reduces interruption risk, but it does not guarantee that every request survives a broken shutdown path.
 
 The container port contract must align perfectly across all layers for this flow to succeed.
 
@@ -185,3 +185,4 @@ We have established a robust runtime shape for containerized services that stay 
 - [Amazon ECS Developer Guide](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/welcome.html) - Technical documentation on orchestrating containers in AWS.
 - [AWS Fargate Task Definitions](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/fargate-tasks-services.html) - Guide on configuring serverless, containerized task blueprints.
 - [Application Load Balancer Target Groups](https://docs.aws.amazon.com/elasticloadbalancing/latest/application/load-balancer-target-groups.html) - Guide on routing traffic to IP-based targets dynamically.
+- [Register targets with your Application Load Balancer target group](https://docs.aws.amazon.com/elasticloadbalancing/latest/application/target-group-register-targets.html) - Explains deregistration delay and connection draining behavior.

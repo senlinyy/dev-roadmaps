@@ -94,7 +94,7 @@ By segmenting your VPC into distinct subnets, you can establish clear physical b
 
 A secure, production-ready network topology utilizes a three-tier subnet architecture, repeated across at least two Availability Zones:
 
-* **The Public Tier**: Holds internet-facing resources like Application Load Balancers and NAT Gateways. These subnets have route tables that send internet-bound traffic to an Internet Gateway. Public reachability still requires the resource or managed service to have the right public address and firewall configuration.
+* **The Public Tier**: Holds internet-facing resources like Application Load Balancers and, in older or zonal designs, public NAT gateways. These subnets have route tables that send internet-bound traffic to an Internet Gateway. Public reachability still requires the resource or managed service to have the right public address and firewall configuration.
 * **The Private Application Tier**: Houses the application code, container tasks, API workers, and internal services. Resources here do not receive public IP addresses and cannot be reached directly from the internet. They can only initiate outbound connections via a NAT Gateway when necessary.
 * **The Data Tier**: Dedicated strictly to databases, key-value caches, and highly sensitive data engines. These subnets are completely isolated, with absolutely no route to the internet, ensuring that data stores remain completely unreachable from outside the private network.
 
@@ -148,9 +148,11 @@ To allow traffic to enter or leave your VPC, you must attach network gateways. T
 
 An Internet Gateway is a horizontally scaled, redundant VPC component that enables direct, bidirectional communication between resources in your public subnets and the internet. To communicate through an Internet Gateway, a resource must live in a public subnet, its route table must point default traffic to the Internet Gateway, and the resource must be assigned a public IPv4 or Elastic IP address.
 
-A NAT Gateway is a managed Network Address Translation service that enables resources in private subnets to initiate outbound connections to the internet, while preventing the internet from initiating unsolicited inbound connections back to those resources. 
+A NAT Gateway is a managed Network Address Translation service that enables resources in private subnets to initiate outbound connections, while preventing the outside network from initiating unsolicited inbound connections back to those resources.
 
-The NAT Gateway lives in a public subnet, receives a public Elastic IP address, and acts as a proxy for private instances. When a private worker initiates an API call, the NAT Gateway translates the private source IP to its own public Elastic IP for the outside leg, and then routes the return response back to the private worker.
+The classic NAT pattern is a public, zonal NAT Gateway. It lives in a public subnet, receives a public Elastic IP address, and acts as a proxy for private instances. When a private worker initiates an API call, the NAT Gateway translates the private source IP to its own public Elastic IP for the outside leg, and then routes the return response back to the private worker.
+
+AWS also supports private NAT gateways for private address translation toward other VPCs or on-premises networks, and Regional NAT gateways for public internet egress that automatically expand across Availability Zones. A Regional NAT gateway does not need to be hosted in a public subnet, which reduces the chance of accidentally mixing private workloads with public subnet infrastructure. The important beginner rule is to identify which NAT mode you are using before copying a route-table pattern from an older architecture diagram.
 
 ```mermaid
 flowchart TD
@@ -173,8 +175,10 @@ flowchart TD
 
 Operating NAT Gateways introduces two critical engineering tradeoffs:
 
-* **Resilience and AZ Alignment**: A NAT Gateway is cabled with built-in redundancy within a single Availability Zone. However, if you deploy only one NAT Gateway and share it across private subnets in multiple Availability Zones, a failure in that NAT Gateway's zone will take down outbound internet access for all other zones. To build a highly resilient architecture, always deploy one NAT Gateway per Availability Zone, routing private subnets to their same-zone gateway.
+* **Resilience and AZ Alignment**: A zonal NAT Gateway is cabled with built-in redundancy within a single Availability Zone. If you deploy only one zonal NAT Gateway and share it across private subnets in multiple Availability Zones, a failure in that NAT Gateway's zone can take down outbound internet access for workloads in the other zones. In the zonal pattern, deploy one public NAT Gateway per Availability Zone and route private subnets to their same-zone gateway. In the Regional NAT pattern, AWS manages the multi-zone expansion for one Regional NAT gateway.
 * **Processing and Idle Costs**: AWS charges a continuous hourly fee for each active NAT Gateway, plus a processing charge for every gigabyte of data passing through it. If your private application workers send heavy volumes of traffic through a NAT Gateway, your bill can escalate rapidly.
+
+NAT gateways are an IPv4 tool. For IPv6-only outbound internet access, AWS uses an egress-only internet gateway. It lets your IPv6 workloads initiate outbound internet connections, but it prevents the internet from starting new inbound connections to those workloads.
 
 ## VPC Gateway Endpoints
 
@@ -199,7 +203,7 @@ Designing a secure cloud network topology means moving from accidental placement
 * **CIDR Planning**: Reserves a distinct, non-overlapping street-grid (such as `10.40.0.0/16`) that leaves ample room for subnets and avoids future IP address conflicts.
 * **Subnet Segmentation**: Duplicates a secure three-tier layout (Public, Private App, Data) across multiple Availability Zones to eliminate single points of failure.
 * **Route Tables**: Act as the routing brain, making subnets public, private, or isolated based on where their default routes and service-specific routes point.
-* **Gateways**: Internet Gateways allow public entry points to accept user requests, while NAT Gateways provide private subnets with secure, outbound-initiated egress.
+* **Gateways**: Internet Gateways allow public entry points to accept user requests, while NAT Gateways and egress-only internet gateways provide private subnets with outbound-initiated egress for IPv4 and IPv6 patterns.
 * **VPC Endpoints**: Bypass NAT Gateway paths for supported AWS services like S3 and DynamoDB, keeping high-volume traffic private while reducing NAT processing costs.
 
 A clean topology outlines where network paths are cabled. However, routing rules only make paths possible; they do not dictate which packets are permitted to use those paths. To lock down our system, we need to apply precise packet-filtering gates at both the subnet and resource levels.
@@ -227,5 +231,7 @@ In the next article, we will compare the two primary AWS packet-filtering layers
 - [Enable internet access for a VPC using an internet gateway](https://docs.aws.amazon.com/vpc/latest/userguide/VPC_Internet_Gateway.html) - Defines the public subnet routing contract and public IPv4 addressing requirements.
 - [NAT gateways](https://docs.aws.amazon.com/vpc/latest/userguide/vpc-nat-gateway.html) - Focuses on outbound address translation, private egress, and NAT gateway placement.
 - [NAT gateway basics](https://docs.aws.amazon.com/vpc/latest/userguide/nat-gateway-basics.html) - Provides architectural guidelines for single-zone and multi-zone NAT gateway designs.
+- [Regional NAT gateways](https://docs.aws.amazon.com/vpc/latest/userguide/nat-gateways-regional.html) - Explains Regional NAT gateways, automatic Availability Zone expansion, and public subnet differences.
+- [Egress-only internet gateways](https://docs.aws.amazon.com/vpc/latest/userguide/egress-only-internet-gateway.html) - Explains outbound-only IPv6 internet access and why NAT gateways are for IPv4 egress.
 - [Pricing for NAT gateways](https://docs.aws.amazon.com/vpc/latest/userguide/nat-gateway-pricing.html) - Explains hourly fees, gigabyte processing costs, and pricing strategies using endpoints.
 - [Gateway endpoints](https://docs.aws.amazon.com/vpc/latest/privatelink/gateway-endpoints.html) - Focuses on gateway endpoints for S3 and DynamoDB, prefix lists, and route integration.

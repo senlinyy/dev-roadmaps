@@ -1,165 +1,238 @@
 ---
-title: "Tags and Registries"
-description: "Understand how Docker image names, tags, digests, and registries decide which exact artifact is shared, pulled, and deployed."
-overview: "After an image is built, the next question is identity. This article explains how tags, digests, and registries connect a local image to the artifact other machines will actually run."
+title: "Tags, Digests, and Registries"
+description: "Secure your deployment pipeline by understanding image tags, content-addressable digests, and registry authentication."
+overview: "Distribution is the final step of the build loop. This article explains OCI image manifests, immutable digests, registry authentication flows, and multi-platform manifests."
 tags: ["docker", "registries", "tags", "digests"]
-order: 4
+order: 3
 id: article-containers-orchestration-docker-tags-digests-and-registries
 ---
 
 ## Table of Contents
 
-1. [The Problem](#the-problem)
-2. [Image Names](#image-names)
-3. [Tags](#tags)
-4. [Digests](#digests)
-5. [Registries](#registries)
-6. [Pull and Push](#pull-and-push)
-7. [Failure Modes](#failure-modes)
-8. [Putting It All Together](#putting-it-all-together)
-9. [What's Next](#whats-next)
+1. [The Mutable Tag Hazard](#the-mutable-tag-hazard)
+2. [Anatomy of an OCI Image Manifest](#anatomy-of-an-oci-image-manifest)
+3. [Immutable Content-Addressable Digests](#immutable-content-addressable-digests)
+4. [Under the Hood: Registry JWT Authentication](#under-the-hood-registry-jwt-authentication)
+5. [Multi-Architecture Manifest Lists](#multi-architecture-manifest-lists)
+6. [Secure Delivery Workflows](#secure-delivery-workflows)
+7. [Putting It All Together](#putting-it-all-together)
+8. [What's Next](#whats-next)
 
-## The Problem
+## The Mutable Tag Hazard
 
-Two machines run `orders-api:latest` and get different behavior. A developer rebuilt the image locally, but staging still runs yesterday's version. CI pushed a tag named `main`, then a later job pushed the same tag again. A rollback tries to use `v1.4.2`, but nobody is sure whether that tag still points to the original image.
+When you distribute compiled container images to production servers, you rely on image registries to act as the central distribution vault. A typical deployment workflow requires tagging an image with a human-readable name, pushing it to a registry, and asking your production orchestrator to pull that name during a rollout.
 
-Docker images need identity. A local image id is enough on one machine, but teams need names that can move through CI, registries, staging, and production. Tags and digests solve different parts of that problem.
+In a naive deployment pipeline, developers often tag their images with mutable labels like `:latest`, `:production`, or `:v1`.
 
-A tag is a human-readable pointer. A digest is a content-based identifier. A registry is the server that stores and distributes image layers and manifests. Confusing those roles is how "same tag" turns into "different artifact."
+Because these tags are mutable, they can be overwritten at any time. If a pipeline pushes a hotfix tagged `:v1` over an existing `:v1` image, the registry silently moves the tag pointer to the new image ID. 
 
-## Image Names
+When a production orchestrator scales up your workload or replaces a crashed node, it pulls the tag `:v1` again. 
 
-A full image reference can include a registry host, namespace, repository, tag, and digest. In everyday use it often looks small:
+If some nodes pull before the update and others pull after, your active fleet runs two completely different versions of the code under the exact same tag name.
 
-```text
-nginx
-orders-api:local
-ghcr.io/acme/orders-api:2026-05-19
-docker.io/library/nginx:1.27
+```plain
+$ docker pull registry.hub.docker.com/org/app:v1
+# Digest: sha256:8f3c... (Downloaded updated application version)
+# Older servers run sha256:2d1a... under the identical "v1" label
 ```
 
-Docker fills in defaults when pieces are omitted. For Docker Hub, `nginx` means `docker.io/library/nginx:latest`. The `library` namespace is where Docker Official Images live. The `latest` tag is used when no tag is specified.
+This tag mutation creates silent, untraceable production drift that bypasses version control. The error is not in the orchestrator. The error is relying on mutable name labels to identify immutable binary layers.
 
-That default is convenient for tutorials and risky for production habits. It hides two decisions: which registry should be used, and which tag should be pulled. A deployment should usually make those decisions visible.
+To run securely in production, you must transition from mutable tags to content-addressable digests, and understand the under-the-hood HTTP manifest exchanges that govern image distribution.
 
-The repository name is the long-lived place where related image versions live. Tags and digests identify specific references inside that repository.
+## Anatomy of an OCI Image Manifest
 
-## Tags
+An image in a registry is not stored as a single, compiled file. Instead, the Open Container Initiative (OCI) Image Specification v1 defines an image as a collection of independent, content-addressed files linked together by an OCI Image Manifest JSON file.
 
-A tag is a named pointer to an image manifest. When you build locally, this command applies a tag:
+When you pull or push an image, the Docker Client first pulls this manifest JSON file to understand the image structure.
+
+```json
+{
+  "schemaVersion": 2,
+  "mediaType": "application/vnd.oci.image.manifest.v1+json",
+  "config": {
+    "mediaType": "application/vnd.oci.image.config.v1+json",
+    "size": 7023,
+    "digest": "sha256:b1d83ab90e11cda908ce91244cf0c0df4a819b5f903a48e7188b0a9477ef290"
+  },
+  "layers": [
+    {
+      "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+      "size": 3267104,
+      "digest": "sha256:8f3c1f0d91b2c1da908ce91244cf0c0df4a819b5f903a48e7188b0a9477ef290"
+    },
+    {
+      "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+      "size": 154082,
+      "digest": "sha256:2d1a58e283b74f75a1058b6e0c77e4e2cda908ce91244cf0c0df4a819b5f903"
+    }
+  ]
+}
+```
+
+The manifest JSON details the exact composition of the artifact:
+* **`schemaVersion`**: Dictates the OCI schema version (typically version 2).
+* **`config`**: Points to the Image Configuration JSON file. This configuration file contains the metadata manifest, including the image environment variables (`ENV`), export ports (`EXPOSE`), the entrypoint array, user configurations, and the layer order timeline.
+* **`layers`**: An ordered array of descriptor objects. Each layer descriptor specifies the compression type (`mediaType`), the file size in bytes, and a cryptographically secure hash (`digest`) of that layer's compressed tarball.
+
+When the local engine pulls an image, it downloads the manifest, compares the layer digests against its local `/var/lib/docker/overlay2/` database, downloads only the missing layer tarballs from the registry, and merges them to assemble the filesystem.
+
+## Immutable Content-Addressable Digests
+
+To eliminate mutable tag drift, you can reference an image using its content-addressable digest instead of its tag name.
+
+A digest is a cryptographically secure SHA256 hash calculated over the exact byte content of the OCI Image Manifest JSON file itself. The digest is represented as `sha256:` followed by the hex string of the hash.
+
+Because the digest is derived directly from the manifest content, it is mathematically immutable:
+* **Layer Immutability**: If a developer modifies a single byte in any of the application source files, the compiled layer's hash changes.
+* **Manifest Immutability**: The updated layer hash changes the layers array inside the OCI manifest JSON.
+* **Digest Immutability**: The modified manifest JSON yields a completely different SHA256 digest hash.
+
+When you deploy a workload using the digest notation, the orchestrator guarantees that every single server pulls the exact same byte-for-byte filesystem:
 
 ```bash
-docker build -t ghcr.io/acme/orders-api:dev .
+docker run -d \
+  --name production-api \
+  registry.hub.docker.com/org/app@sha256:b1d83ab90e11cda908ce91244cf0c0df4a819b5f903a48e7188b0a9477ef290
 ```
 
-The tag `dev` is meaningful to people. It might mean "the current developer build" or "the latest build from a branch." Docker does not enforce that meaning. A later build can move the same tag to a different image.
+Even if an administrator pushes a breaking update to the `:v1` tag in the registry, the digest reference `org/app@sha256:b1d8...` remains bound permanently to the specific manifest hash, bypassing tag mutation entirely. 
 
-This mutability is useful. `main`, `dev`, and `latest` are convenient moving labels. They let humans and automation refer to the current image for a stream of work. The danger is treating a moving label as proof of exact identity.
+Using digests is the single most effective operational habit to guarantee reproducible container orchestration rollouts.
 
-Version tags are better for releases:
+## Under the Hood: Registry JWT Authentication
 
-```text
-ghcr.io/acme/orders-api:1.4.2
-ghcr.io/acme/orders-api:2026-05-19.3
-ghcr.io/acme/orders-api:git-8f3a91c
-```
-
-Even then, a registry may allow tags to be overwritten unless policy prevents it. A tag can be stable by convention, protected by registry settings, or mutable by accident. The name alone does not guarantee immutability.
-
-## Digests
-
-A digest identifies image content by hash. It appears after `@sha256:`:
-
-```text
-ghcr.io/acme/orders-api@sha256:4f2a...
-```
-
-When you pull by digest, you are asking for the artifact whose manifest matches that digest. If the content changes, the digest changes. This is the exactness tags do not provide.
-
-Digests matter in deployment and supply-chain work because they let you answer a precise question: which artifact did this environment run? A tag may tell you the intended release. A digest tells you the resolved image content.
-
-Tags and digests can be used together:
-
-```text
-ghcr.io/acme/orders-api:1.4.2@sha256:4f2a...
-```
-
-That reads as "the `1.4.2` name, resolved to this exact digest." Tools often record both because humans want the release name and machines want exact identity.
-
-## Registries
-
-A registry stores image manifests and layers. Docker Hub is the default public registry for many Docker commands. Teams also use private registries such as GitHub Container Registry, Amazon ECR, Google Artifact Registry, Azure Container Registry, or self-hosted registries.
-
-When you push an image, Docker uploads the layers the registry does not already have and writes or updates the manifest and tag reference. When another machine pulls the image, Docker downloads the manifest, checks which layers it already has locally, and pulls the missing ones.
-
-A registry also sits inside the artifact's trust boundary. It controls authentication, authorization, tag policies, retention, vulnerability scanning integrations, and sometimes signature or provenance features. A local image named `orders-api:local` is not automatically available to CI or staging. It becomes shareable when it is tagged for a registry and pushed.
-
-## Pull and Push
-
-The image movement path is ordinary once identity is clear:
+When the Docker Daemon pushes or pulls an image from a private registry, it does not send raw credentials with every layer upload request. Instead, OCI-compliant registries use a multi-step token authentication handshake mediated by JSON Web Tokens (JWT).
 
 ```mermaid
-flowchart LR
-    Build["Build local image"]
-    Tag["Tag for registry"]
-    Push["Push layers and manifest"]
-    Pull["Pull by tag or digest"]
-    Run["Run container"]
+flowchart TD
+    subgraph ClientDaemon["Local Host Tier"]
+        Daemon["Docker Daemon (dockerd)"]
+    end
+    subgraph RegistryTier["Registry Infrastructure"]
+        AuthServer["Registry Auth Service<br/>(Token Issuer)"]
+        RegistryStorage["Registry Storage Service<br/>(Blobs & Manifests)"]
+    end
 
-    Build --> Tag --> Push --> Pull --> Run
+    Daemon -->|1. HTTP GET /v2/org/app/manifests/v1| RegistryStorage
+    RegistryStorage -->|2. HTTP 401 Unauthorized<br/>(Provides auth challenge header)| Daemon
+    Daemon -->|3. HTTP GET with credentials| AuthServer
+    AuthServer -->|4. Validates & issues signed JWT| Daemon
+    Daemon -->|5. HTTP GET with Bearer JWT| RegistryStorage
+    RegistryStorage -->|6. Validates signature & streams manifest| Daemon
 ```
 
-A local build might produce `orders-api:local`. Before another machine can pull it, the image needs a registry-qualified name:
+The authentication handshake follows a strict HTTP transaction loop:
 
-```bash
-docker image tag orders-api:local ghcr.io/acme/orders-api:git-8f3a91c
-docker push ghcr.io/acme/orders-api:git-8f3a91c
+1. **The Challenge**: The Docker Daemon initiates a pull by sending an HTTP GET request to the registry storage endpoint (e.g., `/v2/org/app/manifests/v1`). Because the image is private, the registry storage service rejects the request, returning an HTTP `401 Unauthorized` response along with a challenge header identifying the auth service domain and scope requirements.
+2. **The Handshake**: The daemon reads the challenge header, formats a new request containing your local authentication credentials (configured via `docker login`), and sends it to the specified Registry Auth Service.
+3. **The Token**: The Auth Service validates your credentials, checks if your account has read or write permissions for the requested image path, compiles a signed JSON Web Token (JWT) containing your access claims (scopes), and returns it to the daemon.
+4. **The Transfer**: The daemon resubmits the original HTTP GET request to the registry storage service, adding the Bearer JWT token to the authorization header. The storage service verifies the token's cryptographic signature, parses the scope claims, and streams the OCI manifest.
+
+This token-based workflow keeps your credentials secure. The local engine only transmits your password once during the token request, using short-lived Bearer tokens to coordinate the high-bandwidth layer downloads.
+
+## Multi-Architecture Manifest Lists
+
+In a modern cloud environment, development laptops and production servers often run on different CPU architectures. A developer might write code on an ARM64 Apple Silicon laptop, while the production Kubernetes cluster runs on AMD64 Intel/AMD server blades.
+
+Because compiled binaries must match the host CPU architecture, running an ARM64 image on an AMD64 server will trigger an immediate execution failure:
+
+```plain
+$ docker run app:local
+exec format error
 ```
 
-After that, a deployment machine can pull the image by tag:
+To solve this multi-architecture compatibility bottleneck, OCI registries support a special metadata wrapper called a Manifest List (or index).
 
-```bash
-docker pull ghcr.io/acme/orders-api:git-8f3a91c
+```mermaid
+flowchart TD
+    subgraph RegistryStore["Registry Storage"]
+        ManifestList["Manifest List (Tag: :v1)<br/>(References arch-specific manifests)"]
+        ManifestAMD64["Manifest AMD64 JSON<br/>(sha256:7a1e...)"]
+        ManifestARM64["Manifest ARM64 JSON<br/>(sha256:9b2c...)"]
+    end
+    subgraph HostSystems["Host Execution Environments"]
+        Laptop["ARM64 Developer Laptop"]
+        ProdServer["AMD64 Production Node"]
+    end
+
+    Laptop -->|1. Pulls v1| ManifestList
+    ManifestList -->|2. Resolves ARM64 manifest| Laptop
+    Laptop -->|3. Downloads ARM64 layers| ManifestARM64
+
+    ProdServer -->|1. Pulls v1| ManifestList
+    ManifestList -->|2. Resolves AMD64 manifest| ProdServer
+    ProdServer -->|3. Downloads AMD64 layers| ManifestAMD64
 ```
 
-For exact deployment records, the resolved digest should be captured. A CI system can build, push, read the digest, and pass that digest to deployment. Then rollback can use the exact artifact instead of hoping a tag still points where it did before.
+A Manifest List is a top-level index file that groups architecture-specific image manifests together under a single tag name. The index JSON contains references to the separate manifest hashes, mapping each one to its target hardware specifications:
 
-## Failure Modes
+```json
+{
+  "schemaVersion": 2,
+  "mediaType": "application/vnd.oci.image.index.v1+json",
+  "manifests": [
+    {
+      "mediaType": "application/vnd.oci.image.manifest.v1+json",
+      "size": 714,
+      "digest": "sha256:7a1e58e283b74f75a1058b6e0c77e4e2cda908ce91244cf0c0df4a819b5f903",
+      "platform": {
+        "architecture": "amd64",
+        "os": "linux"
+      }
+    },
+    {
+      "mediaType": "application/vnd.oci.image.manifest.v1+json",
+      "size": 714,
+      "digest": "sha256:9b2c1f0d91b2c1da908ce91244cf0c0df4a819b5f903a48e7188b0a9477ef290",
+      "platform": {
+        "architecture": "arm64",
+        "os": "linux"
+      }
+    }
+  ]
+}
+```
 
-Image identity failures usually come from relying on a name that is less precise than the situation requires.
+When a host pulls an image tag, the local daemon requests the Manifest List first. It parses the list, matches the host's native OS and CPU architecture against the platform records, and pulls only the corresponding architecture-specific manifest. 
 
-If two machines run different code from the same tag, one machine may have an old local image, or the tag may have moved in the registry. Pulling refreshes the local reference, but only a digest proves exact content.
+This enables developers to build multi-platform images that run identically on their local laptops and public cloud clusters using the exact same tag name.
 
-If staging did not update after a rebuild, the image may have been rebuilt locally but never pushed, pushed under a different tag, or deployed from a cached tag. Local Docker state and registry state are separate.
+## Secure Delivery Workflows
 
-If `latest` caused a surprise, remember that `latest` is only a tag name. It does not mean newest by timestamp, safest, or production-ready. It means "the image currently referenced by the tag named latest."
+To maintain a secure, reviewable delivery pipeline, you must establish strict registry operational habits:
 
-If a rollback fails to recover the old behavior, the rollback may have used a mutable tag that was overwritten. Immutable release tags or digest-based deploy records make rollback a concrete artifact choice.
+* **Lock Down Tags in Production**: Never use mutable tags like `:latest` or `:production` inside deployment configurations. Use content-addressable digests (`org/app@sha256:...`) to ensure absolute immutability.
+* **Integrate Manifest Scanning**: Enable automated vulnerability scanning inside your private registry. Configure the registry to automatically reject push requests for images that carry critical CVEs (Common Vulnerabilities and Exposures).
+* **Sign Images Cryptographically**: Use tools like Cosign to cryptographically sign image manifests during the build pipeline. Configure production hosts to verify these signatures before pulling, ensuring that only verified, signed artifacts can run inside your network.
 
-If a pull works on one machine and fails on another, check the registry host and namespace first. `orders-api:dev` and `ghcr.io/acme/orders-api:dev` are different references. One may be local-only while the other points at a registry.
+By applying these security boundaries, you protect your registries from untrusted layers and ensure that your production deployments remain highly predictable.
 
 ## Putting It All Together
 
-The Docker image story does not end when the build succeeds. The team still needs to name, share, and identify the artifact.
+Distributing container images safely means moving from mutable tags to immutable, content-addressed OCI manifest architectures. By locking down tag structures and understanding registry auth flows, you secure your distribution pipeline.
 
-- An image reference can include registry, namespace, repository, tag, and digest.
-- Tags are human-readable pointers and may move unless policy prevents it.
-- Digests identify exact image content.
-- Registries store manifests and layers so other machines can pull them.
-- Push moves a local image into a registry-qualified repository.
-- Deployments should record the resolved digest when exact reproducibility matters.
+* **Tag Mutation**: Mutable labels like `:latest` introduce silent production drift, which you eliminate by deploying via content-addressable digests.
+* **OCI Manifests**: JSON descriptor files that define an image, linking configuration manifests to an ordered array of read-only compressed layer digests.
+* **Cryptographic Digests**: SHA256 hashes calculated over the manifest JSON that guarantee absolute byte-for-byte immutability across rollout nodes.
+* **JWT Handshakes**: Registries authenticate daemon pulls via a secure challenge-token transaction loop, issuing short-lived signed Bearer tokens for layer downloads.
+* **Manifest Lists**: OCI-compliant indices that group architecture-specific manifests under a single tag, allowing hosts to resolve matching ARM64 vs AMD64 layers dynamically.
+* **Secure pipelines**: Hardening pipelines requires deploying by digests, enabling registry vulnerability scanning, and verifying image signatures before container execution.
 
-The opener's `latest` confusion was an identity problem. Docker ran the images it was asked to run. The team had not been precise enough about which artifact each environment should use.
+Hardening your distribution channels guarantees that the compiled artifact you tested is exactly the binary that runs in production.
 
 ## What's Next
 
-The next Docker topics move from image construction to runtime behavior: networking, storage, Compose, and debugging. Images define the artifact. Containers reveal how that artifact behaves when ports, files, processes, and multiple services interact on a real host.
+Now that we have successfully navigated the entire Docker Foundations and Image compilation stack (Wave 1), we are ready to move into Wave 2, which focuses on container execution parameters and runtime boundaries.
+
+In the next chapter, we will study **Running Containers**. We will explore container entrypoints and commands, examine how environment variable arrays are loaded into process memory, and analyze how to configure Unix signal handling so our processes exit cleanly on host request.
 
 ---
 
 **References**
 
-- [Docker Docs: Build, tag, and publish an image](https://docs.docker.com/get-started/docker-concepts/building-images/build-tag-and-publish-an-image/)
-- [Docker Docs: docker image tag](https://docs.docker.com/reference/cli/docker/image/tag/)
-- [Docker Docs: Docker registries](https://docs.docker.com/get-started/docker-overview/#docker-registries)
-- [Docker Docs: Docker image pull](https://docs.docker.com/reference/cli/docker/image/pull/)
+- [OCI Image Specification](https://github.com/opencontainers/image-spec) - Industry standard specifications defining OCI image manifests, indexes, and layout layers.
+- [Docker Registry token authentication](https://docs.docker.com/registry/spec/auth/token/) - Deep-dive on HTTP challenge handshakes and registry JWT token specifications.
+- [Multi-platform images](https://docs.docker.com/build/building/multi-platform/) - Guide on compiling multi-architecture manifests and using buildkit manifest lists.
+- [Vulnerability scanning in Docker Hub](https://docs.docker.com/docker-hub/vulnerability-scanning/) - Best practices for registry vulnerability scanning and OCI manifest auditing.
+- [docker trust CLI reference](https://docs.docker.com/reference/cli/docker/trust/) - Information on image signing, content trust configurations, and signature verification.

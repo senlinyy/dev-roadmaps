@@ -33,7 +33,7 @@ However, once you are ready to host that application in the cloud for real users
 * A specialized enterprise fraud-detection worker that intercepts network packets via a custom-compiled Linux kernel module (`sec-audit.ko`) to analyze socket buffers in kernel space, and uses a vendor license that expects stable host-level identifiers or dedicated host placement.
 * Nightly email campaigns, financial exports, and database cleanups that only need to run once a day or when a queue message arrives.
 
-Trying to force all of these tasks onto the same virtual server or runtime environment creates massive operational friction. The continuous API process can choke during a heavy background export batch, a crash in the email campaign script can bring down the entire checkout checkout path, and you spend your cloud budget paying for idle servers that do nothing but wait for nightly exports. To deploy software successfully in the cloud, you must step back from the specific tool names and build a systematic mental model around application compute.
+Trying to force all of these tasks onto the same virtual server or runtime environment creates massive operational friction. The continuous API process can choke during a heavy background export batch, a crash in the email campaign script can bring down the entire checkout path, and you spend your cloud budget paying for idle servers that do nothing but wait for nightly exports. To deploy software successfully in the cloud, you must step back from the specific tool names and build a systematic mental model around application compute.
 
 ## What Is Compute
 
@@ -86,7 +86,7 @@ Workload Characterization Matrix:
 * **receipt-job (Event-Driven)**:
   * Port Listener: No.
   * Trigger: An SQS queue message arrives.
-  * Idle State: Shuts down completely, costing zero.
+  * Idle State: No application process stays running between on-demand invocations, so there is no idle compute charge for that waiting time. Provisioned concurrency and supporting resources such as queues, logs, and storage can still create charges.
   * Primary Home: Lambda.
 
 By identifying these shapes first, you ensure that you do not force a short event campaign to run on a permanent, expensive virtual machine, or overload a critical long-running HTTP server with memory-intensive file processing tasks.
@@ -160,8 +160,8 @@ The table below provides a side-by-side architectural blueprint to guide your ho
 
 Selecting between these two compute models is a design decision about matching your workload's system dependencies to your team's engineering capacity:
 
-* **Default to ECS Fargate**: For 95% of standard web applications, REST/GraphQL APIs, queue-processing microservices, and background workers. If your code can run inside a standard Docker container and communicates over standard TCP/UDP ports, Fargate is the superior choice. It eliminates host patching, disk failures, and systemd maintenance, allowing a small team to operate a global service with minimal system administration budget.
-* **Choose Amazon EC2 Only Under Special Constraints**: Select virtual servers exclusively when your workload is physically incompatible with container virtualization. The explicit technical triggers that mandate choosing EC2 are:
+* **Often Start with ECS Fargate**: For many standard web applications, REST/GraphQL APIs, queue-processing microservices, and background workers. If your code can run inside a standard Docker container and communicates over standard TCP/UDP ports, Fargate is usually the simplest starting point because it removes host patching, disk failures, and systemd maintenance from the team's daily work. Amazon ECS Express Mode can simplify this path further by creating a Fargate service, load balancer, TLS, scaling, monitoring, and networking defaults from a small set of inputs.
+* **Choose Amazon EC2 Under Host-Level Constraints**: Select virtual servers when your workload needs host control that managed container services do not provide, or when cost, licensing, networking, or migration constraints make servers the clearer operational shape. The explicit technical triggers that commonly point to EC2 are:
   * **Custom Kernel Drivers**: The application must insert proprietary Linux kernel modules (`.ko` binary drivers via `insmod`) to inspect low-level system call buffers or perform custom packet capture at the network card level.
   * **Node-Locked Software Licensing**: The software vendor enforces a node-locked licensing model tied to stable host attributes, dedicated host placement, or fixed network interfaces that cannot tolerate the ephemeral, rotating nature of container tasks.
   * **Legacy Virtualization**: The workload requires nested virtualization (such as launching guest hypervisors or running Android OS emulators) that serverless container runtimes do not support.
@@ -204,4 +204,6 @@ We now have a clean mental model for choosing where our application code should 
 
 - [Amazon EC2 Overview](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/concepts.html) - Introduction to elastic virtual servers and instance management.
 - [Amazon ECS on AWS Fargate](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/AWS_Fargate.html) - Technical details on running serverless containers without managing EC2 host fleets.
+- [Amazon ECS Express Mode](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/express-service-overview.html) - Explains simplified Fargate-based service creation with managed supporting infrastructure.
 - [AWS Lambda Basics](https://docs.aws.amazon.com/lambda/latest/dg/welcome.html) - Technical documentation on event-driven, serverless execution lifecycles.
+- [Configuring Lambda provisioned concurrency](https://docs.aws.amazon.com/lambda/latest/dg/provisioned-concurrency.html) - Documents provisioned concurrency behavior and its additional billing model.

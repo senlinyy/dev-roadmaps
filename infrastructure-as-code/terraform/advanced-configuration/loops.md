@@ -224,6 +224,8 @@ Use `count` when:
 - You are toggling a resource on or off with a boolean: `count = var.enable_monitoring ? 1 : 0`.
 - The resources will not be added or removed from the middle of the list — you will only ever add to the end or remove from the end.
 
+![count uses numeric indexes that can shift, while for_each uses stable keys that preserve resource identity.](/content-assets/articles/article-iac-terraform-advanced-loops/count-vs-foreach-identity.png)
+
 Use `for_each` when:
 - Resources differ from each other in meaningful ways (different names, settings, or configurations).
 - You need to be able to add or remove individual resources without affecting others.
@@ -234,6 +236,8 @@ In practice, `for_each` is the better default for almost everything except simpl
 ## Dynamic Blocks: Loops Inside Resource Arguments
 
 Sometimes you do not need to create multiple resources — you need to create multiple repeated blocks inside a single resource. AWS security group rules are a classic example: a security group has one `ingress` block per allowed inbound port, and you want to specify those ports as a list without duplicating the block structure.
+
+![Dynamic blocks repeat nested argument blocks inside one resource rather than creating multiple resources.](/content-assets/articles/article-iac-terraform-advanced-loops/dynamic-block-expansion.png)
 
 A `dynamic` block generates repeated blocks inside a resource from a collection:
 
@@ -281,6 +285,9 @@ Together, these tools eliminate most of the configuration repetition that makes 
 ## What's Next
 
 Loops create multiple resources from one definition. The next article covers conditionals in more depth: how to use the ternary expression, `count`-based toggling, and `for_each` filtering to control which resources exist based on input values and environment settings.
+
+
+![Loops summary: use count for simple copies, prefer keyed identity for change, and use dynamic blocks for nested arguments.](/content-assets/articles/article-iac-terraform-advanced-loops/loops-summary.png)
 
 ---
 

@@ -19,10 +19,11 @@ aliases:
 5. [The Rolling Update Deployment Policy](#the-rolling-update-deployment-policy)
 6. [Target Health Checks and Traffic Trust](#target-health-checks-and-traffic-trust)
 7. [Deployment Evidence Checklist](#deployment-evidence-checklist)
-8. [The Mechanics of Rollback](#the-mechanics-of-rollback)
-9. [Operational Deployment Tradeoffs](#operational-deployment-tradeoffs)
-10. [Putting It All Together](#putting-it-all-together)
-11. [What's Next](#whats-next)
+8. [Connection Draining and SIGTERM Mechanics](#connection-draining-and-sigterm-mechanics)
+9. [The Mechanics of Rollback](#the-mechanics-of-rollback)
+10. [Operational Deployment Tradeoffs](#operational-deployment-tradeoffs)
+11. [Putting It All Together](#putting-it-all-together)
+12. [What's Next](#whats-next)
 
 ## The Outage of the Hard Stop
 
@@ -30,11 +31,11 @@ When developing applications locally, releasing a new code version is simple. Yo
 
 If you attempt this brute-force restart in a production environment serving active customer traffic, you will trigger an immediate operational outage. The moment the old container process is terminated, thousands of active TCP connections are severed. Users checking out will see raw gateway timeout pages, network reset errors, and failed database transactions. Even worse, if the new image fails to boot due to a missing environment configuration, your entire service remains completely offline.
 
-To release software in production safely, you must coordinate a zero-downtime rolling deployment. This process slowly provisions fresh container tasks, verifies their application health, shifts user traffic to the new instances, and only terminates the old containers when the new version is fully trusted.
+To release software in production safely, you must coordinate a controlled rolling deployment. This process slowly provisions fresh container tasks, verifies their application health, shifts user traffic to the new instances, and only terminates the old containers after the load balancer has stopped sending new work. A careful deployment can avoid customer-visible interruption, but that outcome depends on capacity headroom, health checks, deregistration delay, and graceful application shutdown.
 
 ## The ECS Service Controller
 
-In an Amazon ECS cluster, the zero-downtime rolling update is managed by the ECS Service Controller. The service controller is a persistent software loop cabled directly to an Application Load Balancer.
+In an Amazon ECS cluster, the rolling update is managed by the ECS Service Controller. The service controller is a persistent software loop cabled directly to an Application Load Balancer.
 
 For our application, `devpolaris-orders-api`, the service definition declares the desired state:
 
@@ -118,25 +119,16 @@ When the ECS service is updated to use a new Task Definition revision, the rolli
 * **Minimum Healthy Percent**: The minimum number of healthy tasks that must remain active and serving traffic during the deployment, relative to the desired count.
 * **Maximum Percent**: The upper boundary on the number of concurrent tasks allowed to run during the deployment.
 
-Let us visualize a rolling update execution matrix where the desired count is `4`, the `minimumHealthyPercent` is `100%`, and the `maximumPercent` is `200%`:
+Let us visualize a rolling update where the desired count is `4`, the `minimumHealthyPercent` is `100%`, and the `maximumPercent` is `200%`:
 
-```text
-Desired Count: 4  |  Min Healthy: 4 (100%)  |  Max Count: 8 (200%)
+| Step | What ECS Tries to Do | Active Task Shape |
+| :--- | :--- | :--- |
+| **1** | Start up to 4 new revision-43 tasks while keeping the 4 old tasks. | Old1, Old2, Old3, Old4 plus New1, New2, New3, New4. |
+| **2** | Wait for the ALB target group to mark new tasks healthy before old tasks are removed. | Old and new tasks may share load while health stabilizes. |
+| **3** | Deregister old task targets after replacement capacity is healthy. | ALB stops sending new requests to old tasks. |
+| **4** | Wait through deregistration delay, then stop old tasks. | New1, New2, New3, New4 remain as the active fleet. |
 
-Step 1: Start 4 new tasks (Revision 43) in parallel.
-  Active Tasks: [Old1, Old2, Old3, Old4] + [New1, New2, New3, New4] (Total: 8)
-
-Step 2: Wait for ALB Target Group to mark all 4 new tasks healthy.
-  Traffic: [Old1, Old2, Old3, Old4] and [New1, New2, New3, New4] share load.
-
-Step 3: ALB deregisters Old tasks. Connection draining window begins.
-  Traffic: ALB routes all new requests exclusively to [New1, New2, New3, New4].
-
-Step 4: Deregistration delay completes. Old tasks receive SIGTERM.
-  Active Tasks: [New1, New2, New3, New4] (Total: 4) - Deployment Complete.
-```
-
-By enforcing `minimumHealthyPercent=100%`, the service controller guarantees that active checkout capacity never drops below the desired baseline. If the new task definition fails to boot, the old tasks continue to serve traffic, preventing service outages.
+With `minimumHealthyPercent=100%`, the service controller tries to keep healthy capacity at the desired baseline during deployment. This is a deployment policy, not an absolute uptime promise. If the cluster lacks spare capacity, the application fails health checks, or dependencies collapse, the controller can still stall or fail the rollout. If the new task definition fails to boot, the old tasks generally continue serving traffic while ECS reports deployment events and, when configured, the circuit breaker can roll the service back.
 
 ![ECS rolling deployment infographic showing old tasks, new tasks, overlap capacity, health checks, traffic shift, connection drain, and rollback target](/content-assets/articles/article-cloud-providers-aws-deployment-runtime-operations-deploying-and-updating-an-ecs-service/rolling-deployment-overlap.png)
 
@@ -213,7 +205,7 @@ This output provides critical diagnostic evidence:
 * `rolloutState`: Tracks the progress of the primary deployment revision.
 * `events`: Chronological system events revealing exactly why the deployment stalled, such as container health check failures.
 
-## Under-the-Hood: Connection Draining and SIGTERM Mechanics
+## Connection Draining and SIGTERM Mechanics
 
 When the Application Load Balancer deregisters an old container task during a rolling update, it does not sever active connections. Instead, it enters a connection draining window, officially called deregistration delay.
 
@@ -252,7 +244,7 @@ Deployment Strategy Tradeoffs:
 | Strategic Choice | Operational Advantage | Operational Risk |
 | :--- | :--- | :--- |
 | **Fast Rolling Update** | Shorter release window, rapid code shipping. | Less time to observe and capture slow-forming memory leaks. |
-| **Conservative Overlap** | High availability, zero connection loss. | Requires cluster memory headroom and database connection capacity. |
+| **Conservative Overlap** | Higher availability and lower interruption risk. | Requires cluster memory headroom and database connection capacity. |
 | **Deployment Circuit Breaker** | Automated failure recovery, no manual paging. | Only detects immediate boot failures; misses logic bugs. |
 | **Strict Target Health Checks** | Prevents bad tasks from receiving traffic. | Can trigger cascading restart loops if checks are fragile. |
 
@@ -262,14 +254,14 @@ Operating a resilient deployment pipeline requires mastering orchestrator update
 
 * **Always Deploy Revisions**: ECS services deploy Task Definition revisions; never attempt to deploy container images directly.
 * **Anchor to SHA256 Digests**: Use immutable image digests inside task definitions to completely prevent tag drift.
-* **Enforce Safe Capacity Boundaries**: Set `minimumHealthyPercent` to 100% in production to protect customer throughput during updates.
+* **Enforce Safe Capacity Boundaries**: Set `minimumHealthyPercent` and `maximumPercent` deliberately so deployments have enough overlap without exhausting cluster or database capacity.
 * **Align Grace Periods**: Match ECS health check grace periods and target group thresholds to your application's actual startup times to prevent termination loops.
 * **Design Elegant Shutdowns**: Intercept `SIGTERM` in your code to drain connection pools and close sockets cleanly.
 * **Enforce Automated Circuit Breakers**: Enable the deployment circuit breaker to automate rollbacks when new tasks fail to boot.
 
 ## What's Next
 
-We have covered the mechanics of zero-downtime rolling updates, target health checking, and rollback pathways. However, a container cannot boot successfully without environment configurations and credentials. In the next article, we will go deep into configurations and secrets, delivering variables securely to tasks, using Secrets Manager references, and evaluating task execution roles vs. task application roles.
+We have covered the mechanics of rolling updates, target health checking, graceful shutdown, and rollback pathways. However, a container cannot boot successfully without environment configurations and credentials. In the next article, we will go deep into configurations and secrets, delivering variables securely to tasks, using Secrets Manager references, and evaluating task execution roles vs. task application roles.
 
 ![ECS deployment checklist covering image digest, task revision, minimum healthy capacity, health checks, connection drain, and circuit breaker](/content-assets/articles/article-cloud-providers-aws-deployment-runtime-operations-deploying-and-updating-an-ecs-service/ecs-deployment-checklist.png)
 
@@ -280,6 +272,7 @@ We have covered the mechanics of zero-downtime rolling updates, target health ch
 **References**
 
 * [Amazon ECS Services](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/ecs_services.html) - AWS developer guide to compute controllers and load balancer targets.
+* [Rolling update deployment type](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/deployment-type-ecs.html) - Documents minimum healthy percent, maximum percent, deployment circuit breaker, and rollback behavior.
 * [Amazon ECS Task Definitions](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task_definitions.html) - Documentation on versioning container parameters and resource boundaries.
 * [Task Definition Parameters](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task_definition_parameters.html) - Technical reference for image, port, role, log, and memory parameters.
-* [Amazon ECS Application Auto Scaling](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/service-auto-scaling.html) - Guide to configuring horizontal scale limits.
+* [Register targets with your Application Load Balancer target group](https://docs.aws.amazon.com/elasticloadbalancing/latest/application/target-group-register-targets.html) - Explains deregistration delay and connection draining behavior.

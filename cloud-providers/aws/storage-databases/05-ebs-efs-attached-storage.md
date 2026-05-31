@@ -42,7 +42,7 @@ While S3, RDS, and DynamoDB provide regional data endpoints cabled to external n
 
 To support these workloads, AWS offers two primary attached storage shapes. Amazon Elastic Block Store (EBS) provides raw, unformatted virtual disk volumes that attach to EC2 instances inside one Availability Zone and appear to the operating system like local block devices. EBS is network-attached under the hood, but the instance sees it as a disk, making it a strong fit for boot drives, databases, and low-latency block I/O.
 
-Amazon Elastic File System (EFS), conversely, provides a serverless network directory tree cabled to the standard Network File System (NFS) protocol. Unlike EBS block drives, an EFS directory can be mounted simultaneously by hundreds of virtual machines and container tasks across multiple Availability Zones, coordinating concurrent file reads and writes in real-time. Using attached storage allows you to deploy legacy applications, high-performance local search indexes, and collaborative document pipelines in the cloud without modifying their source code. The cloud volumes mount directly into the directory tree, providing the exact path-based interface (`/mnt/app/data`) that traditional operating system kernels expect.
+Amazon Elastic File System (EFS), conversely, provides a serverless network directory tree cabled to the standard Network File System (NFS) protocol. A Regional EFS filesystem can be mounted simultaneously by hundreds of virtual machines and container tasks across multiple Availability Zones, coordinating concurrent file reads and writes in real time. EFS One Zone keeps the filesystem in one Availability Zone for lower cost when the workload does not need Multi-AZ resilience. Using attached storage allows you to deploy legacy applications, high-performance local search indexes, and collaborative document pipelines in the cloud without modifying their source code. The cloud volumes mount directly into the directory tree, providing the exact path-based interface (`/mnt/app/data`) that traditional operating system kernels expect.
 
 ## Dedicated Virtual Disks vs. Shared Folders
 
@@ -135,9 +135,10 @@ To improve database and file consistency beyond a basic crash-consistent snapsho
 
 When your cloud application scales horizontally across multiple Availability Zones, standalone EBS volumes cannot solve shared data needs. If multiple container tasks running on separate hosts must read and write to the same file path simultaneously, such as a content management system catalog or a shared incoming vendor directory, you must deploy **Amazon Elastic File System (EFS)**.
 
-Amazon EFS provides a fully managed, elastic, and serverless network filesystem cabled to the AWS regional network. Unlike EBS, EFS is fundamentally regional:
+Amazon EFS provides a fully managed, elastic, and serverless network filesystem cabled to your VPC. Unlike EBS, EFS can be either Regional or One Zone:
 
-* **Multi-AZ Access**: EFS is not bound to a single Availability Zone, allowing a single filesystem to be mounted simultaneously by hundreds of virtual machines, container tasks, and serverless functions across your entire Region.
+* **Regional Multi-AZ Access**: Regional EFS file systems store data across multiple Availability Zones, allowing a single filesystem to be mounted simultaneously by hundreds of virtual machines, container tasks, and serverless functions across your entire Region.
+* **One Zone Cost Boundary**: EFS One Zone stores data inside one Availability Zone and supports a single mount target in that zone. It can be a useful lower-cost choice for reproducible or non-critical shared files, but it is not a Multi-AZ resilience design.
 * **Elastic Scaling**: You do not provision disk size in advance; the filesystem grows and shrinks automatically as your application adds or deletes files, ensuring you only pay for active storage.
 * **Standard Folder Semantics**: Supports standard file folder operations, including directory locking, file appends, and user permissions, making it fully compatible with traditional legacy applications.
 
@@ -147,15 +148,15 @@ EFS charges a premium for storage compared to EBS and S3. Therefore, you should 
 
 Because Amazon EFS is a regional network service reached over your VPC, mounting it to your compute hosts requires careful network and security group engineering.
 
-To make EFS accessible inside your private network, you must create a Mount Target in each private application subnet. The mount target acts as a private network interface (ENI) assigned a static private IP address within that subnet. Compute hosts resolve the EFS filesystem ID to the private IP of their local Availability Zone's mount target, keeping network latency as low as possible.
+To make EFS accessible inside your private network, you create mount targets. For Regional file systems, create one mount target in each Availability Zone where compute will mount the filesystem. If an Availability Zone has multiple subnets, EFS allows only one mount target for that filesystem in that Availability Zone, and instances in other subnets in the same zone can use it. For One Zone file systems, create the single mount target in the same Availability Zone as the filesystem. The mount target acts as a private network interface (ENI) assigned a private IP address within that subnet. Compute hosts resolve the EFS filesystem ID to the private IP of their local Availability Zone's mount target when one exists, keeping network latency and cross-AZ transfer costs lower.
 
 Finally, you secure the connection using security group permissions. EFS communicates over TCP port 2049. To authorize access, you must configure a dedicated security group for your EFS mount targets (`sg-efs`) that allows inbound port 2049 traffic exclusively from your compute workload's security group (`sg-compute`).
 
 ```bash
-$ sudo mount -t nfs4 -o nfsvers=4.1,rsize=1048576,wsize=1048576,hard,timeo=600,retrans=2,noresvport fs-12345678.efs.us-east-1.amazonaws.com:/ /var/lib/shared-data
+$ sudo mount -t efs -o tls fs-12345678:/ /var/lib/shared-data
 ```
 
-The mount command above connects the regional EFS endpoint `fs-12345678` over NFSv4.1 to the local folder `/var/lib/shared-data`. The optimized buffers (`rsize/wsize`) ensure maximum network throughput, while the `hard` flag tells the host kernel to retry connection requests indefinitely if a transient zone outage occurs, protecting application writes from failing silently.
+The mount command above uses the Amazon EFS mount helper from `amazon-efs-utils` and requests TLS in transit. The mount helper hides much of the raw NFS option complexity, monitors TLS mounts, and can be used from `/etc/fstab` for boot-time mounts. Raw NFSv4.1 mounting still exists, but for most Linux hosts the EFS mount helper is the beginner-friendly and security-friendly default.
 
 ```mermaid
 flowchart TD
@@ -205,6 +206,8 @@ We have now established secure homes for all object, relational, key-value, and 
 
 - [Amazon EBS volumes](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/EBSVolumes.html) - Details block-level virtual volumes, single-zone attachment rules, and SSD performance characteristics.
 - [Amazon EFS features](https://docs.aws.amazon.com/efs/latest/ug/whatisefs.html) - Explains EFS elastic filesystems, NFSv4 protocol support, and multi-client regional mounting.
+- [Availability and durability of EFS file systems](https://docs.aws.amazon.com/efs/latest/ug/features.html) - Explains Regional and One Zone EFS file system types.
 - [Formatting and mounting EBS volumes](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ebs-using-volumes.html) - Outlines command sequences, filesystem types, and /etc/fstab persistence setups.
 - [Creating EBS snapshots](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ebs-creating-snapshot.html) - Details crash-consistent backup procedures and OS memory flushing.
 - [EFS mount target management](https://docs.aws.amazon.com/efs/latest/ug/accessing-fs.html) - Focuses on subnet groups, port 2049 security whitelists, and private network interfaces.
+- [Mounting EFS file systems using the EFS mount helper](https://docs.aws.amazon.com/efs/latest/ug/efs-mount-helper.html) - Documents `amazon-efs-utils`, TLS mounts, and boot-time mount support.

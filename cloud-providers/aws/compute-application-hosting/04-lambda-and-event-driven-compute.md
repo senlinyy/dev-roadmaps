@@ -1,7 +1,7 @@
 ---
 title: "Lambda"
 description: "Decide when an AWS Lambda function is a better runtime than a long-running service, and understand the event, handler, invocation, trigger, timeout, memory, and retry choices that shape it."
-overview: "Some compute jobs do not need a process waiting all day for traffic. This article explains Lambda as event-shaped compute for bounded work, not as serverless magic."
+overview: "Some compute jobs do not need a process waiting all day for traffic. This article explains Lambda as event-shaped compute for bounded work, with clear retry, timeout, and concurrency boundaries."
 tags: ["lambda", "events", "serverless", "aws"]
 order: 4
 id: article-cloud-providers-aws-compute-application-hosting-lambda-event-driven-compute
@@ -105,7 +105,7 @@ flowchart TD
     Handler -- Failure --> Return[Messages return to queue visibility]
 ```
 
-Understanding your invocation model is critical. If your function is invoked asynchronously and fails, the caller cannot see the error. You must configure Dead Letter Queues (DLQs) or Lambda Destinations to capture failed events for inspection, and ship all handler errors to CloudWatch Logs to make the failure visible.
+Understanding your invocation model is critical. If your function is invoked asynchronously and fails, the caller cannot see the error. You must configure Dead Letter Queues (DLQs) or Lambda Destinations to capture failed events for inspection, and ship all handler errors to CloudWatch Logs to make the failure visible. For SQS batches, the default behavior is also easy to misunderstand: if one record fails and your function throws, Lambda treats the whole batch as failed and successful messages can be retried. To return only the failed records, enable `ReportBatchItemFailures` on the event source mapping and return a `batchItemFailures` list from the handler.
 
 ## Tuning Timeout and Memory
 
@@ -202,72 +202,143 @@ Here is a clean Node.js handler template for our receipt email function. The cod
 
 ```javascript
 import { SESClient, SendEmailCommand } from "@aws-sdk/client-ses";
-import { DynamoDBClient, PutItemCommand, UpdateItemCommand } from "@aws-sdk/client-dynamodb";
+import {
+  DynamoDBClient,
+  GetItemCommand,
+  PutItemCommand,
+  UpdateItemCommand
+} from "@aws-sdk/client-dynamodb";
 
 const ses = new SESClient();
 const db = new DynamoDBClient();
 
 export const handler = async (event, context) => {
   const processed = [];
+  const batchItemFailures = [];
 
   for (const record of event.Records ?? []) {
-    const message = JSON.parse(record.body);
-
-    if (!message.orderId || !message.email || !message.total) {
-      throw new Error(`Invalid message contract: ${record.messageId}`);
-    }
-
-    const idempotencyKey = `receipt:${message.orderId}`;
+    let idempotencyKey;
+    let claimed = false;
 
     try {
-      await db.send(new PutItemCommand({
-        TableName: "ProcessedReceipts",
-        Item: {
-          Id: { S: idempotencyKey },
-          Status: { S: "PROCESSING" },
-          FirstSeenAt: { N: Date.now().toString() }
-        },
-        ConditionExpression: "attribute_not_exists(Id)"
+      const message = JSON.parse(record.body);
+
+      if (!message.orderId || !message.email || !message.total) {
+        throw new Error(`Invalid message contract: ${record.messageId}`);
+      }
+
+      idempotencyKey = `receipt:${message.orderId}`;
+      const now = Date.now();
+      const processingExpiresAt = now + 10 * 60 * 1000;
+
+      try {
+        await db.send(new PutItemCommand({
+          TableName: "ProcessedReceipts",
+          Item: {
+            Id: { S: idempotencyKey },
+            Status: { S: "PROCESSING" },
+            FirstSeenAt: { N: now.toString() },
+            ProcessingExpiresAt: { N: processingExpiresAt.toString() }
+          },
+          ConditionExpression: "attribute_not_exists(Id)"
+        }));
+        claimed = true;
+      } catch (error) {
+        if (error.name !== "ConditionalCheckFailedException") {
+          throw error;
+        }
+
+        const existing = await db.send(new GetItemCommand({
+          TableName: "ProcessedReceipts",
+          Key: { Id: { S: idempotencyKey } },
+          ConsistentRead: true
+        }));
+
+        const status = existing.Item?.Status?.S;
+        const expiresAt = Number(existing.Item?.ProcessingExpiresAt?.N ?? "0");
+
+        if (status === "SENT") {
+          console.info("Duplicate receipt request skipped", {
+            orderId: message.orderId,
+            messageId: record.messageId,
+            requestId: context.awsRequestId
+          });
+          continue;
+        }
+
+        if (status === "PROCESSING" && expiresAt > now) {
+          throw new Error(`Receipt is already being processed: ${message.orderId}`);
+        }
+
+        await db.send(new UpdateItemCommand({
+          TableName: "ProcessedReceipts",
+          Key: { Id: { S: idempotencyKey } },
+          UpdateExpression: "SET #status = :processing, ProcessingExpiresAt = :expiresAt, LastAttemptAt = :now",
+          ConditionExpression: "#status = :failed OR ProcessingExpiresAt < :now",
+          ExpressionAttributeNames: {
+            "#status": "Status"
+          },
+          ExpressionAttributeValues: {
+            ":processing": { S: "PROCESSING" },
+            ":failed": { S: "FAILED" },
+            ":expiresAt": { N: processingExpiresAt.toString() },
+            ":now": { N: now.toString() }
+          }
+        }));
+        claimed = true;
+      }
+
+      await ses.send(new SendEmailCommand({
+        Source: "orders@company.com",
+        Destination: { ToAddresses: [message.email] },
+        Message: {
+          Subject: { Data: `Your Receipt for Order ${message.orderId}` },
+          Body: { Text: { Data: `Thank you for your purchase of $${message.total}.` } }
+        }
       }));
+
+      await db.send(new UpdateItemCommand({
+        TableName: "ProcessedReceipts",
+        Key: { Id: { S: idempotencyKey } },
+        UpdateExpression: "SET #status = :status, ProcessedAt = :processedAt REMOVE ProcessingExpiresAt",
+        ExpressionAttributeNames: {
+          "#status": "Status"
+        },
+        ExpressionAttributeValues: {
+          ":status": { S: "SENT" },
+          ":processedAt": { N: Date.now().toString() }
+        }
+      }));
+
+      processed.push(message.orderId);
     } catch (error) {
-      if (error.name === "ConditionalCheckFailedException") {
-        console.info("Duplicate receipt request skipped", {
-          orderId: message.orderId,
-          messageId: record.messageId,
-          requestId: context.awsRequestId
-        });
-        continue;
+      if (claimed && idempotencyKey) {
+        await db.send(new UpdateItemCommand({
+          TableName: "ProcessedReceipts",
+          Key: { Id: { S: idempotencyKey } },
+          UpdateExpression: "SET #status = :status, LastError = :error, FailedAt = :failedAt",
+          ExpressionAttributeNames: {
+            "#status": "Status"
+          },
+          ExpressionAttributeValues: {
+            ":status": { S: "FAILED" },
+            ":error": { S: error.message },
+            ":failedAt": { N: Date.now().toString() }
+          }
+        }));
       }
 
-      throw error;
+      console.error("Receipt message failed", {
+        messageId: record.messageId,
+        requestId: context.awsRequestId,
+        error: error.message
+      });
+
+      batchItemFailures.push({ itemIdentifier: record.messageId });
     }
-
-    await ses.send(new SendEmailCommand({
-      Source: "orders@company.com",
-      Destination: { ToAddresses: [message.email] },
-      Message: {
-        Subject: { Data: `Your Receipt for Order ${message.orderId}` },
-        Body: { Text: { Data: `Thank you for your purchase of $${message.total}.` } }
-      }
-    }));
-
-    await db.send(new UpdateItemCommand({
-      TableName: "ProcessedReceipts",
-      Key: { Id: { S: idempotencyKey } },
-      UpdateExpression: "SET #status = :status, ProcessedAt = :processedAt",
-      ExpressionAttributeNames: {
-        "#status": "Status"
-      },
-      ExpressionAttributeValues: {
-        ":status": { S: "SENT" },
-        ":processedAt": { N: Date.now().toString() }
-      }
-    }));
-
-    processed.push(message.orderId);
   }
 
-  return { processed };
+  return { processed, batchItemFailures };
 };
 ```
 
@@ -275,7 +346,8 @@ This handler cleanly implements all serverless design rules:
 
 * **Reuses SDK Clients**: SES and DynamoDB clients are declared globally outside the handler, leveraging warm starts.
 * **Strict Schema Verification**: Validates the nested SQS JSON contract at boot.
-* **Enforces Idempotency**: Claims the receipt key in DynamoDB with a conditional write before sending the email.
+* **Enforces Idempotency**: Claims the receipt key in DynamoDB with a conditional write before sending the email, treats completed records as duplicates, and lets stale or failed records retry instead of leaving a permanent `PROCESSING` lock.
+* **Reports Partial Batch Failures**: Returns failed SQS message IDs so Lambda can delete successful messages and retry only the records that failed, provided the event source mapping has `ReportBatchItemFailures` enabled.
 * **Correlates Metadata**: Logs using both business identifiers (`orderId`) and invocation metadata (`requestId`).
 
 ## Putting It All Together
@@ -304,4 +376,6 @@ We have established runtime shapes for continuous servers, serverless containers
 
 - [AWS Lambda Developer Guide](https://docs.aws.amazon.com/lambda/latest/dg/welcome.html) - Technical details on configuring and operating serverless functions.
 - [AWS Lambda Event Source Mappings](https://docs.aws.amazon.com/lambda/latest/dg/invocation-eventsourcemapping.html) - Technical overview of polling-based triggers for queues and streams.
+- [Using Lambda with Amazon SQS](https://docs.aws.amazon.com/lambda/latest/dg/with-sqs.html) - Explains SQS event source behavior and partial batch response recommendations.
+- [Handling errors for an SQS event source in Lambda](https://docs.aws.amazon.com/lambda/latest/dg/services-sqs-errorhandling.html) - Documents retry behavior, backoff, and `ReportBatchItemFailures`.
 - [Database connection management with RDS Proxy](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/rds-proxy.html) - Guide on pooling database connections for serverless compute scales.
