@@ -27,7 +27,7 @@ aliases:
 
 ## Workload Isolation at the Packet Level
 
-Our VPC network topology establishes isolated public entry points, private application workloads, and protected database subnets. The cabled route tables determine where packets *could* travel inside our system. However, topology alone does not dictate whether those packets are actually *permitted* to pass.
+Our VPC network topology establishes isolated public entry points, private application workloads, and protected database subnets. Route tables determine where packets *could* travel inside our system. However, topology alone does not dictate whether those packets are actually *permitted* to pass.
 
 When you develop an application on your laptop's localhost, you trust that because PostgreSQL is bound strictly to `127.0.0.1`, only code running on your local machine can connect to it. 
 
@@ -38,6 +38,8 @@ To protect our system, we need double-layered packet gates that enforce a zero-t
 AWS provides two built-in packet-filtering layers for this job:
 * **Security Groups** protect resources at the network interface level, evaluating workload-to-workload relationships.
 * **Network Access Control Lists (NACLs)** protect subnets at the boundary level, enforcing broad perimeter guardrails.
+
+The technical anchor is packet filtering at two different scopes. Security Groups are stateful allow lists attached to network interfaces, while NACLs are stateless ordered rule lists attached to subnets.
 
 ```mermaid
 flowchart TD
@@ -58,7 +60,7 @@ If both layers are active, a packet must successfully pass through both the subn
 
 ![Packet filter layer infographic showing a packet crossing a subnet NACL, workload ENI security group, stateful return traffic, stateless rules, and ephemeral ports](/content-assets/articles/article-cloud-providers-aws-networking-connectivity-security-groups-vs-nacls/packet-filter-layers.png)
 
-*Think of packet filtering as two gates in series. The subnet NACL checks boundary rules without remembering connections, while the workload security group stays attached to the resource and remembers allowed return traffic.*
+*Read packet filtering as two rule scopes in series. The subnet NACL checks boundary rules without remembering connections, while the workload security group stays attached to the resource and remembers allowed return traffic.*
 
 ## Mapping Your Application's Network Conversations
 
@@ -77,6 +79,8 @@ The application servers do not need to accept connections from arbitrary develop
 ## Security Groups: Stateful Resource-Level Firewalls
 
 A Security Group acts as a virtual firewall attached directly to your resource's Elastic Network Interface (ENI). For virtual servers, serverless containers running on ECS Fargate, database instances, and load balancers, the Security Group is the primary line of defense.
+
+At its core, a Security Group is a stateful allow list for an ENI. It answers which other sources may start traffic to this interface and which destinations this interface may start traffic toward.
 
 Security Groups possess five foundational characteristics that govern their behavior:
 
@@ -123,6 +127,8 @@ As your API tasks scale from two copies to ten, AWS dynamically monitors their E
 
 A Network Access Control List (NACL) is an optional layer of security that acts as a packet filter at your subnet boundaries. Any packet entering or leaving a subnet must traverse the associated NACL. Every subnet in your VPC must be associated with exactly one NACL at a time, although a single NACL can protect multiple subnets.
 
+A NACL functions as an ordered stateless rule table for a subnet. It evaluates each packet independently and stops at the first matching allow or deny rule.
+
 NACLs differ from Security Groups in three fundamental ways:
 
 * **Stateless Operation**: NACLs are completely stateless. They do not remember connections. If you allow an inbound request to enter a subnet, you must explicitly write an outbound rule allowing the response to exit.
@@ -166,6 +172,8 @@ Because managing ephemeral return ranges across dozens of microservices is opera
 
 When a network connection fails, you must determine whether packets are reaching your workload interfaces and whether AWS packet filters are accepting or rejecting the flow. VPC Flow Logs capture detailed metadata for many IP flows traversing monitored VPC network interfaces.
 
+VPC Flow Logs behave like packet metadata records for monitored VPC interfaces. They do not capture payloads, but they show whether network traffic reached an interface and whether the flow was accepted or rejected.
+
 VPC Flow Logs do not perform deep packet inspection. They do not record HTTP headers, SQL query texts, TLS certificates, or application payloads. They also do not capture every possible VPC traffic type, so use them as strong packet metadata evidence rather than as a complete packet recorder.
 
 Instead, they record flow metadata, including source and destination IP addresses, ports, protocol, packet counts, and the decisive action taken on the flow.
@@ -206,7 +214,7 @@ Securing your VPC is a matter of choosing the correct tool for each specific pac
   * **Rationale**: Captures traffic metadata and accept/reject decisions for security compliance and debugging.
 * **Diagnosing App Logic Errors (HTTP 500)**:
   * **Layer**: Application logs and system metrics.
-  * **Rationale**: The network successfully cabled and permitted the packets; the application simply returned a bad response.
+  * **Rationale**: The network path existed and permitted the packets; the application simply returned a bad response.
 
 Use Security Groups as your primary, highly granular firewall to govern workload relationships, and apply NACLs sparingly as a secondary, coarse-grained perimeter guardrail.
 
@@ -216,9 +224,9 @@ Revisiting our original orders application deployment, our VPC topology gave our
 
 * Customer -> Public Load Balancer -> Private API Task -> Private Database.
 
-Applying packet filters turns this possible path into a tightly controlled, secure highway:
+Applying packet filters turns this possible path into a tightly controlled network flow:
 
-* **The Load Balancer Security Group**: Allows HTTPS traffic on port 443 from any public client (`0.0.0.0/0`), serving as the secure front door.
+* **The Load Balancer Security Group**: Allows HTTPS traffic on port 443 from any public client (`0.0.0.0/0`), serving as the public ingress filter.
 * **The Application Security Group**: Allows traffic on port 3000 strictly from the load balancer's Security Group, ensuring no one can bypass the entry point.
 * **The Database Security Group**: Allows database traffic on port 5432 strictly from the application's Security Group, completely isolating your data store from other VPC workloads.
 * **Broad Subnet NACLs**: Protect the boundaries of your subnets, blocking known malicious IP blocks using low-numbered ordered deny rules.
@@ -228,7 +236,7 @@ By separating routing from packet permissions, AWS networking transforms from a 
 
 ## What's Next
 
-We have now designed a secure private network topology and locked down its traffic lanes using precise packet filters. However, as your cloud platform grows, your VPC cannot remain an isolated island.
+We have now designed a secure private network topology and locked down its packet paths using precise filters. However, as your cloud platform grows, your VPC cannot remain the only private network boundary.
 
 Your workloads will eventually need to reach external regional AWS APIs, share databases with sibling VPCs in other accounts, or connect directly to legacy mainframes in your physical offices.
 

@@ -38,7 +38,9 @@ The useful idea is role separation. The person who manages load balancers and ce
 
 ## The Main Gateway API Objects
 
-Gateway API introduces several resource types. You do not need all of them on day one. For HTTP routing, the first three are enough: `GatewayClass`, `Gateway`, and `HTTPRoute`.
+Gateway API splits routing into separate Kubernetes objects for implementation, listener ownership, and application routes. You do not need all of them on day one. For HTTP routing, the first three are enough: `GatewayClass`, `Gateway`, and `HTTPRoute`.
+
+Example: a platform team can own a `Gateway` for `api.devpolaris.local`, while the orders team owns an `HTTPRoute` that maps `/orders` to the orders Service.
 
 | Object | Usually owned by | What it answers |
 |--------|------------------|-----------------|
@@ -50,7 +52,9 @@ A Gateway API implementation must be installed in the cluster. The API objects d
 
 ## A Platform-Owned Gateway
 
-Imagine the platform team owns a shared external Gateway for DevPolaris APIs. It listens for HTTPS traffic on `api.devpolaris.local` and allows routes from selected namespaces.
+A Gateway is the listener and attachment object for traffic entering the cluster. It defines hostnames, ports, TLS settings, and which namespaces may attach routes.
+
+Example: imagine the platform team owns a shared external Gateway for DevPolaris APIs. It listens for HTTPS traffic on `api.devpolaris.local` and allows routes from selected namespaces.
 
 ```yaml
 apiVersion: gateway.networking.k8s.io/v1
@@ -81,7 +85,9 @@ This object is mostly about the edge: class, listener, hostname, port, TLS, and 
 
 ## An Application-Owned HTTPRoute
 
-The `orders` team can own the route from `/orders` to the internal Service. The route attaches to the shared Gateway through `parentRefs`.
+An HTTPRoute is the application-owned rule that matches HTTP requests and sends them to backend Services. It attaches to a Gateway through `parentRefs`.
+
+Example: the `orders` team can own the route from `/orders` to the internal `devpolaris-orders-api` Service without owning the public listener or certificate.
 
 ```yaml
 apiVersion: gateway.networking.k8s.io/v1
@@ -110,7 +116,9 @@ This is the part the application team changes during normal API routing work. It
 
 ## Status Conditions Are the First Debug Tool
 
-Gateway API resources report status conditions. Conditions are structured fields that explain whether a route was accepted, attached, programmed, or rejected. Read them before guessing.
+Gateway API status conditions are structured status records on Gateway resources. They explain whether a route was accepted, attached, programmed, or rejected.
+
+Example: `Accepted=False` with reason `NotAllowedByListeners` means the route reached the right Gateway, but the listener rules did not allow that namespace or route to attach. Read conditions before guessing.
 
 ```bash
 $ kubectl -n orders get httproute devpolaris-orders-api -o yaml
@@ -133,7 +141,7 @@ status:
 
 ## Failure Mode: Route Not Allowed
 
-A common failure is a route that references the right Gateway but is not allowed to attach. That can happen when `allowedRoutes` only permits selected namespaces and the application namespace is missing the label.
+A route is not allowed when the Gateway sees the route but refuses the attachment. The listener is reachable, but its `allowedRoutes` rules do not permit that namespace or route shape. One common cause is a Gateway that only permits selected namespaces while the application namespace is missing the required label.
 
 ```bash
 $ kubectl -n orders get httproute devpolaris-orders-api -o yaml
@@ -186,7 +194,7 @@ During an incident, keep those layers separate. A certificate error belongs near
 
 ## Production Review Questions
 
-A production review should connect the YAML to the request path. Ask who can call the workload, which component owns the public address, and how a failed health check will be noticed. For `devpolaris-orders-api`, the answer should name the caller, the Service, and the routing layer rather than saying only "Kubernetes handles it."
+A production Gateway API review should connect each owner to the part of the route they control. Ask which GatewayClass implementation is accepted, which Gateway listener owns the hostname and TLS settings, which HTTPRoute attaches to it, and which Service receives traffic. For `devpolaris-orders-api`, the answer should name both the platform-owned Gateway and the application-owned HTTPRoute rather than saying only "Kubernetes handles it."
 
 ```text
 Request path review:

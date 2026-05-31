@@ -22,6 +22,8 @@ id: article-infrastructure-as-code-ansible-workflow
 
 ## The Operations Pipeline Workflow
 
+An Ansible workflow is the safe run order from inventory selection to connection proof, dry-run evidence, controlled apply, and recap review.
+
 An Ansible workflow is a structured sequence of checks and commands that you execute to safely apply configuration changes to your server infrastructure. Instead of running a playbook immediately against your entire fleet of machines, a disciplined workflow validates your host targets, tests remote access channels, dry-runs task updates, and verifies system stability in layers. This gradual process isolates failures early and prevents simple configuration typos from affecting all your active production environments.
 
 To see why a structured workflow is essential, consider our concrete scenario. You are tasked with deploying an application software update across a dual-node web application cluster. You need to update an environment configuration file, install a new security utility package, and restart the backend services.
@@ -139,7 +141,9 @@ You must keep in mind that check mode has structural limitations. While standard
 
 ## Under the Hood: SSH Multiplexing and Sockets
 
-To appreciate the speed and efficiency of a professional Ansible workflow, it helps to understand the underlying networking protocols used by the control node. By default, running a playbook containing ten tasks against five hosts requires Ansible to execute fifty separate commands on the remote systems.
+SSH multiplexing is connection reuse for SSH. Instead of opening a brand-new encrypted login session for every task, the SSH client keeps one authenticated connection open and lets later task commands reuse it through a local socket file.
+
+Example: a playbook with ten tasks against five hosts might need fifty remote command executions. With multiplexing, each host can reuse its existing SSH session for later tasks, so Ansible spends less time repeating handshakes and more time running module payloads.
 
 Opening a new SSH connection for every single task introduces substantial latency. A standard SSH handshake requires multiple network round trips to negotiate cryptographic algorithms, exchange host keys, and verify user credentials. In high-latency cloud networks or multi-region environments, this handshake sequence can take anywhere from 200ms to 800ms. If repeated fifty times across ten tasks and five hosts, network handshakes alone can add several minutes to a simple playbook run.
 
@@ -183,7 +187,7 @@ This socket reuse reduces the per-task execution latency to a few milliseconds, 
 
 Even with verified connections and successful dry runs, running a new playbook on your entire production fleet at once is risky. If a subtle runtime error occurs, you can take down all nodes simultaneously.
 
-A professional workflow minimizes this risk by limiting the initial playbook run to a single host (using the `--limit` CLI argument). This host acts as a live canary.
+A professional workflow minimizes this risk by limiting the initial playbook run to a single host (using the `--limit` CLI argument). This host is the live canary target.
 
 ```bash
 ansible-playbook -i inventory/hosts.yml playbooks/deploy.yml --limit app-node-01

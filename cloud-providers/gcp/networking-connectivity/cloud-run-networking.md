@@ -21,21 +21,21 @@ aliases:
 
 ## Cloud Run Ingress and Egress
 
-When you use serverless platforms like Google Cloud Run, your containerized application runs on physical servers managed entirely by Google. You do not have to configure virtual machines, set up operating systems, or manage scaling limits. However, removing server management does not eliminate the need for network planning. To operate a secure serverless service, you must treat your container's networking like designing the doors of a highly secure building. You must configure two completely separate paths: the inbound "front door" (how users and other services reach your container) and the outbound "back door" (where your container goes to fetch data or call external APIs).
+Cloud Run networking has two separate decisions: ingress controls which paths may invoke the service, and egress controls where outbound packets from the service are routed. Removing server management does not remove network planning; it moves the decision from VM interfaces to service-level ingress settings, IAM checks, and VPC egress configuration.
 
 ![Ingress controls who can reach the service. Egress controls where the service sends outbound traffic.](/content-assets/articles/article-cloud-providers-gcp-networking-connectivity-cloud-run-networking-private-egress/ingress-egress-map.png)
 
 *Read the two sides separately when debugging access.*
 
-The inbound path is called ingress. It determines who is allowed to walk through your front door. For example, you can choose to make your container's public URL accessible to anyone on the public street (internet), or lock it down so only visitors arriving from inside your private VPC network (or guided through your global load balancer) are permitted to enter.
+The inbound path is called ingress. It determines which network paths may invoke the service. For example, you can make the generated service URL reachable from the public internet, or restrict invocation so only internal paths or traffic routed through your global load balancer are accepted.
 
-The outbound path is called egress. It dictates where your container can go when it opens its back door to send a network request. For example, when your application code needs to save data, it can make requests out to the public internet (default internet egress), or route privately through a secure tunnel directly to your internal database subnet (VPC egress) completely separated from the public street.
+The outbound path is called egress. It dictates where packets go when your application opens an HTTP request or TCP socket. For example, when your application code needs to save data, it can use default internet egress for public endpoints or route private address traffic through your VPC to reach internal database paths.
 
-By separating ingress from egress, you protect your system from common security holes. You can ensure that a backend processing container can access private internal databases securely through its back door, while keeping its front door completely locked and invisible to any unsolicited public internet requests.
+By separating ingress from egress, you avoid mixing caller access with dependency access. A backend processing service can call private internal databases through VPC egress while rejecting direct public invocation on the raw service URL.
 
 ## Inbound Ingress Settings and Path Protection
 
-When you deploy a Cloud Run service, the platform assigns it a default public URL (e.g. `https://orders-api-123.a.run.app`). To prevent clients from bypassing your public entry points (like load balancers or API gateways), you must configure **Ingress Settings**:
+Ingress settings are the service-level network gate for accepted invocation paths. When you deploy a Cloud Run service, the platform assigns it a default public URL (e.g. `https://orders-api-123.a.run.app`). To prevent clients from bypassing your public entry points (like load balancers or API gateways), you must configure **Ingress Settings**:
 
 *   **All (Public)**: The default setting. The service is reachable directly from the public internet using the generated platform URL or any custom domain mapping.
 *   **Internal**: The service is only reachable from resources within the same VPC network (via VPC connectors or Direct VPC egress) or other serverless services.
@@ -69,7 +69,7 @@ This is separate from IAM authentication. A service can have public ingress but 
 
 ## Outbound Egress Modes
 
-Outbound egress controls where your container sends packets. When your code makes an HTTP request or establishes a TCP socket, Cloud Run routes the packets based on your configured egress path:
+Outbound egress is the routing choice for packets leaving a Cloud Run instance. When your code makes an HTTP request or establishes a TCP socket, Cloud Run routes the packets based on your configured egress path:
 
 *   **Default Internet Egress**: Outbound packets leave the container over Google's public shared routing fabric, assigning a dynamic public IP address to the connection. This works for calling external API endpoints but cannot reach private resources inside a VPC.
 *   **VPC Egress**: Routes outbound packets through a dedicated subnet interface inside your VPC network.
@@ -108,7 +108,7 @@ When your application initiates a socket connection to a private database, Cloud
 
 ## The IMDS Workload Token Exchange
 
-Securing serverless database and API connections requires you to avoid hardcoding static credentials inside container configurations. Cloud Run solves this by letting the service run as a service account and by exposing metadata access that Google client libraries can use to obtain short-lived credentials.
+The IMDS workload token exchange is the local metadata path that lets a Cloud Run service obtain short-lived credentials for its attached service account. Securing serverless database and API connections requires you to avoid hardcoding static credentials inside container configurations. Cloud Run solves this by letting the service run as a service account and by exposing metadata access that Google client libraries can use to obtain short-lived credentials.
 
 ![Private network paths and metadata identity checks work together before managed services trust a request.](/content-assets/articles/article-cloud-providers-gcp-networking-connectivity-cloud-run-networking-private-egress/private-egress-token.png)
 

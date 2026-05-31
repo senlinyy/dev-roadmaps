@@ -22,6 +22,8 @@ aliases:
 
 ## Logical Boundaries and App Jobs
 
+A GCP project is the main workspace boundary where Google Cloud groups resources, APIs, identities, quotas, billing links, and audit logs for one workload or environment. That project boundary is the anchor for the rest of the GCP mental model.
+
 When you build and run an application on your own laptop, everything is simple because all your code, database files, and network settings share the exact same physical machine. Your database connects directly to a local address, your files are saved to your local hard drive, and nobody else can access your running application unless you explicitly let them. However, when you move your application to the cloud, you are deploying your code to a massive, shared network of physical datacenters cabled across the globe. To keep your application safe, organized, and running efficiently in this shared environment, you need a way to rebuild those secure local boundaries.
 
 ![Local code, data, access, bills, and logs become project-scoped cloud responsibilities.](/content-assets/articles/article-cloud-providers-gcp-foundations-gcp-mental-model/project-boundary-map.png)
@@ -34,7 +36,7 @@ Instead of treating compute servers, databases, and billing as separate entities
 
 ## The Project-Centric Control Plane
 
-A Google Cloud project is the absolute logical workspace for all infrastructure resources. Within a project, you deploy virtual machines, launch managed databases, create storage buckets, write secrets, and attach workload identities. The project serves as the fundamental boundary for identity and access management permissions, API configuration, usage quotas, and administrative logging.
+A Google Cloud project functions as the absolute logical workspace for infrastructure resources. Within a project, you deploy virtual machines, launch managed databases, create storage buckets, write secrets, and attach workload identities. The project serves as the fundamental boundary for identity and access management permissions, API configuration, usage quotas, and administrative logging.
 
 Unlike Azure, where resources can span multiple subscriptions or belong to separate, nested resource groups within a subscription, a GCP resource must belong to exactly one project. This strict containment simplifies ownership and cleanup. If a development team no longer needs an experimental system, deleting the project automatically cascades down to destroy every virtual machine, database instance, and network route housed within it, preventing orphaned resources from silently running up charges.
 
@@ -52,7 +54,7 @@ Although this table provides a useful bridge, do not treat these equivalents as 
 
 ## API Enablement and Service Gates
 
-The most significant operational gotcha for developers new to Google Cloud is the concept of API enablement. In most cloud environments, once you have administrative permissions, you can often create any resource the cloud provider offers. In GCP, many managed services must first be enabled for the specific project. Before a user, service account, or deployment tool can create a Cloud Run service, Cloud SQL instance, Secret Manager secret, or other managed resource, the matching service API must be active in that project.
+API enablement is the project-level service registry that decides which Google APIs may receive create, update, and delete requests in that project. In most cloud environments, once you have administrative permissions, you can often create any resource the cloud provider offers. In GCP, many managed services must first be enabled for the specific project. Before a user, service account, or deployment tool can create a Cloud Run service, Cloud SQL instance, Secret Manager secret, or other managed resource, the matching service API must be active in that project.
 
 ![A create call must pass the project service registry before it reaches the regional service.](/content-assets/articles/article-cloud-providers-gcp-foundations-gcp-mental-model/api-enable-gate.png)
 
@@ -73,7 +75,7 @@ API enablement serves as a critical security gate. By keeping unnecessary APIs d
 
 ## Logical to Physical Resources
 
-Resources are the physical or logical objects that Google Cloud manages on your behalf. These include serverless containers, relational database engines, object storage buckets, and cryptographic secrets. To operate safely, you must understand that GCP resources carry distinct geographical scopes that dictate their physical distribution, latency characteristics, and failure domains:
+Resources are the managed objects that Google Cloud creates, names, secures, and operates on your behalf. These include serverless containers, relational database engines, object storage buckets, and cryptographic secrets. To operate safely, you must understand that GCP resources carry distinct geographical scopes that dictate their physical distribution, latency characteristics, and failure domains:
 
 *   **Zonal Resources**: These run within a single physical datacenter building inside a region. If that building experiences a power grid failure, the resource becomes unavailable. Individual virtual machine instances and persistent disks are zonal resources.
 *   **Regional Resources**: These belong to a single region and are designed around that region's zones. The exact availability and replication behavior depends on the product and configuration. A Cloud Run service is regional, while a Cloud SQL instance needs a regional high availability configuration before you should describe it as replicated across zones.
@@ -87,7 +89,7 @@ By using explicit resource paths instead of loose human-chosen names, you elimin
 
 ## Decoupled Billing Architecture
 
-A critical architectural distinction in GCP is the decoupling of resource management from billing liability. In AWS, billing is bound directly to the AWS account itself. In GCP, project management and financial management are treated as two entirely separate logical layers.
+GCP billing is a separate financial control layer linked to projects, not the same object as the project itself. In AWS, billing is bound directly to the AWS account itself. In GCP, project management and financial management are treated as two separate logical layers.
 
 A Cloud Billing account defines who pays for cloud usage. It is configured with a payment method, corporate billing details, and tax agreements. A project, on the other hand, is purely a container for resources and APIs. For a project to run any paid services, it must be explicitly linked to an active Cloud Billing account.
 

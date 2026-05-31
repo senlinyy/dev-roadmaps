@@ -39,9 +39,11 @@ Trying to force all of these tasks onto the same virtual server or runtime envir
 
 Compute is the generic term for the physical hardware and virtual operating environments that execute your application code. In plain English, compute is the combination of virtual CPU, memory (RAM), storage, networking interfaces, and process supervisors that actually runs your software.
 
+At a high level, AWS compute services are managed runtime contracts. Each service gives your code CPU, memory, network access, startup behavior, and scaling behavior, but each one draws the responsibility line between AWS and your team in a different place.
+
 On your laptop, the compute layer is your machine. In AWS, you do not buy physical computer racks; instead, you rent slices of CPU and memory programmatically via APIs. AWS divides these compute slices into distinct service families, each offering a different operational contract. To choose the right home for your code, you must evaluate three core styles of compute:
 
-* **Virtual Servers (Amazon EC2)**: Virtual machines that you configure, patch, and manage directly. It behaves exactly like renting a private Linux server in a remote data center.
+* **Virtual Servers (Amazon EC2)**: Virtual machines that you configure, patch, and manage directly. EC2 behaves like renting a private guest operating system on remote AWS hardware.
 * **Managed Container Services (Amazon ECS with AWS Fargate)**: A container orchestrator that runs your packaged Docker images directly as a service, without making your team manage or patch the underlying virtual machines.
 * **Serverless Functions (AWS Lambda)**: Event-driven compute that executes isolated blocks of code only when triggered by an incoming event, shutting down completely when the work is finished.
 
@@ -64,6 +66,8 @@ By mapping your application's distinct functions to these three runtime profiles
 ## The Workload Shape
 
 Before comparing specific AWS service features, you must describe the work your code performs in plain English. This is the practice of identifying the workload shape:
+
+A workload shape is the execution pattern your code naturally needs: always listening, host-dependent, or triggered by bounded events. Naming that pattern first prevents you from choosing a service only because its product page sounds familiar.
 
 * **Service-Shaped (Continuous)**: Workloads that must listen on a network port constantly to answer incoming public traffic. They require steady-state compute replicas, load balancer target registrations, active health checks, and rolling deploy rollouts. The primary Node checkout API is a service-shaped workload.
 * **Host-Shaped (Server-Dependent)**: Workloads that depend directly on the guest operating system, privileged host agents, kernel modules, or stable host-level licensing assumptions. These workloads do not fit serverless container engines like Fargate, where AWS owns the host boundary, blocks privileged host access, and gives each replacement task fresh runtime placement and networking. The specialized fraud-detection worker is a classic host-shaped workload.
@@ -95,6 +99,8 @@ By identifying these shapes first, you ensure that you do not force a short even
 
 Every compute choice is an operational trade-off. The key to choosing the right service is evaluating your team's ownership budget: the amount of administrative work, security patching, process monitoring, and capacity scaling your engineers are prepared to carry.
 
+The ownership budget functions like the operational cost line for the runtime. It names which tasks your team must still perform after AWS provisions the service.
+
 As you move from virtual servers to serverless functions, the physical infrastructure tasks are shifted onto AWS, but you gain new design rules that you must enforce in your application architecture.
 
 Compute Ownership Trade-offs:
@@ -119,6 +125,8 @@ For such teams, defaulting to ECS with Fargate for continuous containers and AWS
 ## EC2 vs. ECS Fargate
 
 When you deploy a long-running, continuous workload on AWS, the core architectural decision centers on whether to host your application directly on Amazon EC2 virtual servers or utilize Amazon ECS on AWS Fargate. While both services provide elastic, cloud-based compute, they operate under fundamentally different infrastructure contracts and engineering lifecycles.
+
+The clean anchor is interface control. EC2 gives you a full guest operating system interface, while ECS Fargate gives you a container execution interface and keeps the host layer managed by AWS.
 
 To select the correct home, you must evaluate how their operational footprints compare across five core dimensions:
 

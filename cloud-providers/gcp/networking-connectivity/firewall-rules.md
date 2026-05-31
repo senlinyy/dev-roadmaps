@@ -22,9 +22,9 @@ aliases:
 
 ## VPC Firewall Rules
 
-Once you have established your private VPC network, you need a way to control which network packets are allowed to travel across your subnets. In a physical office building, you might place a security guard at the front lobby desk to check visitor IDs before letting them in. In a virtual cloud network, Google Cloud does not route your VM traffic through a single, central firewall server. VPC firewall rules are applied to VM network interfaces, which means unauthorized traffic can be blocked at the boundary of the target instance.
+GCP VPC firewall rules are conditional packet policies attached to a VPC network and enforced for the VM interfaces they target. They decide whether traffic is allowed or denied based on direction, priority, protocol, ports, source or destination ranges, and target instances.
 
-In Google Cloud, these security gates are managed by writing firewall rules. Unlike other cloud environments like Amazon Web Services (AWS)—which split firewall tasks into stateful, allow-only Security Groups for individual virtual machines, and stateless, ordered Network ACLs (NACLs) at the subnet boundary—Google Cloud combines these behaviors into a single, unified firewall system. Every rule you write is stateful, can either explicitly allow or block traffic, and is evaluated in a strict priority order right at the virtual interface of your resource.
+In Google Cloud, these network controls are managed by writing firewall rules. Unlike other cloud environments like Amazon Web Services (AWS), which split firewall tasks into stateful, allow-only Security Groups for individual virtual machines and stateless, ordered Network ACLs (NACLs) at the subnet boundary, Google Cloud combines these behaviors into a single firewall system. Every rule you write is stateful, can either explicitly allow or block traffic, and is evaluated in a strict priority order at the virtual interface of your resource.
 
 At its core, a firewall rule is a conditional security statement linked to your VPC network. It inspects a packet and looks for a match based on the direction of travel, the action, the protocol, the destination ports, the source or destination ranges, and the targeted instances. If a packet matches these criteria, the rule's instruction is executed. The implied posture is deny ingress and allow egress, but the default VPC network also comes with pre-populated allow rules for internal traffic, SSH, RDP, and ICMP. Custom VPC networks make the implicit rules easier to reason about because you add the opening rules deliberately.
 
@@ -46,7 +46,7 @@ This is why a blocked port scan does not need an application-level deny rule. Th
 
 ## Stateful Connection Tracking
 
-GCP firewall rules are stateful. This means that when a rule allows a connection in one direction, such as ingress to port 443, Google Cloud tracks the connection state and permits return traffic in the opposite direction without requiring a matching outbound rule.
+Stateful connection tracking means a permitted connection creates temporary return-path state. When a rule allows a connection in one direction, such as ingress to port 443, Google Cloud tracks the connection state and permits return traffic in the opposite direction without requiring a matching outbound rule.
 
 ![GCP records an allowed connection so return traffic can flow without a mirrored rule.](/content-assets/articles/article-cloud-providers-gcp-networking-connectivity-vpcs-subnets-routes-firewall-rules/stateful-firewall-path.png)
 
@@ -58,7 +58,7 @@ As long as the connection remains active, return packets matching this connectio
 
 ## Ingress and Egress Paths
 
-GCP separates firewall rules by traffic direction, allowing you to build highly targeted security perimeters:
+Ingress and egress describe packet direction relative to the targeted VM interface. GCP separates firewall rules by traffic direction, allowing you to build highly targeted security perimeters:
 
 *   **Ingress Rules**: Control incoming traffic routed toward target resources inside your VPC. Every ingress rule must specify a source (such as an IP range, a network tag, or a service account identity) and target resources.
 *   **Egress Rules**: Control outgoing traffic initiated by your resources. Every egress rule must specify target resources and a destination (such as an external IP range or another subnet).
@@ -72,7 +72,7 @@ This default posture secures your resources from unsolicited incoming scans whil
 
 ## Rule Priority Matching Engine
 
-When traffic targets a VM network interface, Google Cloud evaluates all matching rules using a priority matching engine.
+The rule priority engine is the ordered evaluation model that decides which matching firewall rule wins. When traffic targets a VM network interface, Google Cloud evaluates all matching rules using this priority matching engine.
 
 ![Firewall evaluation stops at the highest priority rule that matches direction, target, and traffic.](/content-assets/articles/article-cloud-providers-gcp-networking-connectivity-vpcs-subnets-routes-firewall-rules/priority-match-engine.png)
 
@@ -96,7 +96,7 @@ This explicit priority band structure maps closely to AWS Network ACLs and Azure
 
 ## Target Segmentation: Tags vs. Service Accounts
 
-GCP allows you to target firewall rules to specific VM instances using two different metadata systems: network tags and service accounts.
+Target segmentation is how you decide which VM interfaces a firewall rule applies to. GCP allows you to target firewall rules to specific VM instances using two different metadata systems: network tags and service accounts.
 
 **Network Tags** are simple text strings, such as `web-server` or `database-tier`, added directly to a VM instance. They are simple to understand and configure, but they carry significant security risks in production environments. Any user with Compute Instance Admin permissions can add or remove tags on a VM, which dynamically alters that VM's firewall boundaries without passing through an IAM security policy review.
 

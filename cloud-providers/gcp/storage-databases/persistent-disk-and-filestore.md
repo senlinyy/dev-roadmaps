@@ -23,23 +23,25 @@ aliases:
 
 ## Virtual Hardware and OS Path Access
 
-When you build and run applications in the cloud, you often interface with storage using web APIs or database drivers. For example, your code might fetch a document from Firestore or upload a PDF receipt to a Cloud Storage bucket using an HTTP request. However, there are many scenarios where your application code cannot use an API. Many compiled binaries, high-performance databases (like PostgreSQL or MySQL), and legacy software applications are designed to read and write files directly from the local operating system's filesystem. They expect to open, write, and close files inside traditional folders (such as `/var/data` or `/mnt/assets`) using standard filesystem calls. Attempting to rewrite this software to use web APIs would require massive, high-risk code changes, and wrapping low-level disk operations in web requests would introduce severe network latency penalties.
+Persistent Disk and Filestore are GCP storage services for workloads that need operating-system storage paths instead of database drivers or object APIs. Persistent Disk presents block storage to a VM or supported workload, while Filestore presents a managed shared filesystem over NFS.
+
+When you build and run applications in the cloud, you often interface with storage using web APIs or database drivers. For example, your code might fetch a document from Firestore or upload a PDF receipt to a Cloud Storage bucket using an HTTP request. However, there are many scenarios where your application code cannot use an API. Many compiled binaries, high-performance databases like PostgreSQL or MySQL, and legacy software applications are designed to read and write files directly from the local operating system's filesystem. They expect to open, write, and close files inside traditional paths such as `/var/data` or `/mnt/assets` using standard filesystem calls. Attempting to rewrite this software to use web APIs would require large, high-risk code changes, and wrapping low-level disk operations in web requests would introduce severe network latency penalties.
 
 ![Persistent Disk looks like a block device to one VM. Filestore exposes a shared filesystem over the network.](/content-assets/articles/article-cloud-providers-gcp-storage-databases-persistent-disk-filestore/block-vs-file-boundary.png)
 
 *Choose by whether the workload needs device blocks or shared files.*
 
-To accommodate these workloads, cloud platforms provide storage that behaves exactly like physical computer hardware. There are two primary types of hardware-style storage. The first is an attached block device, which acts like a virtual local hard drive that you plug directly into a single virtual server. It is dedicated, extremely fast, and completely controlled by that one server's operating system. The second is a shared network filesystem, which acts like a shared office folder mounted over a local network. This allows multiple distinct servers to plug into the same folder at the same time, coordinating their files concurrently.
+To accommodate these workloads, cloud platforms provide storage through familiar operating-system interfaces. The first interface is an attached block device, which behaves like a virtual disk presented to one server's operating system. It is dedicated, fast, and controlled by that server's filesystem. The second interface is a shared network filesystem, which exposes one mounted directory tree to multiple clients over NFS so separate servers can coordinate file access.
 
 Google Cloud offers both storage styles. For dedicated, high-performance virtual hard drives, you use Google Cloud Persistent Disk. For shared network folders that multiple servers can access simultaneously, you use Google Cloud Filestore. This managed division of labor mirrors equivalent services in other cloud environments. In Amazon Web Services (AWS), Persistent Disks are equivalent to Amazon Elastic Block Store (EBS) volumes, and Filestore shares are equivalent to Amazon Elastic File System (EFS). In Microsoft Azure, the equivalents are Azure Managed Disks and Azure Files. While the physical infrastructure differs, they all serve a common purpose: providing the standard filesystem paths, directory structures, and file locking behaviors that operating systems and legacy binaries expect to see.
 
 ## Hands-On Playbook: Provisioning, Formatting, and Mounting Storage Tiers
 
-To see these virtual hardware mechanics in action, consider a hands-on systems engineering playbook: we must configure a background video rendering worker VM (`worker-vm-1`) in `us-central1-a`. The worker requires a high-performance 100GB Persistent SSD to act as a fast, local block-level cache for scratch frames. Additionally, it must mount a 1TB shared Filestore volume at `/mnt/media-shared` to read incoming raw videos and write completed assets.
+A provisioning playbook is the operational sequence that turns cloud storage resources into visible Linux devices and mount points. To see these virtual hardware mechanics in action, consider a hands-on systems engineering playbook: we must configure a background video rendering worker VM (`worker-vm-1`) in `us-central1-a`. The worker requires a high-performance 100GB Persistent SSD to act as a fast, local block-level cache for scratch frames. Additionally, it must mount a 1TB shared Filestore volume at `/mnt/media-shared` to read incoming raw videos and write completed assets.
 
 ### Creating and Attaching the Block Device
 
-First, we create a 100GB SSD-backed Persistent Disk in the zone of our VM, and then attach it to the VM using the `gcloud` CLI:
+Creating and attaching a block device means provisioning the Persistent Disk resource, then presenting it to the VM's guest operating system. First, we create a 100GB SSD-backed Persistent Disk in the zone of our VM, and then attach it to the VM using the `gcloud` CLI:
 
 ```bash
 # 1. Create a 100GB SSD Persistent Disk
@@ -59,7 +61,7 @@ Running this updates the instance attachment configuration. The guest operating 
 
 ### Formatting and Mounting the Ext4 Filesystem
 
-We SSH into the guest operating system of `worker-vm-1` to initialize the virtual disk controller. The guest kernel detects the hot-plugged hardware under `/dev/disk/by-id/google-worker-scratch`. We format this device with an optimized `ext4` filesystem, mount the disk enabling SSD TRIM support to prevent cell wear latency, and persist the mount UUID to `/etc/fstab` to guarantee it survives VM restarts:
+Formatting and mounting converts an attached block device into a filesystem path the application can use. We SSH into the guest operating system of `worker-vm-1` to initialize the virtual disk controller. The guest kernel detects the hot-plugged hardware under `/dev/disk/by-id/google-worker-scratch`. We format this device with an optimized `ext4` filesystem, mount the disk enabling SSD TRIM support to prevent cell wear latency, and persist the mount UUID to `/etc/fstab` to guarantee it survives VM restarts:
 
 ```bash
 # 1. Verify the emulated hardware path exists
@@ -82,7 +84,7 @@ The disk is now available inside the guest OS as a mounted filesystem path.
 
 ### Mounting the Shared NFS Volume
 
-Next, we establish cooperative multi-writer fileshares using Google Cloud Filestore. We install standard Network File System (NFS) client packages, mount the managed regional NFS v4 volume (located at IP `10.128.0.22` with shared mount path `/media_pool`), and update the static mount tables inside our fstab:
+Mounting Filestore means connecting the VM to a managed NFS export and exposing it as a local directory. We install standard Network File System (NFS) client packages, mount the managed regional NFS v4 volume located at IP `10.128.0.22` with shared mount path `/media_pool`, and update the static mount tables inside our fstab:
 
 ```bash
 # 1. Install NFS client support
@@ -102,7 +104,7 @@ This establishes network-mounted shared directory trees, allowing our applicatio
 
 ### Verifying the Mounted Storage Layout
 
-To verify our active mount structure and storage tier boundaries inside the guest, we run the standard `df` filesystem utility:
+Mount verification confirms which filesystem paths map to which storage backends. To verify our active mount structure and storage tier boundaries inside the guest, we run the standard `df` filesystem utility:
 
 ```bash
 df -h | grep -E 'worker-scratch|media-shared'
@@ -119,7 +121,7 @@ The background worker is now fully configured: frame caches are written locally 
 
 ## Persistent Disk Block Storage Mechanism
 
-Google Cloud Persistent Disk is a fully managed block storage service that presents virtual block devices to Compute Engine virtual machines and supported Google Kubernetes Engine workloads. Unlike traditional local storage attached directly to a physical host, Persistent Disks are decoupled from the VM lifecycle. This means the disk can outlive the VM, can be snapshotted, and can be detached or attached within documented product limits.
+Persistent Disk is managed block storage that appears to the operating system as a disk device. Google Cloud Persistent Disk presents virtual block devices to Compute Engine virtual machines and supported Google Kubernetes Engine workloads. Unlike local storage attached directly to a physical host, Persistent Disks are decoupled from the VM lifecycle. This means the disk can outlive the VM, can be snapshotted, and can be detached or attached within documented product limits.
 
 The narrative spine of high-performance index building highlights the strength of this architecture: an indexing worker on Compute Engine can mount a zonal or regional Persistent Disk formatted with standard Linux filesystems, such as ext4 or XFS, for continuous write-heavy work. When choosing between zonal and regional configurations, systems architects must evaluate their failure-domain tolerance. A zonal Persistent Disk is tied to one zone. A Regional Persistent Disk synchronously replicates data between two zones in the same region, which can help with recovery from zonal failure when the application and failover process are designed for it.
 
@@ -127,7 +129,7 @@ This dual-zone replication mechanism provides a useful contrast to equivalent of
 
 ## Filestore Shared Filesystem Architecture
 
-For workloads that require simultaneous file-level access across multiple compute instances, Google Cloud Filestore provides a fully managed Network File System (NFS) shared storage solution. While Persistent Disks are designed to be mounted by a single virtual machine under standard read-write conditions, Filestore addresses the cooperative demands of distributed application servers that must access, modify, and append files in a unified directory tree. By provisioning a Filestore instance, administrators expose a centralized mount point that can be attached to dozens of client machines simultaneously, facilitating seamless multi-writer file sharing.
+Filestore is managed NFS storage for workloads that need a shared directory tree across multiple clients. While Persistent Disks are designed to be mounted by a single virtual machine under standard read-write conditions, Filestore addresses the cooperative demands of distributed application servers that must access, modify, and append files in a unified directory tree. By provisioning a Filestore instance, administrators expose a centralized mount point that can be attached to multiple client machines, supporting multi-writer file sharing within the documented performance and locking behavior.
 
 Consider a distributed ingestion pipeline where multiple regional worker nodes must process incoming vendor data files, extract raw text, and write indexed chunks to a shared staging area. Using supported NFS protocols, each worker mounts the Filestore share at a local directory path, such as `/mnt/shared-index-assets`. Client processes can execute standard file operations like directory scanning and coordinated file writes. If the application depends on file locking, use mount options and protocol behavior that preserve locking rather than disabling it.
 
@@ -135,7 +137,7 @@ This shared file storage paradigm maps directly to equivalent file services in o
 
 ## Designing Persistent Disk Snapshots and Consistency
 
-Protecting block-level storage states requires an understanding of the difference between raw disk snapshotting and application-level data consistency. A Persistent Disk snapshot captures the exact state of the block storage device at a specific point in time, copying changed blocks incrementally to Google Cloud Storage for durable retention. However, because a running operating system heavily caches file writes in volatile RAM page caches, taking a snapshot of an active, un-quiesced disk can result in a crash-consistent state. If a restore is performed from such a snapshot, the database or indexing engine must go through the same recovery sequence as if it had suffered a sudden power loss, which risks file corruption or incomplete transactions.
+A Persistent Disk snapshot is a point-in-time copy of block-device state, not proof that the application had flushed every logical write. Protecting block-level storage states requires an understanding of the difference between raw disk snapshotting and application-level data consistency. A Persistent Disk snapshot captures the state of the block storage device at a specific point in time, copying changed blocks incrementally to Google Cloud Storage for durable retention. However, because a running operating system heavily caches file writes in volatile RAM page caches, taking a snapshot of an active, un-quiesced disk can result in a crash-consistent state. If a restore is performed from such a snapshot, the database or indexing engine must go through the same recovery sequence as if it had suffered a sudden power loss, which risks file corruption or incomplete transactions.
 
 ![A useful snapshot starts after the filesystem and application have flushed pending writes.](/content-assets/articles/article-cloud-providers-gcp-storage-databases-persistent-disk-filestore/snapshot-consistency.png)
 
@@ -145,7 +147,7 @@ To achieve clean, application-consistent backups, systems engineers must coordin
 
 ### Staging and Processing Directory Protocol
 
-To maintain strict data consistency and avoid race conditions when multiple workers access a shared Filestore directory, workloads should adopt a clear, step-based staging directory convention:
+A staging directory protocol is a file naming and movement convention that lets multiple workers coordinate shared filesystem work safely. To maintain strict data consistency and avoid race conditions when multiple workers access a shared Filestore directory, workloads should adopt a clear, step-based staging directory convention:
 
 - **Incoming Path (`/mnt/incoming`)**: Owned by the upload ingestion process, housing new raw source data awaiting indexing.
 - **Processing Path (`/mnt/processing`)**: Owned by individual indexing workers that have actively claimed and locked specific files.
@@ -162,7 +164,7 @@ To maintain strict data consistency and avoid race conditions when multiple work
 
 ## The System Architecture Blueprint
 
-The following physical-to-logical topology demonstrates the separation between underlying network-attached storage infrastructure and the host-level directory mounts exposed to application software.
+The system architecture blueprint maps the managed storage resources to the disk devices, mount points, and application paths that code actually uses. The following physical-to-logical topology demonstrates the separation between underlying network-attached storage infrastructure and the host-level directory mounts exposed to application software.
 
 ```mermaid
 graph TD

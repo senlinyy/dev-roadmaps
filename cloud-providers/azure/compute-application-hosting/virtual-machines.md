@@ -17,15 +17,33 @@ aliases:
 3. [VM Size](#vm-size)
 4. [Disks](#disks)
 5. [Network Interface](#network-interface)
-6. [Startup](#startup)
-7. [Process Management](#process-management)
-8. [Patching And Logs](#patching-and-logs)
-9. [Putting It All Together](#putting-it-all-together)
-10. [What's Next](#whats-next)
+6. [Virtual Machine Scale Sets: Scaling the Fleet](#virtual-machine-scale-sets-scaling-the-fleet)
+7. [Virtual Machine Extensions: Automated Management](#virtual-machine-extensions-automated-management)
+8. [Startup](#startup)
+9. [Process Management](#process-management)
+10. [Patching And Logs](#patching-and-logs)
+11. [Putting It All Together](#putting-it-all-together)
+12. [What's Next](#whats-next)
 
 ## What Is A Virtual Machine
 
-An Azure Virtual Machine (VM) is a cloud-based guest operating system instance executed by a physical hypervisor using software-defined virtualized hardware allocations. Azure manages the physical datacenter facilities, server blade hardware, hypervisor scheduling, and cooling infrastructure. Your team, however, retains full administrative control and operational ownership over everything inside the guest operating system boundary.
+An Azure Virtual Machine (VM) is Azure's server-shaped compute option: you get a full guest operating system, persistent disks, a network interface, and administrative control inside the OS. Under that familiar server contract, the guest operating system instance is executed by a physical hypervisor using software-defined virtualized hardware allocations. Azure manages the physical datacenter facilities, server blade hardware, hypervisor scheduling, and cooling infrastructure. Your team, however, retains full administrative control and operational ownership over everything inside the guest operating system boundary.
+
+To deploy a Virtual Machine, you declare its size, OS image, network placement, and credential parameters. The following command launches a standard database node inside a dedicated network subnet:
+
+```plain
+az vm create \
+  --resource-group rg-database-prod \
+  --name vm-db-prod \
+  --image Ubuntu2204 \
+  --size Standard_D2s_v5 \
+  --vnet-name vnet-prod \
+  --subnet snet-db \
+  --admin-username dbadmin \
+  --ssh-key-values @id_rsa.pub
+```
+
+Executing this command tells the Azure ARM controller to register a virtual machine identity, allocate physical resources on a hypervisor blade, create a persistent managed disk, bind a virtual network interface card (NIC), and mount the OS partition.
 
 :::expand[Under the Hood: VM Sizing and Host Isolation]{kind="design"}
 Azure VMs run as guest operating systems on Azure-managed physical hosts. The VM size you choose defines the virtual CPU count, memory amount, disk throughput limits, network throughput limits, and sometimes the local temporary storage available to the guest.
@@ -50,7 +68,11 @@ Choosing a Virtual Machine is a deliberate engineering tradeoff. You accept the 
 
 ## Image
 
-The image is the template file that contains the pre-configured operating system, kernel version, default libraries, and system configurations used to boot the virtual machine. When you provision a VM, Azure uses that image to create the VM's OS disk.
+A VM image is the boot template for the server. It contains the operating system, default libraries, kernel version, and any preinstalled software Azure should place on the OS disk.
+
+Example: a custom image named `img-inventory-ubuntu-2026-05` can include Ubuntu 22.04, the inventory daemon binary, the Azure Monitor agent, and baseline security settings before any VM starts.
+
+When you provision a VM, Azure uses that image to create the VM's OS disk.
 
 Relying on raw marketplace images can introduce configuration drift over time. If a developer boots a generic Ubuntu image and manually installs packages, updates libraries, and edits system files, the machine cannot be easily reproduced. If the VM's host hardware fails and the platform migrates the workload to a new node, recreating the configuration by hand creates serious recovery latency.
 
@@ -58,7 +80,7 @@ To ensure consistency, automate the image creation path using golden-image pipel
 
 ## VM Size
 
-The VM Size (also referred to as the VM SKU) defines the compute, memory, local ephemeral disk space, and network bandwidth characteristics of the virtualized environment. Selecting a size is a critical step that must match the physical resource needs of your guest processes.
+A VM size is the capacity profile for the server you are renting: CPU count, memory, temporary storage, disk throughput, and network throughput. The VM Size (also referred to as the VM SKU) defines the compute, memory, local ephemeral disk space, and network bandwidth characteristics of the virtualized environment. Selecting a size is a critical step that must match the physical resource needs of your guest processes.
 
 Azure categorizes VM sizes into specialized families designed for distinct workloads:
 * **D-Family (General Purpose)**: Balanced CPU-to-memory ratios; designed for standard web backends, small databases, and testing environments.
@@ -69,7 +91,7 @@ The VM Size also imposes strict, non-adjustable hardware limits on network inter
 
 ## Disks
 
-An Azure Virtual Machine normally utilizes two distinct categories of storage: managed disks (durable, network-attached storage) and temporary local disks (ephemeral, physically attached SSDs).
+VM disks are the storage devices the guest operating system mounts and reads through its normal filesystem path. An Azure Virtual Machine normally utilizes two distinct categories of storage: managed disks (durable, network-attached storage) and temporary local disks (ephemeral, physically attached SSDs).
 
 ![An infographic showing a VM attached to disks and a network interface](/content-assets/articles/article-cloud-providers-azure-compute-application-hosting-azure-virtual-machines/disk-nic-attachment.png)
 
@@ -86,7 +108,17 @@ flowchart LR
     TempFS["Temporary Mount<br/>(/dev/sdb)"] --> LocalSSD["Physical Local NVMe SSD<br/>(on Hypervisor Host Blade)"]
 ```
 
-Managed disks represent Azure-managed block storage attached to your VM. The guest operating system sees a disk device, while Azure handles the storage account placement, redundancy option, durability, and disk resource lifecycle behind the scenes. The exact redundancy and performance behavior depends on the disk type, SKU, size, and regional features you choose.
+Managed disks represent Azure-managed block storage attached to your VM. The guest operating system sees a disk device, while Azure handles the storage account placement, redundancy option, durability, and disk resource lifecycle behind the scenes.
+
+To fit different performance and cost requirements, Azure provides five distinct Managed Disk types:
+
+*   **Standard HDD**: Backed by traditional magnetic hard drives, providing the lowest cost. Best for backups, archiving, or running development hosts with highly infrequent disk access.
+*   **Standard SSD**: Low-cost solid-state drives, providing balanced, consistent latency. Designed for standard web application hosts and small dev environments.
+*   **Premium SSD**: High-performance network-attached solid-state volumes, delivering low-latency block I/O. Ideal for production databases and transaction-heavy workloads.
+*   **Premium SSD v2**: Next-generation block volumes, allowing you to configure size, IOPS, and throughput independently to optimize disk costs without scaling volume sizes.
+*   **Ultra Disk**: The highest performance block tier, supporting sub-millisecond latencies and delivering up to 160,000 IOPS, designed for transaction-heavy enterprise database clusters.
+
+The exact performance and durability guarantees depend on the disk type, volume size, and SKU you configure.
 
 Temporary disks, conversely, are local temporary storage exposed by many VM sizes. On Linux VMs, this drive is typically mounted at `/mnt` or `/mnt/resource`. This storage is ephemeral. Data on the temporary disk can be lost during stop/deallocate, resize, redeploy, maintenance, or host recovery events. Never store database logs, source code, application state, or critical files on the temporary disk; restrict its use to system swap space and volatile caches.
 
@@ -111,16 +143,88 @@ Consider this before-and-after storage architecture:
     LOG_DIR="/data/app-logs/"
     ```
 
-**Rule of thumb:** Treat the temporary local disk exactly like system RAM—it is completely volatile by design. Use it strictly for transient swap files, sorting buffers, or short-lived build artifact caches where data loss is fully expected and has zero impact on application durability.
+**Rule of thumb:** Treat the temporary local disk exactly like system RAM - it is completely volatile by design. Use it strictly for transient swap files, sorting buffers, or short-lived build artifact caches where data loss is fully expected and has zero impact on application durability.
 :::
 
 ## Network Interface
 
-The Network Interface Card (NIC) is the virtualized resource that connects your VM to a virtual network subnet. It owns the private IP address mapping, links to public IP resources, and ties directly to Network Security Group (NSG) packet filtering rules.
+A Network Interface Card (NIC) is the VM's network attachment. It gives the guest operating system a private IP address inside a subnet and connects that VM to routing and security rules.
+
+Example: `nic-inventory-prod` can place `vm-inventory-prod` in `snet-inventory` with private IP `10.30.8.12`, attach no public IP, and use an NSG rule set that only allows traffic from the application subnet.
 
 Under the hood, when packets reach the host blade's physical network adapter, the hypervisor's software-defined virtual switch inspects the VLAN headers. It routes the packets to the virtual NIC assigned to your VM, where the guest OS kernel parses the Ethernet frames. To bypass this virtual switch overhead and achieve near-line-rate network performance under high traffic, enable Accelerated Networking.
 
-Accelerated Networking utilizes Single Root I/O Virtualization (SR-IOV) technology. When enabled, the hypervisor bypasses the virtual switch entirely, presenting the physical NIC's virtual functions directly to the guest VM's PCIe bus. Packets are copied directly from the physical network adapter to the guest VM's memory buffers, reducing CPU utilization, cutting network jitter, and minimizing round-trip latency.
+### Accelerated Networking and SR-IOV Physics
+
+Under standard virtualization, when a physical network interface receives a packet, the host OS hypervisor intercepts it. The hypervisor evaluates virtual network switch rules, copies the packet buffer to the virtual machine's software network stack, and finally passes it to the guest OS. This software interception path consumes host CPU cycles and introduces network latency and jitter.
+
+Accelerated Networking eliminates this host processor overhead by implementing Single Root I/O Virtualization (SR-IOV). When enabled on a supported VM size, the physical host adapter dynamically partitions a physical PCIe network card into multiple virtual functions.
+
+Azure binds one of these physical PCIe virtual functions directly to your guest VM's virtual NIC interface. Packets bypass the hypervisor entirely. The hardware virtual function copies network packets directly from the physical cable into the guest VM's RAM memory buffers using Direct Memory Access (DMA). This cuts virtual network latency to sub-milliseconds, eliminates CPU virtualization overhead, and supports up to 30 Gbps of network throughput on large VM SKUs.
+
+## Virtual Machine Scale Sets: Scaling the Fleet
+
+A single Virtual Machine represents a single point of physical failure. If the underlying server blade hosting your VM experiences a hardware crash, your application goes offline until the Azure control plane detects the failure and redeploys the instance to a healthy node.
+
+To build a highly available and resilient service, you must run multiple identical instances of your VM behind a load balancer. Azure provides this capability through Virtual Machine Scale Sets (VMSS).
+
+A VMSS is a managed resource group that automates the deployment, lifecycle, and scaling of a group of identical VMs. Under the hood, VMSS integrates directly with Azure Load Balancer and Application Gateway. You define a scaling policy (such as increasing instance counts when the average CPU exceeds 70 percent, or decreasing instance counts during off-peak hours), and the VMSS controller automatically provisions or deprovisions VMs to match the load.
+
+When configuring a scale set, you can choose between two orchestration modes:
+
+*   **Uniform Orchestration**: Designed for large-scale, stateless workloads. The scale set uses a single VM template, allowing you to scale up to one thousand VM instances in a single group.
+*   **Flexible Orchestration**: Designed for stateful or mixed workloads. It allows you to group VMs of different sizes, OS images, and billing models (such as combining Spot and Standard instances) into a single high-availability group.
+
+By utilizing VMSS, our commerce portal's inventory service can scale dynamically across multiple Availability Zones, ensuring that a physical datacenter outage does not disrupt inventory tracking.
+
+### Scale Set Upgrade Policies
+
+When deploying updates to a Virtual Machine Scale Set (such as updating the VM image or installing custom configuration packages), you must configure how Azure rolls out these changes across your active instances to prevent service interruptions:
+
+*   **Manual Upgrade Policy**: Azure does not touch existing VMs. When you apply a new image template, active instances continue running the old version until you explicitly execute the `az vmss update-instances` command to upgrade them.
+*   **Automatic Upgrade Policy**: The scale set controller immediately updates all instances concurrently. This can cause severe service downtime because the controller shuts down and reprovisions every VM in the group at the same time.
+*   **Rolling Upgrade Policy**: The recommended pattern for high availability. Azure divides the scale set instances into virtual batches using Availability Sets or Upgrade Domains. The controller updates one batch at a time, monitors its health probe state, and only proceeds to the next batch when the upgraded instances are verified healthy.
+
+Choosing a rolling upgrade policy ensures that your storefront or catalog APIs remain active and reachable to users during platform security rollouts.
+
+## Virtual Machine Extensions: Automated Management
+
+Virtual Machine Extensions are Azure-run setup tasks inside the guest operating system. They exist so you can install agents, run bootstrap scripts, or fetch certificates without logging into every VM by hand.
+
+Example: a Custom Script Extension can run `mount-data-disk.sh` on `vm-inventory-prod` after the VM boots, while the Azure Monitor Agent extension forwards syslog and performance counters to Log Analytics.
+
+Virtual Machine Extensions are lightweight software utilities that run inside the guest OS. When you assign an extension to a VM, the Azure VM Agent downloads the extension's binary packages and executes them within the host.
+
+Common extensions include:
+
+*   **Custom Script Extension**: Downloads and runs a shell script from Azure Storage or a public URI inside the guest OS on boot. This is ideal for performing late-stage software installation and environment bootstrapping.
+*   **Azure Monitor Agent Extension**: Automatically installs the monitoring daemon and wires it to a Log Analytics workspace to capture system logs and performance metrics.
+*   **Key Vault Extension**: Periodically polls Azure Key Vault to download and update SSL certificates inside the VM's file system, avoiding manual rotation steps.
+
+### Custom Script Extension Bicep Example
+
+The following Bicep code block shows how to apply a Custom Script Extension to a Linux Virtual Machine, executing a boot script that mounts a secondary data drive and initializes a custom daemon:
+
+```bicep
+resource vmCustomScript 'Microsoft.Compute/virtualMachines/extensions@2023-09-01' = {
+  name: 'vm-inventory-prod/bootstrapScript'
+  location: 'eastus'
+  properties: {
+    publisher: 'Microsoft.Azure.Extensions'
+    type: 'CustomScript'
+    typeHandlerVersion: '2.1'
+    autoUpgradeMinorVersion: true
+    settings: {
+      fileUris: [
+        'https://raw.githubusercontent.com/devpolaris/scripts/main/bootstrap.sh'
+      ]
+      commandToExecute: 'bash bootstrap.sh'
+    }
+  }
+}
+```
+
+By chaining Custom Script Extensions, you can transition a generic marketplace OS image into a fully configured, production-ready node without manual SSH intervention.
 
 ## Startup
 
@@ -169,6 +273,18 @@ Logging requires the same active ownership. Application logs written only to loc
 
 To secure your telemetry, install a centralized log collector agent (such as the Azure Monitor Agent or Fluent Bit) inside the guest OS. Configure the agent to tail your application log files and stream them in real-time to a central Log Analytics workspace. Set up host alerts to monitor CPU spikes, disk space exhaustion on persistent volumes, and memory utilization, ensuring you receive warnings before a filled OS disk crashes your databases.
 
+### Azure Update Manager and Guest Patching
+
+Operating a Virtual Machine requires maintaining strict operating system security hygiene. Azure provides **Azure Update Manager** as a native SaaS compliance engine to oversee guest operating system updates at scale across both Linux and Windows fleets.
+
+Azure Update Manager allows you to configure automated guest patching policies without deploying local patching servers or agent virtual machines:
+
+*   **Assessment Scan Loops**: The Azure guest agent runs daily background assessment checks to evaluate missing security definitions, kernel updates, and software hotfixes.
+*   **Maintenance Configurations**: You declare declarative maintenance windows, schedules, and reboot behaviors. You can link multiple VMs to a single maintenance schedule, ensuring patching executes during designated low-traffic hours.
+*   **Automatic Guest Patching**: For supported platform OS images, you can enable automatic VM guest patching. The platform automatically applies high-priority security updates on a rolling basis, schedule-free, while respecting host availability perimeters to prevent co-located VM crashes.
+
+Implementing automated update schedules ensures your servers remain hardened against zero-day vulnerabilities while preserving workload availability.
+
 ## Putting It All Together
 
 Virtual Machines provide low-level guest OS access at the cost of high operational overhead.
@@ -183,18 +299,11 @@ By managing guest operating systems, process supervisors, and storage mounts sys
 
 ## What's Next
 
-In the next chapter, we will go up the compute abstraction ladder to explore Azure Kubernetes Service (AKS). We will analyze managed control plane architectures, contrast Kubenet with Azure CNI overlay networks, and inspect Entra ID Workload Identity cryptographic token exchanges.
-
-![An infographic showing the Azure virtual machine responsibility stack from Azure host and managed disk up to NIC, OS image, processes, patching, backup, monitoring, and hardening](/content-assets/articles/article-cloud-providers-azure-compute-application-hosting-azure-virtual-machines/vm-responsibility-stack.png)
-
-*Use this as the VM responsibility stack: Azure supplies the virtual hardware, but the team still owns the operating system, processes, patching, backups, monitoring, and hardening.*
-
+In the next chapter, we will go up the compute abstraction ladder to explore Azure App Service (PaaS). We will separate App Service Plans from Web Apps, deploy code slots, configure scaling rules, and run secure private backend proxy connections.
 
 ---
 
-**References**
-
-- [Virtual Machines in Azure](https://learn.microsoft.com/en-us/azure/virtual-machines/overview) - Introduction to Azure's IaaS compute platform.
-- [Sizes for Virtual Machines](https://learn.microsoft.com/en-us/azure/virtual-machines/sizes/overview) - Technical reference for compute, memory, and storage VM SKU families.
-- [Managed Disks Overview](https://learn.microsoft.com/en-us/azure/virtual-machines/managed-disks-overview) - Architecture details of remote network-attached durable storage LUNs.
-- [Accelerated Networking SR-IOV](https://learn.microsoft.com/en-us/virtual-network/create-vm-accelerated-networking-cli) - Performance guide on Single Root I/O Virtualization.
+* [Virtual Machines in Azure](https://learn.microsoft.com/en-us/azure/virtual-machines/overview) - Introduction to Azure's IaaS compute platform.
+* [Sizes for Virtual Machines](https://learn.microsoft.com/en-us/azure/virtual-machines/sizes/overview) - Technical reference for compute, memory, and storage VM SKU families.
+* [Managed Disks Overview](https://learn.microsoft.com/en-us/azure/virtual-machines/managed-disks-overview) - Architecture details of remote network-attached durable storage LUNs.
+* [Accelerated Networking SR-IOV](https://learn.microsoft.com/en-us/virtual-network/create-vm-accelerated-networking-cli) - Performance guide on Single Root I/O Virtualization.

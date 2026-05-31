@@ -80,7 +80,7 @@ Policy Intelligence is a separate set of tools for analysis, recommendation, and
 
 ## Principals
 
-A principal is the authenticated identity requesting access to a GCP resource. Google Cloud organizes principals into distinct categories based on their operational roles:
+A principal is the authenticated caller in an IAM decision. It can be a human user, group, service account, or federated workload identity, and IAM checks the principal before it checks whether the requested role grants the needed permission. Google Cloud organizes principals into distinct categories based on their operational roles:
 
 *   **Google Accounts (Users)**: Individual human accounts managed in Google Workspace or Cloud Identity (e.g. `user:maya@example.com`).
 *   **Google Groups**: Named collections of Google Accounts (e.g. `group:orders-oncall@example.com`). Granting roles to groups simplifies administrative updates because adding a user to a group automatically propagates all inherited permissions.
@@ -91,7 +91,7 @@ When an authorization check fails, the first step is to isolate the exact princi
 
 ## Resource Hierarchy and Caching Latency
 
-GCP manages resources in a strict, hierarchical tree. This structure dictates how policies are inherited and evaluated throughout your environment:
+The resource hierarchy is the parent-child scope tree that lets IAM bindings flow from organization to folder to project to individual resources. This structure dictates how policies are inherited and evaluated throughout your environment:
 
 ![Bindings inherited from parent scopes can take time to propagate through authorization caches.](/content-assets/articles/article-cloud-providers-gcp-identity-security-gcp-identity-security-mental-model/hierarchy-policy-cache.png)
 
@@ -110,7 +110,7 @@ When you create or modify an IAM policy binding, Google documentation says acces
 
 ## Permissions and Granular Actions
 
-A permission is the atomic action allowed or denied by IAM. It is represented as a structured string mapping the service, resource type, and action (e.g., `secretmanager.versions.access`).
+A permission is the smallest IAM action checked by a Google API. It is represented as a structured string mapping the service, resource type, and action (e.g., `secretmanager.versions.access`).
 
 Permissions map directly to the REST API endpoints exposed by Google Cloud. For example, when an application calls the Secret Manager API to retrieve a database connection string, it requires the `secretmanager.versions.access` permission on that specific secret resource.
 
@@ -118,7 +118,7 @@ In daily administration, engineers do not grant individual permissions directly 
 
 ## Roles: Predefined vs. Custom
 
-A role is a collection of permissions that you assign to principals. GCP supports three distinct role categories:
+A role is a reusable permission bundle assigned to principals at a resource scope. GCP supports three distinct role categories:
 
 *   **Basic Roles (Legacy)**: Broad, coarse-grained roles representing **Owner**, **Editor**, and **Viewer**. These roles grant wide permissions across almost every service inside a project, including network administration, billing management, and database deletion. Standardizing on basic roles for application workloads violates least-privilege principles and introduces severe operational blast radiuses.
 *   **Predefined Roles**: Google-managed roles tailored to specific service jobs (e.g. `roles/secretmanager.secretAccessor` or `roles/storage.objectViewer`). Google automatically updates these roles when new features or permissions are added to the underlying services.
@@ -126,7 +126,7 @@ A role is a collection of permissions that you assign to principals. GCP support
 
 ## Policy Bindings and Scope Blast Radius
 
-An allow policy is a collection of **Policy Bindings** attached to a resource. A binding links one or more principals to a single role, sometimes constrained by an IAM Condition (such as restricting access to a specific time window or CIDR IP block).
+An allow policy is a resource-attached document made of policy bindings. A binding links one or more principals to a single role, sometimes constrained by an IAM Condition (such as restricting access to a specific time window or CIDR IP block).
 
 The most common architectural mistake in IAM design is selecting the wrong scope for a policy binding. The scope represents the exact node in the resource hierarchy where the binding is attached.
 

@@ -34,19 +34,23 @@ However, as your application's volume scales to thousands of requests per second
 * **Row Locking and Latency**: High-velocity write queries (such as checking security tokens or updating active shopping carts) can lock database rows, causing concurrent queries to wait and driving up response times.
 * **Vertical Scaling Limits**: Relational engines are designed to scale vertically on a single server. Scaling a SQL database horizontally across multiple servers introduces complex synchronization delays, distributed locking overhead, and physical single-point failures.
 
-To bypass these relational scaling limits, you can move high-frequency, key-based application state out of SQL and into serverless NoSQL databases. Amazon DynamoDB is cabled specifically to solve this high-volume scale, discarding database servers and complex SQL query parsers in favor of an HTTP-based service cabled directly to the regional AWS network. To unlock DynamoDB's predictable, single-digit millisecond performance for key-based access, however, you must throw away relational database habits and design your storage around your application's exact access patterns.
+To bypass these relational scaling limits, you can move high-frequency, key-based application state out of SQL and into serverless NoSQL databases. Amazon DynamoDB is built specifically to solve this high-volume scale, removing database servers and complex SQL query parsers in favor of an HTTP-based service connected to the regional AWS network. To unlock DynamoDB's predictable, single-digit millisecond performance for key-based access, however, you must leave behind relational database habits and design your storage around your application's exact access patterns.
 
 ## What Is DynamoDB
 
-DynamoDB is a serverless, non-relational (NoSQL) database service. While relational database engines like RDS PostgreSQL organize data into normalized tables cabled together dynamically using complex SQL joins, DynamoDB takes a completely different path. It is built explicitly for high-velocity, single-digit millisecond performance at a traffic scale that would exhaust traditional SQL database connection and CPU pools.
+DynamoDB is a serverless, non-relational (NoSQL) database service. While relational database engines like RDS PostgreSQL organize data into normalized tables related dynamically using complex SQL joins, DynamoDB takes a completely different path. It is built explicitly for high-velocity, single-digit millisecond performance at a traffic scale that would exhaust traditional SQL database connection and CPU pools.
 
-The easiest way to visualize DynamoDB is as a massive spreadsheet cabled directly to the cloud network. Instead of managing rows with uniform column schemas, DynamoDB stores independent items. Every item in your table must be identified by its primary key. In a simple-key table, the partition key alone must be unique. In a composite-key table, the combination of partition key and sort key must be unique, which allows many related items to share the same partition key. Outside of the primary key attributes, the items in the same table can hold entirely different attributes without uniform column requirements.
+At a high level, DynamoDB behaves like a managed key-addressed table service. Your application sends reads and writes through a primary key, and AWS routes those requests to distributed storage partitions without exposing database servers or connection pools.
+
+Instead of managing rows with uniform column schemas, DynamoDB stores independent items. Every item in your table must be identified by its primary key. In a simple-key table, the partition key alone must be unique. In a composite-key table, the combination of partition key and sort key must be unique, which allows many related items to share the same partition key. Outside of the primary key attributes, the items in the same table can hold entirely different attributes without uniform column requirements.
 
 Because DynamoDB is completely serverless, you do not manage virtual servers, provision disk sizes, or configure connection pools. Instead, your application communicates with the database over secure HTTP APIs, and AWS handles backend capacity scaling, physical hardware replication, and server maintenance automatically. By trading the dynamic query flexibility of SQL joins for managed horizontal scaling, DynamoDB can deliver predictable single-digit millisecond responses for well-designed key access patterns. While it is not designed for unpredictable business analytics, it represents the premier AWS home for high-velocity, key-based application state like customer sessions, API idempotency tokens, and active shopping carts.
 
 ## Physical Partitioning and the Hashing Key
 
 A standard database may search for records by scanning tables or indexes, and poorly indexed searches become slower as the data set grows. DynamoDB keeps key-based access predictable by utilizing physical storage partitions.
+
+The partition key functions as the routing input for DynamoDB's distributed storage layout. A healthy key spreads writes and reads across partitions; a hot key concentrates traffic and can throttle even when the table looks underused overall.
 
 When your application writes a record (called an item) to a DynamoDB table, you must provide a primary Partition Key (abbreviated as PK). When the write request arrives, DynamoDB runs the partition key value through an internal partitioning function that maps the item to a storage partition inside the AWS regional network. DynamoDB routes the write request straight to that partition, bypassing table scans. When your application queries the item by its Partition Key, DynamoDB uses the same partitioning model to find the partition holding the item and retrieve the bytes directly.
 
@@ -56,7 +60,7 @@ Because DynamoDB reads and writes directly to the designated partition, point lo
 
 Partition key hashing delivers high-speed lookups for simple key-value states, like retrieving a user session token. However, e-commerce applications require relational context, meaning you must be able to retrieve an order header and all its associated product line items. Since DynamoDB does not support database joins, storing orders and items as independent tables would force your application to make multiple expensive network round-trips.
 
-To model relationships within a flat NoSQL database, you must deploy **Composite Primary Keys**. The Partition Key (PK) determines the physical partition where a related group of items resides, acting as the primary container ID for the collection. The Sort Key (SK) controls how items are sorted and cabled within that physical partition, enabling range queries (such as begins_with, between, or logical comparisons).
+Composite primary keys behave like a grouped address scheme for related items. The Partition Key (PK) determines the physical partition where a related group of items resides, acting as the primary collection ID. The Sort Key (SK) controls how items are sorted within that physical partition, enabling range queries (such as begins_with, between, or logical comparisons).
 
 Using a composite key structure, you can group and sort related entities together in a single table, constructing a layout known as an item collection:
 
@@ -78,7 +82,9 @@ Designing around access patterns requires careful foresight. If your application
 
 ## Conditional Writes as Concurrency Barriers
 
-With your denormalized table cabled, your application can process high-velocity transactions. However, high-velocity workloads introduce concurrency threats. If a customer double-clicks a checkout button, or a transient network timeout triggers a rapid API retry, two separate application workers will attempt to write the checkout transaction at the exact same millisecond, risking duplicate credit card charges.
+With your denormalized table designed around access patterns, your application can process high-velocity transactions. However, high-velocity workloads introduce concurrency threats. If a customer double-clicks a checkout button, or a transient network timeout triggers a rapid API retry, two separate application workers will attempt to write the checkout transaction at the exact same millisecond, risking duplicate credit card charges.
+
+Conditional writes function as optimistic concurrency checks attached to a write request. DynamoDB applies the write only if the current item state still matches the condition your application declared.
 
 To construct a reliable concurrency barrier without relational row locks, you must deploy **Conditional Writes**.
 
@@ -115,9 +121,11 @@ flowchart TD
 
 A composite primary key structure forces you to query data by its primary Partition Key. However, application access patterns often require alternative query paths. An e-commerce system might routinely query an order by its unique `OrderID` (the table's PK), but support staff also need to list orders by a customer's `EmailAddress`.
 
+A Global Secondary Index acts as a separate key-addressed view of selected table attributes. It gives the same items another partition and sort key layout so a different access pattern can be queried directly.
+
 To query by attributes other than your primary key without running slow, cost-prohibitive full-table scans, you must deploy **Global Secondary Indexes (GSIs)**.
 
-A GSI is a secondary partition layout of your table's data, cabled with its own custom Partition Key and Sort Key, such as using an email address as the index partition key. When you define a GSI, you choose which attributes from the main table are projected (copied) into the index. When your application writes an item to the main table, DynamoDB automatically and asynchronously copies the item to the GSI partition layout. Your application can then query the GSI directly, locating items by the secondary key. GSI reads are eventually consistent, so a just-written item may not appear in the index for a short moment. Note that GSIs are read-only; you cannot write directly to a GSI.
+A GSI is a secondary partition layout of your table's data, configured with its own custom Partition Key and Sort Key, such as using an email address as the index partition key. When you define a GSI, you choose which attributes from the main table are projected (copied) into the index. When your application writes an item to the main table, DynamoDB automatically and asynchronously copies the item to the GSI partition layout. Your application can then query the GSI directly, locating items by the secondary key. GSI reads are eventually consistent, so a just-written item may not appear in the index for a short moment. Note that GSIs are read-only; you cannot write directly to a GSI.
 
 Global Secondary Indexes are powerful tools that provide alternative query paths. However, because they replicate data, they incur additional write costs and consume extra storage. Use GSIs deliberately to satisfy core access patterns, and keep index projections as slim as possible to minimize costs.
 
@@ -128,6 +136,8 @@ Global Secondary Indexes are powerful tools that provide alternative query paths
 ## On-Demand vs. Provisioned Capacity Planning
 
 Unlike managed RDS instances where you pay for continuous running virtual servers and disk allocation, DynamoDB is serverless. You do not manage database servers. Instead, you pay strictly for the database throughput your application consumes, measured in Read Capacity Units (RCUs) and Write Capacity Units (WCUs).
+
+Capacity mode is DynamoDB's throughput billing and throttling contract. On-demand capacity lets AWS absorb variable request volume automatically, while provisioned capacity asks you to declare expected read and write throughput in advance.
 
 * **Read Capacity Units (RCU)**: Represents one strongly consistent read per second, or two eventually consistent reads per second, for an item up to 4 kilobytes in size.
 * **Write Capacity Units (WCU)**: Represents one write per second for an item up to 1 kilobyte in size.

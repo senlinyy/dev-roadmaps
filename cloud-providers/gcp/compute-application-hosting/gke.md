@@ -24,7 +24,7 @@ aliases:
 
 ## Google Kubernetes Engine
 
-Google Kubernetes Engine (GKE) is Google Cloud's highly integrated, enterprise-grade managed container orchestration service. Built on open-source Kubernetes, GKE provides a shared cluster environment designed to deploy, scale, schedule, and secure hundreds of containerized microservices across a dynamic pool of physical compute machines.
+Google Kubernetes Engine (GKE) is managed Kubernetes on Google Cloud. Google runs the cluster control plane, and your team declares how containers should run, connect, scale, and receive policy through Kubernetes objects. That makes GKE a shared platform boundary for teams that need Kubernetes itself, not merely a place to run one container.
 
 ![GKE separates the managed control plane from the worker capacity running your Pods.](/content-assets/articles/article-cloud-providers-gcp-compute-application-hosting-gke/gke-cluster-layers.png)
 
@@ -73,7 +73,7 @@ As traced above, the Autopilot dynamic provisioning lifecycle executes across fi
 
 ## Standard vs. Autopilot Clusters
 
-Choosing the correct GKE operating mode is a major architectural decision. You must balance the team's capacity to manage platforms against the workload's need for infrastructure control:
+GKE operating mode decides how much node and infrastructure responsibility your team keeps. Choosing the correct GKE operating mode is a major architectural decision because you must balance the team's capacity to manage platforms against the workload's need for infrastructure control:
 
 ![Autopilot shifts more node responsibility to Google. Standard leaves more scheduling and node choices to you.](/content-assets/articles/article-cloud-providers-gcp-compute-application-hosting-gke/autopilot-standard-boundary.png)
 
@@ -100,27 +100,27 @@ Because this flow uses short-lived credentials, your Pods can call Google APIs w
 
 ## Kubernetes Object Hierarchy: Pods and Deployments
 
-Operating GKE requires shifting your unit of deployment from individual containers to standard Kubernetes resource objects:
+Kubernetes objects are the API records that describe desired runtime state inside the cluster. Operating GKE requires shifting your unit of deployment from individual containers to standard Kubernetes resource objects:
 
 *   **Pods**: A Pod is the smallest deployable unit in Kubernetes, containing one or more containers that share a local network loopback interface, storage volumes, and lifecycle. In typical microservice patterns, you run a single application container per Pod, keeping them lightweight and replaceable.
 *   **Deployments**: You never manage or deploy Pods individually. Instead, you declare your desired state inside a **Deployment** object. The Deployment specifies which container image to run, the CPU/RAM limits, and the exact replica count (e.g. `3` pods). The GKE control plane monitors this declaration continuously, automatically creating or replacing Pods across different node hosts to ensure actual state always matches your desired state.
 
 ## Cluster Network Identity: Services and Ingress
 
-Because Pods are highly volatile and replaceable, their internal network IP addresses change continuously when they are rescheduled or scaled. To provide stable network interfaces:
+Services and Ingress provide stable network entry points for changing Pod backends. Because Pods are highly volatile and replaceable, their internal network IP addresses change continuously when they are rescheduled or scaled. To provide stable network interfaces:
 
 *   **Services**: A Kubernetes Service provides a stable DNS hostname and internal IP address mapped dynamically to a changing pool of Pods using label selectors. Internal services allow Pod A to call `http://orders-api` reliably, and the Service handles TCP load balancing across active backends.
 *   **Ingress and Gateway**: To route public user traffic from the internet into your cluster services, you deploy an Ingress or Gateway resource. In GKE, an Ingress manifest can provision and configure a Google Cloud external Application Load Balancer and map URL paths to your internal cluster Services. Certificates require the appropriate certificate resource or TLS configuration rather than appearing automatically for every Ingress.
 
 ## Workload Co-location and Sidecar Containers
 
-A unique architectural capability of Kubernetes is the support for **Sidecar Containers**. Because multiple containers inside a single Pod share the same local network namespace (`localhost`) and storage volumes, you can co-locate supporting utilities alongside your primary application process.
+A sidecar container is a supporting process that runs in the same Pod as the main application container and shares local networking or volumes with it. This is a unique architectural capability of Kubernetes. Because multiple containers inside a single Pod share the same local network namespace (`localhost`) and storage volumes, you can co-locate supporting utilities alongside your primary application process.
 
 For instance, you can run a **Service Mesh proxy** (such as Envoy) or a database connection proxy (such as the Cloud SQL Auth Proxy) as a sidecar container inside your Orders API Pod. The application container connects to the database locally over `127.0.0.1:5432`, and the sidecar container transparently intercepts the socket, encrypts the payload, and manages the secure TLS connection to the backing database engine, keeping your primary code clean and focused on business logic.
 
 ## When GKE Fits (and Sibling Runtimes)
 
-Decoupling application hosting from serverless constraints requires choosing a runtime that aligns with your team's operational capabilities and architecture complexity:
+GKE fits when the application platform needs Kubernetes APIs or cluster-wide policies more than it needs the simplicity of a single managed service. Decoupling application hosting from serverless constraints requires choosing a runtime that aligns with your team's operational capabilities and architecture complexity:
 
 *   **Cloud Run**: The ideal fit for simple, stateless HTTP microservices that package cleanly into standard containers. It provides a serverless environment with minimal administrative overhead.
 *   **Cloud Run Functions**: The best fit for event-triggered, single-purpose handlers that run asynchronously in response to platform state changes.
@@ -129,7 +129,7 @@ Decoupling application hosting from serverless constraints requires choosing a r
 
 ## Sample Cluster Shape
 
-An idiomatic GKE Autopilot shape for a platform-managed Orders API unifies namespaces, admission gates, and OIDC workload identities:
+A sample cluster shape is a compact review of the Kubernetes platform contract. An idiomatic GKE Autopilot shape for a platform-managed Orders API unifies namespaces, admission gates, and OIDC workload identities:
 
 | Cluster Component | Configuration Value | Operational Purpose |
 | :--- | :--- | :--- |

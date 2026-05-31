@@ -39,7 +39,9 @@ The StorageClass is cluster-level, not namespaced. A namespace can use it if RBA
 
 ## Reading a StorageClass
 
-A StorageClass has a few fields that matter during everyday troubleshooting. The `provisioner` identifies the storage driver. `reclaimPolicy` says what happens to dynamically created volumes after their claim is deleted. `volumeBindingMode` controls when binding and provisioning happen. `allowVolumeExpansion` tells you whether a PVC can request more storage later.
+A StorageClass is a cluster-level storage profile, so reading one means reading the operational promises attached to that profile. The `provisioner` identifies the storage driver. `reclaimPolicy` says what happens to dynamically created volumes after their claim is deleted. `volumeBindingMode` controls when binding and provisioning happen. `allowVolumeExpansion` tells you whether a PVC can request more storage later.
+
+Example: `standard-retain` can mean encrypted standard disks, retained backing storage after claim deletion, expansion support, and zone-aware binding.
 
 ```yaml
 apiVersion: storage.k8s.io/v1
@@ -71,7 +73,9 @@ That table gives you more operational signal than the name alone. A class called
 
 ## Dynamic Provisioning from a Claim
 
-Dynamic provisioning is the common path in modern clusters. You create a PVC that references a StorageClass, and the class's provisioner creates the backing PV automatically.
+Dynamic provisioning means the cluster creates backing storage automatically after it sees a PVC. You create a PVC that references a StorageClass, and the class's provisioner creates the backing PV.
+
+Example: `orders-api-workdir` can request `20Gi` from `standard-retain`, and the CSI provisioner can create the cloud disk and PV without the application team writing a disk ID by hand.
 
 ```yaml
 apiVersion: v1
@@ -100,7 +104,9 @@ The application team did not write a cloud disk ID. That is the point. The PVC d
 
 ## Default StorageClass Behavior
 
-A cluster can mark one or more StorageClasses as default. When a PVC omits `storageClassName`, Kubernetes may assign a default class. This is convenient for simple clusters, but it can surprise teams that expect an omitted class to mean "do not dynamically provision anything."
+A default StorageClass is the class Kubernetes may use when a PVC does not name one. This is convenient for simple clusters, but it can surprise teams that expect an omitted class to mean "do not dynamically provision anything."
+
+Example: if `standard-delete` is the default, a PVC without `storageClassName` may get storage that is deleted when the claim is deleted, which may be wrong for production handoff files.
 
 ```bash
 $ kubectl get storageclass
@@ -129,7 +135,9 @@ That empty string means the claim should bind only to a pre-created PV with no c
 
 ## Volume Binding Mode and Scheduling
 
-`volumeBindingMode` controls when a volume is provisioned and bound. `Immediate` provisions as soon as the PVC appears. `WaitForFirstConsumer` waits until a Pod uses the claim, so Kubernetes can consider where the Pod will run.
+Some storage can only attach to Pods in certain places, such as a specific zone or node group. `volumeBindingMode` is the StorageClass setting that decides whether storage is created immediately or waits until Kubernetes knows where the first Pod will run.
+
+`Immediate` provisions as soon as the PVC appears. `WaitForFirstConsumer` waits until a Pod uses the claim, so Kubernetes can consider where the Pod will run.
 
 That matters for storage tied to zones or nodes. If a disk is created in zone A but the Pod is scheduled in zone B, the Pod may not be able to attach the disk. Waiting for the first consumer lets the scheduler choose a compatible placement before the storage is created.
 
@@ -153,7 +161,9 @@ That message is not automatically bad. It can be the expected waiting phase befo
 
 ## Reclaim Policy and Expansion
 
-Two StorageClass fields affect the future of your data. `reclaimPolicy` decides what happens after claim deletion. `allowVolumeExpansion` decides whether the claim can request more capacity later.
+Reclaim policy and expansion are lifecycle promises attached to a storage profile. `reclaimPolicy` decides what happens after claim deletion. `allowVolumeExpansion` decides whether the claim can request more capacity later.
+
+Example: a staging scratch disk can use `Delete`, while a production invoice work directory may use `Retain` and expansion so the team can grow from `20Gi` to `40Gi` during a busy period.
 
 For an invoice work directory, expansion can save you during a busy period. The PVC starts at 20Gi, monitoring shows it is near full, and you increase the request to 40Gi if the class and driver support expansion.
 
@@ -238,7 +248,9 @@ For `devpolaris-orders-api`, those answers decide whether the work directory is 
 
 ### StorageClass Names Are an API for Teams
 
-A StorageClass name becomes an API that application teams depend on. If platform engineers rename or remove a class, existing manifests and onboarding guides can break. That is why names should describe the operating contract, not the provider's internal nickname.
+A StorageClass name is the label application teams put into PVC manifests. That makes it an API for teams, even though it behaves more like a stable platform contract than an HTTP endpoint or library function. If platform engineers rename or remove a class, existing manifests and onboarding guides can break.
+
+That is why names should describe the operating contract, not the provider's internal nickname.
 
 A name like `standard-retain` teaches more than `disk1`. A name like `shared-rwx` tells application teams the class is for shared file access. The parameters can change behind the class as the platform evolves, but the promise should stay stable.
 
@@ -259,6 +271,8 @@ Risky class names
 This matters during reviews. When `devpolaris-orders-api` asks for `standard-retain`, a reviewer can infer the data should not disappear on claim deletion. If the manifest asks for `default2`, the reviewer has to inspect cluster state to learn the contract.
 
 ### Watching the Provisioner
+
+A provisioner is the controller that turns a PVC request into backing storage. In modern clusters, that controller is usually part of a CSI driver, which is the storage integration between Kubernetes and the cloud or storage platform.
 
 When PVC events point at provisioning trouble, the next layer is the CSI controller or external provisioner. Application teams may not own that controller, but they should know how to collect useful evidence before asking for help.
 

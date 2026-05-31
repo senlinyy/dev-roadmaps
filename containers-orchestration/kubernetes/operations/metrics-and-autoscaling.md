@@ -40,7 +40,9 @@ The autoscaler is only as good as the metric you give it. A junior engineer can 
 
 ## Requests Make Metrics Useful
 
-CPU autoscaling uses a percentage of requested CPU. A request is the amount of CPU or memory the scheduler reserves for a container. If a container requests `500m` CPU and uses `250m`, it is using 50 percent of its requested CPU.
+A resource request is the CPU or memory amount Kubernetes uses as the planning baseline for a container. CPU autoscaling uses a percentage of requested CPU, so the request gives the HPA a denominator.
+
+Example: if the orders API requests `500m` CPU and uses `250m`, it is using 50 percent of its requested CPU. Without that request, the HPA cannot calculate a CPU utilization percentage for the container.
 
 ```yaml
 apiVersion: apps/v1
@@ -68,7 +70,9 @@ If requests are missing, CPU utilization percentages become undefined for HPA. T
 
 ## Reading Pod and Node Metrics
 
-The `kubectl top` command reads metrics from the metrics API, usually served by Metrics Server. It is a quick operational view, not a long-term dashboard.
+Pod and node metrics are point-in-time measurements of resource usage. The `kubectl top` command reads them from the metrics API, usually served by Metrics Server.
+
+Example: if every orders API Pod is using around `450m` CPU against a `500m` request and latency is rising, the service may be near its per-Pod CPU capacity. `kubectl top` is a quick operational view, not a long-term dashboard.
 
 ```bash
 $ kubectl -n orders top pods -l app.kubernetes.io/name=devpolaris-orders-api
@@ -94,7 +98,9 @@ If nodes are already full, HPA may request more replicas while the scheduler can
 
 ## Horizontal Pod Autoscaling
 
-An HPA watches a scalable target, such as a Deployment, and updates its replica count. Here is a basic CPU-based HPA for the orders API.
+A HorizontalPodAutoscaler is a controller that changes the replica count of a scalable workload. Horizontal means adding or removing Pods, not changing the CPU or memory size of each Pod.
+
+Example: the HPA below watches the orders API Deployment and can move it between three and twelve replicas to keep average CPU near 70 percent of request.
 
 ```yaml
 apiVersion: autoscaling/v2
@@ -131,7 +137,7 @@ The HPA increased replicas because average CPU is above target. That is useful e
 
 ## Choose Metrics That Match the Bottleneck
 
-CPU is a reasonable first metric for CPU-bound APIs. It is not always the right metric. If `devpolaris-orders-api` spends most of its time waiting on PostgreSQL, CPU may stay low while users see slow responses. In that case, CPU autoscaling will not react.
+A bottleneck is the part of the request path that runs out of capacity first. The autoscaling metric should measure that part, or the autoscaler will change replicas without improving the user symptom. CPU is a reasonable first metric for CPU-bound APIs, but it is not always the right metric. If `devpolaris-orders-api` spends most of its time waiting on PostgreSQL, CPU may stay low while users see slow responses. In that case, CPU autoscaling will not react.
 
 | Bottleneck shape | Better signal | Scaling decision |
 |------------------|---------------|------------------|
@@ -145,7 +151,7 @@ Autoscaling should protect the system, not hide every performance issue. More Po
 
 ## Failure Mode: Autoscaling Without Requests
 
-An HPA that targets CPU needs CPU requests on the target containers. Without them, you may see an unknown target.
+Autoscaling without requests fails because the HPA has no baseline for CPU utilization. A CPU target such as 70 percent means 70 percent of the requested CPU, not 70 percent of the node. If the orders API container has no CPU request, the autoscaler cannot calculate that percentage and may report an unknown target.
 
 ```bash
 $ kubectl -n orders get hpa devpolaris-orders-api
@@ -186,7 +192,7 @@ This is why autoscaling is operations work expressed through YAML.
 
 ## Operational Review Questions
 
-Before enabling or changing autoscaling, ask these questions:
+An autoscaling review is a capacity design review, not only a YAML review. Reviewers should know which user symptom should improve, which metric represents the limit, and which dependency might receive more load when replicas increase. Before enabling or changing autoscaling, ask these questions:
 
 | Question | Why it matters |
 |----------|----------------|
@@ -285,7 +291,7 @@ Safety limit: do not exceed 20 worker replicas without database review
 
 That note prevents the metric from becoming a mystery number. Future reviewers can see the operational reason and know when to revisit it.
 
-Finally, treat manual scaling as an incident action that needs cleanup. If someone runs `kubectl scale` during a traffic spike, the source of truth may still say three replicas.
+Finally, treat manual scaling as an incident action that needs cleanup. If someone runs `kubectl scale` during a traffic spike, the reviewed steady-state manifest may still say three replicas.
 
 ```bash
 $ kubectl -n orders scale deployment devpolaris-orders-api --replicas=8

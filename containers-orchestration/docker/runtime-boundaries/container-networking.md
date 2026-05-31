@@ -24,6 +24,8 @@ aliases:
 
 ## Why Networking Feels Weird
 
+Docker networking is a set of caller-specific paths between host ports, container network namespaces, bridge networks, service names, and process bind addresses.
+
 The orders API container is running. The logs say `Listening on 3000`. You open `http://localhost:3000` and the browser fails. A few minutes later, the API tries to connect to Postgres at `localhost:5432` and fails too, even though the database container is healthy.
 
 Those two failures look similar because both are connection failures. They are different paths. The browser is outside the container, trying to enter from the host. The API is inside one container, trying to reach another container. The word `localhost` means something different in each place.
@@ -32,7 +34,11 @@ A request does not simply "go to Docker." It crosses boundaries. Each boundary a
 
 ## The Mental Model
 
+A network namespace is the container's private network table: interfaces, routes, ports, and loopback address belong to that namespace rather than to the host.
+
 A container has its own network namespace. That means it has its own interfaces, routes, ports, and loopback address. From inside the container, `localhost` means that container. From the host, `localhost` means the host. From another container, `localhost` means the other container making the call.
+
+Example: the API container can listen on `127.0.0.1:3000` inside its namespace while your browser's `127.0.0.1:3000` still points at the host. They are both loopback addresses, but they belong to different network tables.
 
 | Viewpoint | What it can see directly | What `localhost` means |
 | --- | --- | --- |
@@ -61,6 +67,13 @@ The top path is host-to-container traffic. The bottom path is container-to-conta
 
 ## Host to Container
 
+Host-to-container traffic uses a published port rule that maps a host address and port to a port inside the container's network namespace.
+
+
+![Diagram showing host traffic flowing through a Docker published port to a container listener](/content-assets/articles/article-containers-orchestration-docker-container-networking/host-container-port-path.png)
+
+*The host-to-container path only works when the port rule and the application listener line up.*
+
 A process inside a container can listen on port 3000 without opening port 3000 on the host. That port belongs to the container's network namespace. Two containers can both listen on port 3000 internally because they do not share the same port table.
 
 Publishing creates a path from a host address and port to a container port:
@@ -80,7 +93,16 @@ The host address matters. Publishing `8080:3000` publishes on all host interface
 
 ## Container to Container
 
+Container-to-container traffic usually uses a shared Docker network and service names rather than host published ports.
+
+
+![Diagram showing container-to-container DNS resolution on a Docker bridge network](/content-assets/articles/article-containers-orchestration-docker-container-networking/container-dns-bridge-network.png)
+
+*Container-to-container traffic uses network names and container ports, not the host-facing published port.*
+
 Containers on the same user-defined bridge network can reach each other directly on that network. Docker also provides name resolution so a container can use another container's name or network alias instead of a changing IP address.
+
+Example: an API container should call `postgres://orders:orders@db:5432/orders` when the database service is named `db` on the same Compose network. It should not call `localhost:5432` unless the database process is inside the API container itself.
 
 Compose makes this normal:
 
@@ -103,6 +125,10 @@ This is also why service-to-service traffic should not usually go through the ho
 
 ## The Bind Address
 
+The bind address is the interface address where the application process accepts connections inside its own network namespace.
+
+In plain terms, the bind address answers "which local network addresses will this process listen on?" `127.0.0.1` means loopback only. `0.0.0.0` means all interfaces inside that namespace.
+
 Publishing a port and resolving a name only get traffic to the container. The application process still has to accept the connection.
 
 Many development servers bind to `127.0.0.1` by default. On a laptop without containers, that often works because the browser is on the same machine. Inside a container, `127.0.0.1` is the container's loopback interface. A process bound only to loopback may accept connections from inside the same container while rejecting traffic arriving through the container's network interface.
@@ -122,6 +148,8 @@ docker run -p 127.0.0.1:8080:3000 devpolaris/orders-api:local
 The process bind address and host publish address live at different boundaries.
 
 ## Seeing the Path
+
+Network inspection is most useful when you follow the exact caller path: host to published port, or container to service name.
 
 Start with the host path:
 
@@ -178,6 +206,10 @@ Once you can draw the path, the evidence lines up. `docker ps` shows the host en
 ## What's Next
 
 Networking explains how traffic crosses the container boundary. The next article covers the filesystem boundary. A container can be reachable and still lose data, hide built files, or write host files with surprising ownership if storage is not placed deliberately.
+
+![Summary infographic for Docker network namespaces, bridges, DNS, published ports, bind addresses, and caller viewpoint](/content-assets/articles/article-containers-orchestration-docker-container-networking/container-networking-summary.png)
+
+*The networking summary keeps the caller viewpoint at the center of every address choice.*
 
 ---
 

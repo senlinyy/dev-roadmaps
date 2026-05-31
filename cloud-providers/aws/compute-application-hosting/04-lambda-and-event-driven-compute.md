@@ -39,6 +39,8 @@ To eliminate this overhead and isolate failures, you must decouple these backgro
 
 AWS Lambda is compute for running isolated application function handlers in response to events. You do not manage host servers, patch container engines, or configure port listeners. You package your code and dependencies, declare the runtime platform (such as Node.js or Python), and define which AWS resource triggers the execution.
 
+A Lambda function behaves like an event handler hosted by AWS: an event payload arrives, AWS starts or reuses an execution environment, your handler runs bounded work, and the environment freezes or shuts down when the invocation is complete.
+
 A Lambda function is fundamentally different from a continuous container service because it operates under a reactive, rather than a continuous, lifecycle:
 
 Continuous Service Process:
@@ -60,6 +62,8 @@ This reactive design means you are billed for the compute time your code activel
 ## The JSON Event Contract
 
 A Lambda function does not listen on a network socket like a web server. The primary input your handler receives is a structured JSON document called the Event. Lambda also provides a temporary local filesystem at `/tmp`, which is useful for scratch files during an invocation but should not be treated as durable storage.
+
+The event is the input contract between the triggering service and your handler. It is similar to an API request body in the sense that your code must validate its shape before trusting any field.
 
 The most vital beginner habit in serverless development is treating the event as a strict API contract. The shape of the JSON event is defined entirely by the service triggering the function, and these shapes vary drastically:
 
@@ -90,6 +94,8 @@ Because your code must parse and unpack these nested JSON structures, you must w
 
 An invocation is one attempt to execute your Lambda function handler. AWS divides these executions into three distinct invocation models, which control how errors are reported and how work is buffered:
 
+An invocation is the runtime attempt, while a trigger is the service integration that creates that attempt. Separating those ideas helps you reason about who waits for the result, where failed work is buffered, and which service owns retries.
+
 * **Synchronous Invocation**: The caller sends the event and blocks, waiting for your handler to return a payload or throw an error. This model is used when Lambda sits behind API Gateway to answer public HTTP requests, where the user is actively waiting for the response.
 * **Asynchronous Invocation**: The caller hands the event to Lambda and moves on immediately. Lambda queues the event internally and executes the handler in the background. S3 file uploads and EventBridge schedules use this asynchronous handoff.
 * **Queue-Based Polling**: Lambda uses an Event Source Mapping to poll an SQS queue or DynamoDB stream dynamically, gathers records into batches, and hands them to your function handler. This model provides natural back-pressure buffering, ensuring that spike workloads wait safely in the queue until compute capacity is ready.
@@ -110,6 +116,8 @@ Understanding your invocation model is critical. If your function is invoked asy
 ## Tuning Timeout and Memory
 
 Every Lambda function has two critical configuration dials that define its execution boundary: Timeout and Memory.
+
+Timeout and memory are the function's resource contract. Timeout limits how long one invocation may run, while memory controls both RAM and the proportional CPU share Lambda assigns to the execution environment.
 
 The **Timeout** is the absolute limit on how long a single invocation is allowed to run before AWS forcibly terminates the execution environment. The default timeout is 3 seconds, but you can configure it up to a maximum of 15 minutes (900 seconds).
 
@@ -142,6 +150,8 @@ Always instantiate your AWS SDK clients and database pool connections globally o
 ## The Retry Hazard and Idempotency
 
 In event-driven architectures, transient network drops, database locking errors, and downstream timeouts are normal operational realities. To ensure reliable delivery, AWS automatically retries failed invocations.
+
+Idempotency is the duplicate-safe contract for a handler. It means the same event can be processed more than once without producing duplicate business side effects.
 
 * **Asynchronous Invocations**: Retried twice by default, with exponential backoff.
 * **SQS Polling Invocations**: Retried according to the queue's redrive policy, returning failed messages to the queue for a different batch.
@@ -186,6 +196,8 @@ By using a fast database such as DynamoDB with a conditional write for the initi
 ## Managing Concurrency Pressure
 
 Concurrency is the number of execution environments running your function code simultaneously to handle incoming events. If your SQS queue suddenly receives 1,000 messages, Lambda can scale horizontally to process them quickly, subject to account concurrency limits and event source mapping behavior.
+
+Concurrency behaves like the parallelism dial for event processing. Raising it increases throughput, but it also increases simultaneous pressure on databases, APIs, queues, and downstream quotas.
 
 While this horizontal scaling is excellent for processing massive spikes, it introduces a severe danger to your downstream infrastructure:
 

@@ -24,7 +24,9 @@ id: article-containers-orchestration-kubernetes-packaging-avoiding-template-spra
 
 Packaging tools solve copied YAML, but they can create a different problem. Instead of seeing the same Deployment copied five times, a reviewer sees helpers, values, partial templates, overlays, patches, generated names, and conditional blocks spread across many files.
 
-That problem is template sprawl. It happens when the packaging layer becomes harder to understand than the Kubernetes objects it produces. A junior engineer then has to debug both Kubernetes and the packaging system at the same time.
+That problem is template sprawl. Template sprawl means the packaging layer has so many helpers, values, patches, or conditionals that it becomes harder to understand than the Kubernetes objects it produces.
+
+Example: if a reviewer must open five helper files to find the orders API image, Service selector, and readiness probe, the package is hiding the operational center of the Deployment. A junior engineer then has to debug both Kubernetes and the packaging system at the same time.
 
 For `devpolaris-orders-api`, the goal is modest. The package should standardize labels, resource defaults, probes, image settings, and environment differences. It should not become a generic framework for every possible Deployment field.
 
@@ -50,7 +52,9 @@ Keep the options that earn their place by improving the rendered manifest or the
 
 ## Keep the Rendered Object in Mind
 
-The rendered manifest is the contract with Kubernetes. Every chart helper, values file, and overlay patch should make that manifest clearer or easier to maintain.
+The rendered manifest is the final YAML that Kubernetes receives. Every chart helper, values file, and overlay patch should make that manifest clearer or easier to maintain.
+
+Example: the rendered orders API Deployment should make the image, replicas, readiness probe, resources, and Secret references easy to find.
 
 ```bash
 $ helm template orders ./charts/orders-api -f environments/prod.values.yaml > rendered/prod.yaml
@@ -91,7 +95,9 @@ This gives reviewers a map before they open the full YAML.
 
 ## Limit Values to Real Decisions
 
-A values file should contain choices a service team expects to make. Image tag, replica count, resource requests, ingress host, and feature flags are normal choices.
+A values file should contain choices a service team expects to make, not every possible Kubernetes field. Real decisions are things reviewers can connect to deployment behavior.
+
+Example: image tag, replica count, resource requests, ingress host, and feature flags are normal choices for the orders API.
 
 ```yaml
 replicaCount: 3
@@ -126,7 +132,9 @@ If a value is not referenced, remove it or wire it deliberately. Do not leave hi
 
 ## Prefer Small Helpers Over Hidden Behavior
 
-Helm helpers are useful for names and labels. They become risky when they hide large sections of Kubernetes behavior. A helper called `orders-api.labels` is easy to understand. A helper called `orders-api.deploymentSpec` can hide most of the workload.
+Helm helpers are reusable template snippets. They are useful for names and labels, but risky when they hide large sections of Kubernetes behavior.
+
+Example: `orders-api.labels` reduces selector mistakes, while `orders-api.fullDeploymentSpec` can hide the image, probes, and resources reviewers most need to see.
 
 ```yaml
 metadata:
@@ -145,7 +153,9 @@ The second example forces reviewers to jump into another file for the most impor
 
 ## Keep Kustomize Patch Chains Short
 
-Kustomize patches are useful because they change only selected fields. They become hard to review when an overlay applies many patches to the same object.
+Kustomize patches are useful because they change only selected fields. A patch chain becomes hard to review when an overlay applies many patches to the same object.
+
+Example: if production uses separate patches for replicas, resources, environment variables, probes, and labels, reviewers must reconstruct the Deployment from several files before they know what will run.
 
 ```text
 overlays/prod/
@@ -163,7 +173,7 @@ The smell is not "patches exist." The smell is that a reviewer cannot describe t
 
 ## Use Tests and Render Checks
 
-Packaging checks should happen before apply. At minimum, CI can render the package, run chart linting when Helm is used, and ask Kubernetes for a client-side or server-side validation when a cluster is available.
+Packaging checks should happen before apply so the team catches package mistakes before Kubernetes changes live objects. At minimum, CI can render the package, run chart linting when Helm is used, and ask Kubernetes for a client-side or server-side validation when a cluster is available.
 
 ```bash
 $ helm lint ./charts/orders-api
@@ -182,7 +192,7 @@ Server-side dry run asks the Kubernetes API server to validate the objects witho
 
 ## Failure Mode: A Review Misses a Hidden Production Change
 
-Suppose a Helm chart has a value called `profile`, and the template changes several behaviors when `profile: prod` is set.
+A hidden production change is a runtime behavior change that is triggered by a vague packaging input. Suppose a Helm chart has a value called `profile`, and the template changes several behaviors when `profile: prod` is set.
 
 ```yaml
 profile: prod
@@ -259,7 +269,7 @@ The same rule applies to values. `replicaCount` is clear. `productionMode` is va
 
 ## Review Questions That Catch Sprawl Early
 
-You can catch packaging sprawl before it becomes painful by asking a few questions on every substantial chart or overlay change.
+Sprawl is easiest to stop while the package is still small. A few review questions on every substantial chart or overlay change can reveal when helpers, values, or patches are starting to hide the rendered Deployment.
 
 ```text
 Packaging review questions

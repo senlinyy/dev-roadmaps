@@ -70,6 +70,8 @@ To support automated compute lifecycles, you must completely decouple applicatio
 
 Choosing the right cloud home for application data becomes easier when you stop asking which storage service is best and start asking a smaller, more precise question: what is the shape of this data? A data shape is the way an application naturally writes, reads, modifies, and protects a specific set of records. Shape is determined by access behavior rather than file format. For example, a raw configuration file can live in a simple file bucket, a database table column, or a key-value row depending entirely on how your code needs to search and update it.
 
+A data shape functions as the interface contract between application code and durable state. It tells you whether the code needs whole-object reads, transactional tables, key lookups, operating system file paths, or recovery copies before you choose a service name.
+
 To identify a data shape before naming an AWS service, evaluate four core operational questions:
 
 * **The Placement Unit**: Decide whether the application writes and reads data as a whole, complete file, a highly structured table row, or a virtual hard drive. When storing user-generated files like receipt PDFs or images, the operating system treats them as complete, self-contained files. Databases, conversely, break data down into structured rows with strict formats. Application build systems or legacy software require raw virtual disk space plugged directly into the virtual server.
@@ -87,6 +89,8 @@ By answering these questions, you prevent a common cloud mistake: treating stora
 
 Object storage is designed for data that the application treats as a whole, complete unit. A user profile image, a receipt PDF, a nightly financial spreadsheet export, an application log archive, or a software build artifact has an identity, binary contents, metadata, and access rules. The application does not update individual lines of these files in place. Instead, it writes or replaces the entire file, and later reads it back in full by its exact name.
 
+Object storage behaves like a web API for whole files addressed by object keys. The application sends requests to put, get, list, or delete complete objects rather than opening a local filesystem handle.
+
 Amazon Simple Storage Service, commonly called S3, is the default AWS home for this object shape. S3 does not use a traditional local directory interface. Instead of opening file handles, locking directories, or renaming folders, application servers interact with S3 using standard web API requests to write, read, list, and delete files.
 
 Every S3 object is stored inside a named container called a bucket and is addressed using a unique string called an object key. A key like `receipts/2026/05/order-1042.pdf` looks like a directory path to human eyes, but in S3 it remains one flat string. Slashes simulate folders in the AWS console, but under the hood, there are no actual directories, which significantly changes how file search and prefix listings behave.
@@ -95,6 +99,8 @@ Every S3 object is stored inside a named container called a bucket and is addres
 
 Relational data is state whose meaning and correctness depend on strict rules, schemas, and relationships. An e-commerce checkout flow creates an order, several line items, a payment record, and a shipping address. These facts cannot exist in isolation. A line item is meaningless without an order header, and a customer should not be marked as billed if the system failed to record their purchase. The application needs absolute assurance that all these tables agree with each other at all times.
 
+Relational storage acts as a transaction engine for related tables. It is the right interface when correctness depends on constraints, joins, and all-or-nothing writes across connected records.
+
 Amazon Relational Database Service, commonly referred to as RDS, is the managed home for this relational shape. RDS deploys and runs traditional databases like PostgreSQL or MySQL within a private cloud network. While RDS automates infrastructure tasks like server provisioning, security updates, and storage scaling, your team remains responsible for defining tables, indexing columns, managing schema migrations, and designing queries.
 
 Relational storage relies on database transactions, ensuring that complex checkout steps either commit completely as a single unit or roll back entirely if a network error occurs. If your data correctness depends on matching keys across tables, strict data rules, and flexible queries that join tables together dynamically, RDS matches the way your data behaves.
@@ -102,6 +108,8 @@ Relational storage relies on database transactions, ensuring that complex checko
 ## Key-Value Data
 
 Some application data does not require database relationships or complex schema constraints. Instead, the application already knows the exact identity of the record it wants and needs to read or write it with predictable low latency at high scale. An API security token, a user session cache, a feature flag setting, or an active shopping cart is key-shaped data. The application simply asks to get or set the value behind a specific key.
+
+Key-value storage behaves like a managed table optimized around direct key lookups. It is strongest when the application can name the exact access pattern before it writes the data.
 
 Amazon DynamoDB is the serverless AWS database designed for this key-value shape. Unlike relational databases that must parse complex queries and scan multiple tables, DynamoDB routes requests directly to storage partitions by matching the unique primary key. With a healthy key design and enough capacity, this keeps point lookups fast even as the table grows, though hot keys and uneven access patterns can still cause throttling.
 
@@ -121,6 +129,8 @@ Choosing between EBS, EFS, and S3 comes down to the interface your application c
 ## Recovery Copies
 
 A storage architecture is incomplete until the data recovery path is fully designed. Data durability is not the same as data safety; a highly durable storage service will faithfully preserve a corrupted write or an accidental delete command. You must define what recovery copies exist, where they are stored, how long they are retained, and how you prove they actually work.
+
+Recovery copies act as historical restore points outside the active serving path. They protect against human mistakes, corrupt deployments, compromised credentials, and software bugs that a normal replica would copy immediately.
 
 Different storage shapes require different recovery mechanisms:
 

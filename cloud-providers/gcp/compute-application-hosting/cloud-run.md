@@ -25,7 +25,7 @@ aliases:
 
 ## Cloud Run Services
 
-Cloud Run is Google Cloud's fully managed, API-driven serverless container runtime designed to run HTTP-based applications, microservices, and background jobs. By abstracting the operating system, virtual machine provisioning, and cluster administration surfaces, Cloud Run allows developers to deploy a containerized application directly from Artifact Registry and instantly receive a secure, auto-scaled public HTTPS endpoint.
+Cloud Run is a managed service wrapper around a container image, source deployment, job, or worker pool. For HTTP services, it gives the container a stable service URL, revision history, scaling behavior, runtime identity, logs, and traffic routing without asking your team to operate VM hosts or a Kubernetes cluster.
 
 A common operational error is treating a container image as the complete running service. In production environments, the container image is merely the immutable package containing your application binaries and dependencies. Cloud Run wraps this package in a robust service model that governs ingress routing, revisions, traffic splits, IAM workload identities, secrets access, and auto-scaling boundaries.
 
@@ -68,7 +68,7 @@ As traced above, the beginner-visible lifecycle is simple:
 
 ## The Container Network Port Contract
 
-To successfully run inside Cloud Run, your application container must adhere to a strict network port contract. Cloud Run injects a `PORT` environment variable into the ingress container, and your server must listen on that port.
+The container port contract is the rule that tells Cloud Run which socket inside your container receives HTTP traffic. To successfully run inside Cloud Run, your application container must adhere to this strict network contract. Cloud Run injects a `PORT` environment variable into the ingress container, and your server must listen on that port.
 
 ![Cloud Run starts a container and expects it to listen on the assigned port.](/content-assets/articles/article-cloud-providers-gcp-compute-application-hosting-cloud-run-services-backend-apis/container-port-contract.png)
 
@@ -80,7 +80,7 @@ Furthermore, your application must listen on the network interface address **`0.
 
 ## Revisions and Traffic Splits
 
-Every time you deploy a new container image or modify a service's configuration settings (such as environment variables, secret mappings, or memory limits), Cloud Run creates an immutable snapshot called a **Revision**. Revisions represent a precise historical record of your application state and cannot be modified.
+A Cloud Run revision is an immutable runtime snapshot of one deployable service configuration. Every time you deploy a new container image or modify a service's configuration settings (such as environment variables, secret mappings, or memory limits), Cloud Run creates a revision. Revisions represent a precise historical record of your application state and cannot be modified.
 
 ![Each deploy creates an immutable revision, then traffic weights decide which revision receives requests.](/content-assets/articles/article-cloud-providers-gcp-compute-application-hosting-cloud-run-services-backend-apis/revisions-traffic-split.png)
 
@@ -94,7 +94,7 @@ This immutability allows security and operations teams to decouple deployment fr
 
 ## Scaling Boundaries and Downstream Protection
 
-Cloud Run autoscaling is highly responsive, dynamically adding container instances as concurrent request volume increases. However, unconstrained auto-scaling is a dangerous architectural hazard that can easily trigger cascading failures across downstream databases and APIs.
+Cloud Run autoscaling is the platform loop that adds or removes container instances based on request pressure and configuration limits. It is highly responsive, dynamically adding container instances as concurrent request volume increases. However, unconstrained autoscaling is a dangerous architectural hazard that can trigger cascading failures across downstream databases and APIs.
 
 If a sudden burst of public traffic arrives, Cloud Run can scale your service to hundreds of concurrent container instances within seconds. If each container instance opens a pool of 10 persistent TCP connections to a relational database like Cloud SQL, the database engine will quickly exhaust its file descriptor limit, lock active connections, and crash under the socket surge.
 
@@ -106,7 +106,7 @@ To defend your downstream systems, you must configure strict scaling boundaries:
 
 ## Runtime Identity and Least-Privilege IAM
 
-Securing your containerized applications requires strict separation between your deployment pipelines and your running workloads. In GCP, this boundary is enforced by attaching a dedicated **Runtime Service Account** to your Cloud Run service.
+A runtime service account is the identity a running Cloud Run service uses when it calls Google APIs. Securing your containerized applications requires strict separation between your deployment pipelines and your running workloads. In GCP, this boundary is enforced by attaching a dedicated **Runtime Service Account** to your Cloud Run service.
 
 Your CI/CD deployment pipeline utilizes a highly privileged *Deploy Identity* (often federated via Workload Identity Federation) to write code, create revisions, and modify service configurations. However, when the container executes, it inherits the permissions of the attached *Runtime Identity*.
 
@@ -114,14 +114,14 @@ This runtime service account must adhere strictly to least-privilege principles.
 
 ## Environment Configuration and Secrets Access
 
-To maintain environment-portable container images, you must decouple configuration values from your application binaries. A healthy container image is built once, tagged with a unique git SHA, and promoted systematically through development, staging, and production environments.
+Environment configuration is the runtime-specific input that changes without rebuilding the container image. To maintain environment-portable container images, you must decouple configuration values from your application binaries. A healthy container image is built once, tagged with a unique git SHA, and promoted systematically through development, staging, and production environments.
 
 *   **Environment Variables**: Use Cloud Run environment variables to inject non-sensitive settings (such as database names, logging levels, or feature flags) that differ across environments.
 *   **Secret Manager Integration**: Never bake sensitive credentials, API tokens, or cryptographic private keys directly into your container image, and avoid injecting them as raw environment variables. Instead, reference the secure paths in Secret Manager. Cloud Run resolves these paths dynamically at boot time, mounting the payload either as an environment variable or as a read-only file inside a transient in-memory volume, ensuring raw keys never touch physical storage disks.
 
 ## Logs, Health, and Revision Verification
 
-Because Cloud Run executes container instances within a sandboxed, serverless fabric, debugging application failures requires relying entirely on structured logging and health metrics. You cannot SSH into a Cloud Run container to inspect file state or run diagnostic utilities.
+Cloud Run logs and health signals are the operational evidence for a runtime you cannot SSH into. Because Cloud Run executes container instances within a sandboxed, serverless fabric, debugging application failures requires relying on structured logging and health metrics rather than direct host inspection.
 
 To ensure your application's operational health is visible:
 
@@ -130,7 +130,7 @@ To ensure your application's operational health is visible:
 
 ## Sample Service Shape
 
-An idiomatic Cloud Run service shape for the Orders API unifies these parameters into a secure, predictable configuration block:
+A sample service shape is a compact way to review the runtime contract before deployment. An idiomatic Cloud Run service shape for the Orders API unifies these parameters into a secure, predictable configuration block:
 
 | Service Parameter | Configuration Value | Operational Purpose |
 | :--- | :--- | :--- |

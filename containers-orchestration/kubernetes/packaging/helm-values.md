@@ -30,7 +30,9 @@ Values are not a separate deployment record. They are only useful when you rende
 
 ## A Default values.yaml
 
-Every chart can include a `values.yaml` file. These are chart defaults. Defaults should be safe for local rendering and clear enough that a reader understands the chart's intended shape.
+A default `values.yaml` file provides the chart's built-in inputs before any environment overrides are applied. Defaults should be safe for local rendering and clear enough that a reader understands the chart's intended shape.
+
+Example: the orders API chart can default to two replicas, a development image tag, and small resource requests, while production overrides those values in a separate file.
 
 ```yaml
 replicaCount: 2
@@ -55,7 +57,9 @@ This file should not be a dumping ground. If a value has no clear use in a templ
 
 ## Environment Values Files
 
-Environment files override defaults for a specific target. The file name should make the target obvious.
+Environment values files are override files for a specific target such as staging, production, or a preview namespace. They keep environment decisions separate from the chart's shared defaults.
+
+Example: `staging.values.yaml` can set one replica and an `rc` image tag, while `prod.values.yaml` sets three replicas and the production hostname. The file name should make the target obvious.
 
 ```text
 charts/orders-api/
@@ -98,7 +102,9 @@ The important review question is whether these differences are intentional. A pr
 
 ## How Helm Merges Values
 
-Helm starts with chart defaults and layers later values on top. A values file passed with `-f` overrides matching keys. A value passed with `--set` overrides files. If two files are passed, the later file wins for overlapping keys.
+Helm value merging is the order Helm uses to combine defaults, values files, and command-line overrides into one final `.Values` object. Helm starts with chart defaults and layers later values on top.
+
+Example: `values.yaml` can set `replicaCount: 2`, `prod.values.yaml` can override it to `3`, and `--set image.tag=hotfix.1` can override the image tag for that one command.
 
 ```bash
 $ helm template orders ./charts/orders-api \
@@ -120,7 +126,7 @@ The final rendered manifest only has one value for each field. Render it before 
 
 ## Designing Values That Reviewers Can Read
 
-A good values file should look like a set of deployment decisions, not like a second Kubernetes manifest with different names. Use names that match the decision a human is making.
+A readable values file acts like a short release form for the chart. It should show the deployment decisions a human is making, not recreate a second Kubernetes manifest with different names. Use value names that match the decision being reviewed.
 
 ```yaml
 api:
@@ -146,7 +152,9 @@ That kind of generic escape hatch can be useful for a shared platform chart, but
 
 ## Rendering Values Into Templates
 
-Templates should show where each value lands. This Deployment snippet uses values for replicas, image, port, and resources.
+Rendering values into templates is the step where Helm replaces placeholders with concrete YAML fields. Templates should show where each important value lands.
+
+Example: `replicaCount: 3` should become `spec.replicas: 3`, and `image.tag: 2026.05.07` should become the container image tag in the Deployment.
 
 ```yaml
 spec:
@@ -178,7 +186,7 @@ The grep command is not a full validation tool. It is a quick human check that t
 
 ## Failure Mode: A Missing Value Becomes a Bad Manifest
 
-Suppose the template expects `.Values.image.tag`, but a new environment file only supplies `image.repository`. The rendered image can become invalid.
+A missing value is a chart input that the template expects but no values file provides. Suppose the template expects `.Values.image.tag`, but a new environment file only supplies `image.repository`. The rendered image can become invalid.
 
 ```bash
 $ helm template orders ./charts/orders-api -f environments/preview.values.yaml

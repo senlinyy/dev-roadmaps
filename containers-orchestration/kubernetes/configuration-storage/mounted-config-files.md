@@ -39,7 +39,9 @@ The mental model is simple: Kubernetes creates a small filesystem view from the 
 
 ## Mounting a ConfigMap as a Directory
 
-Start with a ConfigMap that has one multi-line key. The key name is the filename you want inside the mounted directory.
+A mounted ConfigMap directory turns ConfigMap keys into files inside the container. The key name becomes the filename, and the key value becomes the file contents.
+
+Example: a key named `cancellation-policy.yaml` can appear inside the Pod as `/etc/devpolaris/orders/cancellation-policy.yaml` so the orders API reads it like an ordinary YAML file.
 
 ```yaml
 apiVersion: v1
@@ -101,7 +103,9 @@ Those commands prove the file exists, but they should not be your normal product
 
 ## Mounting One File with items
 
-A ConfigMap can contain several keys, but a container may need only one. The `items` field lets you choose specific keys and filenames. This reduces accidental coupling between one ConfigMap and every container that mounts it.
+The `items` field is an explicit file selection list for a ConfigMap or Secret volume. It lets you choose specific keys and filenames instead of mounting every key.
+
+Example: if a ConfigMap contains three policy files but the orders API needs only `cancellation-policy.yaml`, `items` can expose just that file as `policy.yaml`. This reduces accidental coupling between one ConfigMap and every container that mounts it.
 
 ```yaml
 volumes:
@@ -126,7 +130,9 @@ If a listed key does not exist, the Pod fails to start. Kubernetes treats `items
 
 ## Using subPath Carefully
 
-Sometimes you want to mount one file into a directory that already contains other files from the image. Kubernetes has a `subPath` feature for this. It mounts one file from a volume at one target path instead of mounting the whole volume directory.
+`subPath` is a targeted mount for one file or subdirectory from a larger volume. It is useful when the image already contains other files in the target directory and you do not want the volume mount to hide them.
+
+Example: mount only `policy.yaml` at `/app/config/policy.yaml` while leaving `/app/config/defaults.yaml` from the image visible.
 
 ```yaml
 volumeMounts:
@@ -190,7 +196,9 @@ The log proves the application used the file without copying the key into output
 
 ## Reload Behavior and Application Design
 
-Mounted ConfigMap and Secret volumes can update while a Pod is running, but your application still has to notice. A process that reads a YAML file once during startup will keep using the old parsed value until it restarts or reloads. A process that watches the file or reloads on a signal can pick up changes differently.
+Reload behavior is how a running application notices a mounted file changed. Kubernetes can update mounted ConfigMap and Secret volumes while a Pod is running, but your application still has to reread the file or restart.
+
+Example: if `devpolaris-orders-api` reads `policy.yaml` only during startup, changing the ConfigMap file does not change request behavior until the Pod restarts.
 
 For `devpolaris-orders-api`, the simplest design is startup validation plus rollout restart. The app reads `policy.yaml`, validates it, logs the policy version, and serves traffic. When the policy changes, the Deployment restarts so every Pod reads the new file from startup.
 
@@ -240,7 +248,9 @@ The fix is to mount the ConfigMap at a dedicated path, or use `subPath` for one 
 
 ## Diagnostics from Pod to Process
 
-Mounted file problems can fail at several layers. Kubernetes may fail to create the Pod if the object or key is missing. The container may start but the application may fail because the file path is wrong. The application may start but behave incorrectly because the file content is valid YAML with the wrong meaning.
+A mounted file diagnostic is a path check from the Kubernetes object to the process that reads it. The value starts as a ConfigMap or Secret key, becomes a file in a mounted volume, and then becomes application input.
+
+Mounted file problems can fail at any of those layers. Kubernetes may fail to create the Pod if the object or key is missing. The container may start but the application may fail because the file path is wrong. The application may start but behave incorrectly because the file content is valid YAML with the wrong meaning.
 
 Use a layered diagnostic path:
 
@@ -272,7 +282,9 @@ The skill is not memorizing a preferred pattern. The skill is tracing how the va
 
 ## File Ownership and Read-Only Expectations
 
-Mounted ConfigMap and Secret files are meant to be inputs. The application should not try to edit them. If `devpolaris-orders-api` needs to generate a local cache from a policy file, it should write that cache to a separate writable path such as an `emptyDir` or PVC, not back into the mounted config directory.
+File ownership describes which user can read or write a path inside the container. Mounted ConfigMap and Secret files are meant to be Kubernetes-owned inputs, not application-owned output files. The application should not try to edit them.
+
+If `devpolaris-orders-api` needs to generate a local cache from a policy file, it should write that cache to a separate writable path such as an `emptyDir` or PVC, not back into the mounted config directory.
 
 A write attempt usually fails with a read-only filesystem error.
 

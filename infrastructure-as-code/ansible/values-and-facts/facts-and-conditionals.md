@@ -21,6 +21,8 @@ id: article-infrastructure-as-code-ansible-facts-conditionals
 
 ## The Introspection of Machine States
 
+Facts are host observations collected before or during a run, and conditionals are task-level checks that decide whether those observations require action.
+
 In system administration and configuration management, host facts are structured data objects containing system details that Ansible discovers from a managed server at fact-gathering time. Instead of hardcoding task branches based on assumptions about your servers, you use host facts to query the machine's observed hardware capabilities, operating system distribution, IP addresses, and kernel architecture. Conditionals are logical statements (like `when` clauses) that evaluate these facts, instructing Ansible to execute specific tasks only when the host matches the required operational parameters.
 
 To see why host introspection is critical for robust automation, consider our scenario. You are managing a configuration playbook that deploys web server software across a mixed server cluster containing both Debian-based (Ubuntu) and Red Hat-based (Rocky Linux) operating systems:
@@ -61,7 +63,9 @@ Here is an early, comment-free preview of a playbook task block demonstrating ho
 
 ## Fact Gathering: The Setup Module
 
-When a playbook has `gather_facts: true` (which is the default configuration for almost all Ansible plays), the very first task executed is a hidden system step commonly labeled `Gathering Facts`.
+The setup module is Ansible's built-in host inspection module. It collects details such as operating system family, CPU architecture, memory, network interfaces, and mount points so later tasks can make decisions from observed host data.
+
+Example: the setup module can report `ansible_facts["os_family"] == "Debian"` for an Ubuntu host, allowing the playbook to use `apt` there and skip that task on Rocky Linux. When a playbook has `gather_facts: true`, the very first task executed is a hidden system step commonly labeled `Gathering Facts`.
 
 Under the hood, this task executes the built-in `ansible.builtin.setup` module on the managed server:
 When a play begins, the control node opens an SSH channel to each target and transfers the setup module as a temporary Python script. The remote Python interpreter executes the script, which reads OS release files, queries the kernel for CPU architecture and memory size, enumerates network interfaces, and collects any mounted filesystem paths. The resulting fact dictionary is serialized as a JSON blob and written back to the control node over the same SSH channel, where Ansible stores it in the host's variable scope for the rest of the play.
@@ -88,7 +92,9 @@ Relying on physical host facts rather than inventory assumptions protects your s
 
 ## Dynamic Branching: The when Clause
 
-You implement dynamic conditional branching in Ansible using the `when` keyword. The `when` clause accepts a standard Python-like comparison expression that evaluates variables, host facts, or task outcomes.
+The `when` clause is Ansible's task-level condition. It decides whether a specific task should run on a specific host based on variables, facts, or registered results.
+
+Example: `when: ansible_facts["os_family"] == "Debian"` lets an `apt` task run only on Debian-family hosts. You implement dynamic conditional branching in Ansible using the `when` keyword, which accepts a Python-like comparison expression.
 
 ```yaml
 when: ansible_facts["os_family"] == "Debian"
@@ -100,7 +106,9 @@ Each target host evaluates the conditional individually. If the expression resol
 
 ## Under the Hood: Fact Discovery and Introspection
 
-To appreciate how Ansible gathers this massive dictionary of host specifications, it helps to look at the low-level systems calls and directory scans executed by the `setup` module on the managed server.
+Fact discovery is a series of read-only inspections on the managed host. The setup module reads operating system files and virtual kernel directories, then sends the resulting dictionary back to the control node.
+
+Example: reading `/etc/os-release` tells Ansible whether a host is Ubuntu or Rocky Linux, while reading `/proc/meminfo` reports memory size. These details become keys under `ansible_facts` for later tasks.
 
 When the `setup` module runs on a Linux host, it executes a highly structured set of system introspection scans:
 
@@ -135,21 +143,23 @@ This operating system introspection makes `ansible_facts` a useful snapshot of w
 
 ## Defensive Conditional Coding
 
-Because facts are gathered dynamically from the remote host, you must write your conditionals defensively. If a playbook targets a minimal Docker container, a bare-metal hypervisor, or a legacy network device, certain standard system facts (like `default_ipv4` or `/proc` metadata) might be completely missing.
+Defensive conditional coding means checking whether a fact exists before using nested values from it. This prevents a missing fact from crashing the playbook.
+
+Example: a minimal container may not report `ansible_facts["default_ipv4"]`, so a task that reads `ansible_facts["default_ipv4"]["address"]` directly can fail before it does useful work. Because facts are gathered dynamically from the remote host, you must write your conditionals for incomplete host data.
 
 If a task attempts to read a missing key directly (such as `ansible_facts["default_ipv4"]["address"]`), the Ansible compiler will crash immediately with an `Undefined variable` error.
 
 To prevent these runtime crashes, you write defensive conditionals using Python dictionary get methods:
 
 ### 1. Using the `get()` Method
-Instead of accessing keys directly, use `get()` to provide a safe fallback value (such as `None` or an empty string) if the key is missing:
+The `get()` method is a safe dictionary lookup. Instead of crashing when a key is missing, it returns a fallback value such as `None` or an empty string:
 
 ```yaml
 when: ansible_facts.get("os_family") == "Debian"
 ```
 
 ### 2. Testing Defined Boundaries
-You can explicitly check if a nested dictionary key exists using the `defined` test:
+The `defined` test checks whether a value exists before the task relies on it. Use it when a later expression needs a nested fact:
 
 ```yaml
 when: ansible_facts["default_ipv4"] is defined

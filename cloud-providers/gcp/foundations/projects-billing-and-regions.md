@@ -25,7 +25,7 @@ aliases:
 
 ## Logical Hierarchy and Policy Inheritance
 
-When you first start building in the cloud, launching a few virtual machines or storage buckets inside a single personal project is simple. But as your team grows and you begin managing dozens of separate microservices, databases, and environments (like development, staging, and production), placing resources casually without a clear plan quickly becomes a recipe for chaos. You can easily lose track of which team owns which server, find yourself paying for "orphaned" virtual machines that someone forgot to turn off, or make a security mistake that exposes sensitive customer files. To prevent this, Google Cloud organizes all your resources into a structured, logical family tree that mirrors your company's actual organizational chart.
+The GCP resource hierarchy is the control-plane structure that places projects under folders and organizations so policy, ownership, and administration flow predictably. When you first start building in the cloud, launching a few virtual machines or storage buckets inside a single personal project is simple. But as your team grows and you begin managing dozens of separate microservices, databases, and environments (like development, staging, and production), casual placement makes ownership, security, and cleanup harder to review. To prevent this, Google Cloud organizes resources into a structured hierarchy that can mirror teams, environments, or compliance boundaries.
 
 ![Organization policies flow downward through folders until they constrain project resources.](/content-assets/articles/article-cloud-providers-gcp-foundations-organizations-folders-projects-billing-accounts/hierarchy-policy-map.png)
 
@@ -61,7 +61,7 @@ For example, if your security team configures an organization-wide policy that b
 
 ## Decoupled Financial Controls
 
-In Google Cloud, resource management and financial accountability are decoupled. A project represents the logical boundary for deploying resources, enabling APIs, and configuring security. However, a project has no native capacity to pay for the resources it houses. To cover these costs, a project must be explicitly linked to a Cloud Billing Account.
+A Cloud Billing Account is the administrative payment object that pays for one or more projects. In Google Cloud, resource management and financial accountability are decoupled. A project represents the logical boundary for deploying resources, enabling APIs, and configuring security. However, a project has no native capacity to pay for the resources it houses. To cover these costs, a project must be explicitly linked to a Cloud Billing Account.
 
 ![Resource ownership and payment authority are separate checks.](/content-assets/articles/article-cloud-providers-gcp-foundations-organizations-folders-projects-billing-accounts/billing-link-boundary.png)
 
@@ -78,7 +78,7 @@ Instead, a developer must be granted the `Billing Account User` role on the spec
 
 ## Resource Quotas and Limits
 
-Before you can safely scale workloads in Google Cloud, you must navigate resource quotas. Quotas are control-plane boundaries enforced by Google to prevent accidental resource exhaustion, guard against cost overruns from runway scripts, and protect Google's physical capacity pools from sudden tenant spikes.
+Quotas are project, region, or service limits that cap how much cloud capacity or API activity a workload can consume. Before you can safely scale workloads in Google Cloud, you must navigate these control-plane boundaries, which Google enforces to prevent accidental resource exhaustion, guard against cost overruns from runaway scripts, and protect physical capacity pools from sudden tenant spikes.
 
 Quotas are managed and enforced across several practical dimensions:
 
@@ -90,7 +90,7 @@ When you request a resource creation, Google Cloud checks the relevant service q
 
 ## Physical Geography: Regions and Latency
 
-While projects and folders establish logical boundaries, your application still runs on physical hardware housed within real datacenters. In GCP, these physical environments are divided into Regions and Zones.
+Regions and zones are the location model that decides where compute, storage, and managed service capacity physically run. While projects and folders establish logical boundaries, your application still runs on hardware housed within real datacenters. In GCP, these physical environments are divided into Regions and Zones.
 
 A Region represents a distinct geographic area, such as Council Bluffs, Iowa (`us-central1`), St. Ghislain, Belgium (`europe-west1`), or Frankfurt, Germany (`europe-west3`). Each region consists of zones that are isolated from one another for availability planning. Choosing the right region for your workload requires balancing three critical engineering constraints:
 
@@ -102,7 +102,7 @@ A foundational habit for web application design is regional alignment. Keeping y
 
 ## Zonal Boundaries and Physical Isolation
 
-Within each region, Google provides multiple isolated locations called Zones, typically designated as `us-central1-a`, `us-central1-b`, and `us-central1-c`. A zone maps directly to one or more physical datacenters equipped with independent power generators, cooling systems, and network feeds.
+A zone is the smallest common placement boundary for many GCP resources, such as individual VM instances and Persistent Disks. Within each region, Google provides multiple isolated locations called Zones, typically designated as `us-central1-a`, `us-central1-b`, and `us-central1-c`. A zone maps to one or more physical datacenters equipped with independent power, cooling, and network feeds.
 
 To design resilient architectures, you must distribute your resources across these zonal boundaries. If you run a zonal service (such as Compute Engine virtual machines) and place all your instances within a single zone, a localized power grid failure in that zone's datacenter will take down your entire application. By configuring regional managed services or manually spreading zonal VMs across at least two zones, you ensure that if one physical datacenter experiences an outage, healthy zones can seamlessly absorb the application traffic.
 

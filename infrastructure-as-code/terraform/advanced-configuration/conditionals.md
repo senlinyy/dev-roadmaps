@@ -22,13 +22,17 @@ id: article-iac-terraform-advanced-conditionals
 
 ## Why Conditionals Matter
 
+Terraform conditionals are plan-time expressions that choose one value or resource shape from two branches based on a boolean result.
+
 Infrastructure requirements differ between environments in ways that go beyond just size and count. A development environment might not need a CloudWatch alarm or a DDoS protection plan. A production environment does. A staging environment might need a read replica for the database. Development does not.
 
 Without conditionals, you have two options: duplicate the configuration (one version with the alarm, one without), or always create the alarm even in environments where it is unnecessary. Both are bad. Duplication leads to drift. Always creating everything wastes money and creates clutter in environments where the feature is not needed.
 
-Conditionals let you write one configuration that creates different sets of resources based on input values. The condition is declared in code, visible in code review, and deterministic — the same inputs always produce the same infrastructure.
+Conditionals let you write one configuration that creates different sets of resources based on input values. The condition is declared in code, visible in code review, and deterministic, the same inputs always produce the same infrastructure.
 
 ## The Ternary Expression
+
+A ternary expression is Terraform's compact "if this, then that, otherwise the other value" syntax. It returns one of two values based on a true-or-false condition. Example: `var.environment == "prod" ? "t3.medium" : "t3.micro"` selects a larger instance type only for production.
 
 The foundation of all conditionals in Terraform is the ternary expression. You have already seen it in examples throughout the previous articles. The syntax is:
 
@@ -50,15 +54,15 @@ locals {
 }
 ```
 
-The last local, `enable_deletion_protection`, does not need a ternary at all — the condition itself (`var.environment == "prod"`) is already a boolean, so you can assign it directly.
+The last local, `enable_deletion_protection`, does not need a ternary at all, the condition itself (`var.environment == "prod"`) is already a boolean, so you can assign it directly.
 
 Comparison operators you can use in conditions:
 - `==` (equal to)
 - `!=` (not equal to)
 - `>`, `<`, `>=`, `<=` (numeric comparisons)
-- `&&` (and — both sides must be true)
-- `||` (or — at least one side must be true)
-- `!` (not — inverts a boolean)
+- `&&` (and, both sides must be true)
+- `||` (or, at least one side must be true)
+- `!` (not, inverts a boolean)
 
 ```hcl
 locals {
@@ -68,6 +72,8 @@ locals {
 ```
 
 ## Toggling a Resource On or Off with count
+
+Resource toggling means making a whole resource optional. Terraform does this by setting `count` to `1` when the resource should exist and `0` when it should not. Example: create a CloudWatch alarm in production, but create no alarm in development.
 
 The most common use of conditionals in Terraform is controlling whether a resource is created at all. You do this by combining `count` with a ternary expression:
 
@@ -109,15 +115,17 @@ resource "aws_wafv2_web_acl_association" "main" {
 
 ## Referencing a Resource That Might Not Exist
 
-When you create a resource conditionally with `count`, its Terraform address becomes a list — either a list with one element (`[0]` when `count` is 1) or an empty list (`[]` when `count` is 0). This affects how other resources reference it.
+A conditional resource may have zero instances. That means every reference must handle the possibility that there is no object to read. Example: `aws_sns_topic.alerts[0].arn` works only when alerts are enabled and the list has an element at index `0`.
 
-If you try to reference a conditional resource with `aws_sns_topic.alerts.arn`, Terraform reports an error — that syntax expects a single resource, but a `count` resource is always a list. You must use the index syntax:
+When you create a resource conditionally with `count`, its Terraform address becomes a list, either a list with one element (`[0]` when `count` is 1) or an empty list (`[]` when `count` is 0). This affects how other resources reference it.
+
+If you try to reference a conditional resource with `aws_sns_topic.alerts.arn`, Terraform reports an error, that syntax expects a single resource, but a `count` resource is always a list. You must use the index syntax:
 
 ```hcl
 alarm_actions = [aws_sns_topic.alerts[0].arn]
 ```
 
-But this will fail if `count` is `0` — there is no element at index `0` in an empty list. To safely reference a conditional resource from another conditional resource, both resources need matching conditions:
+But this will fail if `count` is `0`, there is no element at index `0` in an empty list. To safely reference a conditional resource from another conditional resource, both resources need matching conditions:
 
 ```hcl
 resource "aws_sns_topic" "alerts" {
@@ -135,7 +143,7 @@ resource "aws_cloudwatch_metric_alarm" "high_cpu" {
 
 Both use the same condition (`var.enable_alerts`). When alerts are disabled, both resources have `count = 0` and neither is created. When alerts are enabled, both have `count = 1`, and the alarm can safely reference the SNS topic at index `[0]`.
 
-An alternative to the `[0].attribute` pattern is the `one()` function, introduced in Terraform 1.0. It takes a list of zero or one elements and returns either the single element or `null`:
+An alternative to the `[0].attribute` pattern is the `one()` function, available in Terraform v0.15 and later. It takes a list of zero or one elements and returns either the single element or `null`:
 
 ```hcl
 locals {
@@ -147,7 +155,7 @@ If `aws_sns_topic.alerts` has `count = 1`, `one()` returns the ARN. If `count = 
 
 ## Conditional Attribute Values
 
-Not all conditionals toggle a whole resource. Often you need to change a specific attribute based on a condition while keeping the rest of the resource the same.
+An attribute conditional changes one setting while keeping the resource itself present. This is useful when environments share the same resource shape but differ in size or safety settings. Example: a database can use `multi_az = true` in production and `multi_az = false` in development.
 
 ![null omits an argument, while an empty string is still sent as a real value to the provider.](/content-assets/articles/article-iac-terraform-advanced-conditionals/null-vs-omitted-boundary.png)
 
@@ -156,7 +164,6 @@ A database resource that uses multi-AZ replication in production but not in deve
 ```hcl
 resource "aws_db_instance" "main" {
   engine            = "postgres"
-  engine_version    = "15.4"
   instance_class    = var.environment == "prod" ? "db.t3.large" : "db.t3.micro"
   allocated_storage = var.environment == "prod" ? 100 : 20
   multi_az          = var.environment == "prod"
@@ -203,6 +210,8 @@ The `local.db_config[var.environment]` lookup retrieves the settings for the cur
 
 ## Filtering with for_each
 
+Filtering with `for_each` means creating resources only for the items in a collection that match a condition. It keeps identity stable because each selected item still has its own key. Example: attach an admin IAM policy only to users where `is_admin = true`.
+
 When you have a collection of items and only some of them need a particular resource, use a `for` expression with an `if` clause to filter the collection before passing it to `for_each`.
 
 Suppose you have a map of team members, and only some of them should have admin IAM policies:
@@ -233,9 +242,13 @@ resource "aws_iam_user_policy_attachment" "admin" {
 
 The `for_each` for the admin policy attachment filters to only the members where `is_admin` is true. Terraform creates one policy attachment per admin user and no attachment for non-admin users.
 
+The `AdministratorAccess` policy is a teaching shortcut in this example. In production IAM, prefer least-privilege policies scoped to the exact actions each person or workload needs.
+
 This pattern is cleaner than a boolean `count` approach when you have a collection with mixed properties. The filtering happens close to the resource that needs it, and the condition is visible in the `for_each` expression.
 
 ## Nested Conditionals and When to Avoid Them
+
+A nested conditional is a conditional expression inside another conditional expression. It can express more than two choices, but it becomes hard to read quickly. Example: choosing an instance type for `prod`, `staging`, and `dev` is often clearer as a map lookup than as several ternaries chained together.
 
 Conditional expressions can be nested: the value in one branch can itself be another conditional. This lets you express three-way or four-way decisions:
 
@@ -270,7 +283,11 @@ Reserve nested ternaries for two-level decisions and use maps for three or more 
 
 ## Conditions That Depend on Unknown Values
 
-Terraform evaluates conditions during the plan phase, before making any API calls. This means conditions can only reference values that are known at plan time. Values from the cloud provider that are only assigned when a resource is created — like an auto-assigned IP address, an ARN generated by AWS, or a randomly generated password — are "unknown" during the plan phase.
+An unknown value is a value Terraform will only learn during apply. Conditions that decide resource count or keys must be known during plan, so they cannot depend on values like new private IPs or generated ARNs. Example: `count = var.environment == "prod" ? 1 : 0` works, but `count = length(aws_instance.app.private_ip) > 0 ? 1 : 0` does not.
+
+Terraform evaluates resource shape during the plan phase, before making any API calls. Values from the cloud provider that are only assigned when a resource is created, like an auto-assigned IP address, an ARN generated by AWS, or a randomly generated password, are "unknown" during the plan phase.
+
+More precisely, Terraform expressions can carry unknown values through a plan in many normal arguments. The hard boundary is resource shape: arguments such as `count` and `for_each` keys must be known before Terraform can decide how many graph nodes to create. It is fine for an EC2 instance's private IP to be unknown as an output, but it is not fine to use that unknown private IP to decide whether a security group resource exists.
 
 If your condition depends on an unknown value, Terraform cannot evaluate it during plan and reports an error:
 
@@ -282,7 +299,7 @@ resource "aws_security_group" "conditional" {
 
 `aws_instance.app.private_ip` is not known until the instance is created, so this condition cannot be evaluated during plan. Terraform will reject this with an error about using a known-only-after-apply value in a `count` expression.
 
-The fix is to restructure the condition around known values — values that come from variables or data sources that can be evaluated before apply, not from the attributes of resources that are being created:
+The fix is to restructure the condition around known values, values that come from variables or data sources that can be evaluated before apply, not from the attributes of resources that are being created:
 
 ```hcl
 resource "aws_security_group" "conditional" {
@@ -290,7 +307,7 @@ resource "aws_security_group" "conditional" {
 }
 ```
 
-`var.environment` is always known at plan time. Conditions based on input variables always work. If you find yourself writing a condition that depends on a resource attribute, reconsider whether the condition is expressing the right thing — what you actually want to know is usually something about the inputs (the environment, a feature flag, a size setting), not the runtime attributes of another resource.
+`var.environment` is always known at plan time. Conditions based on input variables always work. If you find yourself writing a condition that depends on a resource attribute, reconsider whether the condition is expressing the right thing, what you actually want to know is usually something about the inputs (the environment, a feature flag, a size setting), not the runtime attributes of another resource.
 
 ## Putting It All Together
 
@@ -302,7 +319,7 @@ Each condition in the configuration is a documented design decision: "this alarm
 
 ## What's Next
 
-Loops create multiple resources. Conditionals decide which resources exist. The final advanced configuration topic combines both techniques: how to deploy infrastructure changes — especially changes that would normally require a brief outage — in a way that keeps your application running throughout the update.
+Loops create multiple resources. Conditionals decide which resources exist. The final advanced configuration topic combines both techniques: how to deploy infrastructure changes, especially changes that would normally require a brief outage, in a way that keeps your application running throughout the update.
 
 
 ![Conditionals summary: choose values, toggle optional resources, handle missing outputs, and avoid tangled logic.](/content-assets/articles/article-iac-terraform-advanced-conditionals/conditionals-summary.png)
@@ -311,6 +328,8 @@ Loops create multiple resources. Conditionals decide which resources exist. The 
 
 **References**
 
-- [Conditional Expressions (HashiCorp Documentation)](https://developer.hashicorp.com/terraform/language/expressions/conditionals) — Full reference for the ternary expression, type constraints, and evaluation rules.
-- [count Meta-Argument (HashiCorp Documentation)](https://developer.hashicorp.com/terraform/language/meta-arguments/count) — Reference for using `count` as a resource toggle.
-- [The one() Function (HashiCorp Documentation)](https://developer.hashicorp.com/terraform/language/functions/one) — Reference for safely extracting a single value from a zero-or-one-element list.
+- [Conditional Expressions (HashiCorp Documentation)](https://developer.hashicorp.com/terraform/language/expressions/conditionals), Full reference for the ternary expression, type constraints, and evaluation rules.
+- [count Meta-Argument (HashiCorp Documentation)](https://developer.hashicorp.com/terraform/language/meta-arguments/count), Reference for using `count` as a resource toggle.
+- [The one() Function (HashiCorp Documentation)](https://developer.hashicorp.com/terraform/language/functions/one), Reference for safely extracting a single value from a zero-or-one-element list.
+- [References to Values (HashiCorp Documentation)](https://developer.hashicorp.com/terraform/language/expressions/references), Guidance on unknown values and when Terraform can evaluate references.
+- [RDS PostgreSQL Versions (AWS Documentation)](https://docs.aws.amazon.com/AmazonRDS/latest/PostgreSQLReleaseNotes/postgresql-versions.html), Current AWS version support guidance to avoid stale minor-version examples.

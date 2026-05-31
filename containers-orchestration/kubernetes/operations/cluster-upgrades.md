@@ -41,7 +41,9 @@ The safe path is staged evidence, not hope.
 
 ## Know What Is Being Upgraded
 
-Managed Kubernetes services hide some operational work, but they do not remove the responsibility to understand the change. A provider may upgrade the control plane first, then node pools. Some add-ons may be managed by the provider, while others are installed by your platform team.
+A cluster upgrade is a coordinated change across the software that accepts Kubernetes objects, schedules work, and runs Pods. It can touch the control plane that stores API objects, the nodes that run Pods, and add-ons that provide DNS, networking, storage, ingress, and metrics. Managed Kubernetes services hide some operational work, but they do not remove the responsibility to understand which layer is changing.
+
+Example: a provider may upgrade the API server first, then node pools, while your platform team separately upgrades the ingress controller or CSI storage driver.
 
 Capture the starting state:
 
@@ -76,7 +78,9 @@ If networking, DNS, metrics, or storage add-ons are incompatible with the target
 
 ## Check API Compatibility First
 
-Kubernetes removes deprecated API versions over time. A manifest that worked last year may fail against a newer API server. Check manifests and live objects for deprecated versions before the upgrade window.
+API compatibility means your manifests use resource versions the target Kubernetes API server still accepts. Kubernetes removes deprecated API versions over time, so a manifest that worked last year may fail against a newer API server.
+
+Example: an old Ingress using `extensions/v1beta1` would fail on modern clusters, while `networking.k8s.io/v1` is the stable shape to use. Check manifests and live objects for deprecated versions before the upgrade window.
 
 ```bash
 $ kubectl get ingress -A -o jsonpath='{range .items[*]}{.metadata.namespace}{"/"}{.metadata.name}{" "}{.apiVersion}{"\n"}{end}'
@@ -98,7 +102,9 @@ A dry run proves the API server accepts the object shapes. Production rehearsal 
 
 ## Prepare Workloads for Node Drains
 
-Node upgrades usually move Pods. A node is cordoned so no new Pods are scheduled there, then drained so existing Pods are evicted and recreated on other nodes. Your workload must tolerate that movement.
+A node drain is the planned process of moving Pods off a node so the node can be upgraded or maintained. A node is cordoned so no new Pods are scheduled there, then drained so existing Pods are evicted and recreated on other nodes.
+
+Example: if `worker-2` drains, one orders API Pod may be evicted and a replacement should become ready on another node while the remaining replicas keep serving traffic.
 
 For `devpolaris-orders-api`, three replicas across nodes are a good start. A PodDisruptionBudget can tell Kubernetes how much voluntary disruption is acceptable.
 
@@ -131,7 +137,9 @@ After the drain, the Deployment should return to the desired ready count on othe
 
 ## Upgrade Control Plane and Nodes Separately
 
-The control plane handles API requests and reconciliation. Nodes run your Pods. Many upgrade processes update the control plane first and node pools after. Treat those as separate validation points.
+The control plane handles API requests, validation, scheduling decisions, and reconciliation. Nodes run your Pods through kubelet and the container runtime. Many upgrade processes update the control plane first and node pools after, so treat those as separate validation points.
+
+Example: after the control plane upgrade, prove Deployments still reconcile. During node upgrades, prove Pods can restart on upgraded nodes and pass readiness.
 
 After the control plane upgrade, verify that controllers still reconcile and that normal API operations work:
 
@@ -159,9 +167,9 @@ The new node `worker-4` is serving a ready replica. That is a better proof than 
 
 ## Validate With Real Workload Evidence
 
-A cluster upgrade is not done when every node says `Ready`. It is done when critical workloads prove they can serve traffic, scale, resolve DNS, write storage, and report metrics.
+Upgrade validation is the proof that workloads still behave correctly after the platform changes underneath them. A cluster upgrade is not done when every node says `Ready`. It is done when critical workloads prove they can serve traffic, scale, resolve DNS, write storage, and report metrics.
 
-For `devpolaris-orders-api`, collect a small evidence set:
+For `devpolaris-orders-api`, a useful evidence set proves the Deployment is available, the Service can route to ready Pods, dependencies answer, and metrics still flow:
 
 ```bash
 $ kubectl -n orders get deploy devpolaris-orders-api
@@ -183,7 +191,7 @@ This proves Deployment availability, in-cluster Service routing, readiness depen
 
 ## Failure Mode: Pods Cannot Move
 
-The most common upgrade failure is a drain that cannot evict Pods safely. A PDB may require too many Pods available, or the cluster may lack spare capacity.
+Pods cannot move when Kubernetes cannot safely evict them from the node being upgraded and place replacements elsewhere. The most common cause is a PodDisruptionBudget that allows no voluntary disruption, or a cluster that lacks spare CPU, memory, or topology capacity. In an orders API upgrade, this means a drain can stop before the provider ever replaces the node.
 
 ```bash
 $ kubectl drain worker-2 --ignore-daemonsets --delete-emptydir-data
@@ -203,7 +211,7 @@ The PDB requires all three replicas to stay available, so no voluntary disruptio
 
 ## Upgrade Review Questions
 
-A good upgrade review connects platform change to workload behavior.
+An upgrade review connects a platform version change to the application behavior that must survive it. Reviewers should be able to name the target version, the workload evidence, and the pause point if a node drain or add-on upgrade fails. For example, the `orders` namespace should have a preflight record for deprecated APIs, PDB behavior, and post-upgrade health checks before production nodes start rolling.
 
 | Question | Evidence |
 |----------|----------|
@@ -244,7 +252,7 @@ Validation:
   no new Warning events for orders namespace
 ```
 
-This kind of record keeps the team from treating the provider console as the only source of truth. The provider may say the upgrade completed while application endpoints are still recovering.
+This kind of record keeps the team from treating the provider console as the only recovery evidence. The provider may say the upgrade completed while application endpoints are still recovering.
 
 A staging rehearsal should include at least one controlled drain. The point is to discover PDB, topology, and capacity problems before production.
 

@@ -28,6 +28,8 @@ aliases:
 
 ## Why Runtime Matters
 
+A running container is one execution of an image with its own process, runtime settings, identity, writable layer, and recorded state.
+
 The previous Docker work produced an image for the orders API. The image contains a filesystem, installed dependencies, metadata, and a default command. It can sit on a laptop or in a registry without doing anything. Then someone runs it and a different set of problems appears.
 
 - The command prints a long id and the terminal prompt comes back, but the app is supposed to be running somewhere.
@@ -37,13 +39,15 @@ The previous Docker work produced an image for the orders API. The image contain
 
 Those are runtime problems. The image is the packaged starting point. A container is the object Docker creates when it combines that image with runtime settings, prepares a writable layer, attaches isolation boundaries, and starts a process.
 
-Once that transition is clear, the Docker CLI stops looking like a pile of verbs. `docker ps`, `docker logs`, `docker inspect`, `docker stop`, and `docker rm` are different ways to ask what Docker created, what process ran, and what state is still left behind.
+Once that transition is clear, the Docker CLI stops reading as disconnected verbs. `docker ps`, `docker logs`, `docker inspect`, `docker stop`, and `docker rm` are different ways to ask what Docker created, what process ran, and what state is still left behind.
 
 ## The Mental Model
 
 An image is inert. A container has identity and history. It has a name, id, created time, process state, network settings, environment values, mounts, logs, and a writable layer for changes made while that container exists.
 
 The center of the model is the main process. Docker does not boot a full guest operating system and then hope the right services start. It starts the configured command. If that command keeps running, the container is running. If that command exits, the container exits.
+
+Example: if the image default is `node dist/server.js`, the container stays `Up` while that Node process stays alive. If you override the run with `node --version`, the command prints a version and exits, so the container exits normally.
 
 ```mermaid
 flowchart TD
@@ -62,6 +66,15 @@ This is the first Docker runtime boundary. The image describes what the containe
 
 ## What Docker Creates
 
+A container record is Docker's runtime object for one created run, including the image reference, configuration, network attachments, logs, and writable layer.
+
+
+![Diagram showing an image becoming a container configuration and then a running process boundary](/content-assets/articles/article-containers-orchestration-docker-docker-cli-basics/docker-run-runtime-map.png)
+
+*A container run starts with image metadata, adds runtime flags, and creates a process boundary.*
+
+The record is the thing Docker can inspect later. It tells you which image was used, which command ran, which ports were published, which environment values were passed, and what writable layer belonged to that run.
+
 A plain run might look like this:
 
 ```bash
@@ -75,6 +88,8 @@ The writable layer is important even when you are not thinking about storage yet
 That explains why a container can be removed without deleting the image. The image is the reusable package. The container is one run of that package with one layer of runtime changes.
 
 ## The Main Process
+
+The main process is the process Docker watches to decide whether the container is running or exited.
 
 Docker reports container state by watching the main process. If the orders API starts `node dist/server.js`, that Node process is the life of the container. When it exits, Docker records the exit code.
 
@@ -91,6 +106,13 @@ CONTAINER ID   IMAGE                         COMMAND                  STATUS    
 A container can exit immediately for ordinary application reasons: a missing environment variable, a failed database connection during startup, a command that points to a missing file, or a script that completed successfully and had nothing else to do. Docker is not trying to keep an arbitrary command alive unless you configure restart behavior later.
 
 ## Foreground and Detached Runs
+
+Foreground and detached runs only change how your terminal attaches to the container's input and output streams.
+
+
+![Diagram comparing foreground and detached Docker runs with named containers](/content-assets/articles/article-containers-orchestration-docker-docker-cli-basics/foreground-detached-names.png)
+
+*Foreground and detached runs change how your terminal attaches to the same basic container process model.*
 
 By default, `docker run` attaches your terminal to the process output. If the process writes to standard output or standard error, you see it. If the process keeps running, your terminal stays occupied. This is useful the first time you run an image because startup failures are visible.
 
@@ -110,6 +132,8 @@ docker logs -f orders-api
 The common beginner mistake is to treat a detached run as if it did nothing because the terminal prompt came back. The prompt only means your terminal detached. The evidence moved to `docker ps` and `docker logs`.
 
 ## Names and Evidence
+
+Container names are human-readable handles for container records, and those records preserve evidence until you remove them.
 
 Docker gives every container a long id, but names are the human handle. A name belongs to one container at a time:
 
@@ -139,7 +163,11 @@ That is reasonable when the container is only a local process wrapper. It is ris
 
 ## Cleanup
 
+Container cleanup deletes the container record and writable layer, while leaving the reusable image and named volumes in place.
+
 The safe cleanup question is not "can I remove this container?" It is "where does the important state live?" If the container only ran a web API and all durable data lives in a database volume, removing it is routine. If the container is the database and no volume was mounted, removing it removes the database files stored in that container layer.
+
+Example: removing an `orders-api` container usually removes only logs and temporary files. Removing an unmounted `orders-db` container can remove the actual database files if Postgres wrote them into the container layer.
 
 `--rm` is useful for one-off containers because it removes the container when the command exits:
 
@@ -178,6 +206,10 @@ The runtime model is small but powerful: image plus run settings creates a conta
 ## What's Next
 
 The next article reads the evidence Docker records after a run: state, logs, exit codes, inspection data, and `exec` access. That is the difference between guessing what a container did and observing what actually happened.
+
+![Summary infographic for Docker images, containers, PID 1, ports, names, and cleanup](/content-assets/articles/article-containers-orchestration-docker-docker-cli-basics/running-containers-summary.png)
+
+*The summary groups the CLI basics by image, container, process, connectivity, handles, and cleanup.*
 
 ---
 

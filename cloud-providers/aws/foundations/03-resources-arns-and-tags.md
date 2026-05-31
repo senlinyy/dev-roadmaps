@@ -44,6 +44,8 @@ The engineer is forced to guess, clicking through screens in a panic. In the clo
 
 Friendly names are incomplete because they do not carry service type, owning account ID, or Region details. AWS services solve this in different ways. Some services generate opaque IDs, some use names as the resource identifier, and some use nested paths that include more than one piece of service context.
 
+At a high level, a resource identifier is the machine-readable coordinate a service uses to find one managed object inside its own inventory. It is the difference between saying "the production server" and pointing to the exact EC2 instance record the EC2 API manages.
+
 These identifiers are structured by service family. A virtual server instance receives an ID like `i-0123456789abcdef0`, a Virtual Private Cloud receives a network ID like `vpc-0a1b2c3d4e5f67890`, and an isolated network subnet receives a zonal ID like `subnet-0987654321fedcba0`. Other services identify resources by name, such as an S3 bucket named `orders-exports-prod`, an IAM role named `orders-api-task-prod`, or a CloudWatch log group named `/aws/ecs/orders-api`.
 
 Service-specific identifiers are useful because they remove local naming guesswork within the service that owns them. If an operational ticket reports that instance `i-0123456789abcdef0` is exhibiting high memory exhaustion, there is no guessing which EC2 instance is failing. The ID points to one instance in that account and Region.
@@ -53,6 +55,8 @@ However, a service-specific identifier is still not a complete coordinate string
 ## Amazon Resource Names as Universal Coordinates
 
 This canonical string is the Amazon Resource Name, commonly abbreviated as an ARN. The ARN is the standard identifier format AWS uses for many resource references. ARNs are used to define access permissions in security policies, route events in serverless pipelines, and target resources in deployment scripts.
+
+An ARN functions as a universal coordinate string for AWS resources that need to be referenced outside the service that owns them. Policies, deployment tools, event rules, and audit records use ARNs because they encode the resource's partition, service, Region, account, and service-specific path in one copyable value.
 
 When you need to specify an infrastructure component without any possibility of error, the ARN is the exact string you must copy. The standard structural pattern follows a clean, colon-delimited format:
 
@@ -105,7 +109,7 @@ An ARN provides a precise AWS target, but it carries little business context. It
 
 To solve this context gap, AWS provides metadata tags. Tags are key-value string pairs that you attach directly to resources.
 
-Tags do not alter how the resource performs. They add business metadata that makes your growing cloud inventory searchable, groups related resources together, and enables FinOps cost allocation reporting.
+Tags behave like visible metadata columns attached to cloud resources. They do not alter how the resource performs. They add business metadata that makes your growing cloud inventory searchable, groups related resources together, and enables FinOps cost allocation reporting.
 
 ![An infographic showing an S3 bucket resource identified by an ARN and surrounded by business context tags for application, environment, owner, cost center, and management source](/content-assets/articles/article-cloud-providers-aws-foundations-resources-arns-tags/tags-business-context.png)
 

@@ -23,6 +23,8 @@ id: article-containers-orchestration-docker-compose-services-networks-and-volume
 
 ## Why Resources Matter
 
+Compose resources are the Docker objects that make the application model real: service containers, bridge networks, published ports, volumes, environment values, and health states.
+
 The orders Compose file looks correct. It has an `api` service and a `db` service. `docker compose up` creates both containers. The database says healthy. Then the browser cannot reach the API, or the API tries to connect to `localhost:5432`, or old rows appear after someone thought they had rebuilt everything from scratch.
 
 Those failures are not Compose being random. They are resource boundaries showing through the model.
@@ -34,6 +36,8 @@ This article follows those resources because reading Compose well means knowing 
 ## The Mental Model
 
 The Compose model becomes a running stack by creating resources around service containers.
+
+A resource is a Docker object with a specific job. A container runs a process, a network carries service-to-service traffic, a port rule accepts host traffic, a volume owns data, and a health state records whether a check passed.
 
 ```mermaid
 flowchart TD
@@ -61,6 +65,15 @@ The same YAML file describes all of those edges, but the edges do different thin
 
 ## Service Containers
 
+A service container is the current runtime instance of a Compose service role.
+
+
+![Diagram showing a Compose service role connected to process settings, network names, and a named volume](/content-assets/articles/article-containers-orchestration-docker-compose-services-networks-and-volumes/compose-service-network-volume-map.png)
+
+*A service is easiest to reason about when you separate process settings, network identity, and storage lifetime.*
+
+Example: `api` is the role in the Compose file. `orders-api-1` is one container currently implementing that role. Compose may replace that container after a config change while the `api` role remains the same.
+
 A service definition becomes container configuration. For a simple API, the service might say:
 
 ```yaml
@@ -81,6 +94,8 @@ Service definitions also inherit Dockerfile defaults unless the Compose file ove
 
 ## Networks and Names
 
+A Compose network is the project-local bridge where service names become DNS names for peer containers.
+
 Compose creates a default network for the project when no custom network is defined. Each service joins that network. Docker DNS registers service names on it, so a container in the project can resolve `api` or `db`.
 
 That is why the API's database URL should usually look like this:
@@ -96,6 +111,13 @@ The service name is also more stable than the container IP. Docker can assign a 
 Custom networks are useful when the graph needs segmentation. A frontend service may attach to a `front-tier` network and a backend service may attach to a `back-tier` network, while the database attaches only to `back-tier`. That extra YAML earns its place when communication paths match the application design.
 
 ## Ports and Caller Viewpoint
+
+Published ports are host entry points into a service container; they are not the path peer containers need on the Compose network.
+
+
+![Diagram comparing host caller port addressing with container-to-container service name addressing in Compose](/content-assets/articles/article-containers-orchestration-docker-compose-services-networks-and-volumes/compose-caller-viewpoint.png)
+
+*The same Compose stack has different addresses depending on whether the caller is on the host or inside the project network.*
 
 Published ports are for callers outside the Compose network. This entry:
 
@@ -113,6 +135,8 @@ This is one of the most useful Compose debugging facts. If the browser cannot re
 Publishing a database port can be helpful for local GUI tools or migrations from the host. It is also an extra entry point. For everyday service-to-service traffic, keep the database private and let containers use `db:5432`.
 
 ## Volumes and State
+
+A Compose volume is a declared state owner for data that should survive service container recreation.
 
 Compose can declare named volumes at the top level and mount them into services:
 
@@ -144,6 +168,10 @@ That can make edits visible immediately, but it also carries the storage gotchas
 
 ## Environment and Secrets
 
+Compose environment values are runtime inputs attached to a service container at creation time.
+
+Example: `DATABASE_URL=postgres://orders:orders@db:5432/orders` only works from a container attached to the Compose network where `db` resolves. A host-side database URL might use a published port instead.
+
 Environment values are runtime inputs. They tell the same image which database to use, which mode to start in, and which port the application should listen on.
 
 ```yaml
@@ -159,6 +187,8 @@ The key is to read each value from inside the service's viewpoint. `DATABASE_URL
 Sensitive values deserve care. Compose supports secrets as a distinct model concept, and Docker documentation treats secrets separately from ordinary configuration. For local development, teams often use `.env` files or environment interpolation. That is convenient, but it is easy to accidentally commit credentials or assume a variable exists because it is present in one shell. The repeatable model should make required runtime inputs visible without turning real secrets into source-controlled YAML.
 
 ## Health and Readiness
+
+Compose readiness is only as strong as the health signal a service definition provides.
 
 Startup order is easy to overread. Creating a database container before creating the API container does not prove the database is ready to accept connections.
 
@@ -223,6 +253,10 @@ Compose is useful because it puts those resource choices in one file. It is stil
 ## What's Next
 
 The next article turns the model into a daily development loop. Compose can start the stack, rebuild services, run one-off commands, enter running containers, activate optional tools with profiles, and update containers when files change. The trick is knowing which workflow changes the model and which one only pokes at a running service.
+
+![Summary infographic for Docker Compose services, networks, volumes, environment, and health](/content-assets/articles/article-containers-orchestration-docker-compose-services-networks-and-volumes/compose-resources-summary.png)
+
+*The resource summary organizes Compose around role, network, port, volume, runtime input, and readiness.*
 
 ---
 

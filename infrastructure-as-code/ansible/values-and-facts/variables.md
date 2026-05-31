@@ -21,7 +21,11 @@ id: article-infrastructure-as-code-ansible-variables
 
 ## Dynamic Values in Configuration Declarations
 
-In configuration management, the practice of declaring the desired state of systems in code rather than applying changes by hand, a variable is a named placeholder that stores a dynamic value referenced and evaluated at execution time. Instead of hardcoding concrete data strings such as specific IP addresses, application listening ports, or file system paths directly inside your playbook files, you use variables to represent these parameters. When Ansible runs a task, it retrieves the value assigned to the current host and passes it to the Jinja2 template engine, the Python-based processor that evaluates `{{ variable_name }}` expressions, allowing you to run the exact same playbook across different teams, servers, and environments without changing a single line of task logic.
+Ansible variables are named values injected into tasks and templates after inventory, playbook, role, and command-line sources are merged.
+
+A variable is a named placeholder for a value that may change by host, environment, role, or run. Instead of hardcoding concrete strings such as IP addresses, application ports, or filesystem paths directly inside your playbook files, you give those values names and let Ansible look up the correct value for the current host.
+
+Example: the same Nginx template can contain `listen {{ app_listening_port }}`. Staging can render port `8080`, production can render port `9000`, and the template file itself stays unchanged. When Ansible runs a task, it retrieves the value assigned to the current host and passes it to Jinja2, the Python-based processor that evaluates `{{ variable_name }}` expressions.
 
 To see why separating task logic from configuration data is a critical practice, consider our scenario. You are managing a configuration playbook that deploys a backend application server across staging, preview, and production environments.
 
@@ -108,7 +112,9 @@ You must never use extra variables as the primary home for standard system confi
 
 ## Jinja2 Interpolation Syntax: Compiling Dynamic Strings
 
-Ansible uses the **Jinja2** template engine to evaluate variables and compile dynamic strings during execution. To reference a variable inside a playbook or file template, you wrap the variable name in double curly braces:
+Jinja2 interpolation is the step where Ansible replaces `{{ variable_name }}` placeholders with real values. It exists so one task or template can become different final text for different hosts.
+
+Example: `/var/www/{{ app_name }}/index.html` can render as `/var/www/customer_portal/index.html` on one host and `/var/www/internal_api/index.html` on another. Ansible uses the Jinja2 template engine to evaluate these variables and compile dynamic strings during execution.
 
 ```yaml
 dest: /var/www/{{ app_name }}/index.html
@@ -124,7 +130,9 @@ You must never use names that conflict with Ansible's internal special variables
 
 ## Under the Hood: Jinja2 Tokenization and Safe String Rendering
 
-To appreciate how variables transition from text brackets to active system parameters, it helps to look at the compilers and tokenization engines running inside the control plane memory space during execution.
+Tokenization means splitting template text into literal text pieces and variable placeholders. Rendering means replacing those placeholders with values from the current host's variable dictionary.
+
+Example: the string `port: {{ app_port }}` is split into the literal `port: ` and the lookup key `app_port`. If the current host's active value is `8080`, the rendered argument becomes `port: 8080` before the module receives it.
 
 Many Ansible values are rendered in the context of the task and host that use them:
 

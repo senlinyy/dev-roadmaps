@@ -26,7 +26,7 @@ aliases:
 
 ## Compute Engine Virtual Machines
 
-Compute Engine is Google Cloud's software-defined infrastructure service that provides virtual machines (VMs) on demand. Rather than abstracting the hardware layer completely like serverless container runtimes, Compute Engine allows you to provision, configure, and operate virtual servers with direct root control over the operating system kernel, filesystem configurations, network adapters, and running background processes.
+Compute Engine is GCP's virtual server service. It gives your team a VM with configurable CPU, memory, operating system image, disks, network interfaces, startup behavior, and process supervision responsibility. Rather than abstracting the hardware layer completely like serverless container runtimes, Compute Engine allows you to provision, configure, and operate virtual servers with direct root control over the operating system kernel, filesystem configurations, network adapters, and running background processes.
 
 A common architectural trap is choosing a virtual machine out of operational familiarity rather than technical necessity. Compute Engine is the correct runtime only when a workload requires raw server-shaped capabilities, such as running a database engine that requires dedicated block storage, hosting legacy vendor software with hardcoded OS requirements, or executing background daemons that require persistent host-level monitoring agents.
 
@@ -67,7 +67,7 @@ As traced above, live migration is designed to move supported running VMs during
 
 ## Virtual Machine Machine Families
 
-GCP organizes Compute Engine virtual machines into distinct, workload-optimized machine families. Choosing the correct family is critical for matching your workload's under-the-hood hardware requirements to the correct pricing tier:
+A machine family is a VM hardware profile category for a particular CPU, memory, accelerator, or cost shape. GCP organizes Compute Engine virtual machines into distinct, workload-optimized machine families. Choosing the correct family is critical for matching your workload's hardware requirements to the correct pricing tier:
 
 *   **General-Purpose (`E2`, `N2`, `C3`)**: The standard workhorses designed for web applications, background utilities, and medium-scale databases. They run on shared or dedicated physical CPU cores, balancing cost and performance.
 *   **Compute-Optimized (`C2`, `H3`)**: Hardened machine families that bind your virtual CPUs directly to high-frequency physical processor cores. These are designed for CPU-heavy tasks like high-performance computing (HPC) or real-time gaming servers.
@@ -75,7 +75,7 @@ GCP organizes Compute Engine virtual machines into distinct, workload-optimized 
 
 ## OS Images and Snowflake Server Prevention
 
-Every virtual machine starts from an **OS Image**—a template containing the bootloader, operating system kernel, and pre-installed system packages. While GCP provides standard public images (such as Debian, Ubuntu, and Red Hat Enterprise Linux), relying on manual configuration post-boot is a severe operational risk.
+An OS image is the boot template that gives a VM its operating system, default packages, and startup baseline. Every virtual machine starts from an **OS Image** containing the bootloader, operating system kernel, and pre-installed system packages. While GCP provides standard public images (such as Debian, Ubuntu, and Red Hat Enterprise Linux), relying on manual configuration post-boot is a severe operational risk.
 
 ![A VM should rebuild from image, metadata, startup script, package source, and service manager.](/content-assets/articles/article-cloud-providers-gcp-compute-application-hosting-compute-engine-virtual-machines/vm-boot-path.png)
 
@@ -90,7 +90,7 @@ To prevent snowflake servers, you must enforce automation:
 
 ## Persistent Disks and Storage Decoupling
 
-Compute Engine virtual machines store data on **Persistent Disks (PD)**. Unlike a laptop hard drive that lives inside one machine, a Persistent Disk is managed separately from the VM. The VM sees it as block storage, but the disk can have its own lifecycle, placement rules, and snapshot strategy.
+Persistent Disk is managed block storage that attaches to a VM as a disk device while keeping its own lifecycle. Compute Engine virtual machines store data on **Persistent Disks (PD)**. Unlike a physical boot drive that is inseparable from one machine, a Persistent Disk is managed separately from the VM. The VM sees it as block storage, but the disk can have its own lifecycle, placement rules, and snapshot strategy.
 
 ![Persistent Disk keeps block storage separate from the VM lifecycle.](/content-assets/articles/article-cloud-providers-gcp-compute-application-hosting-compute-engine-virtual-machines/persistent-disk-boundary.png)
 
@@ -105,7 +105,7 @@ Persistent disks include options such as standard, balanced, SSD, and newer Hype
 
 ## Zonal Placement and Availability Boundaries
 
-While GCP VPC networks are natively global, Compute Engine virtual machines are strictly **zonal** resources. A VM is provisioned within a single zone inside a region, such as `us-central1-a`.
+Zonal placement means a VM is created in one specific zone and depends on that zone's capacity and availability. While GCP VPC networks are natively global, Compute Engine virtual machines are strictly **zonal** resources. A VM is provisioned within a single zone inside a region, such as `us-central1-a`.
 
 Because a VM belongs to one zone, deploying a single VM introduces a single failure boundary. If that zone has a serious outage, the workload can go offline.
 
@@ -113,7 +113,7 @@ To secure highly available applications, you must deploy VMs across multiple zon
 
 ## Automated Startup and Metadata Bootstrap
 
-To automate VM provisioning, Compute Engine utilizes a unified **Metadata Server** to pass runtime configurations and scripts to the guest operating system at boot time.
+The metadata server is the local runtime information endpoint a VM uses to read configuration, identity, and startup data. To automate VM provisioning, Compute Engine uses this endpoint to pass runtime configurations and scripts to the guest operating system at boot time.
 
 When a VM boots, the Google Guest Agent running inside the OS queries the link-local metadata address `http://metadata.google.internal/computeMetadata/v1/` to fetch configuration parameters, including the user-supplied **`startup-script`**.
 
@@ -121,7 +121,7 @@ A startup script is a collection of shell commands or configuration scripts exec
 
 ## Guest Process Supervision with systemd
 
-Once a virtual machine's startup script completes, the guest operating system needs a persistent process supervisor to keep the application running. In modern Linux distributions like Debian or Ubuntu, this is managed by **`systemd`**.
+`systemd` is the Linux process supervisor that keeps services running after the boot script finishes. Once a virtual machine's startup script completes, the guest operating system needs a persistent process supervisor to keep the application running. In modern Linux distributions like Debian or Ubuntu, this is managed by **`systemd`**.
 
 Relying on raw background processes (like executing `node server.js &` inside a terminal session) is an operational hazard: the shell will eventually close, and if the process crashes due to an unhandled exception, it remains terminated.
 
@@ -155,7 +155,7 @@ The systemd unit configuration above guarantees process reliability:
 
 ## VPC Network Interface Attachment
 
-Compute Engine virtual machines attach directly to private VPC subnets through network interfaces. Unlike serverless runtimes that hide most backend networking details, a VM is a persistent, addressable node within your private network topology.
+A network interface is the VM attachment point to a VPC subnet and private IP range. Compute Engine virtual machines attach directly to private VPC subnets through network interfaces. Unlike serverless runtimes that hide most backend networking details, a VM is a persistent, addressable node within your private network topology.
 
 This direct attachment requires precise network planning:
 
@@ -165,7 +165,7 @@ This direct attachment requires precise network planning:
 
 ## Sample Server Shape
 
-An idiomatic Compute Engine server shape for the Orders background worker isolates machine sizing, operating system templates, and process execution:
+A sample server shape is a compact review of the VM's runtime contract. An idiomatic Compute Engine server shape for the Orders background worker isolates machine sizing, operating system templates, and process execution:
 
 | Server Parameter | Configuration Value | Operational Purpose |
 | :--- | :--- | :--- |

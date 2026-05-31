@@ -19,9 +19,11 @@ id: article-iac-terraform-config-hcl-syntax
 
 ## Understanding HashiCorp Configuration Language
 
+HCL is Terraform's configuration language: a structured file format for declaring blocks, arguments, expressions, and values that Terraform can parse into an infrastructure graph.
+
 HashiCorp Configuration Language is a clear and readable way to write down instructions that describe how computer servers, databases, and network wires should be set up in the cloud. Unlike general-purpose programming languages that specify the precise step-by-step actions to build an application, this configuration language is declarative. You write a configuration file describing what the final infrastructure must look like, and the underlying deployment engine determines the optimal sequence of actions to reach that target state. The design of the language balances human readability with machine parseability, solving the structural limitations of formats like JSON and the whitespace sensitivity issues common to YAML.
 
-To see the language in action, consider a secure link-shortening backend server. The system must accept shortened key requests, use Route 53 to map a public domain name to a CloudFront distribution, and leverage CloudFront to route incoming client traffic to a highly secure Amazon Simple Storage Service (S3) bucket. The S3 bucket is configured for static website hosting with explicit redirection rules. When a user requests a short URL prefix, the S3 website hosting engine evaluates internal routing rules and redirects the client browser to a resolution API endpoint running on a backend database cluster.
+To see the language in action, consider a link-shortening redirect service. The system accepts shortened key requests, uses Route 53 to map a public domain name to a CloudFront distribution, and uses an Amazon Simple Storage Service (S3) website endpoint as a redirect origin. This is a useful syntax example, but it is not the same as a private S3 origin. S3 website endpoints do not support HTTPS directly and are treated as custom origins by CloudFront. In production, you would choose the S3 and CloudFront origin pattern deliberately based on whether you need website redirect behavior or private object access.
 
 This infrastructure is modeled in files ending with the `.tf` extension. The following configuration defines the core S3 bucket and website redirection rules that make this link-shortening system possible.
 
@@ -54,6 +56,8 @@ resource "aws_s3_bucket_website_configuration" "redirector_config" {
 This configuration illustrates the clean, structural nature of the language. Instead of writing verbose API request payloads or maintaining fragile scripts, you declare resources, specify their configurations, and nest properties to model complex operational behaviors like website redirection. The deployment engine parses this text file, compiles it into an execution plan, and calls the appropriate cloud APIs on your behalf.
 
 ## HCL2 Lexing and Tokenization Mechanics
+
+Lexing and tokenization are parser steps that turn characters in `.tf` files into structured tokens before Terraform validates blocks and expressions.
 
 To understand how the configuration is processed, you must look at the parsing engine under the hood. The current version of the language is powered by the HCL2 engine, a parsing library written in the Go programming language. When you run a command to initialize, validate, or apply your infrastructure, the engine reads the raw `.tf` text files from the local disk as a stream of UTF-8 encoded bytes.
 
@@ -104,7 +108,9 @@ During AST construction, the engine maps nodes directly to core syntax structure
 
 ## Structural Anatomy: Blocks vs Arguments
 
-The grammar of the HashiCorp Configuration Language separates structural layout from data assignment. Every configuration file is composed of two primary syntactic concepts: blocks and arguments. Understanding the physical and logical distinctions between these two structures is crucial for writing valid, maintainable configurations.
+A block is a container in HCL, and an argument is a setting inside a container. Blocks describe the things or sub-things Terraform should understand, while arguments assign values to named settings. Example: `resource "aws_s3_bucket" "redirector"` is a block, and `bucket = "lnk-sh-redirects-prod"` is an argument inside that block.
+
+The grammar of the HashiCorp Configuration Language separates structural layout from data assignment. Every configuration file is composed of these two primary syntactic concepts. Understanding the practical distinction between them is crucial for writing valid, maintainable configurations.
 
 ![HCL blocks use block types, labels, arguments, nested blocks, and expressions to describe infrastructure.](/content-assets/articles/article-iac-terraform-config-hcl-syntax/hcl-block-anatomy.png)
 
@@ -133,7 +139,9 @@ The structural hierarchy formed by nested blocks allows cloud architects to mode
 
 ## The HCL2 Type System: Scalars, Collections, and Structural Types
 
-The language features a robust type system that prevents configuration errors from reaching cloud APIs. Every variable, argument, and attribute must conform to a specific type schema. The HCL2 type system is built on top of a low-level type representation library named `cty`. This library defines how types are validated, coerced, and matched during the compilation process. The type system is organized into three distinct categories: scalar types, collection types, and structural types.
+A type tells Terraform what shape of value is allowed. A value might be one string, a list of strings, a map of tags, or an object with several named fields. Example: `instance_count = 3` is a number, while `subnet_ids = ["subnet-a", "subnet-b"]` is a list of strings.
+
+The language uses a type system to catch configuration errors before Terraform sends requests to cloud APIs. Every variable, argument, and attribute must conform to a specific type schema. The HCL2 type system is built on top of a low-level type representation library named `cty`. This library defines how types are validated, coerced, and matched during the compilation process. The type system is organized into three distinct categories: scalar types, collection types, and structural types.
 
 Scalar types represent a single primitive value. The language supports three scalar types:
 
@@ -162,11 +170,13 @@ To illustrate how these types are represented, the following table details their
 | Map | `{ k = "v" }` | `cty.Map(cty.String)` | Yes (All values must match type `T`) |
 | Object | `{ a = 1, b = "x" }` | `cty.Object(map[string]cty.Type)` | No (Attributes can have different types) |
 
-The compiler includes built-in type coercion rules that attempt to convert values from one type to another when safe. For example, if a provider expects a string argument but you pass the number `307`, the compiler automatically coerces the number into the string `"307"` before validating the schema. However, if you attempt to pass a list of strings to an argument expecting a boolean, the compiler will halt execution and emit a type mismatch diagnostic. The type `any` acts as a wildcard placeholder during initial parsing, letting variables accept any schema until the evaluation engine resolves them to a concrete type.
+The compiler includes built-in type coercion rules that attempt to convert values from one type to another when safe. For example, if a provider expects a string argument but you pass the number `307`, the compiler automatically coerces the number into the string `"307"` before validating the schema. However, if you attempt to pass a list of strings to an argument expecting a boolean, the compiler will halt execution and emit a type mismatch diagnostic. The type `any` is a wildcard placeholder during initial parsing, letting variables accept any schema until the evaluation engine resolves them to a concrete type.
 
 ## Syntax Constraints and AST Normalization with `terraform fmt`
 
-Writing configuration code across large engineering teams requires stylistic consistency. Because HCL2 does not enforce strict whitespace rules like YAML, files can easily diverge in indentation, spacing, and alignment. To address this, the engine includes a built-in code formatting command that operates as an AST-based code rewriter.
+`terraform fmt` is Terraform's built-in formatter for `.tf` files. It rewrites spacing, indentation, and alignment so the code has one consistent style across a team. Example: if one engineer writes `bucket="prod-logs"` and another writes `bucket = "prod-logs"`, `terraform fmt` normalizes the layout so review diffs focus on infrastructure changes instead of spacing choices.
+
+Writing configuration code across large engineering teams requires stylistic consistency. Because HCL2 does not enforce strict whitespace rules like YAML, files can easily diverge in indentation, spacing, and alignment. To address this, Terraform includes a built-in code formatting command that operates as an AST-based code rewriter.
 
 Unlike simple text-replacement tools or regular-expression formatters, the formatter parses your configuration files directly into an in-memory Abstract Syntax Tree. It then walks the syntax tree, applies a rigid set of layout rules, and outputs the formatted code back to disk. This approach guarantees that the formatting process is safe and cannot alter the logical behavior of your infrastructure.
 
@@ -204,6 +214,8 @@ resource "aws_s3_bucket" "redirector" {
 Enforcing these style conventions is vital for collaborative infrastructure engineering. Standardized files ensure that version control diffs remain exceptionally clean. If an engineer adds a single argument to an existing resource block, only that line will show up in the pull request diff, rather than a cascade of unrelated whitespace adjustments. Most engineering teams enforce this command automatically in their continuous integration pipelines to prevent style drift.
 
 ## Gotchas and Common Syntax Pitfalls
+
+Most HCL syntax mistakes come from writing a value where Terraform expected a block, or writing a block where Terraform expected a value. The two forms can look similar because both often use braces. Example: `tags = { env = "prod" }` is a map argument, but `routing_rule { ... }` is a nested block defined by the provider schema.
 
 Even experienced software engineers run into subtle HCL2 syntax behaviors that can lead to unexpected parsing errors or runtime failures. Understanding these quirks requires a deeper grasp of how the parser and compiler interpret text files under the hood.
 
@@ -247,7 +259,9 @@ A third pitfall involves implicit type coercion within collection variables. If 
 
 ## Putting It All Together
 
-To build our secure link-shortening backend server, we must combine our S3 redirector configuration with CloudFront and Route 53 resources. The syntax elements we have explored block structure, nested blocks, arguments, and type systems are the building blocks that tie these distinct cloud services together.
+The link-shortening backend uses HCL's core syntax pieces together: resource blocks for cloud objects, nested blocks for resource sub-objects, arguments for settings, and references for connections between resources. Example: the CloudFront distribution reads the S3 website endpoint from `aws_s3_bucket_website_configuration.redirector_config.website_endpoint`, so Terraform can connect the two resources without a hardcoded endpoint string.
+
+To build the secure link-shortening backend server, we combine the S3 redirector configuration with CloudFront and Route 53 resources. The syntax elements we have explored, block structure, nested blocks, arguments, and type systems, are the building blocks that tie these distinct cloud services together.
 
 Terraform uses implicit dependencies to automatically discover the relationships between resources. By referencing attributes of one resource within the arguments of another, you inform the compiler how to construct the Directed Acyclic Graph (DAG) that guides execution. In the complete configuration below, the CloudFront distribution references the S3 bucket website endpoint, and the Route 53 DNS record references the CloudFront distribution's domain name:
 
@@ -302,12 +316,7 @@ resource "aws_cloudfront_distribution" "s3_distribution" {
     default_ttl            = 3600
     max_ttl                = 86400
 
-    forwarded_values {
-      query_string = false
-      cookies {
-        forward = "none"
-      }
-    }
+    cache_policy_id = "658327ea-f89d-4fab-a63d-7e88639e58f6"
   }
 
   restrictions {
@@ -352,5 +361,7 @@ When you save this configuration and initiate a run, the HCL2 engine executes th
 
 - [HCL Syntax Specification](https://github.com/hashicorp/hcl/blob/main/hclsyntax/spec.md) - Formal grammar and lexing specifications for the HCL2 parsing engine.
 - [Terraform HCL Syntax Guide](https://developer.hashicorp.com/terraform/language/syntax/configuration) - The official guide detailing blocks, arguments, identifiers, and comments.
+- [Amazon S3 Website Endpoints](https://docs.aws.amazon.com/AmazonS3/latest/userguide/WebsiteEndpoints.html) - AWS guidance on S3 static website endpoint behavior and HTTPS limitations.
+- [AWS CloudFront Distribution Resource](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/cloudfront_distribution) - Current AWS provider reference for CloudFront cache behavior arguments.
 - [HCL Type System and cty](https://github.com/zclconf/go-cty) - Deep documentation for the type system and dynamic type representation.
 - [terraform fmt Command Reference](https://developer.hashicorp.com/terraform/cli/commands/fmt) - Official usage guidelines and configuration parameters for formatting standard HCL files.

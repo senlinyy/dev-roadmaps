@@ -51,6 +51,8 @@ Messaging gives that work a place to wait.
 
 Messaging is the pattern of sending a small record from one component to another so the receiver can process it later or independently. The sender does not need the receiver to be online at the same moment. The receiver can work at its own pace.
 
+At a high level, messaging is an asynchronous handoff contract. One component writes a durable work record or notification, and another component receives it later under explicit delivery, retry, and failure rules.
+
 In AWS, the two first services to learn are SQS and SNS.
 
 Amazon Simple Queue Service, or SQS, is a queue. It stores messages until consumers receive and process them. It is useful when one kind of worker needs to drain a backlog of work.
@@ -69,15 +71,19 @@ The useful distinction is wait versus announce. A queue lets work wait. A topic 
 
 A queue stores messages between producers and consumers. For checkout, the API can put a message on `receipt-email-jobs` and return to the customer after the order is created. Receipt workers poll the queue and send emails when they have capacity.
 
+An SQS queue acts as a durable buffer for work records. It decouples the producer's request path from the consumer's processing speed, retry behavior, and failure handling.
+
 That changes the failure boundary. If the email provider is slow, messages build up in the queue. Checkout can still create orders. Operators can scale workers, pause workers, or let the backlog drain after the provider recovers.
 
-A queue is a buffer with delivery behavior, retry behavior, visibility timeout, and monitoring signals. The queue owns the waiting room. Workers own the processing.
+A queue is a buffer with delivery behavior, retry behavior, visibility timeout, and monitoring signals. The queue owns the waiting state. Workers own the processing.
 
 The gotcha is that a queue does not make work harmless. If workers send duplicate emails or call a rate-limited vendor too quickly, the queue preserves the work but does not fix the side effect. Worker code still needs idempotency and downstream limits.
 
 ## Producers
 
 A producer sends messages to a queue or topic. In the orders system, the checkout API is the producer for receipt jobs. A storage event might be the producer for a thumbnail job. A scheduler might be the producer for nightly exports.
+
+A producer is the component that creates the handoff record. It should publish enough stable identifiers for the consumer to find the work without embedding large mutable state into the message.
 
 A good message is small and specific. It should contain the facts the consumer needs to find the real work, not a giant copy of every related object.
 
@@ -98,6 +104,8 @@ The message names the work. It does not attach the PDF. The PDF lives in S3. The
 
 A consumer receives messages and performs the work. The consumer might be an ECS worker, Lambda function, EC2 process, or another application. With SQS, consumers poll the queue, receive messages, process them, and delete them after success.
 
+A consumer is the processing runtime for queued work. It temporarily claims a message, performs the side effect, and deletes the message only after successful completion.
+
 That delete step matters. Receiving a message does not mean the work is done. It means one consumer has a chance to process it. The message leaves the queue only after successful processing and deletion.
 
 This creates a useful recovery behavior. If the consumer crashes after receiving a message but before deleting it, the message can become visible again later. Another consumer can try. That is why consumers must be safe to retry.
@@ -116,6 +124,8 @@ The queue gives you retry opportunity. Idempotent worker code makes that retry s
 ## Message Timeline
 
 SQS becomes much easier to reason about when you picture the message timeline.
+
+The message timeline is the state machine for one SQS message. It moves from sent, to received and hidden, to deleted after success, or visible again after failure or timeout.
 
 ```mermaid
 sequenceDiagram
@@ -139,6 +149,8 @@ This timeline explains why duplicate handling is not optional. A message can be 
 
 Visibility timeout is the period after a consumer receives an SQS message when that message is hidden from other consumers. The message remains in the queue, but other consumers cannot process it at the same time.
 
+Visibility timeout is a temporary processing lease. It gives one consumer exclusive time to finish and delete the message before SQS makes that message available for another attempt.
+
 This is one of the most important SQS concepts. If the timeout is too short, a second worker may receive the same message before the first worker finishes. If the timeout is too long, failed messages take too long to return after a worker crashes.
 
 For a receipt worker that usually finishes in 10 seconds, a 2 minute timeout may be reasonable. For a video processing job, the worker may need to extend the timeout while it is still making progress. For work that can take longer than the SQS visibility model fits comfortably, another workflow pattern may be better.
@@ -154,6 +166,8 @@ That is the SQS bargain: the queue helps avoid loss and smooth pressure, while t
 ## Retries
 
 Retries happen when work fails or does not finish. With SQS, if a message is not deleted before the visibility timeout expires, it can become visible again and be received for another attempt.
+
+Retry behavior is the re-delivery path for unfinished work. It protects against temporary consumer failures, but it also means worker code must tolerate duplicate attempts.
 
 Retries are useful when failure is temporary: a provider returned `429`, a network call timed out, or a worker restarted during deploy. They are dangerous when the message is permanently bad. A malformed message can fail forever, waste worker capacity, and hide newer work behind repeated attempts.
 
@@ -172,17 +186,21 @@ Queues make retries visible. They do not remove the need to classify failure.
 
 A dead-letter queue, or DLQ, receives messages that could not be processed successfully after the configured number of receives. It is the place for work that needs human review, a code fix, or a controlled redrive later.
 
+A DLQ is a failure isolation queue. It separates repeatedly failing messages from the main work stream so operators can inspect, fix, or redrive them deliberately.
+
 A DLQ prevents one bad message from looping forever in the main queue. It also creates evidence. Instead of saying "the worker is failing sometimes," the team can inspect the failed message, receive count, timestamps, and related logs.
 
-The redrive policy decides when a message moves. Its `maxReceiveCount` is not a universal magic number. A payment worker that fails because of malformed input may need a low count so poison messages leave the main queue quickly. A worker calling a flaky vendor may need more attempts or a longer visibility timeout before the message is quarantined. The number should match the failure pattern and the cost of retrying.
+The redrive policy decides when a message moves. Its `maxReceiveCount` is not a universal value. A payment worker that fails because of malformed input may need a low count so poison messages leave the main queue quickly. A worker calling a flaky vendor may need more attempts or a longer visibility timeout before the message is quarantined. The number should match the failure pattern and the cost of retrying.
 
-The gotcha is that DLQ is not a trash can. It is a quarantine. Messages in a DLQ often represent customer-impacting work that did not complete. The team needs an owner and a review process.
+The gotcha is that DLQ is not a deletion destination. It is a quarantine queue. Messages in a DLQ often represent customer-impacting work that did not complete. The team needs an owner and a review process.
 
 For receipt emails, a DLQ message might mean a customer did not receive a receipt. Deleting the message without a record may hide the failure. Redriving it blindly may send duplicate emails if the worker bug is still present.
 
 ## Standard And FIFO
 
 SQS has standard queues and FIFO queues. Standard queues are the default starting point for many workloads because they support high throughput and at-least-once delivery. They may deliver messages more than once and can deliver them out of exact order.
+
+Queue type defines the delivery and ordering contract. Standard queues optimize for throughput and at-least-once delivery; FIFO queues add ordered message groups and deduplication behavior for workloads that require them.
 
 FIFO queues are for workloads that need first-in-first-out processing within a message group and stronger deduplication behavior. They ask more from the design because message group IDs decide ordering lanes. Ordering is per message group, not necessarily across the entire queue unless every message uses the same group. That single-group design protects global order but also limits parallelism. For FIFO workloads where exact order matters, be careful with DLQs because moving one failed message out of the main queue can let later messages continue and change the visible processing order.
 
@@ -201,6 +219,8 @@ Do not choose FIFO only because it sounds safer. If every message uses the same 
 
 An SNS topic is a publication point. A producer publishes a message to the topic. SNS delivers copies to the topic's subscriptions.
 
+An SNS topic functions as a publish-subscribe distribution point. The publisher writes one notification, and SNS delivers matching copies to configured subscribers.
+
 Topics are useful when the publisher should not know every receiver. For example, checkout can publish `OrderCreated`. Receipt, analytics, search indexing, and fraud systems may all care. If checkout calls each of them directly, checkout becomes tightly wired to every downstream team. If checkout publishes to a topic, subscribers can be added without changing checkout code.
 
 SNS subscriptions can include SQS queues, Lambda functions, HTTPS endpoints, and other destinations. Subscription filtering can let subscribers receive only messages that match attributes or message body fields.
@@ -210,6 +230,8 @@ The gotcha is fanout delivery behavior. A topic announces a message. It does not
 ## Fanout
 
 Fanout means one published message is delivered to multiple subscribers. For the orders system, one `OrderCreated` message can create several independent paths:
+
+Fanout is one-to-many message delivery. It is useful when each subscriber should react independently with its own backlog, retry rules, and operational ownership.
 
 - Receipt service sends the customer email.
 - Analytics service records conversion data.

@@ -1,6 +1,6 @@
 ---
 title: "Zero-Downtime Deployments"
-description: "Deploy infrastructure changes — including server replacements — without taking your application offline."
+description: "Deploy infrastructure changes, including server replacements, without taking your application offline."
 overview: "Updating a running server with Terraform often means replacing the old one with a new one. Without planning for traffic handoff and health checks, your application can go offline during the switch. This article covers the create_before_destroy lifecycle setting, blue-green deployments, and how to roll out changes to auto-scaling groups while keeping service interruption to a minimum."
 tags: ["zero-downtime", "create_before_destroy", "lifecycle", "blue-green", "terraform"]
 order: 3
@@ -23,22 +23,28 @@ id: article-iac-terraform-advanced-zero-downtime
 
 ## Why Terraform Replacements Cause Downtime
 
+Zero-downtime Terraform design means shaping replacement order, traffic routing, and resource identity so users keep a working path while infrastructure changes.
+
 Many infrastructure changes require Terraform to destroy the existing resource and create a new one. This is called a replacement, and Terraform's default behavior is to destroy first and create second.
 
-The destroy-first approach causes downtime because there is a gap between when the old resource is gone and when the new resource is ready. For an EC2 instance, this gap is typically two to five minutes — the time it takes for the new instance to boot, run its initialization scripts, and pass the load balancer's health checks. During those minutes, traffic destined for the old instance has nowhere to go.
+The destroy-first approach causes downtime because there is a gap between when the old resource is gone and when the new resource is ready. For an EC2 instance, this gap is typically two to five minutes, the time it takes for the new instance to boot, run its initialization scripts, and pass the load balancer's health checks. During those minutes, traffic destined for the old instance has nowhere to go.
 
 Changes that commonly trigger replacements include:
 - Changing an EC2 instance's AMI (the operating system image)
 - Changing an EC2 instance's availability zone
 - Changing a security group's VPC
-- Changing an RDS instance's identifier or engine version
+- Changing an RDS instance's identifier or another provider-marked replacement attribute
 - Changing any attribute that the cloud provider does not allow to be modified in-place
+
+Database engine upgrades deserve a separate mental model. AWS documents RDS engine upgrades as DB instance modifications that can require downtime, and RDS Blue/Green Deployments are the database-specific strategy for reducing that downtime. Do not teach ordinary RDS engine upgrades as simple Terraform replacements; they are database operations with their own engine, maintenance-window, and rollback constraints.
 
 Terraform's plan output tells you which resources will be replaced. Look for lines marked with `+/-` (destroy and create) rather than `~` (modify in place). When you see `+/-`, think carefully about whether that replacement will cause downtime and whether `create_before_destroy` or another technique is appropriate.
 
 ## The lifecycle Block
 
-The `lifecycle` block is a special sub-block inside resource blocks that modifies how Terraform handles the create, update, and destroy operations for that resource. It is not sent to the cloud provider — it only affects Terraform's own behavior.
+A `lifecycle` block is a Terraform-only settings block inside a resource. It changes how Terraform plans creation, replacement, deletion, and selected drift for that resource. Example: `create_before_destroy = true` changes replacement order, while `prevent_destroy = true` blocks deletion in the plan.
+
+The `lifecycle` block is a special sub-block inside resource blocks that modifies how Terraform handles the create, update, and destroy operations for that resource. It is not sent to the cloud provider. It only affects Terraform's own behavior.
 
 ```hcl
 resource "aws_instance" "app" {
@@ -55,15 +61,17 @@ resource "aws_instance" "app" {
 
 The four settings inside `lifecycle` are:
 
-`create_before_destroy` — when set to `true`, Terraform creates the replacement resource before destroying the old one. This removes the Terraform destroy-before-create gap, but it does not automatically register the new resource with a load balancer, wait for application health, or move traffic safely.
+`create_before_destroy`, when set to `true`, Terraform creates the replacement resource before destroying the old one. This removes the Terraform destroy-before-create gap, but it does not automatically register the new resource with a load balancer, wait for application health, or move traffic safely.
 
-`prevent_destroy` — when set to `true`, Terraform refuses to destroy this resource. Any plan that includes destroying this resource fails with an error. Used to protect databases and other critical resources from accidental deletion.
+`prevent_destroy`, when set to `true`, Terraform refuses to destroy this resource. Any plan that includes destroying this resource fails with an error. Used to protect databases and other critical resources from accidental deletion.
 
-`ignore_changes` — a list of attribute names that Terraform should not track for change detection. When a listed attribute is changed outside of Terraform, Terraform ignores the difference and does not propose a plan to correct it.
+`ignore_changes`, a list of attribute names that Terraform should not track for change detection. When a listed attribute is changed outside of Terraform, Terraform ignores the difference and does not propose a plan to correct it.
 
-`replace_triggered_by` — a list of resource references or resource attributes. When any item in the list changes, Terraform triggers a replacement of this resource even if none of this resource's own attributes changed. Useful for forcing an instance replacement when a new AMI is available.
+`replace_triggered_by`, a list of resource references or resource attributes. When any item in the list changes, Terraform triggers a replacement of this resource even if none of this resource's own attributes changed. Useful for forcing an instance replacement when a new AMI is available.
 
 ## create_before_destroy: Creating the Replacement First
+
+`create_before_destroy` tells Terraform to create the replacement object before deleting the old object. It reduces the Terraform-managed gap, but it does not prove the application is healthy or move traffic by itself. Example: a replacement EC2 instance can be created first, but the load balancer still needs health checks and target registration before users should be sent to it.
 
 With `create_before_destroy = true`, Terraform reverses the order of operations during a replacement. It creates the new resource first and then destroys the old one after the provider reports creation complete.
 
@@ -89,6 +97,8 @@ When you change `var.ami_id` to a new AMI value, Terraform plans a replacement. 
 
 Provider "created" does not always mean "ready to serve users." If the new instance is behind a load balancer, you still need to model registration, health checks, warmup, and traffic handoff. This is where the combination with an auto-scaling group and instance refresh (covered later) becomes important.
 
+Terraform also remembers `create_before_destroy` propagation in state for dependent resources. If resource A depends on resource B, Terraform may need to create B's replacement before destroying the old B so A is not left pointing at something missing. That behavior is useful, but it means lifecycle settings are part of the resource graph, not just a local preference on one block.
+
 There is a constraint to keep in mind: if the resource name must be unique in the cloud provider, you cannot have both the old and new resource with the same name at the same time. AWS security groups, for example, must have unique names within a VPC. With `create_before_destroy`, the new security group must have a different name than the old one while both exist simultaneously. Using a random suffix or a `name_prefix` argument (which lets AWS generate a unique name) solves this:
 
 ```hcl
@@ -106,7 +116,9 @@ resource "aws_security_group" "app" {
 
 ## Blue-Green Deployments with Auto-Scaling Groups
 
-A more sophisticated zero-downtime strategy for application servers is a blue-green deployment. You maintain two complete sets of servers — blue and green — and switch traffic between them.
+A blue-green deployment keeps two complete application fleets so one can serve traffic while the other is prepared and verified. The color names are just labels for old and new capacity. Example: keep `blue_desired_capacity = 3` serving users, bring `green_desired_capacity = 3` online with the new AMI, then shift the load balancer to green after health checks pass.
+
+A more sophisticated zero-downtime strategy for application servers is a blue-green deployment. You maintain two complete sets of servers, blue and green, and switch traffic between them.
 
 ![A traffic cutover shifts users from the old environment to the healthy new environment with a rollback path.](/content-assets/articles/article-iac-terraform-advanced-zero-downtime/traffic-cutover-boundary.png)
 
@@ -176,17 +188,21 @@ Blue is now idle. Green carries all traffic. The deployment is complete and the 
 
 ## Updating a Launch Template Without Replacing the Group
 
-An auto-scaling group (ASG) defines a fleet of EC2 instances. The group configuration — the VPC, the load balancer, the health check settings — is separate from the instance configuration — the AMI, the instance type, the user-data script. Instance configuration lives in a launch template.
+An auto-scaling group, or ASG, manages a fleet of EC2 instances, while a launch template describes how each new instance should be built. This separation lets Terraform update the template without immediately replacing every running server. Example: changing the AMI creates a new launch template version, and an instance refresh can roll that version through the fleet later.
+
+The group configuration, the VPC, the load balancer, the health check settings, is separate from the instance configuration, the AMI, the instance type, the user-data script. Instance configuration lives in a launch template.
 
 When you update a launch template (for example, changing the AMI), the ASG itself does not change. The ASG uses the `$Latest` version of the launch template, but existing running instances do not automatically switch to the new version. They continue running with the old AMI until they are replaced.
 
-This is actually useful. A launch template update is a low-risk Terraform change — it creates a new version of the template in AWS but does not touch any running instances. The plan and apply for a launch template change completes quickly with no disruption.
+This is actually useful. A launch template update is a low-risk Terraform change, it creates a new version of the template in AWS but does not touch any running instances. The plan and apply for a launch template change completes quickly with no disruption.
 
-The next step — refreshing the actual instances with the new template version — is a deliberate, controlled operation.
+The next step, refreshing the actual instances with the new template version, is a deliberate, controlled operation.
 
 ## Instance Refresh: Rolling Updates for Auto-Scaling Groups
 
-AWS Auto Scaling's instance refresh feature replaces instances in an ASG one at a time (or in configurable batches), waiting for new instances to pass health checks before terminating old ones. This is the recommended way to roll out a new AMI or configuration to a running fleet without downtime.
+An instance refresh is an AWS Auto Scaling rollout operation for replacing instances in batches. It waits for new instances to become healthy before terminating more old instances. Example: with desired capacity `3` and `min_healthy_percentage = 80`, AWS keeps most of the fleet healthy while it rolls a new AMI through the group.
+
+AWS Auto Scaling's instance refresh feature replaces instances in an ASG one at a time, or in configurable batches, waiting for new instances to pass health checks before terminating old ones. This is the recommended way to roll out a new AMI or configuration to a running fleet without downtime.
 
 Terraform can trigger an instance refresh automatically when the launch template version changes:
 
@@ -217,19 +233,23 @@ resource "aws_autoscaling_group" "app" {
 
 When `aws_launch_template.app.latest_version` changes (because you updated the launch template), Terraform updates the ASG to use the new template version. AWS then starts an instance refresh, replacing instances in rolling batches. `min_healthy_percentage = 80` ensures that at least 80% of the desired capacity is healthy at all times during the refresh. `instance_warmup = 60` gives new instances 60 seconds after boot before they are counted toward the healthy percentage, allowing time for the application to start.
 
-The rolling replacement continues until all instances run the new template version. If any instance fails to become healthy within the configured timeout, AWS pauses the refresh and allows you to investigate before continuing or cancelling.
+Terraform's AWS provider starts the refresh, but the ASG resource does not wait until every instance has finished rolling. The rolling replacement continues inside AWS after the API accepts the request. If any instance fails to become healthy within the configured timeout or health checks fail, AWS can fail or pause the refresh and leave remaining instances untouched. Treat instance refresh as an AWS rollout operation that Terraform can configure and trigger, not as proof that the application deployment has fully completed.
 
 ## Azure Rolling and Slot-Based Updates
 
+Azure has platform rollout mechanisms that play the same role as AWS rolling updates. Terraform can configure the service and its update policy, but the service performs the actual instance replacement or slot swap. Example: a Virtual Machine Scale Set can replace VMs in batches, while App Service can warm a staging slot before swapping it into production.
+
 The same principle applies on Azure: Terraform can describe the infrastructure settings, but the Azure service controls the actual rollout mechanism.
 
-For Azure Virtual Machine Scale Sets, platform rolling upgrades replace instances in batches and can pause between batches while health is checked. Terraform can configure the scale set and its upgrade policy, but availability depends on capacity, health probes, load balancer settings, and the rolling upgrade policy Azure applies.
+For Azure Virtual Machine Scale Sets, platform rolling upgrades replace instances in batches and can pause between batches while health is checked. Terraform can configure the scale set and its upgrade policy, but availability depends on capacity, health probes or the application health extension, load balancer settings, and the rolling upgrade policy Azure applies.
 
-For Azure App Service, deployment slots are often a better fit than replacing the production app directly. Terraform can create the production slot and a staging slot, while the deployment pipeline warms the staging slot and swaps it into production after validation. The important pattern is the same as the AWS examples: provision the new version, verify it is healthy, then move traffic.
+For Azure App Service, deployment slots are often a better fit than replacing the production app directly. Deployment slots require Standard, Premium, or Isolated tiers. Terraform can create the production slot and a staging slot, while the deployment pipeline warms the staging slot and swaps it into production after validation. The important pattern is the same as the AWS examples: provision the new version, verify it is healthy, then move traffic.
 
 ## prevent_destroy: Protecting Critical Resources
 
-Some resources should never be destroyed as part of a normal Terraform workflow — RDS databases, production S3 buckets with irreplaceable data, KMS keys that encrypt stored data. Accidentally destroying these resources could cause catastrophic data loss.
+`prevent_destroy` is a lifecycle setting that makes Terraform fail any plan that would delete the resource. Use it for resources where accidental deletion would be costly or irreversible. Example: a production RDS database can be protected so a resource rename does not become a database destroy.
+
+Some resources should never be destroyed as part of a normal Terraform workflow, such as RDS databases, production S3 buckets with irreplaceable data, and KMS keys that encrypt stored data. Accidentally destroying these resources could cause catastrophic data loss.
 
 `prevent_destroy = true` makes Terraform refuse to destroy the resource in any plan:
 
@@ -248,7 +268,7 @@ resource "aws_db_instance" "production" {
 }
 ```
 
-If any plan includes destroying `aws_db_instance.production` — because someone accidentally ran `terraform destroy`, or because the database identifier was changed in code (triggering a replacement) — Terraform aborts with:
+If any plan includes destroying `aws_db_instance.production`, because someone accidentally ran `terraform destroy`, or because the database identifier was changed in code (triggering a replacement), Terraform aborts with:
 
 ```
 Error: Instance cannot be destroyed
@@ -259,11 +279,15 @@ Error: Instance cannot be destroyed
 Resource aws_db_instance.production has lifecycle.prevent_destroy set, but the plan calls for this resource to be destroyed.
 ```
 
-To intentionally destroy a resource with `prevent_destroy = true` — for example, to decommission the database at end of life — you first remove the `lifecycle` block from the code, commit that change, and then run `terraform destroy`. The two-step process makes accidental deletion much harder.
+To intentionally destroy a resource with `prevent_destroy = true`, for example, to decommission the database at end of life, you first remove the `lifecycle` block from the code, commit that change, and then run the destroy workflow. The two-step process makes accidental deletion much harder.
+
+There is one important boundary: `prevent_destroy` only protects the resource while the resource block and lifecycle rule are still present in the configuration. If you remove the entire resource block, Terraform no longer has that lifecycle rule to read. For "stop managing this but do not destroy it" workflows, use Terraform's `removed` block with `destroy = false`, or remove the object from state deliberately after review.
 
 ## ignore_changes: Keeping Terraform Out of Certain Attributes
 
-When an attribute is managed by something outside of Terraform — an auto-scaling policy that adjusts instance counts, an AWS feature that modifies tags automatically, an external application that updates configuration — Terraform will keep proposing to revert those changes on every plan.
+`ignore_changes` tells Terraform to ignore drift for selected attributes. Use it when another system is the intended owner of those fields. Example: an auto-scaling policy can change `desired_capacity`, and Terraform can ignore that field so it does not reset the group size on every plan.
+
+When an attribute is managed by something outside of Terraform, an auto-scaling policy that adjusts instance counts, an AWS feature that modifies tags automatically, or an external application that updates configuration, Terraform will keep proposing to revert those changes on every plan.
 
 `ignore_changes` tells Terraform to stop tracking specific attributes for drift detection:
 
@@ -279,7 +303,7 @@ resource "aws_autoscaling_group" "app" {
 }
 ```
 
-Without `ignore_changes`, if AWS's auto-scaling policies scale the group to 7 instances, the next `terraform plan` sees `desired_capacity` is `7` in reality but `3` in the configuration and proposes to change it back to `3`. With `ignore_changes = [desired_capacity]`, Terraform looks at the current value (`7`) and decides it does not matter — it will not change it.
+Without `ignore_changes`, if AWS's auto-scaling policies scale the group to 7 instances, the next `terraform plan` sees `desired_capacity` is `7` in reality but `3` in the configuration and proposes to change it back to `3`. With `ignore_changes = [desired_capacity]`, Terraform looks at the current value (`7`) and decides it does not matter, it will not change it.
 
 Use `ignore_changes` sparingly. Every attribute you tell Terraform to ignore is an attribute where drift goes undetected. If you accidentally set `desired_capacity = 0` in your code and have `ignore_changes = [desired_capacity]`, Terraform will never catch it and will never propose to restore the correct capacity. The ASG will scale to zero on the next recycle and stay there.
 
@@ -304,8 +328,12 @@ With advanced configuration techniques covered, the final module moves into auto
 
 **References**
 
-- [The lifecycle Meta-Argument (HashiCorp Documentation)](https://developer.hashicorp.com/terraform/language/meta-arguments/lifecycle) — Full reference for all `lifecycle` settings: `create_before_destroy`, `prevent_destroy`, `ignore_changes`, and `replace_triggered_by`.
-- [AWS Auto Scaling Instance Refresh (AWS Documentation)](https://docs.aws.amazon.com/autoscaling/ec2/userguide/asg-instance-refresh.html) — How instance refresh works, including warmup periods, health checks, and cancellation behavior.
-- [Configure Rolling Upgrades for Azure Virtual Machine Scale Sets (Microsoft Learn)](https://learn.microsoft.com/en-us/azure/virtual-machine-scale-sets/virtual-machine-scale-sets-configure-rolling-upgrades) — Azure guidance for rolling scale set upgrades.
-- [Upgrade Policy Modes for Azure Virtual Machine Scale Sets (Microsoft Learn)](https://learn.microsoft.com/en-us/azure/virtual-machine-scale-sets/virtual-machine-scale-sets-upgrade-policy) — How manual, automatic, and rolling upgrade policies affect VM scale set changes.
-- [Terraform Up & Running, 3rd Edition (Yevgeniy Brikman)](https://www.terraformupandrunning.com) — Chapter 5 covers zero-downtime deployment patterns in depth, including a full blue-green deployment implementation.
+- [The lifecycle Meta-Argument (HashiCorp Documentation)](https://developer.hashicorp.com/terraform/language/meta-arguments/lifecycle), Full reference for all `lifecycle` settings: `create_before_destroy`, `prevent_destroy`, `ignore_changes`, and `replace_triggered_by`.
+- [AWS Auto Scaling Instance Refresh (AWS Documentation)](https://docs.aws.amazon.com/autoscaling/ec2/userguide/asg-instance-refresh.html), How instance refresh works, including warmup periods, health checks, and cancellation behavior.
+- [AWS Provider Auto Scaling Group Resource](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/autoscaling_group), Provider behavior for starting instance refresh from Terraform.
+- [Upgrading an RDS DB Instance Engine Version (AWS Documentation)](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_UpgradeDBInstance.Upgrading.html), AWS guidance on database engine upgrades and downtime.
+- [Amazon RDS Blue/Green Deployments](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/blue-green-deployments.html), AWS database-specific low-downtime deployment option.
+- [Configure Rolling Upgrades for Azure Virtual Machine Scale Sets (Microsoft Learn)](https://learn.microsoft.com/en-us/azure/virtual-machine-scale-sets/virtual-machine-scale-sets-configure-rolling-upgrades), Azure guidance for rolling scale set upgrades.
+- [Azure App Service Deployment Slots (Microsoft Learn)](https://learn.microsoft.com/en-us/azure/app-service/deploy-staging-slots), Microsoft guidance on slot tiers and swap behavior.
+- [Upgrade Policy Modes for Azure Virtual Machine Scale Sets (Microsoft Learn)](https://learn.microsoft.com/en-us/azure/virtual-machine-scale-sets/virtual-machine-scale-sets-upgrade-policy), How manual, automatic, and rolling upgrade policies affect VM scale set changes.
+- [Terraform Up & Running, 3rd Edition (Yevgeniy Brikman)](https://www.terraformupandrunning.com), Chapter 5 covers zero-downtime deployment patterns in depth, including a full blue-green deployment implementation.

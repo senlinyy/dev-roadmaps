@@ -48,7 +48,9 @@ This is the kind of problem packaging is meant to reduce. The shared label patte
 
 ## What Manifest Packaging Means
 
-A manifest package is a source form that produces Kubernetes manifests. The source might be a Helm chart, a Kustomize base with overlays, or another tool in the same family. Kubernetes still receives normal API objects at the end.
+Manifest packaging is a pre-apply build step for Kubernetes YAML. You keep a reusable source form, ask a tool to render it, and then review or apply the ordinary Kubernetes objects that come out. The source might be a Helm chart, a Kustomize base with overlays, or another tool in the same family.
+
+Example: the orders API package can keep one shared Deployment shape while staging supplies `replicaCount: 1` and production supplies `replicaCount: 3`. Kubernetes still receives normal API objects at the end.
 
 That last point matters. Helm and Kustomize do not replace Deployments, Services, ConfigMaps, or Secrets. They help generate or assemble them. The cluster does not run a chart or an overlay. The cluster runs the rendered objects.
 
@@ -85,7 +87,7 @@ The layers give you a path through confusion. Packaging is one layer in the rele
 
 ## The Running Example
 
-The `devpolaris-orders-api` service starts with four objects. The Deployment runs the API container. The Service points traffic to the Pods. The ConfigMap provides plain settings. The Ingress exposes the API through `orders.devpolaris.example`.
+A running example gives the packaging idea a concrete shape. In this article, `devpolaris-orders-api` starts with four objects. The Deployment runs the API container. The Service points traffic to the Pods. The ConfigMap provides plain settings. The Ingress exposes the API through `orders.devpolaris.example`.
 
 ```text
 k8s/
@@ -117,7 +119,9 @@ If this file is copied into every environment, a reviewer has to ask an awkward 
 
 ## Rendering Before Applying
 
-The safest habit is to render the package before applying it. Rendering means asking the packaging tool to print the final YAML. For Helm, that command is usually `helm template`. For Kustomize, it is `kubectl kustomize` or `kustomize build`.
+Rendering means asking the packaging tool to print the final Kubernetes YAML before it reaches the API server. It exists so reviewers can inspect the exact Deployment, Service, ConfigMap, or Ingress the cluster will receive.
+
+Example: before applying the production orders API package, render it and check the image, replicas, Service selector, and readiness probe. For Helm, that command is usually `helm template`. For Kustomize, it is `kubectl kustomize` or `kustomize build`.
 
 ```bash
 $ helm template orders-api ./charts/orders-api \
@@ -147,7 +151,7 @@ The exact command can vary by delivery system, but the review question stays the
 
 ## What Packaging Should Not Hide
 
-Packaging becomes risky when it makes simple questions harder. A beginner should still be able to answer which image will run, which port will receive traffic, which ConfigMap keys the Pod reads, which namespace receives objects, and which labels connect the Service to Pods.
+Packaging becomes risky when it makes simple operational questions harder. For an API package, a reviewer should still be able to find the image, traffic port, ConfigMap keys, namespace, and Service-to-Pod labels in the rendered output without chasing through unrelated helper files.
 
 Here is a useful review checklist for `devpolaris-orders-api`:
 
@@ -240,7 +244,7 @@ That review record gives you a practical safety rail. If production fails, you c
 
 ## What CI Should Prove
 
-Packaging review gets much easier when CI produces the same evidence every time. The pipeline does not need to deploy production from every pull request. It only needs to render the package, validate the output, and make the important changes visible to humans.
+CI for manifest packaging is a repeatable render-and-check path. The pipeline does not need to deploy production from every pull request. It only needs to render the package, validate the output, and make the important changes visible to humans.
 
 For `devpolaris-orders-api`, a pull request that changes packaging could run three checks. First, render the staging and production manifests. Second, scan the rendered YAML for the fields that often break releases. Third, run a dry-run validation against a cluster API when that is available.
 
@@ -301,7 +305,7 @@ For `devpolaris-orders-api`, migrate in this order:
 | 2 | Add ConfigMap handling | Config changes often drive rollouts |
 | 3 | Add Ingress or Gateway | Hostname differences are environment-specific |
 | 4 | Add CI rendering | Review needs output before production |
-| 5 | Remove old copied manifests | Two sources of truth create confusion |
+| 5 | Remove old copied manifests | Two active manifest paths create confusion |
 
 Keep the old raw manifests until the packaged output has deployed successfully in a lower environment. Then remove the old files in a separate cleanup change. That keeps rollback simple while the team gains confidence in the new source form.
 

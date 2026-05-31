@@ -20,7 +20,7 @@ id: article-containers-orchestration-kubernetes-operations-rbac
 
 ## Permissions Are API Decisions
 
-Every meaningful Kubernetes operation becomes an API request. `kubectl get pods`, a controller updating a Deployment, a CI job reading rollout status, and a Pod listing ConfigMaps all ask the Kubernetes API server to do something. Authentication answers "who are you?" Authorization answers "are you allowed to do this action?"
+RBAC is Kubernetes authorization for API requests. Every meaningful Kubernetes operation becomes an API request: `kubectl get pods`, a controller updating a Deployment, a CI job reading rollout status, and a Pod listing ConfigMaps all ask the Kubernetes API server to do something. Authentication answers "who are you?" Authorization answers "are you allowed to do this action?"
 
 RBAC stands for role-based access control. In Kubernetes, RBAC grants permissions by binding subjects to roles. A subject can be a user, group, or service account. A role describes allowed verbs on resources. A binding connects the subject to the role in a namespace or across the cluster.
 
@@ -38,7 +38,9 @@ RBAC is protective because it limits the damage from mistakes. If the release to
 
 ## Subjects, Verbs, Resources, and Scope
 
-An RBAC rule is easier to read if you translate it into a sentence: subject can verb resource in scope. For example, "the `orders-release` service account can update Deployments in the `orders` namespace."
+An RBAC rule is a permission sentence for the Kubernetes API: a subject can perform a verb on a resource in a scope. Reading the YAML this way turns abstract fields into a concrete access decision.
+
+Example: "the `orders-release` service account can update Deployments in the `orders` namespace" means subject `orders-release`, verb `update`, resource `deployments`, scope `orders`.
 
 | Word | Plain meaning | Example |
 |------|---------------|---------|
@@ -51,7 +53,9 @@ The verbs are Kubernetes API verbs, not shell commands. `kubectl rollout restart
 
 ## Roles and RoleBindings
 
-A Role grants permissions inside one namespace. A RoleBinding attaches that Role to a subject. This is the usual starting point for application team permissions.
+A Role grants permissions inside one namespace, and a RoleBinding attaches that Role to a subject. This is the usual starting point for application team permissions because it keeps access close to the namespace where the team works.
+
+Example: the orders release service account can patch Deployments and read Pods in `orders`, without gaining Secret reads or permissions in other namespaces.
 
 ```yaml
 apiVersion: v1
@@ -92,7 +96,9 @@ The Role lets the release job update Deployments and read Pods and Events. It do
 
 ## ClusterRoles and ClusterRoleBindings
 
-A ClusterRole is a role object stored at cluster scope. It can be used in two ways. You can bind it into one namespace with a RoleBinding, or you can bind it across the whole cluster with a ClusterRoleBinding.
+A ClusterRole is a reusable role object stored at cluster scope. Its rules are not automatically cluster-wide. The binding decides where those rules apply: a RoleBinding can use the ClusterRole in one namespace, while a ClusterRoleBinding applies it across the whole cluster.
+
+Example: binding the built-in `view` ClusterRole into the `orders` namespace gives read access only there. Binding the same role with a ClusterRoleBinding gives cluster-wide read access, which is a much larger grant.
 
 This distinction is useful because Kubernetes ships common ClusterRoles such as `view`, `edit`, and `admin`. You can bind `view` into the `orders` namespace without granting view access to the whole cluster.
 
@@ -117,7 +123,9 @@ Use ClusterRoleBindings carefully. They are appropriate for cluster operators, a
 
 ## Service Accounts for Workloads
 
-A service account is a Kubernetes identity for a process running in the cluster. Pods can run as a service account. Controllers, CI deployers, and in-cluster tools often use service accounts to call the Kubernetes API.
+A service account is a Kubernetes identity for a process running in the cluster. Pods, controllers, CI deployers, and in-cluster tools use service accounts when they need to call the Kubernetes API.
+
+Example: the orders API runtime can use `orders-api` with no mounted API token, while the release job uses a separate `orders-release` identity that can patch Deployments.
 
 For `devpolaris-orders-api`, the application itself may not need to call the Kubernetes API at all. In that case, give it a dedicated service account with no extra permissions.
 
@@ -147,7 +155,9 @@ spec:
 
 ## Testing Permissions With auth can-i
 
-`kubectl auth can-i` asks the API server whether a subject can perform an action. It is the safest way to test RBAC before a CI job fails during a release.
+`kubectl auth can-i` asks the API server a direct permission question. It is the safest way to test whether a subject can perform an action before a CI job fails during a release.
+
+Example: ask whether `system:serviceaccount:orders:orders-release` can `patch deployments` in `orders` and whether it cannot `get secrets`.
 
 ```bash
 $ kubectl auth can-i patch deployments \
@@ -179,7 +189,7 @@ Read the error as a permission sentence. It names the subject, verb, resource, A
 
 ## Failure Mode: A Helpful Role That Is Too Broad
 
-During an incident, someone may propose binding `cluster-admin` to the release service account so deploys stop failing. That works in the same way giving every developer production database owner access "works." It removes the error by removing the boundary.
+An overly broad role fixes a permission error by removing too much of the boundary. During an incident, someone may propose binding `cluster-admin` to the release service account so deploys stop failing. That works in the same way giving every developer production database owner access "works." It removes the error by removing the boundary.
 
 ```yaml
 apiVersion: rbac.authorization.k8s.io/v1
@@ -202,7 +212,7 @@ The diagnostic path is to reproduce the forbidden action with `kubectl auth can-
 
 ## Reviewing RBAC Changes
 
-RBAC review is about concrete API actions. Avoid reviewing role names alone. Names such as `deployer`, `operator`, and `reader` are helpful for humans, but the rules decide the real access.
+RBAC review is about concrete API actions granted to a concrete identity. Avoid reviewing role names alone. Names such as `deployer`, `operator`, and `reader` are helpful for humans, but the rules decide the real access. For example, a release identity that only needs to patch Deployments should not also receive `get secrets` or cluster-wide delete permissions.
 
 Use this checklist:
 

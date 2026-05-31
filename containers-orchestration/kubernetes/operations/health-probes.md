@@ -22,7 +22,9 @@ id: article-containers-orchestration-kubernetes-operations-health-probes
 
 A container can be running while the application inside it is not useful yet. A Node.js process can bind port `8080` before it has connected to PostgreSQL. A Python API can accept TCP connections while its migration lock is still held. Kubernetes needs a way to tell the difference between "the process exists" and "this Pod should receive real user traffic."
 
-Health probes are the questions kubelet asks from the node where the Pod is running. Kubelet is the node agent that starts containers, watches them, and reports Pod status back to the control plane. A probe can be an HTTP request, a TCP socket check, or a command executed inside the container.
+Health probes are small checks Kubernetes runs against a container to decide whether traffic should reach it or whether it should be restarted. Kubelet is the node agent that starts containers, watches them, and reports Pod status back to the control plane. A probe can be an HTTP request, a TCP socket check, or a command executed inside the container.
+
+Example: kubelet can call `GET /health/ready` on each orders API Pod every ten seconds. If that check fails several times, Kubernetes removes that Pod from Service endpoints so callers use the other replicas.
 
 For `devpolaris-orders-api`, the team runs three replicas behind a Service. The API stores orders in PostgreSQL and publishes order events to a queue. The Service should send traffic only to Pods that can answer requests. If one Pod deadlocks, Kubernetes should restart that Pod without touching the healthy replicas.
 
@@ -39,7 +41,9 @@ The important mental model is that probes are signals, not monitoring dashboards
 
 ## The Three Probe Types
 
-Kubernetes has three probe types, and each one answers a different operational question.
+Kubernetes has three probe types, and each one connects a health signal to a different action. The important beginner move is to remember the action, not just the field name.
+
+Example: readiness changes traffic, liveness restarts a container, and startup delays the other checks while a slow app is still booting.
 
 | Probe | Question | Kubernetes action when it fails |
 |-------|----------|----------------------------------|
@@ -53,7 +57,9 @@ For most web APIs, start with readiness before liveness. Readiness protects user
 
 ## Readiness Protects Traffic
 
-The readiness endpoint should answer the question "can this replica serve a normal request?" For `devpolaris-orders-api`, that means the HTTP server is listening, the database connection pool can borrow a connection, and required configuration is loaded.
+A readiness probe decides whether a Pod should be included as a backend for Services. It protects users by keeping a running but not-yet-useful Pod out of normal traffic.
+
+Example: for `devpolaris-orders-api`, readiness should pass only when the HTTP server is listening, the database connection pool can borrow a connection, and required configuration is loaded.
 
 ```yaml
 apiVersion: apps/v1
@@ -106,7 +112,9 @@ The third Pod is running but not ready, so it is absent from the endpoint list. 
 
 ## Liveness Restarts Stuck Containers
 
-A liveness probe should be stricter about the process itself and less strict about external dependencies. If PostgreSQL has a short outage, restarting every API Pod often makes recovery worse because all replicas restart and reconnect at once. Liveness should detect conditions that the current process is unlikely to fix by itself.
+A liveness probe decides whether kubelet should restart the container. It should be strict about the process itself and less strict about short external dependency failures.
+
+Example: if the orders API event loop is wedged and cannot answer a local `/health/live` request, restart can help. If PostgreSQL has a short outage, restarting every API Pod often makes recovery worse because all replicas restart and reconnect at once.
 
 For `devpolaris-orders-api`, the liveness endpoint can be a shallow in-process check. It confirms the HTTP server and event loop can respond. It should not fail just because the database is unavailable for a few seconds.
 
@@ -143,7 +151,9 @@ That event tells you the restart was caused by liveness, not by an image pull fa
 
 ## Startup Probes Give Slow Apps Time
 
-Some applications are healthy after boot but slow before boot. A startup probe exists for that shape. When a startup probe is configured, Kubernetes waits for it to pass before it starts evaluating liveness and readiness probes.
+A startup probe gives a slow-starting container time to finish booting before liveness and readiness begin. It exists for applications that are healthy after startup but need longer initialization.
+
+Example: if the orders API loads a large policy bundle and warms a cache for ninety seconds, a startup probe can prevent liveness from killing it during legitimate boot work.
 
 ```yaml
 startupProbe:
@@ -160,7 +170,9 @@ The endpoint should become successful only when startup is really complete. For 
 
 ## Probe Timing and Failure Thresholds
 
-Probe timing is a small reliability design. Too aggressive, and normal latency spikes cause restarts. Too loose, and broken Pods stay in traffic for too long. Use real application behavior to choose values instead of copying a snippet.
+Probe timing is the schedule Kubernetes uses to turn health checks into action. It controls how often kubelet asks the question, how long it waits for an answer, and how many failed answers count as a real problem. Too aggressive, and normal latency spikes cause restarts. Too loose, and broken Pods stay in traffic for too long.
+
+Example: `periodSeconds: 10` and `failureThreshold: 3` means Kubernetes needs roughly thirty seconds of failed readiness checks before removing a Pod from endpoints. Use real application behavior to choose values instead of copying a snippet.
 
 | Setting | What it controls | Practical starting point |
 |---------|------------------|--------------------------|
@@ -174,7 +186,7 @@ For readiness, a higher `failureThreshold` can avoid endpoint churn when a depen
 
 ## Failure Mode: A Probe That Restarts a Healthy App
 
-A common mistake is using the same dependency-heavy endpoint for readiness and liveness. Imagine `/health` checks PostgreSQL, Redis, and the event queue. A database maintenance window starts, and every liveness probe begins returning `500`.
+A false liveness failure happens when Kubernetes restarts a process that is still capable of recovering. A common cause is using the same dependency-heavy endpoint for readiness and liveness. If `/health` checks PostgreSQL, Redis, and the event queue, then a database maintenance window can make every liveness probe return `500`.
 
 ```text
 2026-05-07T10:14:20Z health check failed component=postgres error="connection timeout"
@@ -196,7 +208,7 @@ The fix is usually to make `/health/ready` dependency-aware and `/health/live` p
 
 ## A Review Checklist
 
-Before merging a probe change, review it like production behavior, not decoration. Ask what Kubernetes will do when the probe fails.
+A probe review is a review of traffic and restart behavior. The YAML does not only describe health. It tells Kubernetes when to remove a Pod from Service endpoints, when to restart a container, and when to keep waiting during startup. Before merging a probe change, ask what Kubernetes will do when the probe fails.
 
 | Question | Good signal |
 |----------|-------------|

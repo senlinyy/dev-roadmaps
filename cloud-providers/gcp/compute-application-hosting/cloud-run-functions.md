@@ -25,7 +25,7 @@ aliases:
 
 ## Cloud Run Functions
 
-Cloud Run functions are Google Cloud's serverless, event-driven execution handlers designed to run lightweight, single-purpose code snippets in response to platform events. Rather than managing VM operating systems, container orchestration, or persistent network routing listeners, Cloud Run functions remain completely idle—scaling to zero instances—until an active trigger invokes the runtime, boots a transient execution container, runs your code, and shuts down.
+Cloud Run functions are managed event handlers: you provide one small handler, and Google invokes it when an HTTP request, Pub/Sub message, Cloud Storage event, scheduler tick, or other configured trigger arrives. Rather than managing VM operating systems, container orchestration, or persistent network listeners, Cloud Run functions can remain idle until an active trigger invokes the runtime, starts execution capacity, runs your code, and completes the attempt.
 
 A common design pitfall is over-architecting background tasks, forcing simple, asynchronous jobs (like sending a receipt email, validating a file upload, or purging temporary database records) directly into the main, customer-facing request path. Cloud Run functions decouple this event-shaped work from your primary services, protecting the core application API from downstream latencies and ensuring that background tasks execute independently.
 
@@ -67,7 +67,7 @@ As illustrated above, Eventarc unifies event ingestion under the CloudEvents sta
 
 ## The At-Least-Once Delivery and Idempotency Gotcha
 
-Operating event-triggered handlers introduces a critical systems engineering reality: Google Cloud's underlying messaging platforms (like Pub/Sub and Eventarc) operate on an **At-Least-Once Delivery** contract.
+At-least-once delivery means an event platform may deliver the same event more than one time, so the handler must recognize repeated work. Operating event-triggered handlers introduces this critical systems engineering reality because Google Cloud's underlying messaging platforms (like Pub/Sub and Eventarc) operate on an **At-Least-Once Delivery** contract.
 
 ![An event can be delivered more than once, so the handler must recognize repeated work.](/content-assets/articles/article-cloud-providers-gcp-compute-application-hosting-cloud-run-functions-event-driven-workloads/event-trigger-retry.png)
 
@@ -92,7 +92,7 @@ The idempotency guard process detailed above protects your systems:
 
 ## Event Trigger Architecture
 
-Cloud Run functions support distinct event triggers, matching the incoming signal to your workload requirements:
+A trigger is the routing rule that decides what input starts a function attempt. Cloud Run functions support distinct event triggers, matching the incoming signal to your workload requirements:
 
 *   **HTTP Triggers**: Expose a direct public or internal web endpoint. This fits webhook integrations (such as Stripe payment callbacks) where an external system must invoke your handler immediately over HTTPS.
 *   **Pub/Sub Triggers**: Bind the function directly to a message topic. This is the optimal trigger for decoupling heavy internal APIs, allowing background tasks to process asynchronously as soon as a message is published.
@@ -101,7 +101,7 @@ Cloud Run functions support distinct event triggers, matching the incoming signa
 
 ## The Bounded Handler Pattern
 
-A critical operational habit when writing serverless handlers is adhering to the **Bounded Handler Pattern**. A function must perform exactly one, highly isolated, atomic task.
+The bounded handler pattern treats a function as one small unit of event work with a clear input, side effect, timeout, and log trail. A critical operational habit when writing serverless handlers is adhering to this pattern. A function must perform exactly one, highly isolated, atomic task.
 
 ![A function should claim work, do one bounded action, and leave evidence before timeout.](/content-assets/articles/article-cloud-providers-gcp-compute-application-hosting-cloud-run-functions-event-driven-workloads/bounded-handler-pattern.png)
 
@@ -113,7 +113,7 @@ If your code requires shared routing middleware, extensive state management, or 
 
 ## Timeout Thresholds and Runtime Limits
 
-Because functions are billed precisely by the millisecond of active execution time, Google Cloud enforces strict runtime limits to protect you from runaway resource bills:
+Timeouts are the maximum execution windows a function attempt may consume before the platform stops it. Because functions are billed by active execution time, Google Cloud enforces strict runtime limits to protect you from runaway resource bills:
 
 *   **Default Timeouts**: Cloud Run functions have a default timeout, and long downstream waits still cause failed invocations. Treat the default as a prompt to keep handlers small, not as a target duration.
 *   **Maximum Timeouts**: Current Cloud Run functions quotas allow longer HTTP functions than event-driven functions. At review time, Google documents a 60 minute maximum for HTTP functions, 1800 seconds for scheduled and task queue functions, and 540 seconds for event-driven functions.
@@ -121,7 +121,7 @@ Because functions are billed precisely by the millisecond of active execution ti
 
 ## Least-Privilege Workload Principal Isolation
 
-Every Cloud Run function runs with a dedicated **Runtime Service Account**. In experienced serverless designs, you never share a single service account across multiple separate functions.
+A function runtime service account is the principal used by that handler when it calls Google APIs or other protected resources. Every Cloud Run function runs with a dedicated **Runtime Service Account**. In experienced serverless designs, you never share a single service account across multiple separate functions.
 
 If a cleanup function and a receipt delivery function share the same identity, an attacker who exploits a dependency vulnerability in the cleanup handler gains immediate authorization to access database secrets and send unauthorized emails.
 
@@ -129,13 +129,13 @@ By attaching an isolated, custom runtime service account to each function, you s
 
 ## Unified Logging and Attempt Auditing
 
-Because event-driven execution is entirely asynchronous, monitoring failures requires structured logging. The developer who initiated the primary checkout request has already received a success response; if the downstream receipt function fails, the failure is invisible unless recorded properly.
+Attempt auditing is the evidence trail that connects each function invocation to the original event and downstream side effect. Because event-driven execution is entirely asynchronous, monitoring failures requires structured logging. The developer who initiated the primary checkout request has already received a success response; if the downstream receipt function fails, the failure is invisible unless recorded properly.
 
 Your function logs must always correlate with the parent checkout request. By extracting the **`correlation-id`** from the CloudEvents payload and injecting it into every structured `stdout` JSON log statement, you enable operators to run simple, unified queries across Cloud Logging, instantly tracing the lifecycle of a request from the initial user click down to the final background function execution.
 
 ## Sample Function Shape
 
-An idiomatic Cloud Run function configuration for the Orders receipt handler isolates triggers, identities, and retry configurations:
+A sample function shape is a compact review of trigger, handler, identity, retry, and logging boundaries. An idiomatic Cloud Run function configuration for the Orders receipt handler isolates triggers, identities, and retry configurations:
 
 | Function Parameter | Configuration Value | Operational Purpose |
 | :--- | :--- | :--- |

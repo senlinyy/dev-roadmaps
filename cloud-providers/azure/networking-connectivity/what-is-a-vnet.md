@@ -15,7 +15,7 @@ aliases:
 
 ## Table of Contents
 
-1. [Private Network Isolation: The Virtual Network Spine](#private-network-isolation-the-virtual-network-spine)
+1. [Private Network Isolation: Virtual Networks](#private-network-isolation-virtual-networks)
 2. [Address Space](#address-space)
 3. [Subnets and Address Masking](#subnets-and-address-masking)
 4. [The Five Reserved IP Addresses](#the-five-reserved-ip-addresses)
@@ -28,17 +28,17 @@ aliases:
 11. [Putting It All Together](#putting-it-all-together)
 12. [What's Next](#whats-next)
 
-## Private Network Isolation: The Virtual Network Spine
+## Private Network Isolation: Virtual Networks
 
-An Azure Virtual Network (VNet) is the fundamental private security boundary that isolates and hosts your cloud infrastructure workloads in a specific geographic region.
+An Azure Virtual Network (VNet) is Azure's private IP network boundary for your cloud resources in a specific geographic region. It gives workloads private address space, subnet placement, routes, gateways, and security attachments before any public entry point is added.
 
-To understand why this is the primary boundary of your infrastructure, you must understand the physical reality of a cloud datacenter. An Azure datacenter is a massive complex containing tens of thousands of physical server blades cabled to shared high-speed network switches. If you deploy a virtual machine or a container directly onto this physical network, your workload shares the same hardware interfaces and wire channels as every other company hosted in that facility.
+To understand why this is the primary boundary of your infrastructure, you must understand the physical reality of a cloud datacenter. An Azure datacenter is a massive complex containing tens of thousands of physical server blades connected to shared high-speed network switches. If you deploy a virtual machine or a container directly onto this physical network, your workload shares the same hardware interfaces and wire channels as every other company hosted in that facility.
 
 Azure Virtual Network solves this physical sharing problem by establishing a highly secure **software-defined networking (SDN) boundary**.
 
 When you provision a VNet, the Azure controller creates an isolated, logical network namespace dedicated to your resources. You control its private address ranges, subnets, route tables, gateways, and security rules. Azure handles the physical switching and routing underneath that logical network.
 
-This logical boundary makes your private IP space unreachable to other tenants unless you explicitly connect it through supported network features. It effectively creates a private cloud network for your services, serving as the spine onto which all subsequent firewall rules, gateways, and load balancers are attached.
+This logical boundary makes your private IP space unreachable to other tenants unless you explicitly connect it through supported network features. It creates the private network surface where later firewall rules, gateways, private endpoints, and load balancers attach.
 
 If you are coming from AWS, a VNet is the closest Azure equivalent to an AWS VPC. While they solve the same isolation requirements, their subnets are designed differently. In AWS, a subnet is physically bound to exactly one Availability Zone (AZ).
 
@@ -59,7 +59,7 @@ flowchart TB
 
 ## Address Space
 
-Every VNet has one or more address spaces, such as `10.30.0.0/16`. This range is the private IP space from which subnets are carved.
+A VNet address space is the private IP range Azure reserves for that virtual network. Every VNet has one or more address spaces, such as `10.30.0.0/16`. This range is the private IP space from which subnets are carved.
 
 Address space feels like setup work, but it becomes a future connectivity decision. A VNet can later peer with another VNet, connect to a hub network, or connect to an on-premises network through VPN or ExpressRoute. Those private networks need non-overlapping ranges. If two connected networks both use `10.0.0.0/16`, routing cannot cleanly decide which side owns a destination address.
 
@@ -76,7 +76,11 @@ The practical habit is to record why the range was chosen. A neat-looking range 
 
 ## Subnets and Address Masking
 
-A subnet is a smaller, contiguous block of IP addresses carved out of your parent VNet address space. It acts as both a logical workspace and an administrative boundary. Resources that perform different operational jobs should be isolated in separate subnets, allowing you to attach granular security filters (NSGs) and routing rules (UDRs) to each specific subnet role.
+A subnet is a role-specific slice of the VNet address space. It gives one workload group a smaller IP range where Azure can attach routing rules, security rules, and service-specific delegation settings.
+
+Example: `snet-public-entry` can hold Application Gateway, `snet-orders-api` can hold private application compute, and `snet-private-endpoints` can hold private endpoint NICs for SQL and Key Vault.
+
+It is a smaller, contiguous block of IP addresses carved out of your parent VNet address space, acting as both a workload placement area and an administrative boundary. Resources that perform different operational jobs should be isolated in separate subnets, allowing you to attach granular security filters (NSGs) and routing rules (UDRs) to each specific subnet role.
 
 When planning subnets, you utilize Classless Inter-Domain Routing (CIDR) notation to define address masks. For example, a VNet address space of `10.30.0.0/16` contains $65,536$ unique IP addresses ($2^{16}$). If you carve this VNet into `/24` subnets (such as `10.30.2.0/24`), each subnet contains $256$ IP addresses ($2^{8}$).
 
@@ -112,11 +116,11 @@ This reservation rule is especially critical when designing small subnets (like 
 
 ## Route Tables
 
-A route tells Azure the next hop for traffic leaving a subnet. A route table is the Azure resource where you put custom routes. The route table matters only after it is associated with a subnet.
+A route table is the subnet-attached list of next-hop rules for outbound packets. A route tells Azure the next hop for traffic leaving a subnet. The route table matters only after it is associated with a subnet.
 
 The route question is plain:
 
-```text
+```plain
 When traffic leaves snet-orders-api for this destination address, which route wins and what is the next hop?
 ```
 
@@ -132,7 +136,11 @@ The table is not a complete production design. It is a way to read intent. For e
 
 ## Routing Engines and Prefix Matching
 
-To design a robust network, you must understand the physical packet-forwarding mechanism implemented by the Azure hypervisors. When your container app transmits an IP packet, the local hypervisor host intercepts the packet at the virtual switch level before it hits any physical cable. The hypervisor's routing engine immediately parses the packet's destination IP address and queries the effective routing table associated with the source subnet.
+Longest Prefix Match (LPM) is the route-selection rule that picks the most specific matching destination prefix. A prefix is an IP range such as `10.30.0.0/16` or the smaller `10.30.40.0/24`.
+
+Example: if a packet is going to `10.30.40.7`, a route for `10.30.40.0/24` wins over a broader route for `10.30.0.0/16`.
+
+To design a robust network, you must understand the packet-forwarding mechanism implemented by the Azure hypervisors. When your container app transmits an IP packet, the local hypervisor host intercepts the packet at the virtual switch level before it hits any physical cable. The hypervisor's routing engine immediately parses the packet's destination IP address and queries the effective routing table associated with the source subnet.
 
 The routing engine resolves conflicts using a strict **Longest Prefix Match (LPM)** algorithm. Under LPM, the engine matches the destination IP against the most specific CIDR prefix available in its table.
 
@@ -154,7 +162,7 @@ This is where Azure differs from a simple whiteboard. A subnet can have routes y
 
 For the orders API, the review should include:
 
-```text
+```plain
 Subnet: snet-orders-api
 Expected local range: 10.30.0.0/16
 Expected private endpoint range: 10.30.40.0/24
@@ -166,7 +174,7 @@ That evidence prevents a familiar waste of time: changing app settings while the
 
 ## User-Defined Routes
 
-A user-defined route, often called a UDR, is a custom route you add to a route table. UDRs are common when a team wants traffic to pass through a firewall, network virtual appliance, hub, or other inspection point.
+A user-defined route (UDR) is a custom next-hop override that you add to a route table. UDRs are common when a team wants traffic to pass through a firewall, network virtual appliance, hub, or other inspection point.
 
 ![An infographic showing a user-defined route sending traffic to a missing next hop and creating a black hole](/content-assets/articles/article-cloud-providers-azure-networking-connectivity-azure-networking-mental-model/udr-black-hole-route.png)
 
@@ -176,7 +184,7 @@ The power is useful and dangerous. A single `0.0.0.0/0` UDR can move most outbou
 
 The route creates an operational dependency:
 
-```text
+```plain
 Route: 0.0.0.0/0 -> 10.30.0.4
 Meaning: traffic leaves through the firewall appliance
 Hidden dependency: the appliance must be healthy, forwarding, and allowed to send return traffic
@@ -185,7 +193,7 @@ Hidden dependency: the appliance must be healthy, forwarding, and allowed to sen
 Use UDRs when the next hop is part of the design, not as a quick way to make a symptom disappear. Before adding one, write the packet path, the next hop, the return path, and the failure behavior.
 
 :::expand[The Silent Black-Hole Route]{kind="pitfall"}
-A common architecture pattern is routing all outbound subnet traffic (`0.0.0.0/0`) through a central firewall or Network Virtual Appliance (NVA) using a User-Defined Route (UDR). However, pointing the UDR next-hop to the NVA's private network interface card (NIC) is only half the battle. If **IP Forwarding** is not explicitly enabled on that target NIC resource, the Azure SDN switch drops every packet destined for that NIC. The failure is completely silent—no TCP resets or ICMP unreachable packets, just continuous timeouts.
+A common architecture pattern is routing all outbound subnet traffic (`0.0.0.0/0`) through a central firewall or Network Virtual Appliance (NVA) using a User-Defined Route (UDR). However, pointing the UDR next-hop to the NVA's private network interface card (NIC) is only half the battle. If **IP Forwarding** is not explicitly enabled on that target NIC resource, the Azure SDN switch drops every packet destined for that NIC. The failure is completely silent - no TCP resets or ICMP unreachable packets, just continuous timeouts.
 
 This matches the AWS behavior where routing traffic through a NAT instance or software firewall requires disabling the **Source/Destination Check** on the EC2 instance's Elastic Network Interface (ENI). If this check is left enabled, AWS drops any packet where the source or destination IP does not match the instance's own IP. In Azure, `enableIPForwarding` is the identical switch.
 
@@ -211,13 +219,17 @@ az network nic update --name nic-firewall-prod --resource-group rg-security-prod
 
 ## NAT Gateway and SNAT Port Exhaustion
 
-A secure private subnet has no direct public inbound path. However, workloads inside the private subnet (like `snet-orders-api`) still need outbound internet access to call external payment APIs, download container updates, or stream telemetry.
+NAT Gateway is the managed outbound translation service for private subnets. It lets private workloads start outbound internet connections while keeping those workloads unreachable from inbound public traffic.
+
+Example: a container in `snet-orders-api` can call a payment provider from private IP `10.30.2.7`; NAT Gateway translates that outbound connection to a public IP such as `52.174.12.34`.
+
+A secure private subnet has no direct public inbound path. However, workloads inside the private subnet still need outbound internet access to call external payment APIs, download container updates, or stream telemetry.
 
 **Azure NAT Gateway** provides a fully managed Source Network Address Translation (SNAT) service that gives your private subnet a highly resilient outbound internet exit without exposing resources to public inbound attacks.
 
 Under the hood, when a container app initiates a connection to an external API, the host hypervisor routes the packet to the NAT Gateway. The NAT Gateway dynamically translates the container's private IP (`10.30.2.7`) to its own assigned public IP (`52.174.12.34`), allocating a random outbound ephemeral port to handle the connection:
 
-```text
+```plain
 Container Connection: 10.30.2.7:5000 ───> NAT Gateway ───> Translated Connection: 52.174.12.34:1024
 ```
 

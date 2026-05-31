@@ -38,6 +38,8 @@ The solution to these risks is passwordless cloud authorization. Instead of teac
 
 A workload role is an IAM role that you assign to running application code, such as an ECS container task, a Lambda function, or an EC2 instance. Unlike human users who have permanent passwords, a role has no long-lived keys. It represents a specific job description that a running workload is authorized to perform.
 
+A workload role behaves like a runtime identity profile for one software job. The hosting service assumes the role on behalf of the running code, and the resulting temporary session becomes the caller AWS sees in API requests.
+
 To implement a workload role, you must configure two distinct policies that govern the role's behavior:
 
 * **The Trust Policy**: A resource-based policy attached directly to the role that defines *who* is allowed to assume it. For a containerized application, the trust policy specifies that the AWS ECS task runner service is a trusted entity permitted to step into the role.
@@ -61,6 +63,8 @@ By separating the trust boundary from the operational boundary, you ensure that 
 ## How Temporary Credentials Work
 
 When the AWS hosting runtime starts your application, it does not inject permanent credentials. Instead, the hosting service assumes the workload role through the AWS Security Token Service, known as STS, and exposes the resulting temporary credentials to the workload through the runtime's local credential endpoint. STS is the service that issues temporary, short-lived security credentials for the role session.
+
+Temporary credentials function as expiring API signing material for one authorized role session. They let the workload sign AWS requests without carrying a permanent access key in code, configuration, or the container image.
 
 The resulting temporary credential set contains three distinct values:
 
@@ -93,7 +97,7 @@ Because this lifecycle is fully automated, the developer does not write credenti
 
 A common developer concern is how to manage these temporary credentials inside the application codebase. If the keys are dynamic, rotate hourly, and require a session token, does the application code need to constantly query STS, track expiration times, and pass tokens into every service client?
 
-The answer is no. You do not write credential management logic. The AWS SDK provides an automated default credential provider chain that scans the local runtime environment for valid credentials. The exact order varies slightly by SDK and version, but the practical sources are familiar:
+The answer is no. You do not write credential management logic. The AWS SDK's default credential provider chain acts as a standard credential discovery pipeline. It scans the local runtime environment for valid credentials. The exact order varies slightly by SDK and version, but the practical sources are familiar:
 
 * **Environment Variables**: The SDK checks for `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, and `AWS_SESSION_TOKEN`. This is useful for local testing or CI/CD pipelines.
 * **Shared Credentials File**: The SDK scans the local filesystem for a credentials file, typically populated by the AWS CLI during local development.
@@ -117,6 +121,8 @@ Your application will fail to read the rotated credentials issued by the hosting
 ## ECS Task Roles vs Task Execution Roles
 
 When deploying containerized applications on AWS ECS, developers frequently encounter credential failures because they confuse the two distinct roles assigned to a single task definition.
+
+The anchor is caller separation. The task execution role authorizes platform startup work performed by ECS, while the task role authorizes AWS API calls made by your application process after it starts.
 
 Most production ECS services use two different roles, and each role exists for a different caller:
 

@@ -17,55 +17,58 @@ aliases:
 3. [App Service Slots](#app-service-slots)
 4. [Slot Settings](#slot-settings)
 5. [Container Apps Revisions](#container-apps-revisions)
-6. [Traffic Splitting](#traffic-splitting)
-7. [Direct Testing](#direct-testing)
-8. [Rollback Shape](#rollback-shape)
-9. [Putting It All Together](#putting-it-all-together)
-10. [What's Next](#whats-next)
+6. [Traffic Splitting and Canary Routing](#traffic-splitting-and-canary-routing)
+7. [App Service Slot Traffic Routing CLI Commands](#app-service-slot-traffic-routing-cli-commands)
+8. [Container Apps Canary Routing Bicep](#container-apps-canary-routing-bicep)
+9. [Direct Testing and Health Paths](#direct-testing-and-health-paths)
+10. [Rollback Mechanics](#rollback-mechanics)
+11. [Putting It All Together](#putting-it-all-together)
+12. [What's Next](#whats-next)
 
 ## The Problem
 
-The previous article described a release as more than a deploy. Now the team wants a safer rollout for `devpolaris-orders-api`.
+A safe rollout is a traffic-control pattern that verifies a candidate version before every user depends on it.
 
-The risky question is simple: where can the new version run before every production user depends on it?
+Deploying a new software version directly to all production users creates a high risk of operational failure.
+If the first real test of a candidate version occurs when it receives the entire production load, any unhandled error can immediately disrupt the service.
+A configuration typo, database schema mismatch, or slow process startup can affect all customers simultaneously.
 
-If the first real test is "send all production traffic to the new version," the blast radius is large. A missing app setting, broken dependency call, slow startup, or bad checkout path can affect everyone at once. Azure gives different rollout handles depending on runtime. App Service uses deployment slots. Container Apps uses revisions. They are different features that answer the same release question: how do we run, test, and route a candidate version deliberately?
+To mitigate this risk, the release process must run the candidate version in an isolated environment that mimics production before routing user traffic.
+This practice limits the blast radius of a failure.
+Azure provides two primary mechanisms for controlled traffic routing: App Service deployment slots and Container Apps revisions.
+Using these mechanisms, engineering teams can deploy, test, and gradually expose a new version to traffic under production conditions.
 
 ## Candidate Version
 
-A candidate version is the version that may become production. It has passed earlier checks and still needs runtime evidence before trust.
+A candidate version is the exact package, image, or revision intended for production but still isolated from normal user traffic.
+Although the version has passed development and integration testing, it still requires validation in the target environment.
 
-For the orders API, the candidate might be:
+A structured candidate release record defines the starting environment properties:
 
-```text
-image: acrdevpolaris.azurecr.io/orders-api@sha256:...
+```plain
+image: acrdevpolaris.azurecr.io/orders-api@sha256:7a4198c62c95
 change: new receipt upload path
-expected runtime: Container Apps
 candidate revision: orders-api--v31
 initial traffic: 0 percent
 rollback target: orders-api--v30
 ```
 
-The important word is candidate. The team should be able to test it without pretending the release is done. A candidate needs the right artifact, configuration, secret access, health path, and dependency reachability before it receives broad traffic.
-
-The Azure tool changes by runtime:
-
-| Runtime | Candidate surface | Traffic movement |
-| --- | --- | --- |
-| App Service | Deployment slot | Swap slots or route traffic by slot behavior. |
-| Container Apps | Revision | Assign traffic percentages to revisions. |
-
-Those surfaces are release tools, not decorations. They give the team a controlled place between "built" and "fully serving production."
+The candidate version remains isolated from production traffic until the team verifies that the application starts successfully, resolves its identity roles, and communicates with dependent databases.
+The candidate can be tested in place using direct URL routing or private network pings.
 
 ## App Service Slots
 
-An App Service deployment slot is a live app with its own hostname. It belongs to the same App Service app, but it can run a different version. Common slot names are `staging`, `blue`, or `green`.
+An App Service deployment slot is a parallel Web App instance used to run and warm a candidate version before swapping traffic.
+It runs on the same App Service Plan as the production instance.
+Each slot is assigned its own fully qualified domain name, its own application settings, and its own managed identity.
+Common slot configurations include a production slot and a staging slot.
 
-![An infographic showing staging warm-up, smoke tests, health checks, and config checks before production traffic moves](/content-assets/articles/article-cloud-providers-azure-deployment-runtime-operations-slots-revisions-safe-rollouts/slot-swap-safety-checks.png)
+Example: `orders-api-staging.azurewebsites.net` can run image digest `sha256:7a4198...` at 0 percent public traffic while `orders-api.azurewebsites.net` continues serving the stable production version.
 
-*A slot swap should wait for warm-up, health, smoke, and config checks before it receives real users.*
-
-The beginner mental model is a theater stage. Production is the stage users see. A staging slot is a second stage where the same app can warm up, receive settings, and answer tests. A swap changes which slot is serving production traffic.
+Deployment slots isolate the candidate version physically and logically:
+- The candidate is deployed to the staging slot without affecting the active production slot.
+- The staging slot runs on the same virtual machine instances as production, ensuring identical hardware profiles.
+- System resources like CPU and memory are shared, which requires monitoring staging load to avoid performance impact on production.
 
 ```mermaid
 flowchart LR
@@ -76,20 +79,23 @@ flowchart LR
     Prod --> Watch["Watch window"]
 ```
 
-Slots help because they separate deployment from production exposure. The team can deploy the candidate to `staging`, test the direct slot URL, verify settings and health, then swap. If the swapped version is bad and the previous slot remains available, the rollback path is often another swap.
-
-Slots are not free of risk. A staging slot is still an app. It can call real databases if configured that way. It can use different settings from production. It can accidentally send emails, process jobs, or write to shared storage if the team does not design its behavior. Test the slot as a candidate production path, not as a harmless copy, and make any production dependency access deliberate, guarded, and safe.
+When the candidate in the staging slot is verified, the platform executes a swap operation.
+The swap reconfigures the underlying network routing to redirect production traffic to the new version.
+Because the previous version remains running in the staging slot after the swap, rolling back requires executing a second swap operation to return traffic to the original version.
 
 :::expand[Pitfall: Staging Slots Connected to Production Data]{kind="pitfall"}
-A catastrophic staging slot misconfiguration occurs when the staging slot is cabled directly to active production data stores and queues. During a slot swap, Azure warm-up routines boot the candidate application inside the staging slot first to ensure it is responsive. If your deployment scripts or engineers then execute automated database schema migrations, test transactions, or data cleanups against the staging endpoint to "verify" the build, these operations will run directly against your active production SQL database or Cosmos DB container.
+A catastrophic staging slot misconfiguration occurs when the staging slot is connected directly to active production data stores and queues.
+During a slot swap, Azure warm-up routines boot the candidate application inside the staging slot first to ensure it is responsive.
+If your deployment scripts or engineers then execute automated database schema migrations, test transactions, or data cleanups against the staging endpoint to "verify" the build, these operations will run directly against your active production SQL database or Cosmos DB container.
 
 The blast radius of this data pollution is severe:
-1.  **Production Data Corruption**: Running test checkouts, deleting sample accounts, or truncating tables during staging verification directly alters live customer records.
-2.  **Queue Interception**: If the staging slot boots up and listens to a shared production Service Bus queue or Event Hub stream, it will begin pulling and processing real production messages, preventing the active production slot from handling them and leading to lost orders or orphan customer workflows.
+1. **Production Data Corruption**: Running test checkouts, deleting sample accounts, or truncating tables during staging verification directly alters live customer records.
+2. **Queue Interception**: If the staging slot boots up and listens to a shared production Service Bus queue or Event Hub stream, it will begin pulling and processing real production messages, preventing the active production slot from handling them and leading to lost orders or orphan customer workflows.
 
-This identical data hazard exists in AWS blue-green deployments. When swapping ECS target groups or Route 53 DNS weights, if your green environment's task definitions are not isolated to staging database connection strings, your pre-swap warm-up tests will write to the active Amazon RDS database or pull messages from the live production Amazon SQS queue.
+This identical data hazard exists in AWS blue-green deployments.
+When swapping ECS target groups or Route 53 DNS weights, if your green environment's task definitions are not isolated to staging database connection strings, your pre-swap warm-up tests will write to the active Amazon RDS database or pull messages from the live production Amazon SQS queue.
 
-The top-down diagram below compares a polluted shared-data configuration with an isolated, secure staging configuration:
+The diagram below compares a polluted shared-data configuration with an isolated, secure staging configuration:
 
 ```mermaid
 flowchart TD
@@ -100,126 +106,210 @@ flowchart TD
         ProdQueueA -->|"Mismatched Processing"| StagingAppA
     end
 
-    subgraph Isolated["Secure Staging Configuration (Isolated Sandboxes)"]
-        StagingAppB["Staging Slot (Warm-up App)"] -->|"Writes Test Data"| StagingDBB[("Staging SQL Database (Sandbox)")]
+    subgraph Isolated["Secure Staging Configuration (Isolated Test Resources)"]
+        StagingAppB["Staging Slot (Warm-up App)"] -->|"Writes Test Data"| StagingDBB[("Staging SQL Database (Test Only)")]
         ProdAppB["Production Slot (Active Users)"] -->|"Writes Real Orders"| ProdDBB[("Production SQL Database (Live)")]
         StagingAppB -->|"Pulls Messages"| StagingQueueB[("Staging Message Queue")]
     end
 ```
 
-**Rule of thumb:** Do not let a staging slot perform writes, destructive tests, or queue processing against production dependencies. Prefer slot-sticky environment settings that point staging to staging databases, storage accounts, and queues. If a final validation must touch a production dependency, make it read-only or use controlled test data with an explicit rollback and cleanup plan.
+Do not let a staging slot perform writes, destructive tests, or queue processing against production dependencies.
+Prefer slot-sticky environment settings that point staging to staging databases, storage accounts, and queues.
+If a final validation must touch a production dependency, make it read-only or use controlled test data with an explicit rollback and cleanup plan.
 :::
 
 ## Slot Settings
 
-Slot settings are the part of App Service slots that prevents a very common mistake. Some settings should move with the app version during a swap. Other settings should stay attached to the slot.
+Slot settings ensure that environment-specific configuration values remain anchored to their physical slots during a swap.
+If a setting is not marked as slot-specific, its value will migrate with the application version, which can cause production to connect to staging resources.
 
-For example, the staging slot might use a staging-only flag or direct test endpoint. Production might use a production storage account. During a swap, you do not want every environment-specific value to travel accidentally with the code.
+Managing configuration values during a swap requires setting slot stickiness:
 
-| Setting | Move with code? | Why |
+| Setting Name | Slot Sticky State | Release Rationale |
 | --- | --- | --- |
-| `APP_VERSION` | Usually yes | The candidate version should become production. |
-| `RECEIPTS_STORAGE_ACCOUNT` | Usually no | Production should keep production storage unless intentionally changed. |
-| Key Vault reference for production secret | Usually no | Secret boundary should remain environment-specific. |
-| Feature flag for candidate testing | Depends | The release record should say whether it is part of the change. |
+| `CONTAINER_IMAGE_TAG` | Not Sticky | The new application container image tag must migrate to the production slot. |
+| `ORDERS_DB_SERVER` | Sticky | The production slot must remain connected to the production database server. |
+| `RECEIPTS_STORAGE` | Sticky | The production slot must write receipts only to the production storage account. |
+| `LOGGING_LEVEL` | Not Sticky | Allows version-specific debugging settings to migrate with the deployment candidate. |
 
-The gotcha is that a slot swap can be technically successful while configuration behavior surprises the team. Before swapping, know which settings are sticky to the slot and which settings travel with the candidate.
+Marking a setting as sticky ensures that network boundaries and resource connections remain secure during the swap operation.
 
 ## Container Apps Revisions
 
-Azure Container Apps uses revisions to represent versions of an app. A revision is created when revision-scope properties change, such as the container image or certain runtime template settings. Revisions let Container Apps keep more than one version around, depending on revision mode and app configuration.
+A Container Apps revision is an immutable version record for one container image, resource allocation, and environment setting set.
+Azure Container Apps manages deployment versions using immutable revisions.
+Every change to a revision-scope property automatically spawns a new revision.
 
-For a beginner, read a revision as a named version of the running container app. It includes the image and revision-scope runtime shape that Azure uses for that version.
+Example: `orders-api--v31` can run alongside `orders-api--v30`, receive 5 percent of traffic, and then be deactivated quickly if telemetry shows failures.
 
-For the orders API:
+Managing revisions provides operational benefits:
+- Revisions are immutable, which guarantees that once a revision is compiled and tested, its internal state cannot change.
+- Multiple revisions can run concurrently, allowing traffic to split between different versions.
+- Older revisions can be preserved in a stopped or active state to serve as immediate rollback targets.
 
-```text
-current revision: orders-api--v30
-candidate revision: orders-api--v31
-candidate image: acrdevpolaris.azurecr.io/orders-api@sha256:...
-initial traffic: 0 percent
+When deploying a container update, the new revision starts with zero percent traffic.
+The team can query the revision status, perform network checks against its unique endpoint, and verify its logs before allocating production traffic.
+
+## Traffic Splitting and Canary Routing
+
+Traffic splitting is the release control that distributes incoming user requests across more than one active version.
+In a canary rollout, a small percentage of production traffic is routed to the candidate revision while the majority of traffic remains on the stable version.
+
+Example: route 95 percent of requests to `orders-api--v30` and 5 percent to `orders-api--v31` for 30 minutes, then increase the candidate only if errors and latency stay within the release threshold.
+
+This gradual transition reduces the impact of unforeseen failures:
+- **0 percent traffic**: The candidate runs in production but receives no public requests. The team runs smoke tests directly.
+- **10 percent traffic**: A fraction of production users interact with the new version. The team monitors error rates and latency.
+- **50 percent traffic**: The candidate handles a significant load. The team audits database performance under stress.
+- **100 percent traffic**: The rollout completes. The previous version is set to zero percent traffic but kept active for rollback.
+
+```mermaid
+flowchart TD
+    Ingress["Public Traffic Ingress"] -->|"90% Traffic"| V30["Stable Revision (orders-api--v30)"]
+    Ingress -->|"10% Traffic"| V31["Canary Revision (orders-api--v31)"]
 ```
 
-This helps the team separate deploy from exposure. A new revision can exist before it receives all production traffic. The team can inspect revision status, test it, assign a small traffic percentage, then increase or remove traffic based on evidence.
+Using traffic splits, the release process is no longer an all-or-nothing event.
+If the canary revision throws exceptions, the traffic router can redirect requests immediately back to the stable revision, protecting the user experience.
 
-The gotcha is configuration scope. Some Container Apps changes create a new revision. Other app-level changes apply to the app without creating a new revision. That distinction affects rollback. Rolling traffic back to an older revision may not undo every app-level configuration change.
+## App Service Slot Traffic Routing CLI Commands
 
-## Traffic Splitting
+App Service traffic routing is the platform feature that sends a configured percentage of production requests to a deployment slot.
+This enables canary testing directly within the App Service routing layer.
 
-Traffic splitting sends percentages of traffic to different versions. In Container Apps, a team can split ingress traffic between revisions. That makes canary-style rollouts possible: 0 percent, then 10 percent, then 50 percent, then 100 percent if evidence is healthy.
+The Azure CLI commands below configure, query, and clear traffic routing distribution rules:
 
-![An infographic showing Container Apps ingress shifting 90 percent and 10 percent of traffic between two revisions](/content-assets/articles/article-cloud-providers-azure-deployment-runtime-operations-slots-revisions-safe-rollouts/revision-traffic-shift.png)
+```bash
+az webapp traffic-routing set \
+  --name app-devpolaris-orders-prod \
+  --resource-group rg-devpolaris-prod \
+  --distribution staging=10
 
-*Revision traffic weights let a team expose a new version gradually while watching health.*
+az webapp traffic-routing show \
+  --name app-devpolaris-orders-prod \
+  --resource-group rg-devpolaris-prod
 
-Traffic splitting reduces blast radius compared with moving everything at once, while ten percent of traffic can still include important customers. A bug may only appear for a specific account, region, feature flag, or data shape.
+az webapp traffic-routing clear \
+  --name app-devpolaris-orders-prod \
+  --resource-group rg-devpolaris-prod
+```
 
-| Traffic state | What the team learns |
-| --- | --- |
-| 0 percent | Candidate can be deployed and inspected without normal user traffic. |
-| Small percent | Candidate handles real traffic with limited exposure. |
-| 50 percent | Candidate is under meaningful load while old version still serves. |
-| 100 percent | Candidate is production path; old version may remain rollback target. |
+Executing these commands updates the platform's Application Request Routing layer, routing ten percent of requests to the staging slot instance without performing a full slot swap.
 
-The release record should capture the traffic state. "Deployed v31" is weaker than "v31 receives 10 percent traffic; v30 remains rollback target."
+## Container Apps Canary Routing Bicep
 
-## Direct Testing
+Container Apps ingress traffic configuration is the gateway rule set that assigns request percentages to active revisions.
+Azure Container Apps supports declarative traffic routing inside its ingress configuration.
+This allows you to define canary weights directly in your infrastructure templates.
 
-Direct testing means reaching the candidate without moving broad traffic. App Service slots have their own hostnames. Container Apps can support revision labels and direct access patterns depending on configuration. The exact feature details vary, but the operating idea is stable: test the candidate path before users rely on it.
+The Bicep template snippet below configures a Container App with ingress traffic split between two active revisions:
 
-Direct tests should check more than "does the page load?" For the orders API, useful smoke tests include:
+```bicep
+resource containerApp 'Microsoft.App/containerApps@2023-05-01' = {
+  name: 'ca-devpolaris-orders-prod'
+  location: location
+  properties: {
+    configuration: {
+      ingress: {
+        external: true
+        targetPort: 3000
+        traffic: [
+          {
+            revisionName: 'ca-devpolaris-orders-prod--v30'
+            weight: 90
+          }
+          {
+            revisionName: 'ca-devpolaris-orders-prod--v31'
+            weight: 10
+            label: 'canary'
+          }
+        ]
+      }
+    }
+    template: {
+      containers: [
+        {
+          name: 'orders-api'
+          image: 'acrdevpolaris.azurecr.io/orders-api@sha256:7a4198c62c95'
+        }
+      ]
+    }
+  }
+}
+```
 
-| Test | What it proves |
-| --- | --- |
-| Health endpoint | The app starts and can answer a known route. |
-| Checkout smoke path | The main business path can complete with test data. |
-| Dependency call | SQL, storage, and payment dependencies are reachable. |
-| Telemetry check | Logs, traces, and metrics appear for the candidate. |
+This configuration ensures that the ingress controller splits the HTTP stream mathematically at the gateway, sending ninety percent of requests to the stable revision and ten percent to the canary revision.
 
-Direct tests can still miss real production conditions. They are a gate, not a guarantee. They give the team enough confidence to move limited traffic and watch real evidence.
+## Direct Testing and Health Paths
 
-## Rollback Shape
+Direct testing is the pre-traffic verification path for a candidate version using slot URLs, revision labels, or private health endpoints.
+Before routing production traffic to a candidate version, the deployment pipeline must verify the application's runtime health.
+App Service slots can be queried using their distinct URLs.
+Container Apps revisions can be assigned labels that expose dedicated testing paths.
 
-Rollback shape depends on the rollout tool.
+Example: call `/readyz` on the staging slot and require it to prove database connectivity, Key Vault access, and Application Insights telemetry before any production traffic shifts.
 
-For App Service slots, rollback often means swapping back to the previous slot or restoring a previous package and settings. For Container Apps, rollback often means shifting traffic back to the previous revision. Those are different operations with different edges.
+A thorough post-deployment verification plan checks the following endpoints:
 
-| Runtime | Common rollback shape | Watch for |
+| Test Type | Verification Endpoint | Technical Validation |
 | --- | --- | --- |
-| App Service slots | Swap back to previous slot | Slot settings, warmed state, shared dependencies. |
-| Container Apps revisions | Route traffic back to old revision | App-level settings that revision rollback does not undo. |
-| Config change | Restore previous setting or secret reference | Runtime restart, identity, and cache behavior. |
+| Liveness Probe | `/healthz` | Confirms the application process is running and the web server is responsive. |
+| Readiness Probe | `/readyz` | Confirms the application can open sockets to the database and retrieve secrets. |
+| Smoke Path | `/api/orders/test-checkout` | Executes a complete checkout transaction using test accounts and mock gateways. |
+| Telemetry Verification | `/api/diagnostics/ping` | Verifies that Application Insights is successfully collecting and routing traces. |
 
-The safest rollback is planned before the release. During an incident, the team should not have to discover which old version still exists, whether it can receive traffic, or which setting changed with the release.
+If the readiness probe returns an error, the deployment pipeline halts the rollout, keeping traffic routed entirely to the stable version.
+
+## Rollback Mechanics
+
+A rollback is the process of restoring the application environment to its previous stable state after a failure is detected in the new release.
+The speed and method of rollback depend on the hosting platform's architecture.
+
+The table below contrasts rollback mechanics across Azure compute platforms:
+
+| Compute Service | Rollback Action | Operational Impact |
+| --- | --- | --- |
+| App Service Slots | Execute a slot swap to return staging to production. | Swaps virtual machine routing; triggers warm-up on the previous version. |
+| Container Apps | Adjust traffic weight parameters to route 100 percent to the old revision. | Instantaneous network routing update; requires no container cold starts. |
+| CLI Traffic Routing | Run the traffic-routing clear command. | Removes routing distribution rules instantly; routes all traffic to production. |
+
+```mermaid
+flowchart TD
+    subgraph RollbackAction["Rollback Target Transition"]
+        Canary["Canary Active (10% Traffic)"] -->|"Detect Errors"| Rollback["Update Traffic Weights"]
+        Rollback -->|"100% Traffic"| Stable["Stable Version Active"]
+        Rollback -->|"0% Traffic"| Broken["Candidate Version Isolated"]
+    end
+```
+
+To ensure a safe rollback, the previous stable version must be preserved.
+Do not delete the old Container Apps revision or overwrite the staging slot until the candidate has cleared its production watch window.
 
 ## Putting It All Together
 
-Return to the new checkout version.
+Implementing safe rollouts on Azure requires moving from all-or-nothing deployments to progressive traffic routing.
+- The candidate version must run in isolation before receiving public production requests.
+- App Service slots provide logical separation and staging instances, sharing virtual machine resources.
+- Slot settings must be declared as sticky to prevent configuration mixing during swaps.
+- Container Apps revisions allow multiple version snapshots to run concurrently.
+- Traffic splitting limits the blast radius of failures by exposing the candidate to a fraction of users.
+- Azure CLI commands allow dynamic traffic routing in App Service slots.
+- Bicep declarations manage canary traffic weights inside Container Apps ingress layers.
+- Direct testing validates liveness, readiness, and telemetry paths before traffic moves.
+- Rollback mechanics must be designed to restore traffic to preserved stable versions instantly.
 
-- The candidate version needed a place to run before full production traffic.
-- App Service slots gave the team a live candidate app and a swap path.
-- Slot settings decided which values stayed attached to staging or production.
-- Container Apps revisions gave the team named versions and traffic percentages.
-- Traffic splitting reduced blast radius but still needed real evidence.
-- Direct testing proved the candidate path before broad traffic.
-- Rollback shape depended on whether the runtime used slots, revisions, or configuration changes.
-
-Safe rollout tools do not remove release risk. They make the risk visible and controllable.
+By managing the rollout pathway, engineering teams can verify application updates under production conditions without compromising service reliability.
 
 ## What's Next
 
-The next article focuses on configuration and secrets. A rollout can be careful and still fail if the candidate receives the wrong setting, references the wrong secret, or uses an identity that cannot read Key Vault.
-
-![An infographic comparing App Service slots and Container Apps revisions for direct testing, health checks, traffic splitting, and rollback targets](/content-assets/articles/article-cloud-providers-azure-deployment-runtime-operations-slots-revisions-safe-rollouts/safe-rollout-lanes.png)
-
-*Use this as the safe rollout map: test the candidate directly, shift traffic only after health evidence looks good, and preserve a known rollback target before users feel the full change.*
-
+The next article covers verification and rollback.
+After routing traffic, the team must monitor telemetry, manage alerts, and use structured data checks to decide whether to complete the release or trigger a rollback.
 
 ---
 
 **References**
 
-- [Set up staging environments in Azure App Service](https://learn.microsoft.com/en-us/azure/app-service/deploy-staging-slots)
-- [Revisions in Azure Container Apps](https://learn.microsoft.com/en-us/azure/container-apps/revisions)
-- [Application lifecycle management in Azure Container Apps](https://learn.microsoft.com/en-us/azure/container-apps/application-lifecycle-management)
-- [Traffic splitting in Azure Container Apps](https://learn.microsoft.com/en-us/azure/container-apps/traffic-splitting)
+- [Set up staging environments in Azure App Service](https://learn.microsoft.com/en-us/azure/app-service/deploy-staging-slots) - Guide to configuring deployment slots and managing swaps.
+- [Revisions in Azure Container Apps](https://learn.microsoft.com/en-us/azure/container-apps/revisions) - Explanation of how revisions are created, managed, and targeted.
+- [Application lifecycle management in Azure Container Apps](https://learn.microsoft.com/en-us/azure/container-apps/application-lifecycle-management) - Overview of revision lifecycles, updates, and rollbacks.
+- [Traffic splitting in Azure Container Apps](https://learn.microsoft.com/en-us/azure/container-apps/traffic-splitting) - Documentation on declaring traffic weights across active revisions.

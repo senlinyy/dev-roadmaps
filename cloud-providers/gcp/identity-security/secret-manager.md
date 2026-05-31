@@ -21,7 +21,7 @@ aliases:
 
 ## Secret Manager
 
-Secret Manager is a secure, managed Google Cloud service designed to store, manage, and audit sensitive runtime configuration values such as database connection strings, third-party API tokens, cryptographic private keys, and certificates. Rather than storing dangerous plain-text values inside version control repositories, dynamic application filesystems, or environmental variables, Secret Manager provides a dedicated security control point.
+Secret Manager is a managed API-backed credential store for sensitive runtime values such as database connection strings, third-party API tokens, cryptographic private keys, and certificates. Rather than storing dangerous plain-text values inside version control repositories, dynamic application filesystems, or environment variables, Secret Manager provides a dedicated security control point.
 
 By housing secrets inside a managed API service, you decouple sensitive data from runtime execution code. Applications retrieve credentials programmatically at startup or during execution, ensuring that dangerous payloads remain completely isolated from operators and unauthorized systems.
 
@@ -29,7 +29,7 @@ Secret Manager unifies secret storage under a managed service boundary. It manag
 
 ## Secrets and Versions Logical Separation
 
-A major operational gotcha in credentials management is the difficulty of rotating secrets without causing application downtime. If a password is bound to a single configuration variable, rotating that credential forces a redeployment or container restart. Secret Manager solves this by establishing a strict logical separation between a **Secret** and its **Versions**.
+A Secret is the stable resource name and policy boundary, while a Secret Version is the immutable stored payload at a point in time. This split solves a major operational gotcha in credentials management: rotating secrets without causing application downtime. If a password is bound to a single configuration variable, rotating that credential forces a redeployment or container restart. Secret Manager solves this by establishing a strict logical separation between a **Secret** and its **Versions**.
 
 ![The secret name is the container. Each version is an immutable stored value with its own state.](/content-assets/articles/article-cloud-providers-gcp-identity-security-secret-manager-encryption-basics/secret-version-boundary.png)
 
@@ -73,7 +73,7 @@ When an application authorized by IAM requests a version, Secret Manager returns
 
 ## Rotation Notifications and Pub/Sub Hooks
 
-To maintain a secure posture, production credentials must be rotated on a deliberate schedule. Secret Manager can integrate with **Cloud Pub/Sub** to notify automation when a secret reaches its configured rotation time:
+Rotation notifications are event hooks that tell automation when a credential should be replaced and verified. To maintain a secure posture, production credentials must be rotated on a deliberate schedule. Secret Manager can integrate with **Cloud Pub/Sub** to notify automation when a secret reaches its configured rotation time:
 
 ![A rotation schedule should create a new version, notify automation, and leave audit evidence.](/content-assets/articles/article-cloud-providers-gcp-identity-security-secret-manager-encryption-basics/rotation-pubsub-flow.png)
 
@@ -88,7 +88,7 @@ Secret Manager does not rotate the database password or third-party token by its
 
 ## VPC Service Controls and Perimeter Security
 
-In highly secure environments, standard IAM policies are insufficient to protect against insider data exfiltration. If a malicious insider or a compromised container possesses the correct IAM `Secret Manager Secret Accessor` role, they can extract payloads from any device globally. To prevent this, you enforce **VPC Service Controls (VPC-SC)** perimeters.
+VPC Service Controls is an API perimeter layer that can restrict where supported Google-managed service requests are allowed to come from and go to. In highly secure environments, standard IAM policies may be insufficient to protect against insider data exfiltration. If a malicious insider or a compromised container possesses the correct IAM `Secret Manager Secret Accessor` role, they can extract payloads from an untrusted path unless an additional perimeter blocks that request.
 
 VPC Service Controls allows you to draw a logical security perimeter around supported Google-managed services, including Secret Manager:
 

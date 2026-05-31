@@ -21,9 +21,9 @@ aliases:
 
 ## What Is Cost and Resilience
 
-Cloud architecture requires pairing financial budgets with technical reliability targets. In virtualized cloud environments, every provisioned resource is simultaneously a recurring line-item on a monthly invoice and an active operational uptime promise. Cost and resilience are structurally linked; you cannot safely reduce cloud spending without explicitly identifying which reliability promises are being weakened, and you cannot increase system durability without dedicating resources for hardware redundancy, duplicate data storage, traffic routing controllers, and ongoing recovery testing.
+Cost and resilience are the paired budget and reliability contract behind every Azure resource. Cloud architecture requires pairing financial budgets with technical reliability targets. In virtualized cloud environments, every provisioned resource is simultaneously a recurring line-item on a monthly invoice and an active operational uptime promise. Cost and resilience are structurally linked; you cannot safely reduce cloud spending without explicitly identifying which reliability promises are being weakened, and you cannot increase system durability without dedicating resources for hardware redundancy, duplicate data storage, traffic routing controllers, and ongoing recovery testing.
 
-If you design systems on AWS, these financial and reliability trade-offs share the same architecture guidelines. Both platforms rely on the Well-Architected Framework—specifically the Cost Optimization and Reliability pillars—to help teams make deliberate resource choices.
+If you design systems on AWS, these financial and reliability trade-offs share the same architecture guidelines. Both platforms rely on the Well-Architected Framework - specifically the Cost Optimization and Reliability pillars - to help teams make deliberate resource choices.
 
 The core systems relationship is identical:
 
@@ -52,7 +52,7 @@ flowchart TD
 
 ## Cloud Cost Shapes
 
-Understanding your cloud bill requires analyzing how different resources measure and bill for resource usage. Azure expenditures organize into five primary cost shapes:
+A cost shape is the billing pattern a resource follows: always-on capacity, usage-based work, stored data, data movement, or safety copies. Understanding your cloud bill requires analyzing how different resources measure and bill for resource usage. Azure expenditures organize into five primary cost shapes:
 
 ![An infographic showing capacity headroom balanced against waste and cost](/content-assets/articles/article-cloud-providers-azure-cost-resilience-mental-model/headroom-waste-balance.png)
 
@@ -68,7 +68,7 @@ The most common cost surprises do not come from always-on compute; they come fro
 
 ## Physical Failure Shapes
 
-A resilient architecture is designed to survive specific physical failures at different layers of the cloud infrastructure. Each failure layer requires a targeted mitigation strategy that directly impacts your resource budget:
+A failure shape is the infrastructure layer where something can break: instance, zone, data state, database write, or region. A resilient architecture is designed to survive specific physical failures at different layers of the cloud infrastructure. Each failure layer requires a targeted mitigation strategy that directly impacts your resource budget:
 
 ![An infographic comparing single-zone and multi-zone designs by cost and outage impact](/content-assets/articles/article-cloud-providers-azure-cost-resilience-mental-model/failure-cost-envelope.png)
 
@@ -88,13 +88,13 @@ Redundancy is also different from recovery after a human or application mistake.
 
 ## Designing Workflow-Specific Service Promises
 
-To avoid overprotecting low-priority resources—which rapidly inflates cloud budgets—you must establish tiered service promises based on the business value of each individual workflow. A critical payment processing transaction engine justifies high availability and synchronous replication, while a internal nightly report or development playground can safely tolerate cold backups, long restore times, and localized outages.
+A service promise is the reliability target attached to one workflow, not a blanket promise for the whole subscription. To avoid overprotecting low-priority resources - which rapidly inflates cloud budgets - you must establish tiered service promises based on the business value of each individual workflow. A critical payment processing transaction engine justifies high availability and synchronous replication, while an internal nightly report or development playground can safely tolerate cold backups, long restore times, and localized outages.
 
 Map your primary system workflows to clear, honest tradeoff profiles:
 
 | Design Choice | Cost Footprint | Uptime Promise | Architectural Tradeoff Evaluation |
 | --- | --- | --- | --- |
-| **Reduce Compute Replicas** | Lowers always-on compute fees. | Vulnerable to single-node failures and scaling delays. | Recommended for non-production sandboxes and staging environments. |
+| **Reduce Compute Replicas** | Lowers always-on compute fees. | Vulnerable to single-node failures and scaling delays. | Recommended for non-production test environments and staging environments. |
 | **Shorten Log Retention** | Lowers Log Analytics storage fees. | Limits historical search windows during security audits. | Recommended for high-volume, verbose debug traces that have no regulatory compliance value. |
 | **Enable Object Versioning & Soft Delete** | Increases persistent storage fees as versions accumulate. | Guarantees recovery of deleted or overwritten files. | Recommended for critical customer-facing assets, contract documents, and financial receipt PDFs. |
 | **Upgrade to Zone-Redundant Storage (ZRS)** | Slightly higher storage rate than Locally Redundant (LRS). | Keeps storage available when an availability zone in the primary region becomes unavailable. | Recommended for production storage accounts that need zonal high availability and can stay inside one region. |
@@ -104,23 +104,23 @@ Map your primary system workflows to clear, honest tradeoff profiles:
 Adopting this tradeoff analysis ensures that your organization spends its cloud budget where reliability is critical, while accepting deliberate, managed tradeoffs on non-essential workloads.
 
 :::expand[Pitfall: The Over-Tiering Trap]{kind="pitfall"}
-A common and expensive cloud architectural mistake is "over-tiering"—applying premium performance and redundancy tiers uniformly across all resources and environments. Driven by a desire to avoid outages or simplify deployment scripts, teams often deploy the highest-tier offerings (such as Premium SSDs, multi-region SQL databases, and P3v3 App Service plans) for low-priority, internal, or development workloads that could easily run on basic, serverless, or dev-centric tiers.
+A common and expensive cloud architectural mistake is "over-tiering" - applying premium performance and redundancy tiers uniformly across all resources and environments. Driven by a desire to avoid outages or simplify deployment scripts, teams often deploy the highest-tier offerings (such as Premium SSDs, multi-region SQL databases, and P3v3 App Service plans) for low-priority, internal, or development workloads that could easily run on basic, serverless, or dev-centric tiers.
 
-This uniform application of premium settings doubles your baseline cloud budget without delivering any improvements to your production system's customer SLA. A development sandbox or an internal, non-critical background worker (like a weekly report compiler) does not benefit from zone-redundant storage (ZRS) or high-vCore database pools. If the background worker fails, it can safely wait several hours for a cold restore, making synchronous multi-datacenter replication a waste of financial resources.
+This uniform application of premium settings doubles your baseline cloud budget without delivering any improvements to your production system's customer SLA. A development test environment or an internal, non-critical background worker (like a weekly report compiler) does not benefit from zone-redundant storage (ZRS) or high-vCore database pools. If the background worker fails, it can safely wait several hours for a cold restore, making synchronous multi-datacenter replication a waste of financial resources.
 
-This identical cost trap occurs on AWS. It is equivalent to uniformly provisioning Multi-AZ RDS database instances, high-provisioned IOPS EBS volumes (such as `io2`), and enterprise-level support plans across all development, testing, and staging sandboxes. In both clouds, you must enforce a tiered environment policy: reserve high-availability, zone-redundant, and premium performance SKUs strictly for critical production paths, while utilizing basic, single-zone, or serverless SKUs for non-production environments.
+This identical cost trap occurs on AWS. It is equivalent to uniformly provisioning Multi-AZ RDS database instances, high-provisioned IOPS EBS volumes (such as `io2`), and enterprise-level support plans across all development, testing, and staging environments. In both clouds, you must enforce a tiered environment policy: reserve high-availability, zone-redundant, and premium performance SKUs strictly for critical production paths, while utilizing basic, single-zone, or serverless SKUs for non-production environments.
 
-The top-down diagram below compares a costly, over-tiered sandbox with a cost-optimized, right-tiered design:
+The top-down diagram below compares a costly, over-tiered development environment with a cost-optimized, right-tiered design:
 
 ```mermaid
 flowchart TD
-    subgraph OverTiered["Over-Tiered Dev Sandbox (Costly & Inefficient)"]
+    subgraph OverTiered["Over-Tiered Dev Environment (Costly & Inefficient)"]
         ComputeA["Staging API (P3v3 App Service Plan)"] -->|"Reads Secret"| VaultA["Premium Key Vault (HSM Tier)"]
         ComputeA -->|"Writes File"| StorageA["Blob Storage (Zone-Redundant ZRS)"]
         ComputeA -->|"Queries"| DBA["Azure SQL (Business Critical - 8 vCores)"]
     end
 
-    subgraph CostOptimized["Right-Tiered Dev Sandbox (Cost-Optimized)"]
+    subgraph CostOptimized["Right-Tiered Dev Environment (Cost-Optimized)"]
         ComputeB["Staging API (Basic B1 Plan)"] -->|"Reads Secret"| VaultB["Standard Key Vault"]
         ComputeB -->|"Writes File"| StorageB["Blob Storage (Locally Redundant LRS)"]
         ComputeB -->|"Queries"| DBB["Azure SQL (Serverless - 1 vCore Max)"]

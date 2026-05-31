@@ -1,7 +1,7 @@
 ---
 title: "Manipulating State"
 description: "Learn how to safely rename, move, import, and remove Terraform state records without corrupting your infrastructure or causing unintended replacements."
-overview: "Sometimes Terraform's view of the world needs manual correction — a resource was renamed in code, moved into a module, deleted outside of Terraform, or needs to be brought under management. This article covers the common state manipulation commands and when to use each one."
+overview: "Sometimes Terraform's view of the world needs manual correction, a resource was renamed in code, moved into a module, deleted outside of Terraform, or needs to be brought under management. This article covers the common state manipulation commands and when to use each one."
 tags: ["state", "terraform state", "import", "mv", "rm", "terraform"]
 order: 4
 id: article-iac-terraform-state-manipulating
@@ -22,13 +22,17 @@ id: article-iac-terraform-state-manipulating
 
 ## When You Need to Manipulate State
 
+State manipulation is manual editing of Terraform's resource-address-to-object mapping through Terraform commands rather than through text-editor changes.
+
 Most of the time, you do not touch the state file directly. You write configuration, run `terraform plan`, review the output, and run `terraform apply`. Terraform manages the state file automatically.
 
-But there are situations where Terraform's automatic state management is not enough. You rename a resource in your configuration and Terraform thinks you deleted the old one and want to create a new one — proposing to destroy and replace perfectly good infrastructure. You move a resource into a module and the same problem occurs. A colleague deleted an EC2 instance directly from the AWS console and now the state file has a stale record. A new project inherits ten years of hand-built infrastructure that has never been managed by Terraform and you need to bring it under control without destroying and recreating it.
+But there are situations where Terraform's automatic state management is not enough. You rename a resource in your configuration and Terraform thinks you deleted the old one and want to create a new one, proposing to destroy and replace perfectly good infrastructure. You move a resource into a module and the same problem occurs. A colleague deleted an EC2 instance directly from the AWS console and now the state file has a stale record. A new project inherits ten years of hand-built infrastructure that has never been managed by Terraform and you need to bring it under control without destroying and recreating it.
 
-All of these situations require you to manipulate the state file directly — not by editing the JSON (which you should never do), but by using Terraform's dedicated state commands. These commands understand the state file's internal structure and make changes safely, updating related records and checksums as needed.
+All of these situations require you to manipulate the state file directly, not by editing the JSON (which you should never do), but by using Terraform's dedicated state commands. These commands understand the state file's internal structure and make changes safely, updating related records and checksums as needed.
 
 ## Viewing State: terraform state list and show
+
+State inspection means asking Terraform which resource records it is currently tracking before you change anything. This matters because state commands operate on Terraform addresses, not on cloud console names. Example: `terraform state list` might show `module.database.aws_db_instance.main`, which is the exact address you need for a move or removal.
 
 Before making any changes to state, understand what is in it.
 
@@ -45,7 +49,7 @@ module.database.aws_db_instance.main
 module.database.aws_db_subnet_group.main
 ```
 
-Each line is a resource address — the combination of type, name, and module path that uniquely identifies a resource in the state file. Module resources show the full path including the module name.
+Each line is a resource address, the combination of type, name, and module path that uniquely identifies a resource in the state file. Module resources show the full path including the module name.
 
 `terraform state show` displays all stored attributes of a specific resource:
 
@@ -68,7 +72,9 @@ This output shows every attribute Terraform knows about, including computed ones
 
 ## Moving Resources: terraform state mv
 
-When you rename a resource in your configuration code, Terraform sees a delete and a create — the old name disappears and a new name appears. For stateless things like IAM policy documents or local files, that is fine. For real infrastructure like running EC2 instances, RDS databases, or managed DNS zones, destroy-and-recreate causes downtime and data loss.
+`terraform state mv` changes the Terraform address of a tracked object without changing the real object. Use it when a resource was renamed or moved in code but should still point at the same cloud resource. Example: move `aws_instance.app_server` to `aws_instance.web_server` so Terraform does not replace the EC2 instance just because the local label changed.
+
+When you rename a resource in your configuration code, Terraform sees a delete and a create. The old name disappears and a new name appears. For stateless things like IAM policy documents or local files, that is fine. For real infrastructure like running EC2 instances, RDS databases, or managed DNS zones, destroy-and-recreate causes downtime and data loss.
 
 ![State move and import commands change Terraform addresses while preserving the link to real resources.](/content-assets/articles/article-iac-terraform-state-manipulating/state-move-import-path.png)
 
@@ -94,11 +100,23 @@ After this, the state file tracks the same real instance under its new module-sc
 
 ## Removing Records: terraform state rm
 
-`terraform state rm` deletes a resource record from the state file without touching the real resource. After removing a record, Terraform no longer manages that resource — the real resource continues running, but Terraform has forgotten about it.
+`terraform state rm` deletes Terraform's tracking record without deleting the real resource. After removing a record, Terraform no longer manages that resource. Example: remove `module.database.aws_db_instance.main` from state if the database should keep running but move to another management system.
 
 This is useful in two situations.
 
-The first is when you want to stop managing a resource with Terraform. Perhaps a legacy database was imported into Terraform management a year ago, but the team has decided to manage it through a different system going forward. You remove the resource block from your configuration and also remove the state record:
+The first is when you want to stop managing a resource with Terraform. Perhaps a legacy database was imported into Terraform management a year ago, but the team has decided to manage it through a different system going forward. Current Terraform gives you a reviewable configuration-first option for this case:
+
+```hcl
+removed {
+  from = module.database.aws_db_instance.main
+
+  lifecycle {
+    destroy = false
+  }
+}
+```
+
+This tells Terraform to remove the object from state without destroying the remote database. The older imperative form is `terraform state rm`, which is still useful for repairs and one-off state work:
 
 ```bash
 terraform state rm module.database.aws_db_instance.main
@@ -114,7 +132,7 @@ terraform state rm aws_s3_bucket.old_uploads
 
 Also remove the corresponding resource block from your configuration. Now Terraform neither tracks the bucket nor proposes to create it.
 
-Be careful with `state rm`. After removing a record, Terraform treats that resource as non-existent. If the resource block is still in your configuration, the next `terraform plan` will propose to create a new resource — which might collide with the existing (untracked) one. Remove the resource block from configuration at the same time you remove the state record.
+Be careful with `state rm`. After removing a record, Terraform treats that resource as non-existent. If the resource block is still in your configuration, the next `terraform plan` will propose to create a new resource, which might collide with the existing (untracked) one. Remove the resource block from configuration at the same time you remove the state record.
 
 ## Importing Existing Resources: terraform import
 
@@ -122,7 +140,7 @@ Be careful with `state rm`. After removing a record, Terraform treats that resou
 
 The most common scenario is inheriting infrastructure. An organization has been running in AWS for years with servers, databases, and networks built manually or through custom scripts. They decide to adopt Terraform and want to manage their existing infrastructure without destroying and recreating it.
 
-To import an existing EC2 instance, you first write the resource block in your configuration — describing what you know about it:
+To import an existing EC2 instance, you first write the resource block in your configuration, describing what you know about it:
 
 ```hcl
 resource "aws_instance" "legacy_api_server" {
@@ -139,15 +157,17 @@ terraform import aws_instance.legacy_api_server i-0a1b2c3d4e5f6789
 
 Terraform contacts AWS, retrieves all current attributes of that instance, and writes a state record that maps `aws_instance.legacy_api_server` to `i-0a1b2c3d4e5f6789`. It does not modify the running instance.
 
-After importing, run `terraform plan`. The plan will likely show differences — your resource block only specified two attributes, but the real instance has dozens. The plan will propose to remove tags, change security groups, or modify other settings to match the sparse configuration you wrote.
+After importing, run `terraform plan`. The plan will likely show differences, your resource block only specified two attributes, but the real instance has dozens. The plan will propose to remove tags, change security groups, or modify other settings to match the sparse configuration you wrote.
 
 This is the hardest part of importing: writing a configuration block that matches what already exists closely enough that the plan shows no changes. You need to look at `terraform state show aws_instance.legacy_api_server` after the import and compare the stored attributes against your resource block. Add the attributes that differ until the plan is clean.
 
-For large numbers of resources, this process is tedious. Current Terraform supports `import` blocks that can be placed inside configuration files and processed during plan. Terraform can also generate draft configuration for import targets with `terraform plan -generate-config-out=generated.tf` when import blocks are present, which dramatically speeds up bulk imports. Treat generated configuration as a starting point: review it, simplify it, and run a plan until the result is clean.
+For large numbers of resources, this process is tedious. Current Terraform supports `import` blocks that can be placed inside configuration files and processed during plan. Terraform can also generate draft configuration for import targets with `terraform plan -generate-config-out=generated.tf` when import blocks are present. The generated file path must point to a new file, and HashiCorp still describes generated configuration as experimental. Treat generated configuration as a starting point: review it, simplify it, and run a plan until the result is clean.
 
 On Azure, Microsoft also provides Azure Export for Terraform, which can discover existing Azure resources and generate Terraform configuration and state import scaffolding. It is especially useful when an Azure environment was built manually and you want a first draft before refining the code into maintainable modules.
 
 ## The Moved Block: Renaming Without State Commands
+
+A `moved` block records a state address change in code. It tells Terraform that an old address and a new address are the same real object. Example: a pull request can rename `aws_instance.app_server` to `aws_instance.web_server` and include a `moved` block so every environment applies the rename safely.
 
 The `moved` block is a cleaner alternative to `terraform state mv` when you rename or move resources as part of a configuration change that will be reviewed in a pull request.
 
@@ -160,7 +180,7 @@ moved {
 }
 ```
 
-When Terraform processes this block during `terraform plan`, it automatically updates the state mapping — effectively doing what `terraform state mv` would have done — and then shows no replacement in the plan. The `moved` block is processed alongside the configuration, so the rename is atomic with the rest of the change.
+When Terraform processes this block during `terraform plan`, it automatically updates the state mapping, effectively doing what `terraform state mv` would have done, and then shows no replacement in the plan. The `moved` block is processed alongside the configuration, so the rename is atomic with the rest of the change.
 
 The `moved` block has a significant advantage over the state command: it is in the configuration file, visible in code review, and tracked in Git history. When someone looks at the history of the configuration six months later and wonders why there is no `aws_instance.app_server` resource, they can find the `moved` block that explains the rename.
 
@@ -173,11 +193,13 @@ moved {
 }
 ```
 
-You can delete the `moved` block once the rename has been applied and is stable — once every environment that uses this configuration has been updated. Keeping `moved` blocks around permanently is fine for documentation but is not required for correctness.
+You can delete the `moved` block once the rename has been applied and is stable, once every environment that uses this configuration has been updated. For reusable modules, remove old `moved` blocks carefully: if a consumer upgrades from an older version that still has the old address, removing the historical move can turn a safe refactor into a destroy-and-create plan for that consumer.
 
 ## Pulling and Pushing State Manually
 
-For advanced operations — transferring state between backends, restoring a previous version, or applying repairs that the standard commands cannot handle — you can work with the raw state JSON using `terraform state pull` and `terraform state push`.
+`terraform state pull` downloads the current state JSON, and `terraform state push` uploads a replacement state JSON. These are repair and migration tools, not normal workflow commands. Example: after restoring a known-good S3 object version, you can inspect it locally and push it back only after confirming the serial and contents are correct.
+
+For advanced operations, such as transferring state between backends, restoring a previous version, or applying repairs that the standard commands cannot handle, you can work with the raw state JSON using `terraform state pull` and `terraform state push`.
 
 `terraform state pull` downloads the current state from wherever the backend stores it and prints it to standard output:
 
@@ -195,9 +217,11 @@ terraform state push state_backup.json
 
 This is how you restore a previous state version. You download the version from S3 (using the AWS CLI to retrieve a specific version ID), verify it looks correct, and push it back as the current state.
 
-`push` has a safety check: it compares the serial number in the file you are pushing against the serial number in the current backend state. If the current state is newer than what you are pushing, Terraform warns you and refuses unless you add the `-force` flag. The `-force` flag bypasses this check. Use it only when you are certain you want to overwrite the current state — for example, when restoring to a known-good version after a corrupted apply.
+`push` has a safety check: it compares the serial number in the file you are pushing against the serial number in the current backend state. If the current state is newer than what you are pushing, Terraform warns you and refuses unless you add the `-force` flag. The `-force` flag bypasses this check. Use it only when you are certain you want to overwrite the current state, for example, when restoring to a known-good version after a corrupted apply.
 
 ## State Manipulation and Team Safety
+
+State manipulation changes the shared record Terraform uses to decide what it owns. Treat it like a production change because a bad state edit can make the next plan destroy, recreate, or forget resources. Example: pause CI, take a `terraform state pull` backup, run one state command, and verify with `terraform plan` before continuing.
 
 All state manipulation commands work on the live state file, which means they require the same care as a production `terraform apply`. Before running any state command:
 
@@ -209,13 +233,13 @@ Work in a low-traffic window. State manipulation on production infrastructure is
 
 Make a backup first. Run `terraform state pull > state_backup_$(date +%Y%m%d_%H%M%S).json` before any destructive operation. If something goes wrong, you have a local copy to restore from.
 
-Verify with `terraform plan` after every state command. The plan is your confirmation that the state now reflects what you intended. A clean plan — one that proposes no unexpected changes — means the state is consistent with your configuration and with reality.
+Verify with `terraform plan` after every state command. The plan is your confirmation that the state now reflects what you intended. A clean plan, one that proposes no unexpected changes, means the state is consistent with your configuration and with reality.
 
 ## Putting It All Together
 
 State manipulation commands are the tools you reach for when Terraform's automatic state management does not cover a situation. Renaming a resource uses `state mv` or a `moved` block. Removing a record for something you no longer want Terraform to manage uses `state rm`. Bringing existing cloud resources under Terraform control uses `terraform import`. Viewing what is in state before taking action uses `state list` and `state show`.
 
-The common thread is that these commands modify the state file in a controlled, structured way — they understand the file's format and consistency requirements. They are safer than editing the JSON by hand, but they still require care and communication in team environments.
+The common thread is that these commands modify the state file in a controlled, structured way, they understand the file's format and consistency requirements. They are safer than editing the JSON by hand, but they still require care and communication in team environments.
 
 ## What's Next
 
@@ -228,9 +252,10 @@ With state management covered, the next articles shift to the values layer: how 
 
 **References**
 
-- [Command: state mv (HashiCorp Documentation)](https://developer.hashicorp.com/terraform/cli/commands/state/mv) — Full reference for the `terraform state mv` command.
-- [Command: state rm (HashiCorp Documentation)](https://developer.hashicorp.com/terraform/cli/commands/state/rm) — Reference for removing resource records from state.
-- [Command: import (HashiCorp Documentation)](https://developer.hashicorp.com/terraform/cli/commands/import) — Reference for the `terraform import` command and the newer `import` block syntax.
-- [Refactoring (HashiCorp Documentation)](https://developer.hashicorp.com/terraform/language/modules/develop/refactoring) — Documentation for the `moved` block and how it handles resource address changes safely.
-- [Import Existing Resources (HashiCorp Documentation)](https://developer.hashicorp.com/terraform/language/import) — Configuration-driven import blocks and generated configuration workflow.
-- [Azure Export for Terraform Overview (Microsoft Learn)](https://learn.microsoft.com/en-us/azure/developer/terraform/azure-export-for-terraform/export-terraform-overview) — Microsoft tool for exporting existing Azure resources into Terraform-friendly artifacts.
+- [Command: state mv (HashiCorp Documentation)](https://developer.hashicorp.com/terraform/cli/commands/state/mv), Full reference for the `terraform state mv` command.
+- [Command: state rm (HashiCorp Documentation)](https://developer.hashicorp.com/terraform/cli/commands/state/rm), Reference for removing resource records from state.
+- [Removed Blocks (HashiCorp Documentation)](https://developer.hashicorp.com/terraform/language/block/removed), Reviewable configuration syntax for removing a resource from state without destroying it.
+- [Command: import (HashiCorp Documentation)](https://developer.hashicorp.com/terraform/cli/commands/import), Reference for the `terraform import` command and the newer `import` block syntax.
+- [Refactoring (HashiCorp Documentation)](https://developer.hashicorp.com/terraform/language/modules/develop/refactoring), Documentation for the `moved` block and how it handles resource address changes safely.
+- [Import Existing Resources (HashiCorp Documentation)](https://developer.hashicorp.com/terraform/language/import), Configuration-driven import blocks and generated configuration workflow.
+- [Azure Export for Terraform Overview (Microsoft Learn)](https://learn.microsoft.com/en-us/azure/developer/terraform/azure-export-for-terraform/export-terraform-overview), Microsoft tool for exporting existing Azure resources into Terraform-friendly artifacts.

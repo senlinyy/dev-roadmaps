@@ -28,7 +28,9 @@ The count follows the nodes. Add a node and the DaemonSet creates a Pod there. R
 
 ## A Log Agent for Orders API Nodes
 
-Here is a simplified DaemonSet for a log agent. It reads container logs from the node and adds a cluster label before forwarding them.
+A node log agent is a helper Pod that reads log files from the worker node where it is running. A DaemonSet is a good fit because every node that may run orders API Pods should also have the helper that collects their logs.
+
+Example: the simplified DaemonSet below reads `/var/log` from each node and adds a cluster label before forwarding records to the logging system.
 
 ```yaml
 apiVersion: apps/v1
@@ -64,7 +66,7 @@ spec:
             path: /var/log
 ```
 
-The `hostPath` volume mounts a path from the node into the Pod. That is powerful and risky. The agent can read node files, so it should run in a controlled namespace with least privilege and clear ownership.
+The `hostPath` volume mounts a path from the node into the Pod. It is a direct bridge from the container to the node filesystem, so it is powerful and risky. The agent can read node files, so it should run in a controlled namespace with least privilege and clear ownership.
 
 Inspect a DaemonSet by comparing desired and available counts:
 
@@ -99,7 +101,9 @@ For a log agent, the DaemonSet should usually run before or alongside applicatio
 
 ## Node Selection, Taints, and Tolerations
 
-You can limit a DaemonSet to certain nodes with `nodeSelector`, node affinity, or tolerations. A selector is useful when only some nodes run a workload type.
+Node selection is the set of rules that decides which nodes are eligible for a Pod. You can limit a DaemonSet to certain nodes with `nodeSelector`, node affinity, or tolerations.
+
+Example: if only nodes labeled `devpolaris.io/node-pool=app` can run the orders API, the log agent can use the same label so it follows the application node pool.
 
 ```yaml
 spec:
@@ -111,11 +115,13 @@ spec:
 
 Now the log agent runs only on nodes with that label. If the orders API runs only in the `app` node pool, that is reasonable. If the API can land elsewhere, this selector can create a logging gap.
 
-Taints and tolerations are Kubernetes scheduling rules. A taint on a node says "do not schedule ordinary Pods here." A toleration on a Pod says "this Pod is allowed to use nodes with that taint." DaemonSets automatically tolerate several node conditions because node-level agents often need to run even when a node is not fully ready.
+Taints and tolerations are Kubernetes scheduling rules. A taint on a node says "do not schedule ordinary Pods here." A toleration on a Pod says "this Pod is allowed to use nodes with that taint." For example, a GPU node might have `dedicated=gpu:NoSchedule`, and the log agent needs a matching toleration only if it is supposed to run there. DaemonSets automatically tolerate several node conditions because node-level agents often need to run even when a node is not fully ready.
 
 ## Updating a DaemonSet
 
-DaemonSets support rolling updates. When you change the Pod template, Kubernetes replaces DaemonSet Pods over time. The exact rollout can matter because node agents can affect every workload on the node.
+A DaemonSet rolling update replaces node-local helper Pods across eligible nodes. It exists so a cluster-wide agent can change versions without disappearing everywhere at once.
+
+Example: updating the log agent image from `2026-05-07.1` to `2026-05-07.2` should keep most nodes covered while Kubernetes replaces each agent Pod over time. The exact rollout can matter because node agents can affect every workload on the node.
 
 ```bash
 $ kubectl set image daemonset/devpolaris-log-agent \
@@ -130,7 +136,9 @@ For critical agents, watch application signals during the rollout. A broken netw
 
 ## Failure Mode: Missing Pods on Some Nodes
 
-Suppose orders API logs are missing from one node. First compare nodes with DaemonSet Pods.
+A missing DaemonSet Pod means expected node coverage and actual helper Pods do not match. For the orders API, that can show up as logs from `worker-a`, `worker-b`, and `worker-c`, but no logs from `worker-d`.
+
+First compare nodes with DaemonSet Pods.
 
 ```bash
 $ kubectl get pods -n observability -l app=devpolaris-log-agent -o wide
@@ -177,7 +185,9 @@ This choice keeps the platform understandable. Controllers should express the op
 
 ## Operational Checks
 
-For a DaemonSet that supports `devpolaris-orders-api`, include it in routine cluster checks. The fastest check compares desired, ready, and available.
+A DaemonSet operational check is a coverage check. It asks whether every eligible node has the helper Pod it needs, and whether those helper Pods are ready enough to do their node-local job.
+
+For a DaemonSet that supports `devpolaris-orders-api`, include that check in routine cluster operations. The fastest command compares desired, ready, and available.
 
 ```bash
 $ kubectl get daemonset -A

@@ -36,7 +36,9 @@ flowchart TD
 
 ## Requests Are Scheduling Promises
 
-A CPU request says, "Schedule this container only on a node where this much CPU is available for planning." A memory request says the same for memory. Kubernetes uses the sum of requests on a node to decide whether another Pod fits.
+A resource request is the amount of CPU or memory Kubernetes should plan for before placing a Pod on a node. It is a scheduling promise, not a live usage measurement.
+
+Example: a `250m` CPU request for each orders API Pod tells Kubernetes to place three replicas only where the cluster can account for three quarters of a CPU core. Kubernetes uses the sum of requests on a node to decide whether another Pod fits.
 
 CPU is measured in cores. `500m` means half a CPU core. Memory is measured in bytes with suffixes such as `Mi` and `Gi`. `512Mi` means 512 mebibytes.
 
@@ -53,7 +55,9 @@ Requests affect cluster economics too. If every team requests far more than it u
 
 ## Limits Are Runtime Boundaries
 
-A limit says how far the container is allowed to go. CPU limits throttle CPU usage when the container tries to use more than allowed. Memory limits are stricter: if a container exceeds its memory limit, the kernel can kill it, and Kubernetes reports the container as `OOMKilled`.
+A resource limit is the runtime ceiling Kubernetes asks the node to enforce for a container. It exists to stop one container from consuming unlimited CPU or memory on a shared node.
+
+Example: a `512Mi` memory limit lets the orders API use memory up to that boundary, but if a large import pushes the process above it, the node kernel can kill the container and Kubernetes reports `OOMKilled`.
 
 ```yaml
 resources:
@@ -68,7 +72,9 @@ The tradeoff is protection versus headroom. Limits protect neighboring workloads
 
 ## A Practical Orders API Resource Spec
 
-Here is a Deployment snippet with requests and limits for `devpolaris-orders-api`:
+A resource spec is the part of a Pod template that tells Kubernetes how much CPU and memory to reserve and where to draw runtime boundaries. For `devpolaris-orders-api`, it turns the broad request "run three API replicas" into a schedulable shape: each replica reserves `250m` CPU and `256Mi` memory, then can burst up to the configured limits.
+
+Here is that resource shape inside a Deployment snippet:
 
 ```yaml
 apiVersion: apps/v1
@@ -111,7 +117,9 @@ If the values are missing in the Pod, your Deployment template did not include t
 
 ## CPU and Memory Behave Differently
 
-CPU is compressible. If a container wants more CPU than its limit, it can be throttled and run more slowly. A slow API is bad, but the process often survives. You may see higher latency before you see restarts.
+CPU is compressible, which means a process can often keep running with less CPU by running more slowly. If a container wants more CPU than its limit, it can be throttled and requests may wait longer.
+
+Example: the orders API might keep serving requests during a CPU spike, but P95 latency can climb from `180ms` to `920ms` because the process is waiting for CPU time.
 
 Memory is not compressible in the same way. If the process needs memory and crosses its limit, it can be killed. That makes memory limits a common source of sudden restarts.
 
@@ -127,7 +135,7 @@ This output is a point-in-time measurement, not a capacity plan by itself. Use i
 
 ## Failure Mode: Pending from Insufficient CPU
 
-When requests are too high for available nodes, Pods can stay `Pending`. The container never starts because the scheduler cannot place it.
+A `Pending` Pod is accepted by the Kubernetes API but not running yet. When resource requests are too high for available nodes, the container never starts because the scheduler cannot find a node with enough unrequested capacity.
 
 ```bash
 $ kubectl get pod -l app=devpolaris-orders-api
@@ -149,7 +157,7 @@ The scheduler cannot find a node with enough unrequested CPU. The fix might be t
 
 ## Failure Mode: OOMKilled
 
-If the API crosses its memory limit, Kubernetes reports the previous container termination reason.
+`OOMKilled` means the node killed a container because it crossed its memory boundary. For `devpolaris-orders-api`, that might happen when a bulk import loads too many rows into memory and pushes the process above its `512Mi` limit.
 
 ```bash
 $ kubectl get pod devpolaris-orders-api-7b7d4b5f9c-h9x7b

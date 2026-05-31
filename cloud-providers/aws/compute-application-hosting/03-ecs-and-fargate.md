@@ -39,6 +39,8 @@ The hard part of container hosting in the cloud is not building the Docker image
 
 Amazon Elastic Container Service, commonly known as ECS, is AWS's native container orchestration service. Orchestration means ECS manages the coordination work around your containers: it schedules when and where they start, monitors their active health, replaces failed copies automatically to maintain your desired state, and registers their changing IP addresses behind Application Load Balancers.
 
+At a high level, ECS behaves like a managed desired-state controller for containers. You give ECS a container image and an execution specification, then the service keeps the requested number of healthy task copies running.
+
 ECS does not build your container image. It does not decide what your Node.js or Python code does. It takes your packaged image from Amazon ECR and a set of operational instructions from you, and works constantly to make the real-world cluster match your requested design.
 
 To build a reliable mental model of ECS, you must map the progression of a container from a static build package to a live request target:
@@ -63,7 +65,7 @@ The Application Load Balancer routes incoming user traffic through a Target Grou
 
 ## Task Definitions and Running Tasks
 
-A Task Definition is the blueprint for your containerized workload. It is an immutable, versioned JSON document that describes exactly how your container should be executed by the AWS platform. When you register a task definition, you are not starting a container; you are writing down the recipe AWS must follow every time it launches your code.
+A Task Definition is the versioned execution specification for your containerized workload. It is an immutable JSON document that describes exactly how your container should be executed by the AWS platform. When you register a task definition, you are not starting a container; you are recording the launch contract ECS must follow every time it starts your code.
 
 For a standard backend web service, a task definition defines:
 
@@ -71,10 +73,10 @@ For a standard backend web service, a task definition defines:
 * **CPU and Memory Limits**: The exact share of virtual processors and RAM allocated to the container (such as `0.5 vCPU` and `1 GB` RAM).
 * **Network Mode**: Set to `awsvpc` on Fargate, giving each task its own network interface.
 * **Port Mappings**: The inbound container port where your application process actually listens (such as port `3000`).
-* **Environment variables and Secrets**: The dynamic configuration keys and vaulted Secrets Manager ARNs injected at boot.
+* **Environment variables and Secrets**: The dynamic configuration keys and Secrets Manager ARNs injected at boot.
 * **Logging Driver**: Typically set to `awslogs` to stream standard output lines directly to CloudWatch.
 
-A Task is one active running instance of your task definition. If the task definition is the recipe, the task is the actual container process running with its allocated CPU, memory, and network resources.
+A Task is one active running instance of your task definition. If the task definition is the launch specification, the task is the actual container process running with its allocated CPU, memory, and network resources.
 
 A common beginner trap is attempting to debug a container by launching a standalone task directly in the ECS cluster. While this works for a quick test, a standalone task has no supervisor. 
 
@@ -83,6 +85,8 @@ If the application process throws an unhandled exception or the host hardware cr
 ## The Role of ECS Services
 
 An ECS Service is the long-running controller that maintains your desired workload state. It sits on top of your running tasks, continuously comparing the number of active tasks in your cluster with the configured desired count.
+
+An ECS Service acts as the service-level reconciliation loop. It keeps the running task count, deployment version, subnet placement, and load balancer registration aligned with the configuration you declared.
 
 If you configure a desired count of `2`, the ECS service controller works in a constant loop. If a container task crashes or a virtual host is retired, the controller immediately notices that the active task count has dropped to `1`. 
 
@@ -101,6 +105,8 @@ The ECS service is what transforms a temporary, replaceable container process in
 
 When deploying containers in ECS, you must choose where the tasks physically execute. AWS offers two primary compute models: EC2-backed clusters and AWS Fargate.
 
+Fargate functions as the serverless host boundary for ECS tasks. You provide the container specification and resource size, and AWS provides the isolated runtime capacity without exposing the EC2 host fleet to your team.
+
 In an EC2-backed cluster, you are responsible for managing the cluster's virtual servers. You must launch EC2 instances, install the container runtime, maintain the ECS host agent, patch the host operating systems, and coordinate how tasks are packed onto instances to optimize CPU usage.
 
 AWS Fargate completely eliminates this host server fleet management. Fargate is serverless compute for containers. With Fargate, you do not launch or patch virtual servers; you specify the exact CPU and memory your task needs, and Fargate provisions an AWS-managed task isolation boundary for the container.
@@ -114,7 +120,9 @@ Fargate does not make your application automatic. Your team still owns the conta
 
 ## Container Networking and Load Balancing
 
-Under the default Fargate networking model, `awsvpc`, container networking is simple and isolated. Each Fargate task receives its own Elastic Network Interface (ENI) cabled directly into your VPC. From the VPC's point of view, the task behaves like a private network target, receiving a unique private IP address and its own security groups.
+Under the default Fargate networking model, `awsvpc`, container networking is simple and isolated. Each Fargate task receives its own Elastic Network Interface (ENI) attached directly to your VPC. From the VPC's point of view, the task behaves like a private network target, receiving a unique private IP address and its own security groups.
+
+The routing anchor is dynamic IP targets. A Fargate task is a private VPC network target whose address can change every time ECS replaces it, so the load balancer must track healthy task IPs instead of fixed hosts.
 
 This private IP is completely dynamic. When ECS replaces a task, the old ENI is deleted, the old IP is discarded, and the new replacement task receives a completely new private IP. Because task IPs change constantly, you cannot route traffic to static IP addresses.
 
@@ -150,7 +158,7 @@ Operating containerized workloads securely requires a strict division of IAM per
 
 First, secure your container APIs using two distinct IAM roles:
 
-* **Task Execution Role (Infrastructure Boot)**: Used by the ECS agent before your container starts. It grants the platform permission to authenticate with ECR, pull your private container image, fetch vaulted secrets from Secrets Manager, and stream logs to CloudWatch.
+* **Task Execution Role (Infrastructure Boot)**: Used by the ECS agent before your container starts. It grants the platform permission to authenticate with ECR, pull your private container image, fetch secret values from Secrets Manager, and stream logs to CloudWatch.
 * **Task Role (Application Runtime)**: Used by your application code running inside the container after boot. It grants your code permission to call AWS APIs, such as uploading files to S3, writing DynamoDB records, or publishing SNS messages.
 
 Never merge these roles or copy application permissions into the execution role. If your app cannot write to S3, adding S3 permissions to the execution role is a common false repair; the app inside the container will continue to fail because its Task Role lacks the required policy.

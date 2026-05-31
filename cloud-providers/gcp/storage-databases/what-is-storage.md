@@ -33,7 +33,7 @@ aliases:
 
 ## The Problem
 
-The Orders API has moved from a laptop into GCP. The app can run on Cloud Run, reach private services, and use a runtime identity. Now it has a quieter but more permanent question: where should the data live?
+The storage decision is the choice of which managed system should hold state after code finishes running. The Orders API has moved from a laptop into GCP. The app can run on Cloud Run, reach private services, and use a runtime identity. Now it has a quieter but more permanent question: where should the data live?
 
 At first, that sounds like one decision. Then the data starts behaving differently:
 
@@ -50,7 +50,7 @@ The working mental model is simple: describe what the data needs to do after it 
 
 ## What Is Storage
 
-Storage is where a system keeps state after a request, process, or job ends. Some state is a whole file. Some state is a set of related rows. Some state is a document the app reads by path. Some state is a large table for analysis. Some state is a disk or filesystem attached to compute. Some state is a recovery copy that exists for the day something goes wrong.
+Storage is the persistence layer where a system keeps state after a request, process, or job ends. Some state is a whole file. Some state is a set of related rows. Some state is a document the app reads by path. Some state is a large table for analysis. Some state is a disk or filesystem attached to compute. Some state is a recovery copy that exists for the day something goes wrong.
 
 GCP has different services because those shapes make different promises.
 
@@ -67,7 +67,7 @@ This table is not a product catalog. It is a first filter. If you can explain th
 
 ## Data Shapes
 
-Data shape means the way the app or team will read, write, update, query, protect, and recover the data. The same business domain can create several shapes.
+Data shape means the access pattern and lifecycle of the data: how the app or team will read, write, update, query, protect, and recover it. The same business domain can create several shapes.
 
 An order creates business records in Cloud SQL. The receipt PDF for that order can live in Cloud Storage. A checkout draft can live in Firestore if the app reads it by user path. A data pipeline can copy checkout events into BigQuery for analysis. A VM worker may use Persistent Disk for local working space while rebuilding an index. A recovery plan may use backups, versions, snapshots, or time travel.
 
@@ -90,7 +90,7 @@ The diagram leaves out service names until the shape is clear. That is the habit
 
 ## Objects
 
-Object-shaped data is stored and retrieved as named blobs of bytes. A receipt PDF, export CSV, profile image, log archive, or support attachment often behaves like an object. The app writes the whole thing, reads the whole thing or a range of it, controls access to it, and may delete it later.
+Object-shaped data is a named byte payload addressed through an object API. A receipt PDF, export CSV, profile image, log archive, or support attachment often fits this model. The app writes the whole thing, reads the whole thing or a range of it, controls access to it, and may delete it later.
 
 Cloud Storage is the usual GCP home for this shape. A bucket is the container. An object is the data plus metadata. The object name is part of the design because it decides how humans and tools find related objects later.
 
@@ -98,7 +98,7 @@ Object storage is durable and scalable, but it is not a relational database. The
 
 ## Relational Data
 
-Relational data is made of records that need rules between them. Orders have line items. Payments belong to orders. Refunds refer to payments. A support query may need to join several tables. Checkout may need a transaction so several writes succeed together or fail together.
+Relational data is organized as linked tables of records with rules between them. Orders have line items. Payments belong to orders. Refunds refer to payments. A support query may need to join several tables. Checkout may need a transaction so several writes succeed together or fail together.
 
 Cloud SQL is the beginner GCP home for that shape. It gives managed MySQL, PostgreSQL, or SQL Server. The team still owns schema design, migrations, indexes, query behavior, credentials, connection handling, and restore expectations.
 
@@ -106,7 +106,7 @@ The non-obvious truth is that a managed database does not remove database thinki
 
 ## Document Data
 
-Document data fits when the app can read or query records as documents with predictable paths and indexes. Checkout drafts, user preferences, lightweight app state, and mobile-friendly records can fit this model.
+Document data works well when records can be stored as addressable application objects with fields, paths, and indexes. Checkout drafts, user preferences, lightweight app state, and mobile-friendly records can fit this model when the app can read or query records as documents.
 
 Firestore is the GCP document database to learn first. It stores documents in collections, supports indexes, and has its own transaction and consistency boundaries. It can feel natural to JavaScript developers because documents look like objects, but that familiarity can be dangerous. Documents are not a license to ignore access patterns.
 
@@ -114,7 +114,7 @@ Firestore is strongest when the app can name the document path or query a collec
 
 ## Analytics Data
 
-Analytics data exists so people can ask questions across many events and records. How many checkouts failed by region last week? Which payment provider has the highest retry rate? Did the latest release increase receipt latency?
+Analytics data is history arranged for aggregate questions across many events and records. How many checkouts failed by region last week? Which payment provider has the highest retry rate? Did the latest release increase receipt latency?
 
 BigQuery is the GCP service built for that analytical shape. It stores datasets and tables and lets teams use SQL to analyze large amounts of data without operating database servers. It is excellent for reports, dashboards, data engineering, and exploration over historical facts.
 
@@ -122,15 +122,15 @@ BigQuery should not become the request-time checkout database. The app should no
 
 ## Attached Storage
 
-Some workloads ask for a path, not an API. A Compute Engine worker may need a durable block device. Several VMs may need a shared NFS-like file system. A vendor tool may expect `/mnt/incoming` and write results beside the input files.
+Attached storage is persistence exposed through operating-system paths or disk devices instead of a service API. Some workloads ask for a path, not an API. A Compute Engine worker may need a durable block device. Several VMs may need a shared NFS-like file system. A vendor tool may expect `/mnt/incoming` and write results beside the input files.
 
-Persistent Disk and Filestore are the GCP services to learn first for attached storage. Persistent Disk behaves like block storage attached to a VM or supported workload. Filestore provides managed file storage that clients can mount.
+Persistent Disk and Filestore are the GCP services to learn first for attached storage. Persistent Disk presents block storage to a VM or supported workload. Filestore provides managed file storage that clients can mount.
 
 This shape is different from Cloud Storage. A bucket is great for object bytes and object APIs. A disk or mounted file system is for workloads that truly need disk or file semantics. Do not choose attached storage just because it feels familiar from a laptop.
 
 ## Recovery Copies
 
-Storage is not finished when the first write succeeds. The team also needs to answer what happens after a bad write, mistaken deletion, corrupt import, or failed migration.
+Recovery copies are historical versions, backups, snapshots, or restore windows kept separately from the active write path. Storage is not finished when the first write succeeds. The team also needs to answer what happens after a bad write, mistaken deletion, corrupt import, or failed migration.
 
 Recovery copies come in different forms:
 

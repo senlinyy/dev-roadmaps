@@ -38,7 +38,9 @@ The split between object and controller is important. Creating an Ingress object
 
 ## A First Ingress for devpolaris-orders-api
 
-The backend Service stays internal. The Ingress becomes the HTTP entry point that maps a hostname and path to that Service.
+An Ingress rule maps an external HTTP host and path to an internal Kubernetes Service. The backend Service stays internal, while the Ingress becomes the HTTP entry point for clients outside the cluster.
+
+Example: `api.devpolaris.local/orders` can route to the internal `devpolaris-orders-api` Service on its named `http` port.
 
 ```yaml
 apiVersion: networking.k8s.io/v1
@@ -73,7 +75,9 @@ The address usually belongs to the load balancer in front of the controller. If 
 
 ## IngressClass Connects Rules to a Controller
 
-Multiple controllers can exist in one cluster. An IngressClass tells Kubernetes which controller should handle a given Ingress. In the example, `ingressClassName: nginx` means the NGINX Ingress Controller should read this object.
+An IngressClass is the link between an Ingress rule and the controller implementation that should enforce it. Multiple controllers can exist in one cluster, so the class prevents a rule from being handled by the wrong edge component.
+
+Example: `ingressClassName: nginx` means the NGINX Ingress Controller should read this object and program its proxy configuration.
 
 ```bash
 $ kubectl get ingressclass
@@ -94,7 +98,9 @@ The typo is small, but the effect is complete. Fix the class name or configure a
 
 ## Path Matching Is an API Contract
 
-Path routing looks simple until clients depend on it. `pathType: Prefix` means a path such as `/orders/123` can match `/orders`. `pathType: Exact` would require an exact path match. `ImplementationSpecific` lets the controller decide, which may be acceptable for advanced controller features but is less portable.
+Path matching is the rule that decides which backend receives an HTTP request after the hostname matches. It becomes an API contract as soon as clients build URLs against it.
+
+Example: `pathType: Prefix` lets `/orders/123` match the `/orders` route, while `pathType: Exact` would match `/orders` only. `ImplementationSpecific` lets the controller decide, which may be acceptable for advanced controller features but is less portable.
 
 For `devpolaris-orders-api`, a prefix route is a reasonable API contract if the application serves all order endpoints under `/orders`. The application and Ingress must agree on whether the prefix is preserved or rewritten. Rewrites are controller-specific and should be used carefully because they hide part of the URL from the backend.
 
@@ -108,7 +114,9 @@ When a route returns 404, check whether the request reached the controller and w
 
 ## TLS Belongs at the Edge
 
-Browsers expect HTTPS for production APIs. With Ingress, TLS termination usually happens at the controller or the load balancer in front of it. Termination means the edge component accepts the HTTPS connection, presents the certificate, decrypts the request, and forwards traffic to the backend Service.
+TLS termination is the point where an edge component accepts HTTPS, presents the certificate, decrypts the request, and forwards traffic to the backend Service. With Ingress, that usually happens at the controller or the load balancer in front of it.
+
+Example: the browser connects to `https://api.devpolaris.local`, the Ingress edge presents the `devpolaris-api-tls` certificate, then the controller forwards plain HTTP to the internal orders Service if that is how the backend is configured.
 
 ```yaml
 spec:
@@ -166,7 +174,7 @@ That log says the controller tried a Pod IP and port. Now inspect readiness, net
 
 ## Ingress Tradeoffs
 
-Ingress is widely supported and simple for common HTTP routing. It is a good fit when a team needs host and path routing, TLS, and one controller-owned edge. The tradeoff is that many advanced behaviors live in controller-specific annotations. Rate limits, rewrites, authentication, and timeouts often differ between controllers.
+Ingress is a shared HTTP entry rule for Services. It is widely supported and simple for common host, path, and TLS routing. The tradeoff is that many advanced behaviors live in controller-specific annotations. Rate limits, rewrites, authentication, and timeouts often differ between controllers.
 
 For a small platform, that is acceptable if the controller choice is deliberate and documented. For a larger platform with multiple teams and richer traffic management, Gateway API may give clearer roles and more portable resources.
 
@@ -174,7 +182,7 @@ Keep this boundary in mind: Ingress routes HTTP traffic to Services. It does not
 
 ## Production Review Questions
 
-A production review should connect the YAML to the request path. Ask who can call the workload, which component owns the public address, and how a failed health check will be noticed. For `devpolaris-orders-api`, the answer should name the caller, the Service, and the routing layer rather than saying only "Kubernetes handles it."
+A production Ingress review should connect the public URL to the internal Service path. Ask which controller owns the address, which host and path should match, which TLS secret clients receive, and which Service receives the request. For `devpolaris-orders-api`, the answer should name the Ingress, the backend Service, and the controller rather than saying only "Kubernetes handles it."
 
 ```text
 Request path review:

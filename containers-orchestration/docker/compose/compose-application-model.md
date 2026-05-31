@@ -25,6 +25,8 @@ aliases:
 
 ## Why Compose Exists
 
+Docker Compose is a local application model that turns multiple container run settings into one reviewable graph of services, networks, volumes, ports, and startup rules.
+
 The orders API now has several Docker facts attached to it. The image comes from a Dockerfile. The container needs a database URL. The browser reaches the API through a published host port. The API reaches Postgres through a Docker network. The database needs storage that survives container recreation.
 
 You can keep those facts in separate commands:
@@ -43,6 +45,8 @@ Compose exists because a multi-container application needs a model. The model sa
 ## The Mental Model
 
 Read a Compose file as an application graph. A single `docker run` command describes one container. A Compose file describes the connected system that should appear when the project starts.
+
+An application graph is the set of service roles and the connections between them. In a small stack, that graph might be `browser -> api -> db`, plus a volume attached to the database.
 
 ```mermaid
 flowchart TD
@@ -64,9 +68,16 @@ flowchart TD
 
 The API service has one public edge from the host and one private edge to the database. The worker service may use the same image as the API but run a different command. The database has a storage edge because its data should not disappear with one container. The network is part of the graph because service names such as `db` only make sense inside that shared network.
 
-Once the graph is visible, the YAML stops feeling like a bag of options. Most fields describe one of four things: a service role, a connection between roles, a host entry point, or a state lifetime.
+Once the graph is visible, the YAML becomes easier to classify. Most fields describe one of four things: a service role, a connection between roles, a host entry point, or a state lifetime.
 
 ## The Project Boundary
+
+The Compose project boundary is the namespace Compose uses to group generated containers, networks, volumes, and labels for one application instance.
+
+
+![Diagram showing a Docker Compose project boundary grouping service roles, network, and volumes](/content-assets/articles/article-containers-orchestration-containerization-docker-compose/compose-project-boundary.png)
+
+*The project boundary is the namespace that keeps one local application copy from colliding with another.*
 
 Compose groups resources into a project. The project name is normally derived from the directory, though it can be set explicitly. Docker uses that project name to group and label the containers, networks, and volumes that Compose creates.
 
@@ -75,6 +86,8 @@ That boundary matters when two copies of the same app run on one machine. A deve
 The boundary also explains why the service name is the name applications should use. The actual container name can include the project prefix and a number. The service role is the stable thing inside the model. `db` means "the database role in this Compose project," not "a particular container ID that will live forever."
 
 ## Services
+
+A Compose service is a stable application role; Docker implements that role by creating container instances from the service definition.
 
 A service is a role in the application. Docker implements that role by creating one or more containers from the same service definition. The definition says which image to use, how to build it if it comes from local source, which command to run, which environment to pass, which ports to publish, which volumes to mount, and which networks to join.
 
@@ -90,6 +103,10 @@ For the orders stack, the service roles are easier to understand than the contai
 This is the first non-obvious Compose habit: define roles, then let Compose create containers for them. If a container is recreated after a config change, the role remains. If a service is scaled, several containers can implement the same role. If application code hardcodes a generated container name or IP address, it attaches itself to a disposable implementation detail.
 
 ## The Compose File
+
+A Compose file is the declarative model for the local application graph.
+
+Declarative means the file describes the result you want Docker to assemble, not every manual command Docker should run. The file says there is an `api` service, a `db` service, a port, an environment value, a volume, and a health check.
 
 Here is a small model for the orders stack:
 
@@ -129,6 +146,13 @@ The file folds earlier Docker concepts into one place. `build: .` points to the 
 This is still local Docker, not a production orchestrator. Compose is not deciding where in a cluster to schedule work, how to roll out a new version safely across many machines, or how to enforce production policy. It is making the local application shape explicit and repeatable.
 
 ## What Compose Creates
+
+Compose resources are the concrete Docker objects created from the model: containers, networks, volumes, labels, and port bindings.
+
+
+![Diagram showing a Compose YAML model becoming concrete Docker containers, networks, volumes, labels, and ports](/content-assets/articles/article-containers-orchestration-containerization-docker-compose/compose-creates-resources.png)
+
+*Compose turns the reviewable YAML model into concrete Docker resources with the project identity attached.*
 
 When you run the model, Compose creates Docker resources that correspond to the graph:
 
@@ -174,6 +198,10 @@ The result is a local model that a teammate can read before they run it. That is
 ## What's Next
 
 The next article zooms into the resources inside that graph. Services, networks, and volumes are where most Compose surprises live, because they decide which process starts, which names resolve, which ports are visible, and which files survive.
+
+![Summary infographic for the Docker Compose model mental map](/content-assets/articles/article-containers-orchestration-containerization-docker-compose/compose-model-summary.png)
+
+*The summary map keeps the Compose model anchored around project, services, network, ports, volumes, and model-versus-runtime state.*
 
 ---
 

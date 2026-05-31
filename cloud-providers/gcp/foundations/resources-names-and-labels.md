@@ -22,7 +22,9 @@ aliases:
 
 ## Resource Paths and Logical Lineage
 
-When you build systems in the cloud, you quickly accumulate hundreds of virtual objects—like database servers, storage buckets, network switches, and security credentials. Identifying these resources using simple, human-chosen names alone (such as `database-secret` or `orders-service`) is highly risky. As your team provisions separate environments for development, staging, and production, you will inevitably end up with duplicate names across projects. If your deployment scripts or alerting systems rely on loose, logical display names, a developer attempting to update a connection setting in development can easily target the production database by mistake simply because both share the same name. To operate safely, you need a precise, absolute address for every single resource you deploy.
+A GCP resource path is the absolute API address for one managed object. It records the parent project, location, collection, and resource ID so tools can target the exact Cloud Run service, bucket, secret, or database instance they mean.
+
+When you build systems in the cloud, you quickly accumulate hundreds of virtual objects like database servers, storage buckets, network switches, and security credentials. Identifying these resources using simple, human-chosen names alone (such as `database-secret` or `orders-service`) is highly risky. As your team provisions separate environments for development, staging, and production, you will inevitably end up with duplicate names across projects. If your deployment scripts or alerting systems rely on loose, logical display names, a developer attempting to update a connection setting in development can easily target the production database by mistake simply because both share the same name. To operate safely, you need a precise, absolute address for every single resource you deploy.
 
 ![A resource name gives the API enough coordinates to locate the exact resource.](/content-assets/articles/article-cloud-providers-gcp-foundations-resource-names-labels-resource-paths/selflink-route.png)
 
@@ -48,7 +50,7 @@ By relying on a full resource name instead of a loose display name, deployment t
 
 ## Global vs. Local Resource Uniqueness
 
-When planning your resource naming strategy, you must recognize that GCP resources carry different uniqueness scopes. Failing to account for these scopes can block deployment pipelines and create security conflicts:
+Resource uniqueness scope tells you where a name must be unique before the API will accept it. When planning your resource naming strategy, you must recognize that GCP resources carry different uniqueness scopes. Failing to account for these scopes can block deployment pipelines and create security conflicts:
 
 ![Some names are local to a project while bucket names are reserved in a global edge namespace.](/content-assets/articles/article-cloud-providers-gcp-foundations-resource-names-labels-resource-paths/global-name-registry.png)
 
@@ -72,7 +74,7 @@ To prevent global name clashes, prefix globally unique resources with your compa
 
 ## Metadata Classification: Labels
 
-To manage a growing cloud footprint, you must separate resource identification from resource categorization. While resource paths provide the exact coordinates needed for deployment tools, they do not help teams track who owns a resource, which environment it serves, or which cost center is responsible for its charges. To categorize resources at scale, GCP provides Labels.
+Labels are lightweight metadata fields for filtering, grouping, and reporting on resources. To manage a growing cloud footprint, you must separate resource identification from resource categorization. While resource paths provide the exact coordinates needed for deployment tools, they do not help teams track who owns a resource, which environment it serves, or which cost center is responsible for its charges. To categorize resources at scale, GCP provides Labels.
 
 Labels are key-value pairs (such as `env=production` or `team=commerce`) that you attach directly to resource metadata. They are designed for inventory search, resource grouping, and cost allocation. GCP's billing engine exports these labels alongside resource consumption data to Cloud Billing reports and BigQuery export tables.
 
@@ -91,7 +93,7 @@ Additionally, labels are purely administrative. They have no impact on resource 
 
 ## Access Control and Policy Gates: Tags
 
-When you need metadata to drive security behavior and control-plane access policies, you must use Tags. Although tags and labels appear similar in the GCP console, they are implemented as entirely separate subsystems under the hood.
+Tags are governed metadata resources that policy engines can reference when making access or network decisions. When you need metadata to drive security behavior and control-plane access policies, you must use Tags. Although tags and labels appear similar in the GCP console, they are implemented as entirely separate subsystems under the hood.
 
 A Tag is a key-value resource managed by Google Cloud Resource Manager. Unlike labels, which are loose metadata strings attached directly to resources, tags are structured resources that can be created under supported parent resources, including organizations and projects.
 

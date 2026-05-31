@@ -30,11 +30,11 @@ aliases:
 
 ## Public Entry Point Architectures
 
-Public entry points serve as the administrative edge routing gateways that securely connect external internet traffic to your private virtual network resources.
+Public entry points are the internet-facing services that receive user traffic, terminate or forward network connections, and route only valid requests toward private backend resources.
 
 To build a secure, high-performance cloud deployment, you must treat public ingress as a structured, multi-layer chain rather than a single portal switch. In local loopback architectures, a user's browser talks directly to your backend process. In the cloud, exposing your application servers directly to the internet is a severe vulnerability.
 
-You need specialized entry services to act as shields, absorbing DDoS attacks, decrypting secure connections close to the user, and routing requests only to healthy compute nodes inside your private subnets.
+You need specialized entry services to absorb DDoS pressure, decrypt secure connections close to the user when appropriate, apply web filtering, and route requests only to healthy compute nodes inside your private subnets.
 
 ```mermaid
 flowchart TD
@@ -51,7 +51,7 @@ The public entry path begins long before a single byte of application code is ex
 
 ## Public DNS Caching and Resolution Paths
 
-Public Domain Name System (DNS) is the translation engine that maps human-friendly hostnames (like `api.devpolaris.com`) to the public IP addresses of your Azure entry points.
+Public Domain Name System (DNS) is the distributed name-resolution system that maps hostnames like `api.devpolaris.com` to the public addresses or managed names of your Azure entry points.
 
 When a user's browser initiates a connection, it does not send an HTTP payload immediately. It first queries a hierarchical chain of recursive DNS resolvers. Understanding this path is vital:
 
@@ -62,10 +62,14 @@ During cutovers, always lower the TTL values (e.g. to 300 seconds) several days 
 
 ## TLS Edge Termination Physics
 
-Transport Layer Security (TLS) encrypts user connections and proves domain authenticity via public certificates. In a secure architecture, the physical location where the TLS handshake is terminated has profound performance and networking consequences:
+TLS termination is the point where an entry service completes the HTTPS handshake and can inspect or forward decrypted HTTP traffic. Transport Layer Security (TLS) encrypts user connections and proves domain authenticity via public certificates.
+
+Example: `orders.devpolaris.com` can terminate TLS at Azure Front Door near the user, then forward the request over Microsoft's backbone to an Application Gateway in `uksouth`.
+
+In a secure architecture, the physical location where the TLS handshake is terminated has profound performance and networking consequences:
 
 ### 1. Global Edge Termination (Split-TCP Handshake)
-Azure Front Door terminates TLS at the global Microsoft edge Point of Presence (PoP) nearest to the user. This relies on **Split-TCP physics**.
+Global edge termination means the user completes the TCP and TLS handshakes with a nearby edge location instead of with the final regional backend. Azure Front Door terminates TLS at the global Microsoft edge Point of Presence (PoP) nearest to the user. This relies on Split-TCP behavior.
 
 Establishing a TCP and TLS 1.3 connection requires multiple round-trips over the wire. If a user in London connects to a server in Singapore, each round-trip takes approximately 150 milliseconds due to the speed of light in glass fiber, resulting in a painful 600ms handshake delay.
 
@@ -78,39 +82,161 @@ While it does not offer global Split-TCP acceleration, it provides a highly secu
 
 ## Azure Front Door: The Global Edge Gateway
 
-Azure Front Door is a global edge routing service that combines a content delivery network (CDN), Web Application Firewall (WAF), and global HTTP/HTTPS load balancer into a single, Microsoft-managed edge platform.
+Azure Front Door is Azure's global HTTP/HTTPS entry service for routing user requests through Microsoft's edge network before they reach regional origins. It combines a content delivery network (CDN), Web Application Firewall (WAF), and global HTTP/HTTPS load balancer into a single, Microsoft-managed edge platform.
 
-Front Door utilizes **Anycast routing** globally. When you configure Front Door, Microsoft broadcasts its public IP addresses from all edge PoPs worldwide.
+Front Door utilizes Anycast routing globally. When you configure Front Door, Microsoft broadcasts its public IP addresses from all edge PoPs worldwide. When a user connects, the internet's routing switches automatically direct their packets to the physically nearest edge facility. WAF rules are evaluated immediately at the edge, blocking SQL injection and cross-site scripting (XSS) payloads before they can cross regional boundaries. Front Door then proxies the clean HTTP headers to your regional backend origins over Microsoft's dedicated WAN backbone, maintaining high speed and reliability.
 
-When a user connects, the internet's routing switches automatically direct their packets to the physically nearest edge facility.
+### Anycast Routing and Split-TCP Physics
 
-WAF rules are evaluated immediately at the edge, blocking SQL injection and cross-site scripting (XSS) payloads before they can cross regional boundaries.
+Anycast is a routing pattern where the same public IP address is announced from many physical locations. The internet then sends a user to a nearby location that advertises that address.
 
-Front Door then proxies the clean HTTP headers to your regional backend origins over Microsoft's dedicated WAN backbone, maintaining high speed and reliability.
+Example: the same Front Door IP can be announced from London, Singapore, and Virginia. A London user reaches the London edge, while a Singapore user reaches the Singapore edge.
+
+To appreciate why this edge routing design is powerful, compare it with standard unicast routing. In standard unicast routing, a public IP address belongs to a single physical data center. If a user in London wants to access a server in Singapore, every packet must travel the entire distance across under-sea fiber cables, taking roughly 150 milliseconds per round-trip.
+
+Anycast changes this by advertising the exact same public IP address from over one hundred Microsoft Edge PoPs worldwide using the Border Gateway Protocol (BGP). The internet's standard routing systems naturally direct the user's packets to the closest physical PoP advertising that IP.
+
+Once the packets reach this nearby Edge PoP, Front Door terminates the TCP and TLS connections immediately. This process relies on Split-TCP physics. A standard HTTPS handshake requires two round-trips over the wire (one for the TCP three-way handshake, and one for the TLS 1.3 cryptographic exchange) before any actual application data is sent. Under unicast, a London user would wait 300 milliseconds just to establish the secure socket with Singapore. With Split-TCP, the user completes the TCP and TLS handshakes with the London Edge PoP in under 10 milliseconds.
+
+After completing the local handshake, the Edge PoP forwards the request to the regional origin server in Singapore over Microsoft's private global fiber network. Front Door maintains pre-established, warm TCP connection pools between all Edge PoPs and regional origins. Because these connection pools are already open and active, the Edge PoP can transmit the request to Singapore instantly, bypassing the handshake latency penalty entirely.
 
 ## Application Gateway: The Regional L7 Proxy
 
-Azure Application Gateway is a regional, dedicated Layer 7 load balancer that operates inside your private Virtual Network.
+Azure Application Gateway is the regional Layer 7 proxy for HTTP and HTTPS traffic inside or at the edge of your virtual network. It is a dedicated Layer 7 load balancer that operates inside your private Virtual Network.
 
-Because Application Gateway is a Layer 7 proxy, it parses the actual HTTP application protocol headers. Unlike simple IP port forwarding, it executes **URL path-based routing rules**:
+Because Application Gateway is a Layer 7 proxy, it parses the actual HTTP application protocol headers. Unlike simple IP port forwarding, it executes URL path-based routing rules:
 
-```text
+```plain
 HTTP Request to api.devpolaris.com
   ├── Path starts with /api/* ──> Forward to snet-orders-api pool
   └── Path starts with /images/* ──> Forward to Blob Storage pool
 ```
 
-This HTTP-level intelligence is highly robust but requires a dedicated subnet inside your VNet. Application Gateway operates multiple virtual instances inside this subnet, requiring a continuous flow of IP allocations.
+This HTTP-level intelligence is highly robust but requires a dedicated subnet inside your Virtual Network. Unlike a simple virtual appliance, Application Gateway operates as a set of managed instances that scale dynamically. It requires a continuous block of private IP addresses within its dedicated subnet to handle scaling events.
 
 It handles regional TLS certificate bindings, evaluates local WAF rules, and performs backend header rewrites (such as injecting `X-Forwarded-For` headers to preserve the client's source IP) before routing requests to your compute subnets.
 
+### Application Gateway Configuration Example
+
+You can deploy and configure an Application Gateway declaratively using Bicep. The following sample Bicep template defines a standard public IP address, a virtual network subnet integration, and an Application Gateway resource configured for basic HTTP port 80 routing to a private backend pool:
+
+```bicep
+resource publicIp 'Microsoft.Network/publicIPAddresses@2023-09-01' = {
+  name: 'pip-appgw-prod'
+  location: 'eastus'
+  sku: {
+    name: 'Standard'
+  }
+  properties: {
+    publicIPAllocationMethod: 'Static'
+  }
+}
+
+resource appGateway 'Microsoft.Network/applicationGateways@2023-09-01' = {
+  name: 'agw-orders-prod'
+  location: 'eastus'
+  properties: {
+    sku: {
+      name: 'WAF_v2'
+      tier: 'WAF_v2'
+      capacity: 2
+    }
+    gatewayIPConfigurations: [
+      {
+        name: 'appGatewayIpConfig'
+        properties: {
+          subnet: {
+            id: resourceId('Microsoft.Network/virtualNetworks/subnets', 'vnet-prod', 'snet-agw')
+          }
+        }
+      }
+    ]
+    frontendIPConfigurations: [
+      {
+        name: 'appGatewayFrontendIp'
+        properties: {
+          publicIPAddress: {
+            id: publicIp.id
+          }
+        }
+      }
+    ]
+    frontendPorts: [
+      {
+        name: 'port_80'
+        properties: {
+          port: 80
+        }
+      }
+    ]
+    backendAddressPools: [
+      {
+        name: 'apiv2-backend-pool'
+        properties: {
+          backendAddresses: [
+            {
+              ipAddress: '10.30.2.4'
+            }
+          ]
+        }
+      }
+    ]
+    backendHttpSettingsCollection: [
+      {
+        name: 'apiv2-http-settings'
+        properties: {
+          port: 80
+          protocol: 'Http'
+          cookieBasedAffinity: 'Disabled'
+          requestTimeout: 20
+        }
+      }
+    ]
+    httpListeners: [
+      {
+        name: 'apiv2-listener'
+        properties: {
+          frontendIPConfiguration: {
+            id: resourceId('Microsoft.Network/applicationGateways/frontendIPConfigurations', 'agw-orders-prod', 'appGatewayFrontendIp')
+          }
+          frontendPort: {
+            id: resourceId('Microsoft.Network/applicationGateways/frontendPorts', 'agw-orders-prod', 'port_80')
+          }
+          protocol: 'Http'
+        }
+      }
+    ]
+    requestRoutingRules: [
+      {
+        name: 'apiv2-routing-rule'
+        properties: {
+          ruleType: 'Basic'
+          priority: 100
+          httpListener: {
+            id: resourceId('Microsoft.Network/applicationGateways/httpListeners', 'agw-orders-prod', 'apiv2-listener')
+          }
+          backendAddressPool: {
+            id: resourceId('Microsoft.Network/applicationGateways/backendAddressPools', 'agw-orders-prod', 'apiv2-backend-pool')
+          }
+          backendHttpSettings: {
+            id: resourceId('Microsoft.Network/applicationGateways/backendHttpSettingsCollection', 'agw-orders-prod', 'apiv2-http-settings')
+          }
+        }
+      }
+    ]
+  }
+}
+```
+
 ## Azure Load Balancer: The Layer 4 Transport Switch
 
-Azure Load Balancer is a ultra-high-performance Layer 4 transport load balancer.
+Azure Load Balancer is the Layer 4 distribution service for TCP and UDP flows. Layer 4 means it looks at IP addresses, ports, and protocol, not HTTP paths, cookies, or hostnames.
+
+Example: a public Load Balancer can distribute TCP port `443` across three VM instances running the same service, but it cannot route `/api` to one backend and `/images` to another.
 
 Unlike Application Gateway, Azure Load Balancer **does not parse HTTP headers, inspect URLs, or decrypt TLS certificates**. It operates strictly at the transport tier, evaluating packets using a 5-tuple hash: Source IP, Source Port, Destination IP, Destination Port, and Protocol.
 
-```text
+```plain
 Incoming Packet: 52.174.12.34:5000 ──> Load Balancer ──> 5-Tuple Hash ──> Forward to VM 10.30.2.4:80
 ```
 
@@ -118,7 +244,7 @@ Because it does not parse HTTP or terminate TLS, Azure Load Balancer is built fo
 
 ## Active Health Probe Polling Algorithms
 
-To protect users from server crashes, public entry points run continuous **Active Health Probe Polling Algorithms** to monitor the state of backend nodes.
+A health probe is the entry service's repeated check that a backend target is ready to receive traffic. To protect users from server crashes, public entry points run continuous active health probe polling to monitor the state of backend nodes.
 
 ![An infographic showing TLS termination, routing rules, health probes, and backend pool selection](/content-assets/articles/article-cloud-providers-azure-networking-connectivity-load-balancers-application-gateway-and-front-door/tls-health-path.png)
 
@@ -126,7 +252,7 @@ To protect users from server crashes, public entry points run continuous **Activ
 
 A health probe is an active polling loop. The entry service initiates short HTTP requests to a designated path (e.g. `/health` or `/ready`) at configured intervals (such as every 15 seconds):
 
-```text
+```plain
 Health Probe Loop (Interval: 15s, Timeout: 5s, Unhealthy Threshold: 2)
   ├── Poll 1: Get /health ──> returns 200 OK (Healthy)
   ├── Poll 2: Get /health ──> returns 503 Service Unavailable (Failed count: 1)
@@ -141,7 +267,9 @@ When writing backend code, always expose a dedicated health endpoint that audits
 
 ## Choosing The Entry Point
 
-The entry choice starts with the kind of request, not the product menu.
+The entry choice starts with the kind of request, not the product menu. Decide whether the request needs global HTTP routing, regional HTTP inspection, raw TCP/UDP distribution, or private backend routing.
+
+Example: a public browser API usually starts with Front Door or Application Gateway, while a private TCP service between VM tiers may only need an internal Load Balancer.
 
 ![An infographic comparing global edge entry with regional application gateway and layer 4 load balancing](/content-assets/articles/article-cloud-providers-azure-networking-connectivity-load-balancers-application-gateway-and-front-door/edge-vs-regional-entry.png)
 
@@ -168,17 +296,17 @@ To secure this boundary, you must enforce a two-layer lockdown:
 1.  **Restrict the Subnet NSG:** Modify the Application Gateway's subnet NSG to block all inbound HTTP/HTTPS traffic except that originating from Front Door's dynamic IP range:
 
     *   **Before (Exposed):**
-        ```text
+        ```plain
         Allow Inbound TCP 443 from Source: *
         ```
     *   **After (Hardened):**
-        ```text
+        ```plain
         Allow Inbound TCP 443 from Source: AzureFrontDoor.Backend
         ```
 
 2.  **Validate the Front Door ID (FDID):** Configure the Application Gateway's routing rules or your application's Web Application Firewall (WAF) custom rules to inspect the `X-Azure-FDID` header. The gateway must reject any request where this header is missing or does not match your specific Front Door profile ID.
 
-**Rule of thumb:** An origin gateway is only secure if it forces traffic through the edge. Every Application Gateway deployed behind Front Door must enforce BOTH the `AzureFrontDoor.Backend` NSG service tag restriction and the `X-Azure-FDID` header validation—relying on either alone is insufficient.
+**Rule of thumb:** An origin gateway is only secure if it forces traffic through the edge. Every Application Gateway deployed behind Front Door must enforce BOTH the `AzureFrontDoor.Backend` NSG service tag restriction and the `X-Azure-FDID` header validation - relying on either alone is insufficient.
 :::
 
 ## Sample Entry Shape

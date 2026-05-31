@@ -23,7 +23,7 @@ aliases:
 
 ## The API Server Checkpoint
 
-Every Kubernetes change passes through the API server. A user runs `kubectl apply`, a GitOps controller syncs a manifest, or a CI job patches a Deployment. Before the object is stored, admission control can inspect the request. Some admission steps can change the object. Others can reject it.
+Admission control is the set of checks Kubernetes runs after it knows who made a request and before it saves the requested object. Every Kubernetes change passes through the API server first: a user runs `kubectl apply`, a GitOps controller syncs a manifest, or a CI job patches a Deployment. At that checkpoint, admission control can inspect the request, add safe defaults, or reject an unsafe shape before it becomes cluster state.
 
 Admission policies exist because prevention is cheaper than cleanup. It is better to reject a `devpolaris-orders-api` Deployment that runs as root than to discover after an incident that every Pod had weak defaults. It is better to require owner labels when the object is created than to spend a cost review guessing who owns a forgotten workload.
 
@@ -43,7 +43,9 @@ That ordering means policy is not a replacement for RBAC. It is a second guard t
 
 ## Mutating and Validating Admission
 
-Admission controllers are usually described as mutating or validating. Mutating admission can modify an object before it is stored. Validating admission can accept or reject the final object.
+Admission controllers are checks that run inside the API server request path after authentication and authorization. The practical split is between checks that change an object and checks that decide whether the final object is allowed. For example, one controller might add a standard `team=orders` label, and another might reject the Deployment if its image does not include a digest.
+
+Mutating admission can modify an object before it is stored. Validating admission can accept or reject the final object.
 
 | Admission type | What it does | Example |
 |----------------|--------------|---------|
@@ -57,7 +59,9 @@ The tradeoff is surprise. Mutation can reduce repetitive YAML, but it can also m
 
 ## Built In Policies and Pod Security
 
-Kubernetes includes Pod Security Admission, which applies Pod Security Standards through namespace labels. This is built in and useful for broad Pod safety.
+Pod Security Admission is a built-in admission controller that applies Kubernetes Pod Security Standards through namespace labels. It exists to block risky Pod shapes before they run.
+
+Example: the `orders` namespace can warn or reject Pods that run privileged, allow privilege escalation, or omit `runAsNonRoot`.
 
 ```bash
 $ kubectl label namespace orders \
@@ -80,7 +84,9 @@ This protects the namespace without requiring every team to write the same polic
 
 ## Validating Admission Policy
 
-ValidatingAdmissionPolicy lets clusters validate API requests using CEL, the Common Expression Language. It is useful for rules that can be expressed from the object fields and request context.
+ValidatingAdmissionPolicy is a Kubernetes resource for writing validation rules directly against API requests. It uses CEL, the Common Expression Language, to evaluate object fields and request context.
+
+Example: a policy can reject any Deployment in `orders` that lacks `devpolaris.io/owner`, before the object is stored.
 
 Suppose the platform team wants every Deployment in `orders` to carry an owner label. The policy can check that the label exists.
 
@@ -121,7 +127,9 @@ When a Deployment lacks the label, the API server rejects it with the policy mes
 
 ## Policy Engines in Real Clusters
 
-Many clusters use policy engines such as Kyverno, Gatekeeper, or cloud-provider policy tools. These engines can provide higher-level policy formats, audit reports, mutation, image verification, and reusable rule libraries.
+Policy engines are controller systems that add richer policy features around Kubernetes admission. Many clusters use Kyverno, Gatekeeper, or cloud-provider policy tools for higher-level policy formats, audit reports, mutation, image verification, and reusable rule libraries.
+
+Example: a policy engine can require images from `ghcr.io/devpolaris`, require resource requests, and audit existing Deployments that do not yet meet the rule.
 
 The operating idea stays the same. A policy should catch unsafe changes before they become running Pods. For `devpolaris-orders-api`, common rules might include:
 
@@ -137,7 +145,9 @@ Start with a small set of high-value rules. Too many rules at once create noisy 
 
 ## Design Policies That Developers Can Fix
 
-A useful policy names the problem and the repair. A vague denial such as `policy failed` sends developers searching through platform code. A good denial says exactly which field is missing or unsafe.
+A developer-friendly policy names the unsafe field and the repair. A vague denial such as `policy failed` sends developers searching through platform code. A good denial says exactly which field is missing or unsafe.
+
+Example: `Deployment devpolaris-orders-api must use an image from ghcr.io/devpolaris and include a digest` tells the service team exactly what to change.
 
 Bad message:
 
@@ -157,7 +167,7 @@ Policy exceptions need the same care. Some controllers need broader permissions 
 
 ## Failure Mode: A Policy Blocks the Release
 
-Imagine a CI job tries to deploy a new orders API image:
+A release-blocking policy failure happens when the API server accepts the caller's identity and permissions but rejects the submitted object. The request reached admission control, and the policy found a field that violates a cluster rule. A common example is a CI job trying to deploy an orders API image by a movable tag:
 
 ```bash
 $ kubectl -n orders apply -f deployment.yaml
@@ -185,7 +195,7 @@ RBAC errors usually say `cannot create resource`. Admission errors usually say a
 
 ## Policy Review Questions
 
-Review admission policy as product behavior for developers and safety behavior for the platform.
+An admission policy review is a design review for an automatic API-server decision. The policy will run during real deploys, so reviewers need to understand which mistake it prevents, which workloads it touches, and what a developer sees when it denies a request. For example, a rule that requires immutable images in `orders` should explain the exact image field to fix, not only say that validation failed.
 
 | Question | Why it matters |
 |----------|----------------|

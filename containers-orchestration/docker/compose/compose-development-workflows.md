@@ -23,6 +23,8 @@ id: article-containers-orchestration-docker-compose-development-workflows
 
 ## Why Workflow Matters
 
+Compose workflow commands are lifecycle operations against the Compose model and the Docker resources currently implementing it.
+
 The Compose model is correct now. The API, database, network, port, volume, and health check are all in the file. A new teammate runs the stack and gets a working app. Then normal development starts.
 
 They edit source and do not see the change. They run a migration command and accidentally start a second API-shaped container. They use `docker compose down -v` to clean up a port conflict and delete the local database. They add a debug UI to the Compose file, and now every developer starts it even when nobody needs it.
@@ -32,6 +34,8 @@ These are workflow problems. The model says what the application is. The workflo
 ## The Mental Model
 
 Compose workflows fall into a few buckets:
+
+A workflow command changes a lifetime. Some commands change the whole project, some inspect a running container, and some create a separate one-off container for a task.
 
 ```mermaid
 flowchart TD
@@ -59,6 +63,13 @@ Once you know which lifetime a command touches, Compose feels less surprising.
 
 ## Starting the Stack
 
+`docker compose up` is the reconciliation command that compares the current project resources with the Compose model and starts or recreates what is needed.
+
+
+![Diagram showing docker compose up, logs, exec, and run as a development feedback loop](/content-assets/articles/article-containers-orchestration-docker-compose-development-workflows/compose-start-logs-exec.png)
+
+*Compose workflow commands are different ways to inspect or act on the same project model.*
+
 `docker compose up` reads the model, builds images when needed, creates missing networks and volumes, creates or recreates service containers when configuration changes, starts the services, and attaches their logs in the foreground. With `--detach`, it leaves the containers running in the background.
 
 The important behavior is reconciliation. Compose compares the running service containers with the model. If the service configuration or image changed after a container was created, `up` can recreate that service container while preserving mounted volumes. That is why a config edit often takes effect through another `up`.
@@ -68,6 +79,8 @@ This is also why `up` is usually the safest default for a local project. It keep
 Foreground `up` is good when you are reading the stack as it starts. Detached `up` is good when the stack is background infrastructure for your editor and tests. The model is the same; only the attachment changes.
 
 ## Logs and Process Evidence
+
+Compose logs are role-scoped process output, grouped by service instead of by raw container ID.
 
 Logs are how the running process tells you what happened from its own viewpoint. Compose can aggregate logs from the stack or focus on one service:
 
@@ -81,6 +94,8 @@ Logs do not prove everything. A missing host port may never appear in the API lo
 
 ## Exec and Run
 
+`compose exec` enters an existing service container, while `compose run` creates a separate one-off container from the service definition.
+
 `exec` and `run` are easy to confuse because both can give you a shell or run a command using a service name. They touch different lifetimes.
 
 `docker compose exec api sh` runs a command inside the already-running API service container. It is useful when you want the current process environment, current mounts, current network namespace, and current files. If the question is "what does the running API see," use `exec`.
@@ -90,6 +105,10 @@ Logs do not prove everything. A missing host port may never appear in the API lo
 The distinction explains several surprises. A `run` container is new, so it may not share process-local state with the running service. By default, a `run` command does not publish the service's ports, which avoids collisions with the already-running service. A command passed to `run` overrides the service command for that one container. These are features when you expect them and confusing when you do not.
 
 ## Changing Code
+
+Compose code-change workflows decide whether edits reach a service through image rebuilds, bind mounts, or Compose Watch synchronization.
+
+The beginner question is simple: after I save a file, how does the running process see it? The answer must be one of the workflow paths: rebuild the image, read the host file through a bind mount, or let Compose Watch sync or rebuild based on rules.
 
 There are three common ways source changes reach a Compose service.
 
@@ -111,6 +130,10 @@ The workflow should match the application. A Node API running a dev server might
 
 ## Profiles
 
+Compose profiles are opt-in switches for optional services in the same application model.
+
+Example: `db-admin` can be present in the Compose file but start only when `COMPOSE_PROFILES=debug` is enabled. The normal stack stays `api` and `db`, while the optional debugging tool is still documented in the model.
+
 Profiles let one Compose file include optional services without starting every optional tool by default. A debug database UI, mail catcher, metrics stack, or seed-data tool can live in the model and only start when requested.
 
 ```yaml
@@ -131,6 +154,13 @@ Without the `debug` profile, `api` and `db` can start as the normal stack. With 
 The mechanism is simple but the design question is important. Profiles are best for tools that support a workflow without being part of the core application. If the API always needs Redis to start, Redis is probably not optional. If a UI helps inspect the database during one debugging session, a profile keeps it available without making it everyone's default stack.
 
 ## Resetting Deliberately
+
+Compose reset commands are resource deletion choices, especially around whether named volumes should survive.
+
+
+![Diagram contrasting Compose state preservation with deliberate reset and optional profiles](/content-assets/articles/article-containers-orchestration-docker-compose-development-workflows/compose-reset-profiles.png)
+
+*A safe reset workflow names which state should survive and which state should be recreated.*
 
 Shutdown commands are storage decisions in disguise.
 
@@ -169,6 +199,10 @@ Compose works best when the file and the workflow agree. The model says what the
 ## What's Next
 
 The Docker module now has all the main boundaries: images, runtime settings, networking, storage, Compose resources, and development workflows. The final article uses those boundaries as a debugging map so a vague report like "Docker is broken" can turn into specific evidence.
+
+![Summary infographic for Docker Compose development workflow commands](/content-assets/articles/article-containers-orchestration-docker-compose-development-workflows/compose-workflows-summary.png)
+
+*The workflow summary separates startup, evidence, one-off work, optional profiles, and destructive cleanup.*
 
 ---
 

@@ -22,13 +22,15 @@ aliases:
 
 ## Job-Centric Mapping over Service Inventories
 
-Looking at a public cloud provider's product catalog for the first time can be an overwhelming experience. If you want to deploy a simple web application to Google Cloud, you are immediately confronted with a long, confusing list of brand names: Cloud Run, Compute Engine, Google Kubernetes Engine, Cloud SQL, Cloud Storage, Firestore, BigQuery, and Secret Manager. The natural temptation is to try to memorize what each product does, or attempt a mechanical, product-by-product translation from another cloud provider you already know.
+A GCP core services map is a practical routing guide from an application job to the managed service family that performs that job. Instead of learning product names as isolated facts, you first identify whether the system needs traffic entry, compute runtime, transactional storage, object storage, document state, analytics, credentials, monitoring, or deployment flow. The GCP service name becomes useful only after that job is clear.
+
+Looking at a public cloud provider's product catalog for the first time can be an overwhelming experience. If you want to deploy a simple web application to Google Cloud, you are immediately confronted with names such as Cloud Run, Compute Engine, Google Kubernetes Engine, Cloud SQL, Cloud Storage, Firestore, BigQuery, and Secret Manager. The natural temptation is to try to memorize what each product does, or attempt a mechanical, product-by-product translation from another cloud provider you already know.
 
 ![Start from the application job, then choose the service family that owns that job.](/content-assets/articles/article-cloud-providers-gcp-foundations-gcp-core-services-map/service-jobs-map.png)
 
 *The service map is easier to use when each product owns a clear application job.*
 
-Rather than trying to memorize arbitrary brand names, the key to mastering cloud architecture is to focus on the actual engineering job your application needs help with. In the physical world, your software requires processing power, a persistent place to save files, a structured database to record transactions, a secure safe to hold passwords, and a way for users to connect. Once you group cloud services around these core responsibilities, the product catalog transforms from a chaotic inventory into a logical map:
+Rather than trying to memorize arbitrary brand names, the key to mastering cloud architecture is to focus on the actual engineering job your application needs help with. Most applications need a request entry point, a runtime for code, a durable place for files, a structured database for business records, a protected credential store, and an evidence layer for logs and metrics. Once you group cloud services around these core responsibilities, the product catalog becomes a reviewable architecture map:
 
 | App Job | AWS Equivalent | Azure Equivalent | GCP Primary Service |
 | :--- | :--- | :--- | :--- |
@@ -43,7 +45,7 @@ By framing your architecture around these functional jobs before selecting servi
 
 ## Compute Choices and Responsibility
 
-Compute is the processing heart of your application. GCP offers three primary models for running your backend code:
+Compute is the runtime layer where application code receives CPU, memory, networking, identity, startup behavior, and logs. You can loosely think of each GCP compute choice as a different responsibility contract between your team and Google Cloud. GCP offers three primary models for running your backend code:
 
 *   **Virtual Machines (Compute Engine)**: Provides raw, virtualization-level control. You configure the virtual CPU cores, memory limits, and operating system kernels. This is a fit when you must manage custom OS kernels, run legacy stateful software, or require direct hardware access.
 *   **Kubernetes (Google Kubernetes Engine / GKE)**: Houses complex, microservice-based clusters. GKE gives you deep control over container orchestrations, service meshes, and shared cluster networking, but introduces significant administrative and configuration complexity.
@@ -55,7 +57,7 @@ For beginners, the best first question is not which product is most powerful. As
 
 ## Persistence and State: Relational vs. Object
 
-Once your compute layer is running, you must establish secure zones for your application's state. GCP divides persistence services by data shape and access pattern:
+Persistence is the part of the system that keeps state after a request or process ends. GCP divides persistence services by data shape and access pattern, so the first decision is whether the data behaves like relational records, file-like objects, document state, analytical history, or attached disk:
 
 *   **Relational Records (Cloud SQL)**: Manages transactional database engines like PostgreSQL, MySQL, and SQL Server. Cloud SQL takes over automated backups, cross-zone high availability replication, and kernel patching, while exposing standard SQL sockets to your application.
 *   **Object Storage (Cloud Storage)**: Stores unstructured binary files (such as customer receipts, images, or log archives) within regional Buckets. Data is accessed via HTTPS API calls rather than file system paths, enabling near-infinite horizontal scale.
@@ -67,7 +69,7 @@ This means disk write performance is affected by the machine type, disk type, di
 
 ## Service Identity and Metadata Tokens
 
-Securing application resources requires you to eliminate static credentials. Rather than hardcoding private keys or access tokens inside application configuration files, GCP runtimes can use an attached service account. Google client libraries usually discover this identity through Application Default Credentials and request short-lived tokens when the app calls Google APIs.
+Service identity is the runtime principal your application uses when it calls Google APIs. Rather than hardcoding private keys or access tokens inside application configuration files, GCP runtimes can use an attached service account. Google client libraries usually discover this identity through Application Default Credentials and request short-lived tokens when the app calls Google APIs.
 
 ![The runtime asks local metadata for a short-lived token instead of storing a static key.](/content-assets/articles/article-cloud-providers-gcp-foundations-gcp-core-services-map/imds-token-exchange.png)
 
@@ -102,7 +104,7 @@ flowchart TD
 
 ## Observability Signals and Release Operations
 
-To operate a production system, you must ensure that release flows and operational signals are cabled directly into your infrastructure map.
+Observability and release operations are the feedback layer that connects a deployed artifact to logs, metrics, traces, and rollout evidence. A production system is easier to operate when the service map shows not only where code runs, but also where images are stored, where logs land, and where release health is measured.
 
 *   **Artifact Registry**: Serves as your central repository for container images and language packages, acting as the bridge between build tools and compute environments.
 *   **Cloud Logging**: Aggregates structured logs emitted to standard output (`stdout`) and standard error (`stderr`) by your container engines. Logging parses JSON logs automatically to extract severity levels, making error tracing highly searchable.
@@ -112,7 +114,7 @@ By ensuring that your deployment pipeline builds container images directly into 
 
 ## Tracing a Single Request
 
-To verify your mental model, trace the physical flow of a single user request traversing your core GCP services:
+Tracing a single request is a way to test whether the service map describes a real runtime path. Follow one HTTPS call from public entry to compute, identity, state, secrets, logs, and cost signals:
 
 ```mermaid
 flowchart TD

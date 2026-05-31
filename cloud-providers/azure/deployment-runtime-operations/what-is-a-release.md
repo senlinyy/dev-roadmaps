@@ -12,262 +12,326 @@ aliases:
 
 ## Table of Contents
 
-1. [The Problem](#the-problem)
+1. [The Problem: The Deployment vs. Release Dissonance](#the-problem-the-deployment-vs-release-dissonance)
 2. [What Is a Release](#what-is-a-release)
-3. [Artifact](#artifact)
-4. [Runtime](#runtime)
-5. [Configuration](#configuration)
-6. [Traffic](#traffic)
-7. [Health](#health)
-8. [Rollback](#rollback)
-9. [Putting It All Together](#putting-it-all-together)
-10. [What's Next](#whats-next)
+3. [Declarative Slot Bicep and Routing CLI Previews](#declarative-slot-bicep-and-routing-cli-previews)
+4. [Automated Release Pipeline and Rollback Orchestration](#automated-release-pipeline-and-rollback-orchestration)
+5. [Under the Hood: ARR Routing Redirections and Cold-Start Warmups](#under-the-hood-arr-routing-redirections-and-cold-start-warmups)
+6. [The Artifact: Digest Accountability vs. Mutable Tag Hazards](#the-artifact-digest-accountability-vs-mutable-tag-hazards)
+7. [Configuration and Identity: Environment Leakages](#configuration-and-identity-environment-leakages)
+8. [Traffic and Health Gates](#traffic-and-health-gates)
+9. [Rollback Transactions](#rollback-transactions)
+10. [Putting It All Together](#putting-it-all-together)
+11. [What's Next](#whats-next)
 
-## The Problem
+## The Problem: The Deployment vs. Release Dissonance
 
-The build passed. The container image exists. The pull request is merged. The pipeline says the deployment succeeded.
+A deployment moves an artifact into a runtime; a release moves a verified runtime into the path of users. That distinction is the anchor for this whole module.
 
-Then production checkout fails.
+The continuous integration pipeline reports complete success.
+The application container image builds successfully, passing all local unit tests and lint checks.
+The pull request is merged, and the deployment pipeline registers a successful push to the target cloud hosting environment.
+Yet, the moment real customer traffic hits the production checkout endpoint, the portal crashes.
 
-- The image is correct, but the production runtime is missing `RECEIPTS_STORAGE_ACCOUNT`.
-- The app starts, but the health endpoint fails after it tries to connect to Azure SQL.
-- The candidate version works in a staging slot, but production traffic still reaches the old slot.
-- The new Container Apps revision receives 10 percent of traffic, fails real checkout requests, and nobody knows which older revision is the rollback target.
+Upon closer inspection, the operations team discovers that while the compiled code artifact is perfectly correct, the production runtime environment lacks the critical `RECEIPTS_STORAGE_ACCOUNT` environment variable.
+Alternatively, the application starts successfully, but the health check endpoint fails after it tries to establish a connection to the backend database.
+In other scenarios, the candidate version works flawlessly in a staging slot, but production traffic continues to route to the old slot due to a misconfigured traffic split.
+In serverless environments, the new revision receives a small percentage of traffic, returns database connection timeout errors, and the operations team cannot identify which older revision is the safe rollback target.
 
-This module is about the operating work around an Azure release. A deployment moves code into a place where it can run. A release is larger. It moves a known artifact, runtime settings, secret access, traffic, monitoring attention, and rollback responsibility. In Azure, that usually means naming the App Service slot, Container Apps revision, Function App package, VM image, or AKS deployment that changed, then naming the configuration, identity, traffic, health, and rollback target attached to that change.
-
-The beginner habit is simple: before users depend on a change, know what version is running, what values it receives, how traffic reaches it, how health will be judged, and how users return to a known working path if the release is bad.
+These scenarios illustrate the critical difference between a deployment and a release.
+A deployment is the technical process of moving compiled bytes, packages, or container images into a cloud runtime hosting environment where they can physically execute.
+A release is a much larger business event.
+It is the controlled movement of that running code into the path of live customer traffic, backed by correct configuration values, managed identity access, monitoring watch windows, and verified rollback targets.
+If your engineering team treats deployments and releases as the same action, you are exposed to silent production downtime.
 
 ## What Is a Release
 
-A release is the controlled movement of a change into a live system. The change may be application code, a container image, an App Service package, an environment variable, a Key Vault reference, a scaling setting, or a traffic split. The user does not care which file changed. The user cares whether checkout still works.
+A release is the controlled exposure of a specific artifact, configuration set, and runtime target to users.
+It behaves like an operational transaction: code, settings, traffic, evidence, and rollback state must move together.
+The change may be application code, a container image, an App Service package, an environment variable, a Key Vault reference, a scaling setting, or a traffic split.
+The user does not care which configuration file changed.
+The user cares exclusively whether the checkout workflow still functions correctly.
 
-![An infographic showing artifact, runtime, configuration, traffic, and health as parts of a release contract](/content-assets/articles/article-cloud-providers-azure-deployment-runtime-operations-mental-model/artifact-config-traffic-split.png)
+A successful cloud release requires aligning six distinct architectural promises.
+If an outage occurs, these separate promises allow you to quickly identify whether the code changed, the runtime environment changed, the configuration changed, or only the traffic path changed:
 
-*A release is the moment artifact, runtime, config, traffic, and health checks line up around the same version.*
+| Promise Name | Question It Answers | System Impact |
+| --- | --- | --- |
+| Artifact | Which exact version are we trying to run? | Governs compiled code safety and container security. |
+| Runtime | Where is that version executing? | Determines physical host regions, compute limits, and boundaries. |
+| Configuration | What values and secret access does it receive? | Governs environment variables, database strings, and Entra permissions. |
+| Traffic | Which users can reach the new version now? | Determines traffic weight, slot allocation, and path routing. |
+| Evidence | What proves the release is healthy or unsafe? | Governs health endpoints, telemetry traces, and latency metrics. |
+| Rollback | Which known working path can users return to? | Determines the rapid recovery path to restore service. |
 
-That is why "deployment succeeded" gives incomplete evidence. A deployment can succeed while the release fails. Azure accepted the package or image. The app may even be running. But the runtime can still be wrong for production: wrong secret reference, wrong identity, wrong database, wrong traffic target, wrong health path, or no rollback plan.
+## Declarative Slot Bicep and Routing CLI Previews
 
-Think of a release as six connected promises:
+A deployment slot is a separate Web App runtime target that shares the same App Service app boundary while holding its own hostname, settings, and warmed process.
+To establish a resilient release boundary inside Azure, we deploy an App Service App with a dedicated staging slot.
+The Bicep configuration below declares a web application and a staging slot.
+It configures `slotSetting` to ensure that connection strings remain sticky to their specific slot environment during deployment swaps, preventing staging code from talking to production databases.
 
-| Promise | Question it answers |
-| --- | --- |
-| Artifact | Which exact version are we trying to run? |
-| Runtime | Where is that version running? |
-| Configuration | What values and secret access does it receive? |
-| Traffic | Which users can reach it now? |
-| Evidence | What proves the release is healthy or unsafe? |
-| Rollback | Which known working path can users return to? |
+```bicep
+resource webApp 'Microsoft.Web/sites@2022-09-01' = {
+  name: 'app-ecommerce-prod'
+  location: resourceGroup().location
+  kind: 'app'
+  properties: {
+    serverFarmId: '/subscriptions/.../serverfarms/asp-ecommerce'
+  }
+}
 
-Those promises are separate on purpose. If checkout breaks after a release, you need to know whether the code changed, the runtime changed, the config changed, or only the traffic path changed.
+resource webAppConfig 'Microsoft.Web/sites/config@2022-09-01' = {
+  parent: webApp
+  name: 'web'
+  properties: {
+    appSettings: [
+      {
+        name: 'DB_CONNECTION'
+        value: 'Server=tcp:sql-prod.database.windows.net...'
+      }
+    ]
+  }
+}
 
-```mermaid
-flowchart LR
-    Build["Build artifact"] --> Runtime["Azure runtime"]
-    Runtime --> Config["Settings and secrets"]
-    Config --> Candidate["Candidate version"]
-    Candidate --> Traffic["User traffic"]
-    Traffic --> Evidence["Health evidence"]
-    Evidence --> Decision["Keep or roll back"]
+resource stagingSlot 'Microsoft.Web/sites/slots@2022-09-01' = {
+  parent: webApp
+  name: 'staging'
+  location: resourceGroup().location
+  properties: {
+    serverFarmId: '/subscriptions/.../serverfarms/asp-ecommerce'
+  }
+}
+
+resource stagingConfig 'Microsoft.Web/sites/slots/config@2022-09-01' = {
+  parent: stagingSlot
+  name: 'web'
+  properties: {
+    appSettings: [
+      {
+        name: 'DB_CONNECTION'
+        value: 'Server=tcp:sql-staging.database.windows.net...'
+      }
+    ]
+  }
+}
+
+resource stickySettings 'Microsoft.Web/sites/config@2022-09-01' = {
+  parent: webApp
+  name: 'slotConfigNames'
+  properties: {
+    appSettingNames: [
+      'DB_CONNECTION'
+    ]
+  }
+}
 ```
 
-The release is the whole path, not one box in the path.
+Once the code is deployed and verified in the staging slot, the release pipeline triggers a slot swap.
+The Azure CLI commands below check slot health, perform the swap, and verify production.
 
-## Artifact
+```plain
+az webapp deployment slot list \
+  --resource-group rg-ecommerce-prod \
+  --name app-ecommerce-prod \
+  --query "[].{Name:name, Status:status}" \
+  --output table
 
-The artifact is the thing you built and intend to run. For App Service, it might be a deployed package or container image. For Azure Container Apps, it is usually a container image reference. For a beginner team, the exact artifact should be visible in the release record.
-
-This matters because names can lie. A tag like `latest` or `prod` may point to different images at different times. A release record that says "deployed latest" is weaker than one that records a digest, build number, commit SHA, or immutable version.
-
-For `devpolaris-orders-api`, useful artifact evidence might be:
-
-```text
-service: devpolaris-orders-api
-version: checkout-2026-05-16.4
-commit: 91df3a8
-image: acrdevpolaris.azurecr.io/orders-api@sha256:...
-release owner: platform-api
+az webapp deployment slot swap \
+  --resource-group rg-ecommerce-prod \
+  --name app-ecommerce-prod \
+  --slot staging \
+  --target-slot production
 ```
 
-This does not make the release safe by itself. It makes the version knowable. When you later compare the old and new behavior, you are not guessing which code ran.
+## Automated Release Pipeline and Rollback Orchestration
 
-:::expand[Design: Why Mutable Tags Exist Despite Their Risks]{kind="design"}
-In modern container operations, referencing mutable image tags like `:latest` or `:prod` in production is widely considered an anti-pattern. Yet, container registries and orchestration engines continue to support mutable tags as standard features. Differentiating the design pressure that created mutable tags from the operational safety that demands immutable digests reveals a fundamental tradeoff between developer convenience and runtime predictability.
+An automated release pipeline is the executable checklist that promotes, checks, shifts traffic, watches telemetry, and rolls back when conditions fail. To manage the execution of our release contract at scale, we translate our steps into an automated pipeline.
+The GitHub Actions workflow configuration below demonstrates a declarative deployment to the staging slot, an integration sanity check, a slot swap execution, a five-minute health monitoring watch window, and an automatic rollback triggered by active Azure Monitor alerts.
 
-Mutable tags exist to simplify early-stage development loops. By utilizing a stable, reusable tag like `:latest`, developers can push updated container images to the registry without needing to modify, compile, and re-commit Bicep templates or Kubernetes manifests on every single change. The runtime hosting environment simply queries the registry and pulls whichever bytes are currently mapped to that tag, making continuous integration fast and lightweight.
+```yaml
+name: Production Release Pipeline
 
-However, this simplicity introduces severe scale-out risks in production. A container registry is a mutable directory: anyone with write access can overwrite the `:latest` tag at any moment. If an Azure Container App or AKS cluster scales out to handle a traffic surge after the tag is overwritten but before a formal release, the newly provisioned replicas will pull the new image, while existing replicas continue to run the old image. This results in mixed-version replicas serving production traffic concurrently.
+on:
+  push:
+    branches: [ main ]
 
-This risk is identical on AWS. In Amazon ECS or EKS, referencing mutable tags in your task definitions will lead to replica skew during auto-scaling sweeps on Fargate or EC2. The correct design pattern in both clouds is to restrict mutable tags strictly to local development, while utilizing immutable, Git-SHA-based tags or explicit SHA-256 image digests for all production releases.
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout Source Code
+      uses: actions/checkout@v3
 
-The top-down diagram below compares mutable convenience with immutable safety:
+    - name: Azure CLI Login
+      uses: azure/login@v1
+      with:
+        creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+    - name: Deploy Code to Staging Slot
+      uses: azure/webapps-deploy@v2
+      with:
+        app-name: app-ecommerce-prod
+        slot-name: staging
+        package: ./build-artifacts.zip
+
+    - name: Run Integration Warmup Checks
+      run: |
+        curl --fail --silent --retry 3 \
+          https://app-ecommerce-prod-staging.azurewebsites.net/health
+
+    - name: Swap Staging Slot to Production
+      run: |
+        az webapp deployment slot swap \
+          --resource-group rg-ecommerce-prod \
+          --name app-ecommerce-prod \
+          --slot staging \
+          --target-slot production
+
+    - name: Active Telemetry Watch Window
+      run: |
+        echo "Starting 5-minute production monitoring watch window..."
+        sleep 300
+        ALERT_STATUS=$(az monitor app-insights alert show-status \
+          --resource-group rg-ecommerce-prod \
+          --app app-ecommerce-prod \
+          --query "status")
+        if [ "$ALERT_STATUS" == "Fired" ]; then
+          echo "🔴 ALERT FIRED: Triggering automated rollback!"
+          exit 1
+        fi
+
+    - name: Handle Automated Rollback Swap
+      if: failure()
+      run: |
+        echo "Reverting App Service ARR routing pointers back to staging..."
+        az webapp deployment slot swap \
+          --resource-group rg-ecommerce-prod \
+          --name app-ecommerce-prod \
+          --slot staging \
+          --target-slot production
+```
+
+## Under the Hood: ARR Routing Redirections and Cold-Start Warmups
+
+A slot swap functions as a routing-pointer update between already-running slot targets, not as a file copy between machines.
+Understanding how Azure App Service executes a zero-downtime slot swap requires looking beneath the high-level CLI commands at Layer 7 proxy mechanics and IIS host virtualization.
+App Service runs behind a centralized frontend proxy network hosting Application Request Routing (ARR) instances.
+ARR acts as a high-performance Layer 7 load balancer and reverse proxy that intercepts all incoming HTTP requests targeting your application's domain.
+
+When you trigger a slot swap, the Azure Web App orchestrator does not copy physical code files, assembly binaries, or container layers between the staging and production virtual hosts.
+Instead, the orchestrator executes a virtual pointer swap within the ARR routing tables.
+ARR updates its hostname destination mappings.
+Requests targeting `app-ecommerce-prod.azurewebsites.net` are redirected to the worker instances hosting the staging codebase, while requests for the staging URL are redirected to the old production instances.
+Because this routing change occurs at the proxy configuration layer, the network connection cut-over takes less than a second and does not drop active TCP packets.
 
 ```mermaid
 flowchart TD
-    subgraph Mutable["Mutable Tag (myapp:latest)"]
-        RegistryA["Registry: latest maps to Version 2"]
-        ScaleOutA["Scale Event: Pod 2 Boots"] -->|"Pulls latest"| RegistryA
-        Pod1["Pod 1 runs Version 1"]
-        Pod2["Pod 2 runs Version 2"]
-        Pod1 ---|"Mixed version skew!"| Pod2
+    subgraph UserRequest["Internet Users Access"]
+        HTTP["HTTP Request: app-ecommerce-prod.azurewebsites.net"] --> ARR["Application Request Routing (ARR) Proxy"]
     end
 
-    subgraph Immutable["Immutable Tag (myapp:git-a3f82b)"]
-        RegistryB["Registry: git-a3f82b maps to Version 1"]
-        ScaleOutB["Scale Event: Pod 2 Boots"] -->|"Pulls git-a3f82b"| RegistryB
-        Pod3["Pod 3 runs Version 1"]
-        Pod4["Pod 4 runs Version 1"]
-        Pod3 ---|"Guaranteed consistency!"| Pod4
+    subgraph ARRVirtualRouting["ARR Routing Pointers"]
+        ARR -.->|"Default Path"| ProdVM["Production Host Worker (Old Version 1)"]
+        ARR ==>|"Slot Swap Redirection"| StagingVM["Staging Host Worker (New Version 2)"]
+    end
+
+    subgraph WarmUpSequence["Pre-Swap Warmup Protocol"]
+        Orchestrator["Azure App Service Orchestrator"] -->|"1. Injects Production App Settings"| StagingVM
+        Orchestrator -->|"2. Polls Health Endpoint"| StagingVM
+        StagingVM -->|"3. Loads Assemblies into RAM"| DbPool["Warm Database Connections"]
+        Orchestrator -->|"4. Triggers ARR Swap Pointer"| ARR
     end
 ```
 
-**Rule of thumb:** Treat mutable tags like local scratch space. For all production environments, enforce a strict deployment pipeline policy that tags images with unique git commit SHAs and references the immutable digest, guaranteeing that all running replicas remain perfectly synchronized.
-:::
+To prevent users from experiencing high response latencies or timeout errors during this cut-over, the App Service orchestrator enforces a strict cold-start warm-up protocol before altering the ARR routing tables.
+First, the orchestrator injects production app settings and connection strings into the staging worker environment.
+The staging application process is automatically restarted to ingest these environment variables.
 
-## Runtime
+Next, the orchestrator monitors local warm-up requests.
+It sends HTTP requests to the local staging endpoints (following the rules declared in your web application's `<applicationInitialization>` configurations).
+This forces the staging guest operating system kernel to JIT-compile compiled C# assemblies, initialize Node.js module maps, load large static libraries into physical RAM, and establish connection pools with database clusters.
+Only after these warm-up probes return successful HTTP 200 responses does the orchestrator signal to the ARR proxy network to swap the routing pointers, guaranteeing that the first customer request hits a pre-warmed host.
 
-The runtime is where the artifact actually runs. In this roadmap, the main Azure runtime examples are App Service, Container Apps, Functions, virtual machines, and AKS. This module focuses on App Service and Container Apps because they have common safe-rollout handles: deployment slots and revisions.
+## The Artifact: Digest Accountability vs. Mutable Tag Hazards
 
-Runtime matters because the same artifact can behave differently in different places. A staging slot can have different settings from production. A Container Apps revision can receive no traffic, 10 percent traffic, or all traffic. A health check can be configured for one runtime but absent in another.
+A release artifact is the immutable package or image digest the platform should run everywhere for that version.
+The foundation of every secure release is the compiled artifact.
+In containerized cloud architectures, the most common deployment mistake is referencing mutable container tags like `:latest` or `:prod` in your release configurations.
+Because a container registry is a mutable directory, anyone with write permissions can overwrite the `:latest` tag at any time.
 
-The runtime question asks what production is actually running:
+This introduces severe replica skew risks during scaling events.
+If your Azure Container App environment or AKS cluster scales out to handle a traffic surge after the `:latest` tag is overwritten but before a formal release is coordinated, newly booted replicas will pull the new image bytes.
+Meanwhile, existing replicas continue to run the old image.
+This results in mixed-version replicas serving production traffic concurrently.
 
-| Runtime evidence | Why it matters |
-| --- | --- |
-| Resource name and resource group | Identifies the exact Azure resource being changed. |
-| Slot or revision | Identifies which candidate is running. |
-| Region | Explains latency, dependency, and rollout boundary. |
-| Identity | Determines what secrets and Azure resources the app can access. |
-| Scale and health settings | Determines whether the runtime can serve and stay in rotation. |
+To guarantee release predictability, all production pipelines must reference immutable image digests.
+Every container image has a unique SHA-256 digest (e.g., `orders-api@sha256:...`) which is cryptographically generated from the image's layers.
+By declaring the explicit digest in your Bicep templates, you ensure that every scaled instance is physically identical, making your releases perfectly predictable.
 
-If the release record cannot name the runtime target, the team cannot safely compare staging, production, old revision, and new revision behavior.
+## Configuration and Identity: Environment Leakages
 
-## Configuration
+Configuration and identity are the runtime inputs that tell the same artifact which databases, vaults, feature flags, and permissions belong to its environment.
+Configuration variables and access secrets govern how your code behaves within a chosen environment scope.
+A common release failure mode is environment leakage, where a candidate codebase running in a staging environment connects to production databases or caches due to shared configuration files.
 
-Configuration is the set of values the runtime gives the app when it starts or handles work. Database server names, storage account names, feature flags, telemetry connection strings, queue names, and external API endpoints are configuration. Secrets are sensitive configuration values or references to them.
+To prevent this, Azure App Service utilizes slot-level sticky settings.
+By marking an environment setting or connection string as a slot setting, you instruct the ARM configuration layer to pin that value to its physical slot.
+During a slot swap, while the code and routing pointers are swapped, the sticky settings remain unchanged, ensuring that the staging host continues to talk to the staging database while the newly promoted production host inherits the production database connection.
 
-Configuration can break a good artifact. This is one of the most common release surprises. The code passed tests. The image starts. The app fails only in production because the production value is different.
+Furthermore, configuration safety depends on identity integration.
+Rather than embedding raw database passwords or Key Vault secrets directly in your configuration files, your release pipeline must associate the runtime compute with a managed identity.
+The compute identity must be granted explicit RBAC scopes on Key Vault, allowing the application to resolve secret references dynamically at runtime without storing passwords on disk.
 
-For the orders API, configuration might include:
+## Traffic and Health Gates
 
-```text
-ORDERS_DB_SERVER=sql-devpolaris-prod.database.windows.net
-ORDERS_DB_NAME=orders
-RECEIPTS_STORAGE_ACCOUNT=stordersprod
-APPINSIGHTS_CONNECTION_STRING=@Microsoft.KeyVault(...)
-CHECKOUT_PAYMENTS_ENABLED=true
-```
+Traffic and health gates are the routing weights and telemetry checks that decide how much production traffic a candidate can receive.
+Managing traffic allocation is the core mechanism for reducing the blast radius of a new release.
+Traditional release methods cut over 100% of traffic instantly, exposing all active users to potential bugs.
+Modern Azure rollouts utilize dynamic traffic gates.
 
-The release question is not "does the setting exist somewhere?" It is "does the candidate version receive the values it needs, and can its identity read the secrets it references?"
+Azure Container Apps support versioned revisions, allowing you to split incoming HTTP requests by percentage.
+You can route 90% of traffic to the stable, historical revision and 10% to the new candidate revision.
+This canary testing exposes the new code to real-world concurrency, dependency timing, and edge cases under a controlled scope.
 
-That identity boundary matters. A Key Vault reference in an App Service setting depends on the app's managed identity having permission to read the secret. A Container Apps secret can exist while the app points at the wrong secret name or revision. Configuration and identity are part of release safety.
+During this traffic watch window, you must monitor health evidence rather than hoping for success.
+This watch window utilizes Azure Monitor to actively track server error rates, database deadlock traces, and 95th-percentile response latencies.
+Only when these telemetry metrics remain clean and stable for a designated period (such as fifteen minutes) should your pipeline promote the new version to 100% traffic.
 
-## Traffic
+## Rollback Transactions
 
-Traffic movement is the moment users start depending on the candidate version. That is the risky boundary.
+A rollback transaction is the coordinated reversal of traffic, code, configuration, and secret references to a known working baseline.
+A rollback is the emergency procedure of returning your active users to a known, working historical state.
+A common mistake during an incident is executing a code-only rollback while leaving new configuration settings active in production.
+If the older codebase lacks the logic to parse the new configuration schema, the system will crash.
 
-Before traffic moves, a candidate can look healthy under direct tests. After traffic moves, real users bring real data, real concurrency, real dependency timing, and real edge cases. Safe rollout features exist because production traffic should not be the first meaningful test.
-
-Two Azure examples matter in this module:
-
-| Runtime | Rollout handle | Beginner meaning |
-| --- | --- | --- |
-| App Service | Deployment slot | A separate live app environment that can be tested and swapped with production. |
-| Container Apps | Revision | A versioned snapshot of revision-scope settings that can receive a traffic percentage. |
-
-Traffic should move deliberately. If the team sends 10 percent of traffic to a new revision, the release record should say that. If the team swaps a staging slot into production, the release record should say which slot, which settings are sticky, and how to reverse the path.
-
-## Health
-
-Health is evidence, not hope. A release is not healthy because the deploy command finished. It is healthy when the app can serve the user path it promises.
-
-Health has layers:
-
-| Health layer | What it proves | What it does not prove |
-| --- | --- | --- |
-| Process starts | The runtime can start the app. | Checkout works. |
-| Health endpoint | The app can answer a known path. | Every dependency and user path works. |
-| Smoke test | A chosen workflow works after release. | Rare user paths are safe. |
-| Real traffic metrics | Users are succeeding at normal rates. | Root cause is known. |
-| Logs and traces | Specific failures can be explained. | The whole service is healthy. |
-
-The previous observability module taught logs, metrics, traces, and alerts. A release uses those signals during a watch window: the period after traffic moves when the team actively checks whether the release is safe to keep.
-
-## Rollback
-
-Rollback means returning users to a known working path. That path might be the previous App Service slot, the older Container Apps revision, a previous app setting value, a disabled feature flag, or an older package.
-
-![An infographic showing a health check gate deciding whether a new version continues or rolls back](/content-assets/articles/article-cloud-providers-azure-deployment-runtime-operations-mental-model/health-rollback-gate.png)
-
-*Rollback decisions are safer when they are driven by health evidence instead of guesswork.*
-
-Rollback works when the team knows what to return to and what else changed. A release that changes both code and configuration may need both restored. A release that changed a database schema may not be safely reversible without a data plan. A release that changed a Key Vault secret reference may require identity and secret checks.
-
-A useful rollback note is concrete:
-
-```text
-Rollback target:
-  App Service: swap production back to slot `blue`
-  Container Apps: route 100 percent traffic to revision `orders-api--v27`
-  Config: restore RECEIPTS_STORAGE_ACCOUNT=stordersprod
-  Evidence: checkout success rate normal for 15 minutes
-```
-
-Sometimes fixing forward is faster and safer than rolling back. The decision should be based on evidence and a known recovery path, not panic.
-
-:::expand[Pitfall: Rollback Without Configuration Cleanup]{kind="pitfall"}
-A dangerous release mistake is executing a "code-only" rollback while leaving new or modified configuration settings active in production. Imagine a release that deploys a new container image along with a modified environment variable `PAYMENT_GATEWAY_URL=https://api.stripe.com` to replace a legacy PayPal endpoint. The release fails smoke tests, and the team quickly rolls back by routing 100% of traffic back to the previous Container Apps revision or App Service slot. However, because environment settings are often shared at the application resource scope, the old code remains cabled to the new Stripe URL—which it has no logic to handle—causing immediate system crashes.
-
-A complete rollback must treat code, configuration, and secrets as a unified transaction. If you swap slots or revisions back to an older version, you must audit whether your environment variables, Key Vault secret references, database schemas, and feature flags must also be restored to their previous states. Leaving "dirty" or orphaned configurations active in production after a code rollback leads to subtle runtime bugs that are highly difficult to diagnose because the codebase itself appears to be in a known working historical snapshot.
-
-This identical mismatch occurs on AWS. If you update an AWS Secrets Manager credential or an AWS Systems Manager (SSM) Parameter Store value during a release, and subsequently roll back your ECS Task Definition or Lambda function to a previous version, the older code will ingest the new secret structure. If the older code cannot parse the new format, the system will experience runtime exceptions.
-
-The top-down diagram below illustrates how an incomplete configuration rollback creates mismatched state:
-
-```mermaid
-flowchart TD
-    subgraph SwappedCode["1. Application Code Swapped Back (Rollback)"]
-        Active["Active Compute (Old Revision)"] -->|"Reads Configuration"| ConfigStore["Azure App Service Settings"]
-    end
-
-    subgraph DirtyConfig["2. Configuration Left Dirty (Failure)"]
-        ConfigStore ---|"Orphaned Setting"| Dirty["PAYMENT_GATEWAY_URL=stripe (New Value)"]
-    end
-
-    Active -->|"Attempts to parse Stripe using PayPal logic"| Crash["🔴 Runtime Crash: InvalidPaymentFormat"]
-```
-
-**Rule of thumb:** Never treat a rollback as a simple code-only swap. Document your rollback sequences as unified transactions, and verify that environment variables, Key Vault references, and feature flags are reverted alongside your application code.
-:::
+A complete rollback must treat code, configuration, and secret references as a single, unified transaction.
+If you swap slots or revisions back to a previous state, you must verify that all environment variables, Key Vault references, and database schemas are reverted alongside the compiled binaries.
+Documenting and dry-running these rollback sequences beforehand ensures that your team can restore system availability without panic or guesswork.
 
 ## Putting It All Together
 
-Return to the checkout release.
+A successful release requires coordinating multiple control points to transition code safely into production.
 
-- The passing build was only artifact evidence.
-- The runtime had to prove which slot or revision was actually running.
-- Configuration had to prove the candidate received the right settings and secret access.
-- Traffic had to move deliberately, not accidentally.
-- Health had to be judged from endpoints, smoke tests, metrics, logs, and traces.
-- Rollback had to name a known working path before the release became stressful.
-
-The release is the operating event around the deploy. When you can name each part, Azure rollout tools stop feeling like product trivia and start feeling like control points.
+* **Release Contract**: Define a release as the alignment of artifact, runtime, configuration, traffic, health, and rollback controls, rather than a simple CI/CD build.
+* **Cold-Start Warmups**: Leverage App Service slot warmups and Application Request Routing (ARR) redirections to execute zero-downtime VIP swaps.
+* **Immutable Digests**: Enforce a strict policy that references SHA-256 digests in production, eliminating the auto-scaling replica skew risks of mutable tags.
+* **Sticky Configurations**: Apply slot-level sticky settings to prevent environment leakage, ensuring that staging and production boundaries remain separate during swaps.
+* **Canary Splits**: Utilize Container App revision splits to expose new candidates to a small percentage of real-world traffic before full promotion.
+* **Unified Rollbacks**: Treat rollbacks as complete transactions that revert code, configurations, and secrets together to a known working state.
 
 ## What's Next
 
-The next article focuses on those control points. It explains how App Service deployment slots and Container Apps revisions help a team test a candidate version, move traffic, and recover from a bad rollout.
-
-![An infographic showing a release runtime contract across artifact, configuration, traffic, health, rollback, and runtime](/content-assets/articles/article-cloud-providers-azure-deployment-runtime-operations-mental-model/release-runtime-contract.png)
-
-*Use this as the release contract: a production change is the artifact plus its configuration, traffic exposure, health evidence, and rollback path, not just a build number.*
-
+Now that we have established the operational mental model of a release contract, we will explore the configuration controls.
+In the next chapter, we will explore Configuration and Secrets.
+We will examine how Azure App Configuration and Key Vault work under the hood to manage dynamic environment variables, rotate secret vaults, and enforce security policies.
 
 ---
 
 **References**
 
-- [Set up staging environments in Azure App Service](https://learn.microsoft.com/en-us/azure/app-service/deploy-staging-slots)
-- [Application lifecycle management in Azure Container Apps](https://learn.microsoft.com/en-us/azure/container-apps/application-lifecycle-management)
-- [Revisions in Azure Container Apps](https://learn.microsoft.com/en-us/azure/container-apps/revisions)
-- [Configure an App Service app](https://learn.microsoft.com/en-us/azure/app-service/configure-common)
-- [Azure Monitor alerts overview](https://learn.microsoft.com/en-us/azure/azure-monitor/alerts/alerts-overview)
+* [Set up staging environments in Azure App Service](https://learn.microsoft.com/en-us/azure/app-service/deploy-staging-slots) - Official staging slots overview.
+* [Application lifecycle management in Azure Container Apps](https://learn.microsoft.com/en-us/azure/container-apps/application-lifecycle-management) - Guide to revision boundaries.
+* [Revisions in Azure Container Apps](https://learn.microsoft.com/en-us/azure/container-apps/revisions) - Technical details on canary traffic splits.
+* [Configure an App Service app](https://learn.microsoft.com/en-us/azure/app-service/configure-common) - Guide to slot sticky settings and configurations.
+* [Azure Monitor alerts overview](https://learn.microsoft.com/en-us/azure/azure-monitor/alerts/alerts-overview) - Reference for release watch window metrics.

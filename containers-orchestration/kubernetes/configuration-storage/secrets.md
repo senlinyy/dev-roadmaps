@@ -41,7 +41,7 @@ A Secret is not a complete secret-management system by itself. It is an API obje
 
 ## Creating an Opaque Secret Manifest
 
-The most common Secret type for application credentials is `Opaque`. Opaque means Kubernetes does not assign special meaning to the keys. Your application and your team decide what `DATABASE_URL` and `WEBHOOK_SIGNING_KEY` mean.
+An Opaque Secret is the generic Secret type for application-defined sensitive strings. Kubernetes stores the keys and values, but it does not interpret what those keys mean. Your application and your team decide that `DATABASE_URL` is a database connection string and `WEBHOOK_SIGNING_KEY` is the value used to verify webhook callbacks.
 
 For GitOps-style review, teams often avoid committing real Secret values. The manifest below shows the shape only. In a real production repository, your sealed secret tool, external secrets operator, or CI secret injection process would provide the actual data.
 
@@ -70,7 +70,9 @@ That output is why you should not treat base64 as protection. The protection com
 
 ## Passing Secret Values to the Container
 
-A Secret can be exposed as environment variables or mounted as files. Environment variables are simple for many application frameworks because the code already reads `process.env.DATABASE_URL`. The cost is that the value becomes part of the process environment, so you need to be careful with debug dumps and crash reports.
+A Secret can reach a container as environment variables or as mounted files. Environment variables are simple for many application frameworks because the code already reads `process.env.DATABASE_URL`.
+
+Example: the orders API can read `DATABASE_URL` from `process.env`, while Kubernetes fills that variable from `orders-api-secrets`. The cost is that the value becomes part of the process environment, so you need to be careful with debug dumps and crash reports.
 
 ```yaml
 apiVersion: apps/v1
@@ -175,7 +177,9 @@ The `DATA` column says there is one key, but the Deployment expects two. Add the
 
 ## RBAC and Namespace Risk
 
-The most important security detail is easy to miss: anyone who can create a Pod in a namespace may be able to mount Secrets in that namespace, depending on admission controls and policies. Secret access includes direct reads such as `kubectl get secret` and workload scheduling that asks Kubernetes to inject the Secret.
+RBAC is the Kubernetes permission system that controls who can read or change API objects. For Secrets, the most important security detail is easy to miss: anyone who can create a Pod in a namespace may be able to mount Secrets in that namespace, depending on admission controls and policies.
+
+Example: a user who cannot run `kubectl get secret orders-api-secrets` might still create a Pod that references that Secret and prints the value, unless policy blocks that path. Secret access includes direct reads such as `kubectl get secret` and workload scheduling that asks Kubernetes to inject the Secret.
 
 For `devpolaris-orders-api`, the service account that deploys staging should not automatically control production. The namespace split helps, but RBAC must match it.
 
@@ -222,7 +226,9 @@ Diagnose both sides. Check that the Secret contains the new credential, that the
 
 ## When to Use an External Secret Store
 
-Kubernetes Secrets are useful, but many production teams connect them to an external secret store such as a cloud secret manager, Vault, or a managed platform feature. The external system becomes the source of truth, and Kubernetes receives short-lived or synchronized material for Pods.
+An external secret store is a dedicated system for storing, rotating, auditing, and delivering credentials outside the Kubernetes API. Kubernetes Secrets are useful, but many production teams connect them to a cloud secret manager, Vault, or a managed platform feature.
+
+Example: the production database password can live in a cloud secret manager, while Kubernetes receives only the synchronized or short-lived material needed by Pods.
 
 The tradeoff is operational complexity. External secret systems add controllers, identity wiring, network paths, and failure modes. They also give you stronger audit trails, centralized rotation, and less pressure to store long-lived credentials directly in cluster state.
 
@@ -237,7 +243,9 @@ For `devpolaris-orders-api`, a Kubernetes Secret is enough to learn the mechanic
 
 ## Preventing Secret Values from Escaping
 
-The Secret object is one part of the secret's life. After Kubernetes injects the value, the application can still leak it through logs, errors, metrics labels, crash dumps, or support bundles. A safe Secret pattern includes Kubernetes YAML and application behavior.
+A Secret leak happens when a sensitive value leaves the narrow path where it is needed. Kubernetes can deliver the value to the container, but after that the application can still expose it through logs, errors, metrics labels, crash dumps, or support bundles.
+
+The Secret object is one part of the secret's life. A safe Secret pattern includes Kubernetes YAML and application behavior.
 
 For `devpolaris-orders-api`, a startup summary should say whether a secret is present, never what the secret is. That is enough for diagnostics and safe for logs.
 
@@ -258,7 +266,7 @@ The same caution applies to `kubectl` commands. Use `kubectl describe secret` to
 
 ## Separating Secrets by Purpose
 
-A single large Secret named `app-secrets` is easy at first and painful later. Every container that needs one key may receive many unrelated keys. Every rotation looks risky because the object holds several credentials with different owners and lifecycles.
+Separating Secrets by purpose means grouping credentials by the job they perform and the people or systems that rotate them. A single large Secret named `app-secrets` is easy at first and painful later. Every container that needs one key may receive many unrelated keys. Every rotation looks risky because the object holds several credentials with different owners and lifecycles.
 
 Split Secrets by purpose when the values have different blast radius or rotation schedules. `devpolaris-orders-api` might use one Secret for database access and another for webhook signing.
 

@@ -20,6 +20,10 @@ id: article-containers-orchestration-docker-image-layers-and-cache
 
 ## The Cache Invalidation Bottleneck
 
+Docker layer cache is the build engine's reuse mechanism for previously committed image layers.
+
+In plain terms, the cache is Docker remembering the result of earlier build steps. If the inputs for a step have not changed, Docker can reuse the old layer instead of running the step again.
+
 When you compile a software application locally, compilation tools typically use incremental building to speed up the loop. If you modify a single line of application source code, the compiler rebuilds only the affected file, reusing previously compiled package caches and library binaries. 
 
 In a containerized build, this incremental process is governed by a layer-caching engine.
@@ -41,6 +45,15 @@ The delay does not occur because the package registry is slow or the host CPU is
 To prevent this bottleneck, you must design your Dockerfiles around layer caching rules. This requires understanding how the OverlayFS storage driver mounts read-only layers under the hood, and how to structure instructions to maximize cache reuse.
 
 ## OverlayFS Stack Mechanics
+
+OverlayFS is the Linux filesystem driver Docker uses to present many read-only image directories plus one writable container directory as one merged filesystem view.
+
+
+![Stack diagram showing Docker image layers, a writable container layer, and the merged filesystem view](/content-assets/articles/article-containers-orchestration-docker-image-layers-and-cache/overlayfs-layer-stack.png)
+
+*The process sees one filesystem, while Docker stores read-only layers plus a writable top layer.*
+
+A filesystem driver is kernel code that decides how file paths appear to a process. OverlayFS lets Docker show `/usr/src/app` as one normal directory even when the files actually come from several stacked layer directories on the host.
 
 An image is not a single, unified block of disk storage. An image is a logical collection of independent, read-only directory layers. When the build engine compiles an image, each instruction that modifies the filesystem (such as `RUN` or `COPY`) creates a new layer containing only the specific files added or modified during that step.
 
@@ -82,6 +95,15 @@ Ten containers running the same image use the exact same `lowerdir` stack, creat
 
 ## The Caching Rules Engine
 
+Docker's caching rules engine is the build-time decision system that decides whether an instruction can reuse a prior layer or must execute again.
+
+
+![Diagram showing Docker cache invalidation cascading from an earlier instruction to downstream rebuild work](/content-assets/articles/article-containers-orchestration-docker-image-layers-and-cache/cache-invalidation-chain.png)
+
+*Cache invalidation cascades downward, so stable expensive work should happen before frequently changing source code.*
+
+Example: if `COPY package*.json ./` sees the same `package.json` and `package-lock.json` bytes as the previous build, Docker can reuse the cached dependency layer. If one byte changes in either file, Docker must rebuild that step and every later step.
+
 When you execute a new build run, the engine checks if it can reuse existing image layers instead of executing instructions from scratch. This evaluation is driven by the caching rules engine, which runs different validation checks depending on the instruction type:
 
 * **Metadata-Only Instructions**: Instructions like `ENV`, `WORKDIR`, `USER`, or `EXPOSE` modify only the image manifest JSON file, not the filesystem. The engine validates the cache simply by comparing the string arguments. If the arguments match the previous build record, the cache is preserved.
@@ -93,6 +115,8 @@ The crucial cache invalidation rule is that **cache invalidation is a cascading 
 As soon as a single build step fails the cache validation check, the engine permanently discards the cache for that instruction and **every subsequent instruction in the Dockerfile**. Even if the downstream commands are identical and have not changed, the engine is forced to execute them in new intermediate scratch containers to maintain filesystem consistency.
 
 ## Optimizing the Instruction Stack
+
+An optimized instruction stack orders stable inputs before volatile source files so expensive dependency layers survive ordinary code edits.
 
 To exploit these caching rules and build fast, reproducible images, you must order your Dockerfile instructions from the **most stable** to the **most volatile**.
 
@@ -130,6 +154,10 @@ Applying this structure ensures that everyday developer builds compile in millis
 
 ## The Power of Multi-Stage Builds
 
+Multi-stage builds split compilation and runtime into separate image stages so build tools can be used without being shipped in the final image.
+
+The simplest version is two images inside one Dockerfile: one image has the compiler and source code, and the final image has only the files needed to run. The final image can copy a compiled binary from the build stage without carrying the compiler.
+
 Optimizing caching layers accelerates build runs, but it does not solve the image bloat problem. A professional build environment requires compiler tools, header files, and dependency caches to compile application binaries. 
 
 If you leave these build tools inside the final image, the production artifact remains massive and carries an unnecessary security footprint.
@@ -164,7 +192,11 @@ The resulting production image consumes less than 20MB of disk space, boots inst
 
 ## Under the Hood: The `--from` Mount Pipeline
 
-To use multi-stage builds effectively, you must understand how the BuildKit compilation engine executes the `COPY --from` pipeline under the hood. 
+`COPY --from` is the stage-to-stage file transfer mechanism that lets a final image copy selected outputs from an earlier build stage.
+
+To use multi-stage builds effectively, you must understand how the BuildKit compilation engine executes the `COPY --from` pipeline under the hood.
+
+A Directed Acyclic Graph (DAG) is a dependency map made of arrows that do not loop backward. In a Docker build, it lets BuildKit see that the final runtime stage depends on the builder stage's `/build/app` output, while an unrelated debug stage might not be needed at all.
 
 The compiler stage (`builder`) and the runtime stage (`alpine`) do not run as a simple sequential script. Instead, the BuildKit engine analyzes the build instructions and constructs an in-memory Directed Acyclic Graph (DAG) of the target dependencies.
 
@@ -213,6 +245,10 @@ Structuring your recipes around these caching limits guarantees your deployment 
 Now that we have optimized our local image layers, caches, and compiler pipelines, our next step is to examine how these artifacts are distributed. We need to push our completed production images to external registries and verify their authenticity.
 
 In the next chapter, we will study **Tags, Digests, and Registries** in deep architectural detail. We will compare mutable tag labels to immutable content-addressable SHA256 digests, trace the HTTP token authentication handshakes used by registries, and explore how multi-platform manifests allow a single tag to pull ARM64 vs AMD64 binaries.
+
+![Summary infographic for Docker layers, merged view, cache keys, invalidation, multi-stage builds, and runtime image size](/content-assets/articles/article-containers-orchestration-docker-image-layers-and-cache/layers-cache-summary.png)
+
+*The layer summary shows why image build performance depends on ordering and separating build-time artifacts from runtime files.*
 
 ---
 

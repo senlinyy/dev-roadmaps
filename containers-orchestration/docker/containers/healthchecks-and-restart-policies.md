@@ -21,6 +21,8 @@ id: article-containers-orchestration-docker-healthchecks-and-restart-policies
 
 ## Why Running Is Not Enough
 
+Docker separates process state from service usefulness: a container can be running, unhealthy, not ready, or restarting for different reasons.
+
 The orders API container is `Up`. That sounds good until the browser gets a 503, the API logs say migrations are still running, and the database accepts TCP connections before it can process queries. Docker did what it was asked to do: it started the process. The process being alive does not prove the service is ready.
 
 Another failure has the opposite shape. The API crashes because a required variable is missing. Someone adds `--restart always`. Now the container is always `Restarting`, logs are harder to read, and the original configuration problem is still there.
@@ -30,6 +32,8 @@ Health checks and restart policies solve different problems. A health check asks
 ## The Mental Model
 
 Docker has several state signals around one process.
+
+The useful starting point is to separate observation from recovery. Health checks observe whether a running service can answer a test. Restart policies decide what Docker does after the main process exits.
 
 ```mermaid
 flowchart TD
@@ -49,7 +53,16 @@ Running state is necessary but shallow. Health state is an application-specific 
 
 ## Health Checks
 
+A Docker health check is a scheduled command inside the container that records whether the running process passes a service-specific test.
+
+
+![Diagram contrasting a running Docker process with a healthy Docker container readiness signal](/content-assets/articles/article-containers-orchestration-docker-healthchecks-and-restart-policies/running-vs-healthy.png)
+
+*The health check adds an application-level readiness signal on top of the process lifecycle state.*
+
 A Docker health check is a command run inside the container on a schedule. The command exits with `0` for healthy and non-zero for unhealthy. Docker records the result in the container state.
+
+Example: a web API health check might call `http://127.0.0.1:3000/health` from inside the API container. If the endpoint returns success, Docker records the container as healthy. If the request times out or exits non-zero, Docker records it as unhealthy.
 
 An image can define a default health check:
 
@@ -76,6 +89,10 @@ Good checks are small and meaningful. For a web API, a health endpoint can prove
 
 ## Readiness
 
+Readiness is the caller-facing condition that a running service can handle the kind of request its dependents need.
+
+Example: a Postgres container can have a running process before it can accept a login for the `orders` database. An API that needs SQL access is not helped by "Postgres process exists" unless the database is ready for that specific connection.
+
 Health and readiness overlap, but they are not identical. A process can be running while it warms a cache, applies migrations, or waits for a database. During that time, it may be alive but not ready to serve real traffic.
 
 For local Docker work, readiness usually matters when one service depends on another. The database container can be `running` before it accepts SQL connections. If the API starts immediately and exits on the first failed connection, the stack looks flaky even though both images are fine.
@@ -98,6 +115,13 @@ The `start_period` gives the service time to initialize before early failures co
 
 ## Restart Policies
 
+A restart policy is Docker's rule for what to do after the container's main process exits.
+
+
+![Diagram showing Docker restart policy evaluation after PID 1 exits](/content-assets/articles/article-containers-orchestration-docker-healthchecks-and-restart-policies/restart-policy-loop.png)
+
+*A restart policy replaces an exited process, but it does not correct the cause of the failure.*
+
 A restart policy tells Docker what to do after the main process exits. Common policies are:
 
 | Policy | Meaning |
@@ -118,6 +142,8 @@ Restart policies are useful for long-running services that should recover from o
 Docker also treats manual stops specially. If you manually stop a container, the restart policy is ignored until the Docker daemon restarts or the container is manually restarted. That prevents a container from fighting the operator who intentionally stopped it.
 
 ## Compose Startup Order
+
+Compose startup order is the project-level dependency rule that decides when one service container should be created relative to another.
 
 Compose can use health checks to order dependent service creation. The important distinction is that Compose naturally knows dependency order, but it does not automatically know readiness. A dependency being started is weaker than a dependency being healthy.
 
@@ -153,7 +179,7 @@ Readiness breaks when it becomes a substitute for application resilience. Waitin
 
 ## Putting It All Together
 
-The opening container was `Up`, but the service was not useful yet. The fix was not one magic flag. It was separating signals:
+The opening container was `Up`, but the service was not useful yet. The fix was separating signals:
 
 - Running means the main process is alive.
 - Healthy means a container-local check passed.
@@ -166,6 +192,10 @@ Treat health as evidence and restarts as recovery. When they are separated, they
 ## What's Next
 
 The next module moves from the container's process behavior to the runtime boundaries around it: network paths, filesystem mounts, users, permissions, and resource limits.
+
+![Summary infographic for Docker running state, health checks, readiness, restart policy, depends_on, and loop risk](/content-assets/articles/article-containers-orchestration-docker-healthchecks-and-restart-policies/health-restarts-summary.png)
+
+*The summary separates readiness signals from process replacement rules.*
 
 ---
 

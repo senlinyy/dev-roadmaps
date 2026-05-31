@@ -22,6 +22,8 @@ id: article-containers-orchestration-docker-cleanup-and-prune
 
 ## Why Cleanup Needs Ownership
 
+Docker cleanup is the process of deleting local Docker objects only after identifying which object owns the bytes and whether that state is disposable.
+
 A Docker development machine fills up slowly. At first the cause is invisible. Builds still work, `docker compose up` still starts the stack, and the project directory is not very large. Then one day a build fails with `no space left on device`, or Docker Desktop says the disk image is full, or CI spends minutes pulling and rebuilding images that should already be cached.
 
 The tempting fix is a big cleanup command:
@@ -35,6 +37,10 @@ That command may free a lot of space. It may also remove data a stopped project 
 Docker keeps old objects because they are useful evidence. A stopped container has logs and a writable layer. An unused image may be the last known-good build. Build cache makes the next build faster. A volume may hold the database you used all week. The cleanup question is not "can Docker delete unused things?" It is "which unused things are safe to lose?"
 
 ## The Mental Model
+
+Docker disk usage is split across object types with different meanings: containers preserve runtime evidence, images preserve reusable packages, build cache preserves saved work, and volumes preserve data.
+
+The practical starting point is ownership. Before deleting bytes, name whether those bytes belong to process history, image layers, saved build work, or persistent service data.
 
 Docker stores several kinds of objects. They share disk space, but they do not mean the same thing.
 
@@ -64,6 +70,15 @@ A volume is different. A volume exists to outlive containers. If a Postgres serv
 
 ## Read Disk Use First
 
+`docker system df` is the ownership summary for Docker's local disk use.
+
+
+![Diagram mapping Docker disk usage across stopped containers, images, build cache, and volumes](/content-assets/articles/article-containers-orchestration-docker-cleanup-and-prune/docker-disk-ownership-map.png)
+
+*Docker storage is safer to clean when you first identify which lifetime owns each piece of disk use.*
+
+The command does not decide what is safe to delete. It gives you the first map of where Docker disk usage lives so each cleanup choice can target the right object type.
+
 Start with evidence:
 
 ```bash
@@ -85,6 +100,8 @@ Treat this output as an ownership table. Images, containers, volumes, and build 
 The `ACTIVE` column also matters. Active does not mean important, and inactive does not mean disposable. It means Docker can see a current relationship. A stopped project can leave useful volumes behind, and an active container can be running from an image you are about to rebuild.
 
 ## Stopped Containers
+
+Stopped containers are process history objects: they no longer run, but they can still hold logs, exit codes, configuration, and writable-layer files.
 
 Stopped containers accumulate when you run short-lived commands, failed experiments, one-off migrations, or old Compose services. They are useful while you need logs, exit codes, or the exact configuration that failed:
 
@@ -115,6 +132,8 @@ docker container prune
 The important boundary is the container's writable layer. Files written outside a volume live in that layer. Removing the container removes those files. Files written to a named volume remain, unless you remove the volume separately.
 
 ## Images and Build Cache
+
+Images and build cache are reusable build artifacts, not application data, but deleting them changes future pull and build behavior.
 
 Images pile up because tags move and builds create new layer graphs. A local tag such as `orders-api:dev` may point to the latest local build, while older image objects remain because old containers, caches, or dangling layer references still point at them.
 
@@ -148,6 +167,10 @@ When a build cache is huge, pruning it is often the cleanest first move. It rare
 
 ## Volumes and Data
 
+Volumes are persistent data owners, so volume cleanup has a higher data-loss risk than image or cache cleanup.
+
+Example: an unused volume named `orders_db_data` may still contain the local Postgres database you expect tomorrow. Docker calls it unused when no current container is attached, not when the data has no value.
+
 Volumes deserve their own pass because they are designed to survive container removal. A Compose database volume might look unused after `docker compose down`, but it may contain the exact data you expect to see when the stack comes back.
 
 List volumes:
@@ -180,6 +203,8 @@ Unused means no container currently uses the volume. It does not mean the data i
 
 ## Compose Cleanup
 
+Compose cleanup applies deletion at the project boundary: containers and networks by default, volumes only when explicitly requested.
+
 Compose gives cleanup a project boundary. When you run:
 
 ```bash
@@ -205,6 +230,15 @@ docker compose down --remove-orphans
 That flag is useful after refactors because stale service containers can keep ports, names, or network entries that confuse the current stack.
 
 ## Prune Safely
+
+Prune commands are broad deletion filters; safe pruning starts by narrowing the object type and data owner before running them.
+
+
+![Diagram contrasting usually disposable Docker artifacts with volume data that may need preservation](/content-assets/articles/article-containers-orchestration-docker-cleanup-and-prune/prune-risk-boundary.png)
+
+*Prune commands remove by category, so volumes deserve a separate data-safety decision.*
+
+In plain terms, prune means "delete everything matching this broad unused-object rule." That is convenient for cache and stale containers, but risky for volumes unless you have already identified the data owner.
 
 The broad cleanup command is:
 
@@ -241,11 +275,15 @@ If volumes are large, slow down. Volumes are where useful state often lives. Ins
 
 If a Compose project needs a clean slate, `docker compose down -v` expresses that reset at the project boundary. It is clearer than a global volume prune because it says which project is losing data.
 
-Cleanup is Docker maintenance with ownership attached. Once the owner is clear, prune commands become predictable tools instead of scary incantations.
+Cleanup is Docker maintenance with ownership attached. Once the owner is clear, prune commands become predictable tools instead of opaque deletion shortcuts.
 
 ## What's Next
 
 The next article uses the same ownership map for debugging. When a Docker stack fails, the first question is similar: which boundary owns the symptom? The answer might be the image, the command, the process, the network path, the storage path, the health check, or the Compose graph.
+
+![Summary infographic for Docker system df, containers, images, cache, volumes, and Compose cleanup](/content-assets/articles/article-containers-orchestration-docker-cleanup-and-prune/cleanup-prune-summary.png)
+
+*The cleanup summary keeps measurement, artifact lifetime, build speed, and data safety in one checklist.*
 
 ---
 

@@ -20,7 +20,11 @@ id: article-containers-orchestration-docker-tags-digests-and-registries
 
 ## The Mutable Tag Hazard
 
-When you distribute compiled container images to production servers, you rely on image registries to act as the central distribution vault. A typical deployment workflow requires tagging an image with a human-readable name, pushing it to a registry, and asking your production orchestrator to pull that name during a rollout.
+A registry is the distribution service that stores image manifests and layer blobs so Docker hosts can push and pull the same image artifact by name or digest.
+
+A tag is a readable pointer to an image manifest. The important beginner detail is that a tag can move. The label `org/app:v1` can point to one manifest in the morning and a different manifest after a later push.
+
+When you distribute compiled container images to production servers, you rely on image registries to act as the central image distribution store. A typical deployment workflow requires tagging an image with a human-readable name, pushing it to a registry, and asking your production orchestrator to pull that name during a rollout.
 
 In a naive deployment pipeline, developers often tag their images with mutable labels like `:latest`, `:production`, or `:v1`.
 
@@ -41,6 +45,10 @@ This tag mutation creates silent, untraceable production drift that bypasses ver
 To run securely in production, you must transition from mutable tags to content-addressable digests, and understand the under-the-hood HTTP manifest exchanges that govern image distribution.
 
 ## Anatomy of an OCI Image Manifest
+
+An OCI image manifest is the registry-side index document that names the image configuration object and the exact layer blobs that make up one image.
+
+OCI means Open Container Initiative, the shared container image standard used by Docker and many other runtimes. A manifest is just a JSON document that lists the config file and layer files a host must download to recreate one image.
 
 An image in a registry is not stored as a single, compiled file. Instead, the Open Container Initiative (OCI) Image Specification v1 defines an image as a collection of independent, content-addressed files linked together by an OCI Image Manifest JSON file.
 
@@ -79,6 +87,15 @@ When the local engine pulls an image, it downloads the manifest, compares the la
 
 ## Immutable Content-Addressable Digests
 
+A digest is the immutable content address for a manifest, similar in role to a Git commit hash for an image artifact.
+
+
+![Diagram comparing mutable Docker image tags with immutable content digests](/content-assets/articles/article-containers-orchestration-docker-tags-digests-and-registries/tag-vs-digest.png)
+
+*Tags are useful human labels, but digests are the identity that prevents image drift.*
+
+In practical terms, a digest is the exact byte fingerprint of the image manifest. If the manifest changes, the digest changes, so a deployment pinned to `@sha256:...` keeps pulling the same artifact even if a tag moves.
+
 To eliminate mutable tag drift, you can reference an image using its content-addressable digest instead of its tag name.
 
 A digest is a cryptographically secure SHA256 hash calculated over the exact byte content of the OCI Image Manifest JSON file itself. The digest is represented as `sha256:` followed by the hex string of the hash.
@@ -101,6 +118,15 @@ Even if an administrator pushes a breaking update to the `:v1` tag in the regist
 Using digests is the single most effective operational habit to guarantee reproducible container orchestration rollouts.
 
 ## Under the Hood: Registry JWT Authentication
+
+Registry token authentication is the HTTP challenge-and-token flow that lets Docker prove pull or push permission without sending raw credentials on every blob request.
+
+
+![Diagram showing Docker registry authentication, manifest lookup, and layer blob downloads](/content-assets/articles/article-containers-orchestration-docker-tags-digests-and-registries/registry-auth-manifest-flow.png)
+
+*A registry pull starts with authorization, resolves a manifest, and downloads missing layer blobs by digest.*
+
+A JSON Web Token (JWT) is a signed JSON document that says what the client is allowed to do for a short time. In registry pulls, Docker trades login credentials for a short-lived Bearer token, then sends that token when asking for manifests and layer blobs.
 
 When the Docker Daemon pushes or pulls an image from a private registry, it does not send raw credentials with every layer upload request. Instead, OCI-compliant registries use a multi-step token authentication handshake mediated by JSON Web Tokens (JWT).
 
@@ -132,6 +158,10 @@ The authentication handshake follows a strict HTTP transaction loop:
 This token-based workflow keeps your credentials secure. The local engine only transmits your password once during the token request, using short-lived Bearer tokens to coordinate the high-bandwidth layer downloads.
 
 ## Multi-Architecture Manifest Lists
+
+A manifest list is a top-level registry index that maps one image name to different platform-specific manifests.
+
+Example: the same `org/app:v1` tag can point an Apple Silicon laptop to an ARM64 manifest and an Intel production node to an AMD64 manifest. Both hosts use the same tag, but each downloads layers built for its own CPU.
 
 In a modern cloud environment, development laptops and production servers often run on different CPU architectures. A developer might write code on an ARM64 Apple Silicon laptop, while the production Kubernetes cluster runs on AMD64 Intel/AMD server blades.
 
@@ -200,6 +230,10 @@ This enables developers to build multi-platform images that run identically on t
 
 ## Secure Delivery Workflows
 
+Secure image delivery is the set of registry and deployment controls that make sure the image tested in CI is the image pulled by runtime hosts.
+
+The practical goal is traceability. A release should answer three questions: which manifest was tested, who was allowed to push it, and whether the runtime host verified it before running it.
+
 To maintain a secure, reviewable delivery pipeline, you must establish strict registry operational habits:
 
 * **Lock Down Tags in Production**: Never use mutable tags like `:latest` or `:production` inside deployment configurations. Use content-addressable digests (`org/app@sha256:...`) to ensure absolute immutability.
@@ -226,6 +260,10 @@ Hardening your distribution channels guarantees that the compiled artifact you t
 Now that we have successfully navigated the entire Docker Foundations and Image compilation stack (Wave 1), we are ready to move into Wave 2, which focuses on container execution parameters and runtime boundaries.
 
 In the next chapter, we will study **Running Containers**. We will explore container entrypoints and commands, examine how environment variable arrays are loaded into process memory, and analyze how to configure Unix signal handling so our processes exit cleanly on host request.
+
+![Summary infographic for Docker repository names, tags, digests, manifests, tokens, and multi-architecture images](/content-assets/articles/article-containers-orchestration-docker-tags-digests-and-registries/tags-registries-summary.png)
+
+*The registry summary separates mutable labels, immutable content, access tokens, and platform-specific manifests.*
 
 ---
 

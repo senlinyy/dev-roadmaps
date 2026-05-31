@@ -28,7 +28,9 @@ aliases:
 
 ## Managed Service Isolation: The Private Link Fabric
 
-Azure Private Link is the platform capability that establishes secure, private network connectivity from your virtual network to managed Azure PaaS services over Microsoft's private global backbone network.
+Azure Private Link is the private connection path from your virtual network to a supported Azure service. It lets an app reach a managed service through a private endpoint IP instead of sending traffic to the service's public endpoint.
+
+Example: `orders-api` can connect to Azure SQL through `10.30.40.7` inside `snet-private-endpoints`, while the SQL server's public network access stays disabled.
 
 To secure a cloud deployment, you must treat service connectivity as a private network routing concern. Many managed Azure PaaS services, such as Azure SQL databases, Storage Accounts, and Key Vaults, have public endpoints unless you restrict them. Even if you secure these endpoints with strong authentication and workload identities, the default public endpoint is still reachable from public networks unless the service firewall or public network access setting says otherwise.
 
@@ -55,13 +57,13 @@ The application sends traffic to a private IP in your VNet, and the Private Link
 
 ## Private Endpoints: The Local Proxy Model
 
-A private endpoint is a specialized network interface resource (`Microsoft.Network/networkInterfaces`) that Azure injects directly into a designated subnet within your Virtual Network.
+A private endpoint is the private IP network interface Azure places in your subnet for one specific service connection. It is a specialized network interface resource (`Microsoft.Network/networkInterfaces`) that Azure injects directly into a designated subnet within your Virtual Network.
 
-This private endpoint functions as a **local proxy** for your managed PaaS service. When you create a private endpoint for a SQL database, the virtual network controller allocates a real, private IP address from your subnet's CIDR range (such as `10.30.40.7`) and binds it to the network interface:
+This private endpoint functions as a local network representation of your managed PaaS service. When you create a private endpoint for a SQL database, the virtual network controller allocates a real, private IP address from your subnet's CIDR range (such as `10.30.40.7`) and binds it to the network interface:
 
-```text
+```plain
 Target Database: devpolaris-orders-sql.database.windows.net
-  └── Local Proxy Private Endpoint: pe-orders-sql (IP: 10.30.40.7 cabled to snet-private-endpoints)
+  └── Private Endpoint: pe-orders-sql (IP: 10.30.40.7 in snet-private-endpoints)
 ```
 
 From your application's perspective, calling the database is now identical to calling any other private host inside your VNet. The application routes traffic directly to the local private IP address.
@@ -70,7 +72,9 @@ Azure routes that connection through the Private Link path to the target service
 
 ## Private Link: The Backbone Bridge
 
-Private Link is the capability that lets a private endpoint connect to Azure platform services, your own services, or partner services over Microsoft's backbone network. A private endpoint is the object you place in your VNet. Private Link is the platform behind that private connection.
+Private Link is the Azure platform capability behind the private connection path. A private endpoint is the object you place in your VNet. Private Link is the managed transport that carries that private endpoint traffic to the target service over Microsoft's backbone network.
+
+Example: a private endpoint named `pe-orders-kv` sits in your subnet, while Private Link carries its traffic to `kv-orders-prod.vault.azure.net` without using the public endpoint path.
 
 The distinction helps in design reviews:
 
@@ -82,9 +86,23 @@ The distinction helps in design reviews:
 
 Most app teams first use Private Link through private endpoints for Azure services: Key Vault, Storage, SQL, Cosmos DB, Service Bus, and similar dependencies. They do not need to build a Private Link service just to consume an Azure PaaS resource privately.
 
+### Under the Hood: Private Link Encapsulation Mechanics
+
+Private Link encapsulation is the network wrapping Azure uses to carry your VNet packet to the managed service while preserving which VNet it came from. Encapsulation means Azure places the original packet inside another transport packet so the platform can route it safely across shared infrastructure.
+
+Example: a packet from `10.30.2.15` to private endpoint `10.30.40.7` can be wrapped with metadata that identifies the target SQL resource and the originating VNet.
+
+While a private endpoint looks like a simple network interface inside your Virtual Network, the underlying transport mechanism uses Software Defined Networking (SDN) encapsulation.
+
+When your application container sends a packet to the private endpoint IP (e.g., `10.30.40.7`), the Azure hypervisor intercepts the packet. It does not route the packet using standard IP routing rules. Instead, the virtual network controller wraps the original VNet IP packet inside a transport packet using an encapsulation protocol like NVGRE (Network Virtualization using Generic Routing Encapsulation) or VXLAN.
+
+This encapsulated packet contains a Virtual Network Identifier (VNID) that represents your VNet identity, along with a metadata header specifying the destination PaaS resource ID. The encapsulated packet is then routed across Microsoft's physical host substrate network to the multi-tenant storage or database server cluster.
+
+When the packet arrives at the destination PaaS host, the receiving hypervisor decapsulates the packet, validates that the VNet VNID matches the allowed Private Link connection database, and passes the raw payload to the target database instance. Because this encapsulation separates customer VNets, different customers can use overlapping private IP ranges for their VNets without any packet collision or security leakage on the physical substrate.
+
 ## Under-the-Hood: Split-Brain DNS Zone Resolution
 
-To implement private endpoints seamlessly, your network must utilize a highly secure mechanism called **Split-Brain DNS Zone Resolution**.
+Split-brain DNS is a name-resolution design where the same service hostname returns a private IP inside the VNet and a public answer outside it. To implement private endpoints seamlessly, your network must use this DNS pattern.
 
 ![An infographic showing public and private DNS resolving the same service name to different addresses](/content-assets/articles/article-cloud-providers-azure-networking-connectivity-public-and-private-access/split-dns-decision.png)
 
@@ -107,6 +125,10 @@ flowchart TD
     end
 ```
 
+![A pseudo-code infographic showing the same Azure service hostname resolving to a public IP outside the VNet and a private endpoint IP inside the VNet](/content-assets/articles/article-cloud-providers-azure-networking-connectivity-public-and-private-access/split-dns-pseudocode.png)
+
+*Private Link often keeps the same hostname in application code, but DNS returns a private endpoint address when the query originates inside the linked VNet.*
+
 ### 1. The Inside-VNet Query Path
 When your application container calls `devpolaris-orders-sql.database.windows.net`, the request is resolved through the DNS settings for the virtual network. With Azure-provided DNS, the platform IP is `168.63.129.16`. If you use custom DNS servers, those servers must forward or resolve the relevant private DNS zones correctly.
 
@@ -123,6 +145,17 @@ Because the public internet is blind to your Private DNS Zone link, the resolver
 
 This split behavior is highly elegant: the same hostname works everywhere, but routing automatically shifts from public to private the moment traffic originates inside your VNet boundary.
 
+### Hybrid DNS Forwarding Loops
+
+Split-Brain DNS works effortlessly when workloads use the default Azure resolver at `168.63.129.16`. However, enterprise architectures often use custom DNS servers (such as Active Directory Domain Services or custom Bind9 servers) or hybrid on-premises environments. In these environments, simple Split-Brain DNS fails because your on-premises servers or custom VNets do not have direct access to the Azure Private DNS Zones.
+
+To resolve this, you must configure a DNS forwarding loop:
+
+*   **Custom DNS Servers in the VNet:** If your VMs or containers use custom DNS servers, those servers cannot directly query the Azure Private DNS Zone. You must configure these custom servers to conditionally forward DNS queries for Azure public suffixes (such as `*.database.windows.net` or `*.blob.core.windows.net`) to the Azure-provided DNS IP `168.63.129.16`.
+*   **On-Premises DNS Resolution:** On-premises servers cannot reach `168.63.129.16` because it is a non-routable link-local address. To resolve names from on-premises, you must deploy an Azure Private DNS Resolver or a custom DNS forwarder VM inside your Azure Hub VNet. The on-premises DNS server is configured to conditionally forward Azure PaaS queries across the VPN or ExpressRoute to the Hub DNS forwarder, which in turn queries `168.63.129.16` to get the private endpoint IP.
+
+Without these forwarding loops, on-premises clients or custom DNS clients will resolve the public IP of the PaaS service, causing traffic to be blocked at the resource's private firewall.
+
 :::expand[Forgetting to Link the Private DNS Zone to the VNet]{kind="pitfall"}
 Deploying a private endpoint allocates a private IP interface. Private DNS integration must also be configured, usually by creating or linking the correct Private DNS Zone and records for that service. If you forget the DNS link or use custom DNS without the right forwarding, resources inside your VNet remain blind to the private records. An `nslookup` query inside your container can resolve the target service's public endpoint, bypassing the private endpoint path.
 
@@ -131,12 +164,12 @@ This matches the AWS VPC behavior when deploying **VPC Interface Endpoints**. In
 To diagnose and resolve this:
 
 *   **Before (Zone Unlinked):** Resolving the storage account returns public IPs:
-    ```text
+    ```plain
     $ nslookup mystorage.blob.core.windows.net
     Address: 52.174.12.99
     ```
 *   **After (Zone Linked):** Resolving the storage account returns the local VNet IP:
-    ```text
+    ```plain
     $ nslookup mystorage.blob.core.windows.net
     Address: 10.30.40.7
     ```
@@ -156,7 +189,7 @@ az network private-dns link vnet create \
 
 ## Private Endpoints vs. Service Endpoints
 
-Azure provides two primary private connectivity patterns: **Private Endpoints** and **Service Endpoints**. Differentiating between these architectures is a core design requirement:
+Azure provides two primary private connectivity patterns: Private Endpoints create a private IP interface for one service instance, while Service Endpoints keep the service endpoint public but add subnet-based trust. Differentiating between these architectures is a core design requirement:
 
 ![An infographic comparing private endpoints and service endpoints for Azure managed services](/content-assets/articles/article-cloud-providers-azure-networking-connectivity-public-and-private-access/endpoint-choice.png)
 
@@ -180,15 +213,17 @@ Furthermore, the private endpoint binds to a specific service resource or subres
 
 ## Resource Firewalls: The In-Service Gate
 
-Many Azure services have their own network access controls. Storage accounts, Key Vaults, and databases can restrict which public networks, subnets, private endpoints, or trusted service paths they accept.
+A resource firewall is the service's own network admission rule set, separate from VNet routing and NSGs. Many Azure services have their own network access controls. Storage accounts, Key Vaults, and databases can restrict which public networks, subnets, private endpoints, or trusted service paths they accept.
 
-That service gate is separate from NSGs. An NSG may allow the packet to leave the API subnet. DNS may resolve to the private endpoint. The service can still reject the request if its network settings do not accept that path.
+Example: an NSG may allow `orders-api` to reach a Key Vault private endpoint, but the vault can still reject the call if its firewall does not approve that private endpoint connection.
 
-This is why `403` can be tricky. A `403` from Key Vault might mean the managed identity lacks permission. It might also mean the vault firewall rejected the network path. The fix depends on which gate denied the request.
+That service admission check is separate from NSGs. An NSG may allow the packet to leave the API subnet. DNS may resolve to the private endpoint. The service can still reject the request if its network settings do not accept that path.
+
+This is why `403` can be tricky. A `403` from Key Vault might mean the managed identity lacks permission. It might also mean the vault firewall rejected the network path. The fix depends on which layer denied the request.
 
 For each dependency, keep the evidence split:
 
-```text
+```plain
 Network path:
   DNS answer: private endpoint IP
   Private endpoint: approved
@@ -204,7 +239,9 @@ Those two blocks should not be collapsed into "the app has access."
 
 ## VNet Peering: Private Backbone Transit
 
-VNet Peering connects two virtual networks over Microsoft's backbone network, allowing resources inside both networks to communicate privately using their internal IP addresses.
+VNet peering connects two virtual networks so their private IP addresses can route to each other over Microsoft's backbone network. It lets separate VNets communicate without crossing the public internet.
+
+Example: `vnet-orders-prod` can peer with `vnet-platform-hub`, allowing the orders API subnet to reach a shared DNS resolver or firewall in the hub VNet.
 
 Peering is the primary architectural mechanism used to construct **Hub-and-Spoke networks**.
 
@@ -218,7 +255,11 @@ Traffic never crosses public internet paths, maintaining low-latency and secure 
 
 ## Hybrid Paths
 
-Hybrid connectivity connects Azure to networks outside Azure, usually through VPN, ExpressRoute, or a hub network design. The same private connectivity habits still apply: non-overlapping address spaces, routes, DNS, security rules, and service gates.
+Hybrid connectivity connects Azure to networks outside Azure, usually through VPN, ExpressRoute, or a hub network design. It exists when cloud workloads and private datacenter workloads need to talk over controlled network paths instead of public endpoints.
+
+Example: an on-premises reporting server can reach `db-orders-prod` through ExpressRoute and a private endpoint, while Azure workloads resolve on-premises names through a forwarded DNS zone.
+
+The same private connectivity habits still apply: non-overlapping address spaces, routes, DNS, security rules, and service admission checks.
 
 Hybrid paths make DNS especially important. An on-premises workload might need to resolve an Azure service name to a private endpoint IP. An Azure workload might need to resolve an on-premises service name through the right resolver path. If the name resolves differently on each side, the route evidence will not match the app symptom.
 
@@ -245,7 +286,7 @@ $ nslookup devpolaris-orders-sql.database.windows.net
 
 This diagnostic execution queries the VNet's DNS resolver to return the path evidence:
 
-```text
+```plain
 Server:         168.63.129.16
 Address:        168.63.129.16#53
 
@@ -263,7 +304,7 @@ This output provides pristine path evidence:
 
 Operating a secure virtual network requires routing all PaaS service dependencies through private, isolated backbone links:
 
-*   **Deploy Private Endpoints**: Inject real, VNet-local private IP proxies cabled to specific PaaS service instances, blocking public internet exposure.
+*   **Deploy Private Endpoints**: Inject real, VNet-local private endpoint interfaces mapped to specific PaaS service instances, blocking public internet exposure.
 *   **Configure Split-Brain DNS**: Link Private DNS Zones to your VNets to ensure that public hostnames automatically resolve to local private endpoint IPs at runtime.
 *   **Decouple Endpoints from Service Endpoints**: Prefer Private Endpoints for strict resource-level security and hybrid network access, reserving Service Endpoints for broad, regional optimizations.
 *   **Secure PaaS firewalls**: Harden resource firewalls on databases and key vaults to reject all public IP ranges, permitting connections strictly from approved private endpoint NICs.

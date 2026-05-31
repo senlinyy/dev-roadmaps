@@ -41,7 +41,9 @@ During a rollout, the Deployment can scale the new ReplicaSet up while scaling t
 
 ## The Deployment Spec
 
-Here is a practical Deployment for `devpolaris-orders-api`. It asks Kubernetes to keep three API Pods running and to create each Pod from the template under `spec.template`.
+A Deployment spec is the part of the object that describes the running state Kubernetes should maintain for a stateless workload. It tells the Deployment controller how many Pods to keep, which Pods belong to it, and what new Pods should look like.
+
+Example: the spec below asks Kubernetes to keep three orders API Pods running from the same container image, with a readiness probe on `/health/ready` before traffic is sent to each Pod.
 
 ```yaml
 apiVersion: apps/v1
@@ -97,7 +99,9 @@ The useful habit is to compare desired, current, and ready counts. If desired is
 
 ## ReplicaSets Under the Deployment
 
-A ReplicaSet keeps a stable number of matching Pods alive. It watches Pods that match its selector and creates or deletes Pods until the count matches `replicas`.
+A ReplicaSet is the lower-level controller that keeps a specific number of matching Pods alive. A Deployment uses ReplicaSets so each Pod template revision has its own managed set of Pods.
+
+Example: when the orders API image changes from `2026-05-07.1` to `2026-05-07.2`, the Deployment can keep the old ReplicaSet around with zero desired Pods while the new ReplicaSet owns the running Pods. It watches Pods that match its selector and creates or deletes Pods until the count matches `replicas`.
 
 You can see the owner chain with `kubectl describe`:
 
@@ -115,7 +119,9 @@ ReplicaSets are important to understand, but a beginner should rarely create one
 
 ## Labels and Selectors Are the Contract
 
-Selectors are the matching rules controllers use to find Pods. In a Deployment, the selector must match the labels in the Pod template. If those labels drift apart, Kubernetes either rejects the object or cannot manage the Pods you meant it to manage.
+Labels are small key-value tags on Kubernetes objects, and selectors are the matching rules that find objects with those tags. In a Deployment, the selector must match the labels in the Pod template because that is how the controller knows which Pods it owns.
+
+Example: if the Deployment creates Pods with `app=devpolaris-orders-api`, the Service can use the same label to send traffic only to those Pods. If those labels drift apart, Kubernetes either rejects the object or cannot manage the Pods you meant it to manage.
 
 The labels also connect other objects. A Service that sends traffic to the API might use the same `app` label:
 
@@ -147,13 +153,15 @@ NAME                    READY   UP-TO-DATE   AVAILABLE
 devpolaris-orders-api   5/5     5            5
 ```
 
-This is useful during a traffic increase, but it is still a manual command. In production, teams often store replica counts in YAML, Helm values, Kustomize overlays, or a GitOps repo so the source of truth stays reviewable.
+This is useful during a traffic increase, but it is still a manual command. In production, teams often store replica counts in YAML, Helm values, Kustomize overlays, or a GitOps repo so the intended steady-state configuration stays reviewable.
 
 The tradeoff is speed versus traceability. A direct `kubectl scale` is quick during an incident. A reviewed config change is easier to audit and repeat. Many teams allow emergency manual changes, then require a follow-up pull request that records the intended steady state.
 
 ## Failure Mode: Selector Mismatch
 
-Selector mistakes usually show up before the Deployment is accepted. Kubernetes protects you from changing a Deployment selector after creation because doing so could orphan or adopt Pods unexpectedly.
+A selector mismatch means the controller's ownership rule and the Pod template labels do not describe the same Pods. In a Deployment, that is serious because the selector decides which Pods the ReplicaSet may count, replace, and scale.
+
+Example: if the live Deployment selector is `app=devpolaris-orders-api` but a new file tries to change it to `app=orders-api`, Kubernetes rejects the update before the controller can accidentally abandon the existing Pods.
 
 ```bash
 $ kubectl apply -f deployment.yaml
@@ -175,7 +183,9 @@ If the current selector is correct, update your file to match it. If the current
 
 ## Deployment Tradeoffs
 
-Deployments are excellent for replaceable Pods. That makes them a good fit for `devpolaris-orders-api`, a web API where any replica can serve a request after it is ready.
+Deployments are excellent for replaceable Pods, meaning Pods where any healthy replica can do the same job as any other healthy replica. That makes them a good fit for `devpolaris-orders-api`, a web API where any replica can serve a request after it is ready.
+
+Example: if `devpolaris-orders-api-6c98b8f6d7-mr2xh` disappears, the replacement Pod can use a different name because the database and Service carry the durable state and stable network route.
 
 They are a poor fit when each Pod needs a stable identity, stable attached storage, or ordered startup. A Deployment replica named `devpolaris-orders-api-6c98b8f6d7-8p6cz` can disappear and be replaced with a different name. If the application expects `orders-0` and `orders-1` with durable volumes, that is a StatefulSet problem.
 
@@ -190,7 +200,9 @@ This tradeoff is why the controller choice starts from application behavior, not
 
 ## The Review Checklist
 
-When you review a Deployment for `devpolaris-orders-api`, check the parts that change production behavior. The image should be the intended artifact. The selector should match the template labels. The replica count should match expected capacity. The readiness probe should protect traffic. Resource requests should give the scheduler useful information.
+A Deployment review is a check that the controller will create the Pods you intend before and after a rollout. It focuses on fields that change runtime behavior: image, selector, replicas, readiness, resources, and configuration references.
+
+For `devpolaris-orders-api`, the image should be the intended artifact. The selector should match the template labels. The replica count should match expected capacity. The readiness probe should protect traffic. Resource requests should give the scheduler useful information.
 
 ```bash
 $ kubectl rollout status deployment/devpolaris-orders-api

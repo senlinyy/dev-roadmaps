@@ -46,6 +46,8 @@ An artifact proves that something was built. It does not prove that a customer c
 
 Runtime operations is the practice of keeping a deployed application running correctly after its build artifact is created. It bridges the gap between automated pipelines and day-to-day incident response, establishing the operational guardrails that protect live systems.
 
+At a high level, runtime operations functions as the control layer around a deployed artifact: the task definition, configuration bindings, IAM roles, health rules, scale rules, and rollback target that make one immutable package run safely in one environment.
+
 For an application running on AWS, runtime operations manages the lifecycle of the process and its dependencies across several distinct concerns:
 
 Operational Telemetry and Target Questions:
@@ -59,13 +61,15 @@ Operational Telemetry and Target Questions:
 | **Capacity Management** | How many container replicas are running, and what rules trigger horizontal scaling? |
 | **Recovery Strategy** | What is the exact sequence to rollback the code and configuration if a failure occurs? |
 
-To build an intuitive mental model, you can think of a container image as the static body of the application. Runtime operations is the surrounding world that decides where that body lives, what values it wakes up with, how traffic enters it, and how operators determine it is safe.
+A container image is the versioned application package. Runtime operations is the execution context that decides where that package runs, what values it receives, which AWS permissions it can use, how traffic reaches it, and how operators determine it is safe.
 
 ## Running Services and Orchestrators
 
 In a professional cloud architecture, an application container does not run as a loose, isolated process. High-volume systems are managed by an orchestrator, such as Amazon Elastic Container Service (ECS).
 
-Let us visualize the request path and physical resource cabling of our application service, `devpolaris-orders-api`:
+An orchestrator acts as a desired-state controller for running processes. Instead of an operator starting individual containers by hand, the controller compares the declared service shape with the actual running tasks and launches, stops, or replaces tasks to converge on that declared state.
+
+Let us visualize the request path and resource relationships of our application service, `devpolaris-orders-api`:
 
 ```mermaid
 flowchart TD
@@ -91,6 +95,8 @@ The first essential runtime habit is to identify the specific controller respons
 
 A container image is the compiled package containing your application code, runtime libraries, and system dependencies. In AWS, these images are stored in Amazon ECR. 
 
+You can loosely think of the image as a versioned filesystem and process package. It can prove which bytes were built, but it does not contain the environment-specific runtime decisions that AWS must make when the package becomes a live task.
+
 A built container image is a static package, and an image digest identifies its exact bytes. This immutability is highly valuable because it lets staging and production run the same artifact when both reference the same digest. Human-friendly tags such as `latest` or `production` can still move unless your repository disables tag mutation, so production runtime contracts should pin the digest they intend to run. However, because the image package is static, it cannot answer environment-specific questions:
 
 Image Boundaries and Missing Information:
@@ -109,7 +115,7 @@ This is why pushing an image to ECR is not the same as deploying a release. The 
 
 Because a container image is static, it requires a surrounding contract to boot successfully. In Amazon ECS, this runtime contract is declared inside a JSON document called a Task Definition. 
 
-A Task Definition is the recipe that tells the Fargate serverless platform exactly how to run the container. When you update an application, ECS creates a numbered revision of this task definition recipe:
+A Task Definition acts as a versioned launch specification for ECS tasks. It tells the Fargate serverless platform exactly which image to run, which resources to allocate, which ports to expose, which secrets to inject, and which IAM roles to attach. When you update an application, ECS creates a numbered revision of this launch specification:
 
 * **Image Reference**: The ECR registry location and digest of the container image.
 * **Port Mappings**: The internal port the container process listens on (such as port 3000), mapped to the load balancer ingress.
@@ -126,6 +132,8 @@ The runtime contract can fail even if your application code is bug-free. A missp
 
 Once a container is running, the orchestrator must answer the core traffic trust question: *Should we route customer packets to this task?*
 
+The health layer is the set of process, task, load balancer, and application signals that determine routing eligibility. A task is not production-ready just because a Linux process exists; it becomes eligible only when the surrounding control systems agree that it can handle real requests.
+
 Health is not a single check. To operate reliably, you must understand the distinct layers of health telemetry:
 
 * **Process State**: Proves that the Linux container process has not exited. This is a basic container engine check.
@@ -140,7 +148,7 @@ Keep your load balancer health checks fast and lightweight, reserving deep depen
 
 ## Capacity and Resource Load Balance
 
-Capacity is the operational lever that answers: *Can this service absorb the current volume of transactions?*
+Capacity is the operational resource budget assigned to a running service. It answers: *Can this service absorb the current volume of transactions?*
 
 For ECS services, the primary capacity control is the desired count parameter, which dictates the number of task replicas the service maintains. Autoscaling policies can dynamically adjust this desired count up or down based on incoming CPU utilization, memory pressure, or request counts.
 
@@ -152,7 +160,7 @@ Capacity shifts must be treated as active operations. Responders must identify w
 
 ## Rollback: Returning to a Known Good Contract
 
-Rollback is the emergency recovery path. It means returning the running service to a previous known-good state. 
+Rollback is the emergency recovery path. In ECS terms, it usually means re-pointing the service controller to a previous known-good runtime contract.
 
 In an ECS cluster, rollback is not a generic "undo" button. It is a precise operation that updates the ECS service definition back to a previous, stable Task Definition revision:
 
@@ -169,7 +177,7 @@ A green build pipeline is only the first step in a software release. To run a st
 
 * **Acknowledge the Orchestrator**: Trust the ECS Service Controller to manage task lifecycles, and completely avoid manual container start scripts.
 * **Isolate Static Packages**: Maintain static, immutable ECR container images, completely separating code packaging from environment configuration.
-* **Secure the Runtime Contract**: Manage your task definition parameter recipes as versioned, high-priority operational assets.
+* **Secure the Runtime Contract**: Manage your task definition parameters as versioned, high-priority operational assets.
 * **Isolate Health Layers**: Enforce lightweight load balancer target checks, ensuring dependency blips do not trigger task termination loops.
 * **Analyze Bottlenecks Before Scaling**: Verify database and queue limits before scaling compute task replicas to prevent connection saturation storms.
 * **Design Reversible Rollbacks**: Record and maintain exact task definition revisions to enable rapid, safe recovery paths during incidents.

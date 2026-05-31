@@ -28,7 +28,9 @@ For `devpolaris-orders-api`, the team needs two kinds of finite work. Before a r
 
 ## A One-Time Order Migration Job
 
-A Job contains a Pod template, just like a Deployment, but its success condition is completion. Here is a small migration Job:
+A Job is a controller that creates one or more Pods and treats successful completion as the goal. It contains a Pod template, just like a Deployment, but it expects the process to finish instead of run forever.
+
+Example: the migration Job below runs `node scripts/migrate.js` once to update the orders database schema, then records success when the script exits with code `0`.
 
 ```yaml
 apiVersion: batch/v1
@@ -69,7 +71,9 @@ orders-add-payment-status-20260507  1/1           18s        31s
 
 ## Completion, Backoff, and Restart Policy
 
-Jobs give you several knobs because batch work has different failure shapes. A migration might need exactly one success. A thumbnail generator might process thousands of files in parallel. A report builder might tolerate a retry after a transient database timeout.
+Job completion settings describe what "done" means, and retry settings describe how much Kubernetes should try again after failures. Jobs need these controls because batch work has different failure shapes.
+
+Example: a migration might need exactly one successful Pod, while a thumbnail generator might run hundreds of Pods in parallel. A report builder might tolerate a retry after a transient database timeout.
 
 For beginner operations, understand these fields first:
 
@@ -86,6 +90,8 @@ The tradeoff is retry safety. Retrying a read-only report is usually fine. Retry
 ## CronJobs for Scheduled Work
 
 A CronJob creates Jobs from a schedule. It is like a line in a Unix crontab, but the work runs as Kubernetes Pods and is visible through the Kubernetes API.
+
+Example: `orders-expire-checkouts` can run every day at `02:15 UTC`, create one Job for that run, and leave behind Job status and Pod logs that show whether the cleanup finished.
 
 ```yaml
 apiVersion: batch/v1
@@ -128,7 +134,9 @@ The CronJob owns the schedule. The Job owns a particular run. When a run fails, 
 
 ## Concurrency and Missed Schedules
 
-CronJobs have scheduling edges that ordinary crontab users often miss. A controller creates Jobs approximately on schedule. If the controller is down, the cluster is overloaded, or the previous run is still active, a scheduled run can be late or skipped depending on your settings.
+CronJob scheduling is approximate cluster work, not a guarantee that a process starts at the exact second on a single machine. The CronJob controller creates Jobs around the schedule, and cluster load, controller downtime, or a still-running previous Job can make a run late or skipped depending on your settings.
+
+Example: if `orders-expire-checkouts` normally runs at `02:15 UTC` but yesterday's cleanup is still active, `concurrencyPolicy: Forbid` skips the new run to avoid two cleanup processes touching the same rows.
 
 `concurrencyPolicy` is the first safety choice:
 
@@ -143,6 +151,8 @@ For `orders-expire-checkouts`, `Forbid` is safer because two cleanup workers cou
 `startingDeadlineSeconds` controls how late a missed run may start. If a daily cleanup is not useful after business hours begin, give it a deadline. If every run must happen eventually, design the task to process a date range or checkpoint instead of relying only on CronJob timing.
 
 ## Failure Mode: A Job Keeps Retrying
+
+A retrying Job means Kubernetes keeps creating attempts because previous Pods did not finish successfully. For an orders database migration, that is useful for a brief database timeout but dangerous if the script is not safe to run more than once.
 
 When a Job fails, start at the Job status, then inspect the Pods it created.
 
@@ -175,7 +185,9 @@ The fix direction is now clear. The cluster did run the Job. The image did start
 
 ## Cleanup and History
 
-Finished Jobs and their Pods remain for inspection unless you clean them up. That is useful after a failure, but a busy CronJob can leave many old objects.
+Job history is the set of completed Job objects and Pods Kubernetes leaves behind after batch work finishes. It exists so teams can inspect what ran, when it ran, and why it failed.
+
+Example: keeping the last three failed cleanup Jobs gives responders enough evidence to read logs from the failing runs, while preventing hundreds of old CronJob Pods from cluttering the namespace.
 
 CronJobs have `successfulJobsHistoryLimit` and `failedJobsHistoryLimit`. Jobs can also set `ttlSecondsAfterFinished` so Kubernetes removes them after a period.
 

@@ -22,7 +22,7 @@ id: article-containers-orchestration-kubernetes-networking-debugging-kubernetes-
 
 ## Debug One Layer at a Time
 
-Kubernetes networking has several moving parts, so random debugging wastes time. A client request may pass through DNS, a Service, EndpointSlices, kube-proxy or a CNI data plane, NetworkPolicies, an Ingress or Gateway controller, and finally the application process. A failure message usually tells you which layer to inspect next, but only if you separate the layers.
+A Kubernetes networking debug path is a sequence of small checks from the caller to the backend process. A client request may pass through DNS, a Service, EndpointSlices, kube-proxy or a CNI data plane, NetworkPolicies, an Ingress or Gateway controller, and finally the application process. A failure message usually tells you which layer to inspect next, but only if you separate the layers.
 
 The running example is `devpolaris-web` calling `devpolaris-orders-api`. The symptom is simple: order pages show an error because the web app cannot reach the orders API. The goal is to build a reliable path of evidence.
 
@@ -40,7 +40,9 @@ Start as close to the failing caller as possible. If the web Pod cannot connect,
 
 ## Capture the Exact Symptom
 
-Before changing anything, capture what failed. A DNS failure, connection timeout, connection refused, TLS error, 404, 502, and 500 all point to different layers.
+The exact symptom is the smallest reproducible error from the caller's point of view. Capture it before changing anything because a DNS failure, connection timeout, connection refused, TLS error, 404, 502, and 500 all point to different layers.
+
+Example: `curl: (28) Connection timed out` means the name likely resolved, but packets did not complete a connection. `Could not resolve host` would send you to DNS first.
 
 ```bash
 $ kubectl -n web exec deploy/devpolaris-web -- curl -i -m 5 http://devpolaris-orders-api.orders/healthz
@@ -53,7 +55,9 @@ Record the exact URL too. `devpolaris-orders-api`, `devpolaris-orders-api.orders
 
 ## Check DNS Before the Service
 
-DNS is a quick proof. Use the same caller namespace so search paths match the application environment.
+DNS is the name lookup layer that turns a Service name into an IP address. Check it early because a wrong namespace or missing Service can look like a deeper network outage.
+
+Example: run the lookup from the `web` namespace when `devpolaris-web` is the failing caller, so DNS search paths match the application environment.
 
 ```bash
 $ kubectl -n web exec deploy/devpolaris-web -- nslookup devpolaris-orders-api.orders
@@ -74,7 +78,9 @@ The resolver file explains why short names may work in one namespace and fail in
 
 ## Check the Service and EndpointSlices
 
-Once DNS resolves, inspect the Service object and its endpoints. The Service should have the selector you expect, and the EndpointSlice should list ready backend addresses.
+An EndpointSlice is Kubernetes' current list of backend addresses and ports for a Service. Once DNS resolves, inspect the Service object and EndpointSlices to prove the Service has ready Pods behind it.
+
+Example: the orders Service should select `app.kubernetes.io/name=devpolaris-orders-api`, and its EndpointSlice should list Pod addresses like `10.244.1.17:3000`.
 
 ```bash
 $ kubectl -n orders describe svc devpolaris-orders-api
@@ -95,7 +101,9 @@ If `Endpoints` is `<none>`, inspect Pod labels and readiness. If endpoint ports 
 
 ## Test the Pod Directly
 
-Testing a Pod IP directly is not a production access pattern. It is a diagnostic step. It tells you whether the application is listening before you blame the Service layer.
+Testing a Pod IP directly bypasses the Service and asks whether the backend process is listening on the expected address and port. It is not a production access pattern. It is a diagnostic step.
+
+Example: if `curl http://10.244.1.17:3000/healthz` works but `curl http://devpolaris-orders-api.orders/healthz` fails, the application is alive and the next layer is Service routing or policy.
 
 ```bash
 $ kubectl -n web run netcheck --rm -it --image=curlimages/curl --restart=Never -- sh
@@ -114,7 +122,9 @@ That log has a subtle but serious bug. The process is listening on loopback insi
 
 ## Inspect NetworkPolicies When Traffic Times Out
 
-A NetworkPolicy denial often looks like a timeout. After DNS and endpoints look correct, list policies in the destination namespace and read which Pods they select.
+A NetworkPolicy denial often looks like a timeout because packets are blocked before a normal application response exists. After DNS and endpoints look correct, list policies in the destination namespace and read which Pods they select.
+
+Example: if the orders policy allows namespace `frontend` but the caller namespace is `web`, DNS can succeed and the Service can have endpoints while the connection still times out.
 
 ```bash
 $ kubectl -n orders get networkpolicy
@@ -140,7 +150,9 @@ The evidence points to a label mismatch, not a broken cluster.
 
 ## Inspect Ingress or Gateway Separately
 
-External failures add another layer. If `https://api.devpolaris.local/orders/healthz` fails from outside the cluster, first test the backend Service inside the cluster. If the backend works internally, inspect the edge routing layer.
+Ingress and Gateway are edge routing layers for traffic entering from outside the cluster. Debug them separately from the internal Service path.
+
+Example: if `https://api.devpolaris.local/orders/healthz` fails from outside the cluster, first test `http://devpolaris-orders-api/healthz` from inside the cluster. If the backend works internally, inspect the edge routing layer.
 
 ```bash
 $ curl -i https://api.devpolaris.local/orders/healthz
@@ -167,7 +179,7 @@ If backend addresses appear in the Ingress description, the controller sees the 
 
 ## Read Events and Logs After Object State
 
-Events and logs are useful after you know which object to inspect. Reading all cluster logs first usually creates noise. Read the Service, endpoints, policies, and route status, then open the log for the component that still looks suspicious.
+Events are short status notes Kubernetes records when an object changes or a health check fails. Logs are messages from the running component. Both are useful after you know which object to inspect. Reading all cluster logs first usually creates noise. Read the Service, endpoints, policies, and route status, then open the log for the component that still looks suspicious.
 
 ```bash
 $ kubectl -n orders get events --sort-by=.lastTimestamp | tail -5
@@ -208,7 +220,7 @@ The tradeoff in this method is patience. It may feel slower than trying the firs
 
 ## Production Review Questions
 
-A production review should connect the YAML to the request path. Ask who can call the workload, which component owns the public address, and how a failed health check will be noticed. For `devpolaris-orders-api`, the answer should name the caller, the Service, and the routing layer rather than saying only "Kubernetes handles it."
+A production networking review should connect the intended request path to the evidence you would collect during an incident. Ask which caller namespace starts the request, which Service name it uses, which endpoints should be ready, which policies can block it, and which edge layer is involved if traffic starts outside the cluster. For `devpolaris-orders-api`, the answer should name the next diagnostic check for each layer rather than saying only "Kubernetes handles it."
 
 ```text
 Request path review:

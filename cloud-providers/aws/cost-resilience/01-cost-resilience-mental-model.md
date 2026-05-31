@@ -41,6 +41,8 @@ The immediate cost savings created a massive production outage. Cost and resilie
 
 Cost is the total financial spend required to provision running capacity, transfer data, store backups, and retain operational evidence. Resilience is your application's physical ability to keep serving transactions or recover cleanly to a usable state after an infrastructure failure.
 
+At a high level, cost is the spend model for your AWS architecture, while resilience is the failure-behavior model that spend supports. You review them together because reducing a bill often changes capacity, recovery, evidence retention, or isolation.
+
 To operate successfully in the cloud, you must replace the vague question *How do we make AWS cheaper?* with a precise paired equation:
 
 ```text
@@ -68,6 +70,8 @@ flowchart TD
 
 AWS resources bill teams using different pricing structures. Recognizing the cost shape is the first step in deciding what evidence to analyze:
 
+A cost shape is the billing behavior behind a resource. It tells you whether spend grows with time, usage, storage, support traffic, or recovery protection.
+
 * **Running Capacity (Fixed-Time Charge)**: Resources that bill a flat rate per hour while provisioned, regardless of actual work processed. Examples include RDS instance hours, ECS Fargate task allocations, and active NAT Gateways.
 * **Usage Volume (Transaction Charge)**: Charges driven entirely by application activity. Examples include Lambda execution counts, SQS request APIs, and data transfer rates between Availability Zones.
 * **Storage Growth (Accumulating Charge)**: Spending that increases continuously over time as files accumulate. Examples include S3 object storage, EBS volumes, and RDS databases.
@@ -80,6 +84,8 @@ One service often contains multiple cost shapes. Amazon S3 bills for object stor
 
 Just as spending has different shapes, your reliability design is partitioned into five distinct resilience shapes:
 
+A resilience shape is the specific failure-handling capability a design buys. It names whether the system is paying for redundancy, spare capacity, isolation, recovery points, or diagnostic evidence.
+
 * **Redundancy**: Running multiple physical replicas of a component so that one instance can fail completely without severing the user route. Examples include Multi-AZ databases and multi-task ECS services.
 * **Headroom**: Maintaining spare capacity to absorb traffic surges, transactional blips, and deployment overlaps without performance degradation.
 * **Isolation**: Partitioning resources so that a failure in one service boundary cannot cascade and crash adjacent systems. Examples include separate SQS queues and microservice network borders.
@@ -91,6 +97,8 @@ Every resilience shape requires financial investment. Redundancy increases runni
 ## The Capacity Trap: Headroom vs. Waste
 
 Headroom and waste can look identical on a quiet system graph. If you open CloudWatch at 2 a.m. and find your application tasks operating at 5% CPU utilization, a naive cost review will declare the idle capacity to be waste and demand immediate downsizing.
+
+Headroom is intentionally unused capacity reserved for failure absorption, deployment overlap, or traffic spikes. Waste is unused capacity or storage with no verified workload, owner, or recovery purpose.
 
 This is the capacity trap. In an ECS cluster, that low-activity headroom protects several critical operations:
 
@@ -114,6 +122,8 @@ Useful Headroom vs. Idle Waste:
 
 Waste is any cloud spending that does not serve a measured workload, support operational evidence checks, or satisfy a verified recovery target.
 
+Waste removal is the safest form of cost optimization because it targets resources that have no active operational contract. The goal is to delete or lifecycle only what the team can prove is unused.
+
 The safest cost-saving actions are completely boring:
 * **Shutdown Dev Environments**: Write automated shell scripts to scale staging ECS desired counts to zero during weekends and non-business hours, eliminating fixed-time running capacity hours when developers are offline.
 * **Enforce Storage Lifecycles**: Apply strict S3 lifecycle rules to transition temporary exports or build logs to S3 Glacier storage classes or deletion paths after a set period.
@@ -124,6 +134,8 @@ The practical rule: never delete or downsize a resource unless you can prove exa
 ## The Cost vs. Resilience Tradeoff Map
 
 To operate a reliable AWS environment, every cost-saving decision must be treated as an operational trade. Operators must document the saved cost, the reliability risk, the required verification metrics, and the precise rollback plan:
+
+A cost-resilience tradeoff map is a change record for infrastructure economics. It connects the proposed saving to the reliability capability being reduced, the metrics that must stay healthy, and the exact reversal path.
 
 Cost vs. Resilience Tradeoff Map:
 

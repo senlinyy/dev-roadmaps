@@ -22,11 +22,11 @@ aliases:
 
 ## What Is Recovery Planning
 
-A cloud disaster recovery plan is the documented, tested engineering workflow that orchestrates the restoration of application compute, networking, data stores, and access security to a functioning operational state following an infrastructure failure. The primary operational trap is confusing a static backup copy with a functional recovery pipeline. Having automated transaction logs or daily file snapshots does not mean your service is resilient. A backup is merely a passive data asset; a recovery plan defines what physical resources must be provisioned, how much data can be lost, how long the cutover takes, and how the application dynamically re-establishes network connections and access permissions.
+A cloud disaster recovery plan is the tested restore workflow for bringing compute, networking, data, and access controls back to a working state after a failure. It is the documented engineering workflow that orchestrates the restoration of application compute, networking, data stores, and access security to a functioning operational state following an infrastructure failure. The primary operational trap is confusing a static backup copy with a functional recovery pipeline. Having automated transaction logs or daily file snapshots does not mean your service is resilient. A backup is merely a passive data asset; a recovery plan defines what physical resources must be provisioned, how much data can be lost, how long the cutover takes, and how the application dynamically re-establishes network connections and access permissions.
 
 If you design disaster recovery strategies on AWS, these technical boundaries correspond directly to your existing systems:
 
-* **Disaster Recovery Speeds**: The classic spectrum of disaster recovery methods—moving from low-cost, high-latency Backup and Restore to pilot lights, warm standbys, and high-cost active-active multi-region failovers—is identical across both cloud providers.
+* **Disaster Recovery Speeds**: The classic spectrum of disaster recovery methods - moving from low-cost, high-latency Backup and Restore to pilot lights, warm standbys, and high-cost active-active multi-region failovers - is identical across both cloud providers.
 * **DNS Failover Controllers**: While AWS routes global traffic using Route 53 latency and failover routing policies, Azure can steer clients with Azure Traffic Manager, which is a DNS-based traffic distribution service, or with Azure Front Door, which is a global layer 7 entry point for HTTP and HTTPS applications.
 
 :::expand[Under the Hood: Crash-Consistent vs. Application-Consistent Snapshots and Replication Physics]{kind="design"}
@@ -41,7 +41,7 @@ Rather than viewing disaster recovery as an all-or-nothing requirement, treat re
 
 ## Quantifying Recovery Metrics (RTO and RPO)
 
-Every resilient cloud design is sized, budgeted, and measured against two primary metrics that define your recovery window:
+RTO and RPO are the two recovery targets that tell the team how long the service may be down and how much recent data may be lost. Every resilient cloud design is sized, budgeted, and measured against these metrics:
 
 * **Recovery Time Objective (RTO)**: The maximum acceptable duration of service downtime before the system must be restored to a functioning state, measured in time (e.g., 30 minutes).
 * **Recovery Point Objective (RPO)**: The maximum acceptable age of data that can be lost following a restore, defining your data loss budget measured in time (e.g., 5 minutes of transactional records).
@@ -65,7 +65,7 @@ Designing for short RTOs and RPOs requires warm pre-provisioned compute, databas
 
 ## Database and Object Protection Architectures
 
-To protect your core source-of-truth data, you must combine database point-in-time recovery tools with object-level storage protections:
+Database and object protection are different recovery layers: databases need restore points for structured state, while object stores need deletion and overwrite protection for files. To protect your core source-of-truth data, you must combine database point-in-time recovery tools with object-level storage protections:
 
 * **Azure SQL Point-in-Time Restore (PITR)**: Azure SQL Database automatically generates full, differential, and transaction log backups so you can restore a database to a selected point in time within the configured retention window, commonly up to 35 days for short-term retention. When you trigger a point-in-time restore, the platform provisions a new database beside the original. The restored database has its own name (e.g., `db-orders-restored-1020`), requiring you to update your application connection strings or surgically copy recovered rows to complete the recovery.
 * **Blob Storage Data Protection**: Protecting unstructured files requires enabling two primary data-plane features:
@@ -76,7 +76,7 @@ Separate your data assets into distinct storage containers based on their recove
 
 ## Physical Redundancy Levels (LRS vs. ZRS vs. GRS)
 
-Redundancy controls how many physical copies of your data the Azure storage fabric maintains, and where those copies are distributed.
+Redundancy is the replica placement policy for storage data. It controls how many physical copies of your data the Azure storage fabric maintains, and where those copies are distributed.
 
 ![An infographic comparing LRS, ZRS, and GRS across datacenter, zone, and second-region scope](/content-assets/articles/article-cloud-providers-azure-cost-resilience-recovery-planning-redundancy-backups/redundancy-choice-map.png)
 
@@ -101,7 +101,7 @@ Differentiate between backup capabilities and physical redundancy. If a user del
 
 ## Disaster Recovery Strategies
 
-Your overall disaster recovery strategy defines the deployment architecture and readiness state of your secondary environments. The four primary strategies represent a spectrum of cost-to-recovery tradeoffs:
+A disaster recovery strategy is the readiness level of your secondary environment: no compute until restore, a small always-ready core, a scaled-down working stack, or full multi-region operation. The four primary strategies represent a spectrum of cost-to-recovery tradeoffs:
 
 ```mermaid
 flowchart TD
@@ -146,9 +146,9 @@ Choose the strategy that aligns with your workflow's financial value and downtim
 
 ## Executing Verifiable Restore Drills
 
-A disaster recovery plan is merely a theory until a successful restore drill demonstrates that your team can recover the system within your target RTO.
+A restore drill is a controlled proof that the recovery workflow works inside the target RTO and RPO. A disaster recovery plan is merely a theory until a successful restore drill demonstrates that your team can recover the system within your target RTO.
 
-![An infographic showing backup, restore sandbox, app verification, and recording restore drill results](/content-assets/articles/article-cloud-providers-azure-cost-resilience-recovery-planning-redundancy-backups/restore-drill-loop.png)
+![An infographic showing backup, isolated restore environment, app verification, and recording restore drill results](/content-assets/articles/article-cloud-providers-azure-cost-resilience-recovery-planning-redundancy-backups/restore-drill-loop.png)
 
 *Restore drills close the loop between written recovery targets and evidence that the system can actually recover.*
 
@@ -156,25 +156,25 @@ To run a safe, isolated recovery drill without disrupting production traffic, es
 
 ```mermaid
 flowchart TD
-    Start["Initiate Drill Schedule"] --> RestoreDB["1. Restore Database to a Cloned Sandbox Instance"]
+    Start["Initiate Drill Schedule"] --> RestoreDB["1. Restore Database to a Cloned Test Instance"]
     RestoreDB --> ProvisionCompute["2. Provision Isolated Non-Production Compute Nodes"]
     ProvisionCompute --> ConnectDR["3. Connect Compute to Cloned Database (Update Connection String)"]
     ConnectDR --> RunSmoke["4. Execute Automated Smoke Tests (Checkout / Read / Write paths)"]
     RunSmoke --> RecordMetrics["5. Measure & Record Actual Recovery Time (RTO) and Data Gaps (RPO)"]
-    RecordMetrics --> CleanUp["6. Tear Down Sandbox Compute & Delete Cloned Database"]
+    RecordMetrics --> CleanUp["6. Tear Down Test Compute & Delete Cloned Database"]
     CleanUp --> Review["7. Audit Gaps and Document Operational Gaps"]
 ```
 
 Executing this drill regularly ensures that your operations team identifies hardcoded database names, missing firewall rules, stale connection string secrets, and undocumented setup steps before an actual production incident occurs.
 
 :::expand[Pitfall: Drill Blocked by Hardcoded Secrets and Identity Gaps]{kind="pitfall"}
-A disastrous failure mode in disaster recovery is discovering that your cloned recovery sandbox cannot run because of hardcoded configuration strings or missing identity role assignments. Imagine executing a restore drill: you successfully restore your production SQL database to a cloned instance named `db-orders-restored` and spin up duplicate container instances. However, upon boot, the restored application either crashes instantly or, worst of all, silently connects back to your *active, primary production database*.
+A disastrous failure mode in disaster recovery is discovering that your cloned recovery environment cannot run because of hardcoded configuration strings or missing identity role assignments. During a restore drill, you might successfully restore your production SQL database to a cloned instance named `db-orders-restored` and spin up duplicate container instances. However, upon boot, the restored application either crashes instantly or, worst of all, silently connects back to your *active, primary production database*.
 
 This happens because the application's environment configuration, Bicep templates, or Key Vault Secret References contain hardcoded hostnames pointing directly to the primary environment (e.g., `db-orders-prod.database.windows.net`). If the application successfully logs in, your drill will execute test database writes directly on live production tables, corrupting real customer records. Alternatively, if you successfully parameterized the database endpoint, the boot will still fail with a `403 Forbidden` if your cloned compute's managed identity lacks the necessary data-plane role assignments on the newly provisioned `db-orders-restored` database.
 
-This identical hazard occurs in AWS recovery planning. If you spin up an isolated EC2 or ECS recovery sandbox in a secondary region, the restored containers will fail to operate if their database endpoints are hardcoded to the primary RDS writer endpoint, or if their ECS Task Role lacks the IAM permissions to decrypt the secondary region's KMS key or read the newly provisioned DynamoDB table.
+This identical hazard occurs in AWS recovery planning. If you spin up an isolated EC2 or ECS recovery environment in a secondary region, the restored containers will fail to operate if their database endpoints are hardcoded to the primary RDS writer endpoint, or if their ECS Task Role lacks the IAM permissions to decrypt the secondary region's KMS key or read the newly provisioned DynamoDB table.
 
-The top-down diagram below compares a failed, unsafe recovery drill with a secure, parameterized sandbox drill:
+The top-down diagram below compares a failed, unsafe recovery drill with a secure, parameterized recovery drill:
 
 ```mermaid
 flowchart TD

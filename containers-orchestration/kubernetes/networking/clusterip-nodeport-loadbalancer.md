@@ -22,7 +22,9 @@ id: article-containers-orchestration-kubernetes-networking-clusterip-nodeport-lo
 
 ## One Service API, Three Exposure Shapes
 
-After you understand that a Service gives Pods a stable identity, the next question is where that identity should be reachable from. Kubernetes answers that with Service types. The type does not change the application code in `devpolaris-orders-api`; it changes how far Kubernetes publishes the Service.
+Service types are exposure settings for the same Service API. They answer where the stable Service address should be reachable from: only inside the cluster, through every node, or through an external load balancer.
+
+Example: the same `devpolaris-orders-api` backend can stay internal as `ClusterIP` for web Pods, become reachable on node port `31080` in a lab, or request a cloud load balancer with an external IP. The type does not change the application code in `devpolaris-orders-api`; it changes how far Kubernetes publishes the Service.
 
 `ClusterIP` is the default. It creates a cluster-internal virtual IP and DNS name. `NodePort` builds on that and opens a high port on every node. `LoadBalancer` builds on those ideas and asks the cloud provider or load balancer implementation to create an external load balancer.
 
@@ -39,7 +41,9 @@ The safe default for most backend APIs is `ClusterIP`. You can still expose that
 
 ## ClusterIP for Internal Contracts
 
-A `ClusterIP` Service is for callers inside the cluster. It is the right shape when `devpolaris-web`, background workers, or another API needs to call `devpolaris-orders-api` without leaving the Kubernetes network.
+A `ClusterIP` Service is a cluster-internal virtual IP and DNS name. It is for callers inside the Kubernetes network.
+
+Example: `devpolaris-web`, background workers, or another API can call `devpolaris-orders-api.orders` without sending traffic through a public load balancer.
 
 ```yaml
 apiVersion: v1
@@ -69,7 +73,9 @@ The `<none>` under `EXTERNAL-IP` is not an error. It is the point. This Service 
 
 ## NodePort for Direct Node Entry
 
-A `NodePort` Service opens the same port on every node and forwards traffic from that node port to the Service. Kubernetes usually allocates a port from the configured node port range. Many clusters use the default range `30000-32767`, but you should check your cluster rather than assume it.
+A `NodePort` Service opens a port on each node IP and forwards traffic from that port into the Service. It exists for direct node entry, local labs, or external load balancers that you manage outside Kubernetes.
+
+Example: if the node port is `31080`, traffic to `worker-1:31080` and `worker-2:31080` can both reach the orders API Service. Kubernetes usually allocates a port from the configured node port range. Many clusters use the default range `30000-32767`, but you should check your cluster rather than assume it.
 
 ```yaml
 apiVersion: v1
@@ -100,7 +106,9 @@ The `80:31080/TCP` output means clients inside the cluster can still use port 80
 
 ## LoadBalancer for Infrastructure Integration
 
-A `LoadBalancer` Service asks the cluster's infrastructure integration to create an external load balancer. In a managed cloud cluster, that usually means the cloud controller talks to the cloud provider. In a local or bare-metal cluster, a project such as MetalLB may provide the implementation.
+A `LoadBalancer` Service asks infrastructure outside the Kubernetes API to publish the Service externally. In a managed cloud cluster, that usually means the cloud controller talks to the cloud provider. In a local or bare-metal cluster, a project such as MetalLB may provide the implementation.
+
+Example: a cloud controller can create a public IP such as `203.0.113.42`, attach it to a provider load balancer, and forward traffic to the Service backends.
 
 ```yaml
 apiVersion: v1
@@ -130,7 +138,7 @@ The external IP is the outside entry point. The node port may still exist behind
 
 ## Choosing by Audience
 
-Choose the Service type by asking who needs to call the workload. If the only callers are other Pods, use `ClusterIP`. If you need each node to listen on a stable port for a lab or custom load balancer, use `NodePort`. If the cluster should request infrastructure for outside traffic, use `LoadBalancer`.
+A Service type is an exposure choice. It decides where the stable Service address is reachable, so choose it by naming the caller first. If the only callers are other Pods, use `ClusterIP`. If you need each node to listen on a stable port for a lab or custom load balancer, use `NodePort`. If the cluster should request infrastructure for outside traffic, use `LoadBalancer`.
 
 | Need | Service type | Good fit for `devpolaris-orders-api` |
 |------|--------------|--------------------------------------|
@@ -143,7 +151,7 @@ The tradeoff is surface area. Wider exposure gives easier access from outside th
 
 ## Failure Mode: Pending External IP
 
-A common first `LoadBalancer` failure is a Service that remains pending. The manifest applied successfully, but the external address never appears.
+A pending external IP means Kubernetes accepted the `LoadBalancer` Service, but the infrastructure layer has not assigned an outside address yet. The manifest applied successfully, but the public entry point never appeared.
 
 ```bash
 $ kubectl -n orders get svc devpolaris-orders-api-public
@@ -205,7 +213,7 @@ You can still use `LoadBalancer` directly for simple services, especially non-HT
 
 ## Production Review Questions
 
-A production review should connect the YAML to the request path. Ask who can call the workload, which component owns the public address, and how a failed health check will be noticed. For `devpolaris-orders-api`, the answer should name the caller, the Service, and the routing layer rather than saying only "Kubernetes handles it."
+A production review for Service types should connect the exposure choice to the real request path. Ask who can call the workload, where the first outside address exists, and how a failed health check will be noticed. For `devpolaris-orders-api`, the answer should name the caller, the Service type, and any routing layer in front of it rather than saying only "Kubernetes handles it."
 
 ```text
 Request path review:

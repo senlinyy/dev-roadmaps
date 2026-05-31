@@ -51,6 +51,8 @@ Event-driven architecture changes the integration shape. A service publishes a f
 
 Event-driven architecture is a way to connect systems through events. An event is a record that something happened. Instead of asking another service to do work right now, a producer says, "This fact is true now," and consumers react.
 
+At a high level, event-driven architecture is a routing model for state-change records. Producers publish facts about completed business or system changes, and consumers subscribe to the facts they need without the producer calling each consumer directly.
+
 In AWS, Amazon EventBridge is the main service to learn for event routing. An event bus receives events. Rules match event patterns. Targets receive matching events. The target might be a Lambda function, SQS queue, SNS topic, Step Functions state machine, ECS task, or another supported destination.
 
 The useful mental model is routing facts:
@@ -68,6 +70,8 @@ Event-driven design is strongest when the producer should not know every future 
 ## Events
 
 An event should describe something that already happened. `OrderCreated` is an event. `CreateOrder` is a command. That difference matters because it changes ownership.
+
+An event is an immutable fact record. It should name the source, event type, timestamp, and stable identifiers that let consumers fetch or process the related state.
 
 A command asks another component to do something. The sender usually cares whether it succeeded. An event announces that something happened. The publisher should not need to know every reaction.
 
@@ -93,6 +97,8 @@ The gotcha is tense. If the payload says something happened, the producing servi
 
 An EventBridge event bus receives events and routes them to targets through rules. AWS accounts have a default event bus that receives events from many AWS services. Teams can also create custom event buses for application events.
 
+An event bus is the routing surface for events. It receives event records, evaluates rules, and delivers matching records to targets without becoming the system of record.
+
 For the orders system, a custom `orders-events` bus can receive events such as `OrderCreated`, `PaymentCaptured`, and `RefundIssued`. Rules on that bus can route only the events each downstream system cares about.
 
 The event bus is not the owner of the business state. RDS owns orders. S3 owns receipt PDFs. DynamoDB may own idempotency records. The event bus owns routing. That separation keeps the architecture readable.
@@ -102,6 +108,8 @@ Event buses are well-suited for many-to-many routing. One source can produce eve
 ## Rules
 
 Rules decide which events are sent to which targets. A rule uses an event pattern to match fields in the event, such as `source`, `detail-type`, or values inside `detail`.
+
+A rule is a pattern-matching subscription. It declares which event fields a target cares about and turns those matches into delivery attempts.
 
 For example, a receipt rule might match only order-created events:
 
@@ -119,6 +127,8 @@ The gotcha is pattern precision. A broad rule can send too much work to a target
 ## Targets
 
 A target is the destination for a matched event. EventBridge supports many target types, including Lambda functions, SQS queues, SNS topics, Step Functions state machines, ECS tasks, and API destinations.
+
+A target is the reaction endpoint for a matched event. The target type should match the work shape, such as a handler, queue, workflow, container task, topic, or external API destination.
 
 The target should match the work shape:
 
@@ -138,6 +148,8 @@ Targets need permissions too. EventBridge must be allowed to invoke the target. 
 ## Delivery Failures and Redrive
 
 Event routing is not the same thing as guaranteed business success. EventBridge can successfully match a rule and still fail to deliver to a target because the target permission is missing, the target is throttling, or the target returns an error.
+
+Delivery failure handling is the per-target retry and inspection model. EventBridge can retry failed target invocations and send exhausted failures to a DLQ, but each target still needs idempotency and observability.
 
 For many target types, EventBridge retries failed invocations for a configured retry window. By default, EventBridge retries delivery for up to 24 hours and up to 185 attempts with exponential backoff and jitter. That is useful for temporary errors, but it also means targets can receive the same event more than once. If all retries are exhausted and no dead-letter queue is configured, EventBridge can drop the failed delivery after recording failure metrics. Configure a dead-letter queue when failed events need inspection instead of disappearing into metrics and logs.
 
@@ -164,6 +176,8 @@ This partial-failure behavior is why event consumers must be independently obser
 
 Not every event comes from a business action. Some work starts because time passed: nightly export, stale-cart cleanup, subscription renewal, backup verification, or report generation.
 
+A schedule is a time-based event source. It turns cron, rate, or one-time schedule definitions into target invocations with their own permissions, retries, and enabled state.
+
 EventBridge can run scheduled work. AWS now recommends EventBridge Scheduler for scheduled invocations when you need a managed scheduling service. Scheduler can use rate or cron expressions, one-time schedules, flexible time windows, retries, and target invocation permissions.
 
 The scheduling mental model is still event-shaped. Time becomes the source. The target receives an invocation because a schedule fired.
@@ -173,6 +187,8 @@ The gotcha is ownership. A schedule that starts a cleanup job can delete or chan
 ## Idempotency
 
 Event-driven systems must expect retries and duplicates. A target may receive the same event more than once. A producer may publish twice after a retry. A subscriber may fail after doing the side effect but before recording success. EventBridge also gives each delivered event an ID, but application-level idempotency should usually use a stable business key when the business action must happen only once.
+
+Idempotency is the duplicate-safe processing contract. It lets a handler receive the same event more than once without repeating harmful side effects.
 
 Idempotency means handling repeated input without repeating harmful side effects. If `OrderCreated` is delivered twice, the receipt service should not send two receipts. If `PaymentCaptured` is processed twice, fulfillment should not ship twice.
 
@@ -193,6 +209,8 @@ EventBridge routes facts. Your application still owns safe reaction.
 
 Events often arrive in the order you hope for, until the day they do not. Distributed systems can retry, buffer, parallelize, and redeliver. EventBridge is a routing service, not a strict ordering engine for a business workflow. If a workflow needs strict ordering, design for it explicitly.
 
+Ordering is a workflow requirement, not an automatic property of event routing. If business correctness depends on sequence, use the queue, state, or workflow mechanism that explicitly preserves that sequence.
+
 For example, `PaymentCaptured` should not be processed as if the order is ready if `OrderCreated` has not committed. A consumer that receives `PaymentCaptured` can fetch the current order state before acting. That is often safer than assuming event arrival order tells the whole truth.
 
 Ordering expectations should be written down:
@@ -209,6 +227,8 @@ Event-driven architecture reduces coupling, but it does not remove sequence from
 ## Step Functions
 
 Step Functions is AWS's workflow orchestration service. It lets a team define a state machine made of steps. Steps can call Lambda, AWS services, HTTP endpoints, or other work units. The workflow can branch, retry, catch errors, wait, run parallel paths, and keep execution history.
+
+Step Functions acts as a managed state machine for multi-step processes. It is the right fit when the process needs explicit order, branching, retries, waits, error handling, and visible execution history.
 
 Use Step Functions when the process itself has important state and order. Fraud review may need: validate order, call provider, wait for manual review if risk is high, retry temporary provider errors, write the final decision, then notify fulfillment. That is more than "an event happened." It is a workflow.
 

@@ -37,7 +37,9 @@ The first operational skill is inventory. List what the service needs to run, wh
 
 ## Kubernetes API Objects and etcd
 
-Kubernetes stores cluster state in etcd, a distributed key-value store used by the control plane. When you create a ConfigMap, Secret, Deployment, or PVC, that object becomes API state. If etcd is lost without a backup, the cluster can lose the record of what should exist.
+etcd is the database the Kubernetes control plane uses to store API objects. It is a distributed key-value store, which means it stores named records and replicates them across members for consistency.
+
+Example: when you create a ConfigMap, Secret, Deployment, or PVC, that object becomes API state stored through etcd. If etcd is lost without a backup, the cluster can lose the record of what should exist.
 
 Many managed Kubernetes platforms handle control plane backups for you, but you still need to understand the boundary. A managed control plane backup may restore API objects. It does not automatically restore data inside an external database. It may not restore a deleted cloud disk if the disk was removed by a reclaim policy.
 
@@ -96,9 +98,11 @@ That last line matters. Restore is not complete when YAML applies successfully. 
 
 ## Backing Up Manifests and Cluster State
 
-Git is a strong backup of intended configuration when you practice declarative delivery. If your Deployments, ConfigMaps, Services, RBAC, and PVC manifests live in Git, you can recreate much of the desired API state. Cluster recovery still needs separate backups for runtime state and data.
+A manifest backup is the recoverable record of the Kubernetes objects you intended to run. Git is a strong place for that record when you practice declarative delivery. If your Deployments, ConfigMaps, Services, RBAC, and PVC manifests live in Git, you can recreate much of the desired API state.
 
-A simple export command can help during learning, but it is not a clean source of truth because live objects contain generated fields.
+Cluster recovery still needs separate backups for runtime state and data. Example: Git can recreate the `orders-api-workdir` PVC object, but a storage snapshot or application backup must recover the files that lived on the volume.
+
+A simple export command can help during learning, but it is not a clean primary record because live objects contain generated fields.
 
 ```bash
 $ kubectl get deploy,svc,configmap,secret,pvc -n devpolaris-prod -o yaml > devpolaris-prod-api-objects.yaml
@@ -108,7 +112,7 @@ That file may contain resource versions, managed fields, timestamps, and data yo
 
 A better steady-state pattern is:
 
-| Object Type | Source of Truth |
+| Object Type | Primary Recovery Record |
 |-------------|-----------------|
 | Deployment and Service | Git manifests or Helm chart |
 | ConfigMap | Git manifest when values are non-secret |
@@ -120,7 +124,9 @@ The API object and the data behind it are different layers. Back up both when bo
 
 ## Volume Snapshots and PVC Recovery
 
-Many CSI storage drivers support VolumeSnapshot resources. A snapshot captures the state of a volume at a point in time. The exact guarantees depend on the driver and storage system, especially when applications are writing during the snapshot.
+A volume snapshot is a point-in-time recovery copy for a PVC's backing storage. It is useful when a team needs to recover files from a work directory, clone data into a restore namespace, or inspect a previous version without changing the original volume.
+
+Many CSI storage drivers support VolumeSnapshot resources. The exact guarantees depend on the driver and storage system, especially when applications are writing during the snapshot.
 
 A snapshot object usually points at a PVC.
 
@@ -241,7 +247,7 @@ Run the checklist before you need it. A restore drill turns backup from a hopefu
 
 ### Restore Order Matters
 
-A restore plan also needs an order. Restoring a Deployment before its Secret, PVC, or database is ready may create noisy CrashLoopBackOff Pods. That noise can hide the real missing dependency while the team is trying to recover.
+A restore order is the dependency sequence that brings a service back without creating avoidable noise. Restoring a Deployment before its Secret, PVC, or database is ready may create CrashLoopBackOff Pods. That noise can hide the real missing dependency while the team is trying to recover.
 
 For `devpolaris-orders-api`, a clean restore order is usually infrastructure first, data second, workload last.
 

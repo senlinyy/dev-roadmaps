@@ -41,7 +41,9 @@ The important boundary is that a ConfigMap is not a password store. If a value w
 
 ## The First ConfigMap for devpolaris-orders-api
 
-Start with the values the application already needs. A small Node service often reads configuration through `process.env`, which is just a map of strings. Kubernetes can fill that map from a ConfigMap, so the application code does not need to know where the values came from.
+A ConfigMap is useful when you can name the plain values the application already needs at startup. A small Node service often reads configuration through `process.env`, which is a map of strings attached to the process when it starts.
+
+Example: `devpolaris-orders-api` can receive `LOG_LEVEL=info` and `FEATURE_REFUNDS=false` from a ConfigMap, while the application code still reads ordinary environment variables. Kubernetes fills that map from the ConfigMap, so the application code does not need to know where the values came from.
 
 Here is a ConfigMap for staging. It contains only values that a teammate can safely read in a pull request.
 
@@ -81,7 +83,9 @@ That layout makes the environment boundary visible. The staging and production f
 
 ## Injecting ConfigMap Keys as Environment Variables
 
-The shortest way to use a ConfigMap is `envFrom`. It copies every key from the ConfigMap into the container environment. This is convenient when the ConfigMap exists only for one application and every key is meant for that container.
+Injecting a ConfigMap means copying selected ConfigMap keys into the container's runtime configuration. The shortest way is `envFrom`, which copies every key from the ConfigMap into the container environment.
+
+Example: if `orders-api-config` contains only keys meant for the orders API container, `envFrom` can load `PORT`, `LOG_LEVEL`, and `FEATURE_REFUNDS` in one block. This is convenient when the ConfigMap exists only for one application and every key is meant for that container.
 
 ```yaml
 apiVersion: apps/v1
@@ -138,7 +142,9 @@ Explicit keys make review slower but clearer. A reviewer can see that the API de
 
 ## How Updates Reach Running Pods
 
-A ConfigMap update changes the Kubernetes object, but it does not rewrite the environment of a process that is already running. Environment variables are captured when the container starts. If `devpolaris-orders-api` reads `LOG_LEVEL` at startup, updating the ConfigMap object will not change the value inside existing Pods.
+A ConfigMap update changes the API object, not the memory of a process that is already running. Environment variables are captured when the container starts.
+
+Example: if `devpolaris-orders-api` reads `LOG_LEVEL` at startup, changing the ConfigMap from `info` to `debug` will not change existing Pods. New Pods must start before the process sees the new value.
 
 You can see that split with a simple status check.
 
@@ -212,7 +218,9 @@ That log line is much better than a later connection failure. Configuration shou
 
 ## Reviewing ConfigMap Changes
 
-ConfigMap reviews are small, but they can still change production behavior. A feature flag can enable a code path. A URL can send traffic to the wrong service. A timeout can turn a slow dependency into many failed requests. Treat configuration changes as application changes, not as harmless text edits.
+A ConfigMap review is a review of how a running application will behave after the next rollout. The file may look small, but the values can decide which dependency the service calls, which code path a feature flag enables, or how long the app waits before timing out.
+
+Example: changing `CATALOG_API_URL` from the staging catalog Service to the production catalog Service is only one line of YAML, but it changes where `devpolaris-orders-api` sends live requests. Treat configuration changes as application changes, not as harmless text edits.
 
 For `devpolaris-orders-api`, a reviewer should ask three questions. Does the key belong in a ConfigMap rather than a Secret? Does the value match the target namespace and environment? Does the rollout plan restart the Pods if the app reads the value at startup?
 
@@ -237,7 +245,9 @@ A mature team eventually standardizes this review pattern. The habit saves time 
 
 ## ConfigMaps Versus Other Configuration Paths
 
-ConfigMaps are not the only place configuration can live. A value can be baked into the image, passed as an environment variable by the Deployment, mounted as a file, fetched from a database, or served by a configuration service. Kubernetes gives you ConfigMaps because many settings are small, environment-specific, and easy to review as YAML.
+A configuration path is the route a value takes from a human decision to the process that uses it. A value can be baked into the image, written directly in the Deployment, loaded from a ConfigMap, mounted as a file, fetched from a database, or served by a configuration service.
+
+Kubernetes gives you ConfigMaps because many settings are small, environment-specific, and easy to review as YAML. Example: `LOG_LEVEL=info` and `CATALOG_API_URL=http://catalog-api.devpolaris-staging.svc.cluster.local:8080` fit well in a ConfigMap because they are plain operational values that change by environment.
 
 | Option | Good For | Tradeoff |
 |--------|----------|----------|

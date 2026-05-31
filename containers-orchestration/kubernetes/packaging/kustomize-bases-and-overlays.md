@@ -30,7 +30,9 @@ For `devpolaris-orders-api`, the base contains the Deployment and Service. The s
 
 ## The Base Directory
 
-A base is a directory that other kustomizations can reuse. It should not know who is reusing it. That boundary keeps the base clean.
+A base is a reusable directory of ordinary Kubernetes YAML plus a `kustomization.yaml` file. Other kustomizations can reference it, and it should not know who is reusing it.
+
+Example: the orders API base can define the shared Deployment and Service once, while staging and production overlays decide namespace, replicas, and image tag.
 
 ```text
 k8s/
@@ -85,7 +87,9 @@ Because the base is valid YAML, a beginner can inspect it without learning a tem
 
 ## The First Overlay
 
-An overlay references the base and then customizes it. Staging can set a namespace, reduce replicas, and use a staging image tag.
+An overlay is a kustomization that references a base and adds environment-specific changes. It exists so staging and production can share the same workload shape without copying the whole Deployment.
+
+Example: staging can set a namespace, reduce replicas to one, and use a staging image tag.
 
 ```yaml
 apiVersion: kustomize.config.k8s.io/v1beta1
@@ -114,7 +118,9 @@ The source files remain readable, and the rendered output shows the final Kubern
 
 ## Patching Specific Fields
 
-When a built-in customization is not enough, use a patch. Production can add stronger resource requests without duplicating the whole Deployment.
+A Kustomize patch is a small YAML fragment that changes selected fields on a target object. Use it when a built-in customization is not enough.
+
+Example: production can add stronger resource requests to the orders API Deployment without duplicating the whole Deployment.
 
 ```yaml
 apiVersion: kustomize.config.k8s.io/v1beta1
@@ -153,7 +159,9 @@ Keep patches small. A patch that rewrites most of the Deployment is a copied man
 
 ## ConfigMap Generators and Name Updates
 
-Kustomize can generate ConfigMaps from literals or files. The generated name often includes a hash so Pods roll when the config changes.
+A ConfigMap generator creates ConfigMap objects from literals or files during rendering. The generated name often includes a hash so Pods roll when the config changes.
+
+Example: if `LOG_LEVEL` changes in the generator, Kustomize can render a new ConfigMap name and update the Deployment reference, which changes the Pod template.
 
 ```yaml
 configMapGenerator:
@@ -183,7 +191,9 @@ That hash is useful because a changed ConfigMap name changes the Pod template, w
 
 ## Rendering and Applying an Overlay
 
-Kustomize is built into `kubectl`, so you can render or apply a directory with `-k`.
+Rendering an overlay means building the final YAML from the base plus overlay changes. Kustomize is built into `kubectl`, so you can render or apply a directory with `-k`.
+
+Example: `kubectl kustomize k8s/overlays/prod` prints the production orders API manifests, while `kubectl apply -k k8s/overlays/prod` sends them to the API server.
 
 ```bash
 $ kubectl kustomize k8s/overlays/prod > rendered/prod.yaml
@@ -207,7 +217,7 @@ Kustomize builds YAML. Kubernetes still owns rollout behavior.
 
 ## Failure Mode: A Patch Targets the Wrong Object
 
-Suppose a patch uses the wrong Deployment name. Kustomize cannot find a target.
+A patch target is the Kubernetes object identity the patch is supposed to change. Kustomize matches that target by fields such as `kind`, `metadata.name`, API group, version, and sometimes namespace. Suppose a patch uses the wrong Deployment name. Kustomize cannot find a target.
 
 ```yaml
 apiVersion: apps/v1
@@ -248,7 +258,7 @@ The tradeoff is directness versus flexibility. Kustomize keeps the source close 
 
 ## Reviewing an Overlay Pull Request
 
-An overlay pull request should show both the patch and the rendered result. If the patch changes production replicas, the rendered Deployment should prove the final count. If the patch changes a ConfigMap literal, the rendered ConfigMap and Deployment reference should both be checked.
+An overlay review should connect the source patch to the final rendered object. If the patch changes production replicas, the rendered Deployment should prove the final count. If the patch changes a ConfigMap literal, the rendered ConfigMap and Deployment reference should both be checked.
 
 ```diff
  replicas:

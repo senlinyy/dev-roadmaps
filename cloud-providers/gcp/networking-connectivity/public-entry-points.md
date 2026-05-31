@@ -22,13 +22,13 @@ aliases:
 
 ## Public Entry Points
 
-When you deploy a backend application to the cloud, you cannot let public internet users connect directly to your private servers. Doing so would expose your database ports, make your system highly vulnerable to security scans, and cause your application to crash if thousands of users flooded the system at once. Instead, you need a secure, managed gateway at the front of your network. Think of this public entry point like the secure front lobby of a large corporate office building. Public visitors (user requests) are stopped at the lobby desk (load balancer), where the receptionist terminates their session, verifies their ID (verifies the HTTPS security certificate), and then guides them safely to the correct room (application container) using an internal guide (Serverless NEG).
+Public entry points are the managed DNS, TLS, proxy, and routing components that receive internet traffic before it reaches private application backends. For a GCP backend, that usually means a custom domain, a public IP, an HTTPS certificate, an external Application Load Balancer, a URL map, and a backend target such as a Serverless Network Endpoint Group.
 
 ![A user reaches a service through DNS, edge TLS, a load balancer rule, and a backend target.](/content-assets/articles/article-cloud-providers-gcp-networking-connectivity-dns-custom-domains-https-load-balancing/public-entry-path.png)
 
 *Public entry is a chain of routing decisions, not just a service URL.*
 
-By decoupling traffic entry from runtime execution, your application remains completely private. When a user queries your website domain, their request is intercepted at the global edge of Google's network. The high-latency network connection is safely terminated, inspected for security compliance, and then routed over Google's private internal fiber cables directly to your private backend containers.
+By decoupling traffic entry from runtime execution, your application backend can remain private while public clients use a stable HTTPS endpoint. When a user queries your website domain, DNS points them to the load balancer's public address. The external Application Load Balancer terminates TLS at Google's edge, applies routing policy, and sends the request to the configured backend path.
 
 This secure public ingress pipeline is built by coordinating several layers. First, a naming system (Cloud DNS) translates your custom domain name into a public IP address. Second, a certificate service (Google-managed SSL) handles encrypting and decrypting the traffic. Third, an external load balancer evaluates your request URLs to route them to the right backend. Finally, a logical adapter (Serverless Network Endpoint Group) connects this load balancer directly to your serverless container runtimes.
 
@@ -69,7 +69,7 @@ Once terminated, the GFE proxies the HTTP payload over Google's private, dedicat
 
 ## HTTPS and Google-Managed SSL Certificates
 
-Public entry points require SSL/TLS encryption to protect data in transit. Google Cloud Load Balancing manages the complexity of certificate provisioning, validation, and renewal automatically.
+SSL/TLS certificates are the public key material that lets clients verify the domain and encrypt the HTTPS session. Public entry points require SSL/TLS encryption to protect data in transit. Google Cloud Load Balancing can manage the complexity of certificate provisioning, validation, and renewal automatically when you use Google-managed certificates.
 
 When you configure a Google-managed certificate, Google obtains, manages, and renews a domain-validated certificate for the names you configure. Your job is to point DNS at the load balancer and wait for provisioning to complete.
 
@@ -77,7 +77,7 @@ Once issued, the certificate is served by the load balancer's frontend. TLS term
 
 ## Cloud Load Balancing and URL Maps
 
-Central to public traffic routing is the **External Application Load Balancer**. The load balancer operates at Layer 7 (HTTP/HTTPS) and uses a structured routing engine called a URL Map.
+The external Application Load Balancer is the managed HTTP(S) proxy that receives public requests and applies routing policy. It operates at Layer 7 (HTTP/HTTPS) and uses a structured routing engine called a URL Map.
 
 A URL Map evaluates the path and headers of incoming HTTP requests and directs them to the appropriate backend service. For example, you can configure a single URL Map to route traffic based on path rules:
 
@@ -89,7 +89,7 @@ By centralizing routing rules inside the URL Map, you avoid exposing separate do
 
 ## Serverless Network Endpoint Groups
 
-A major challenge in serverless environments is that runtimes like Cloud Run do not expose stable VM backend IP addresses in your VPC subnets. To let an external Application Load Balancer target a serverless service, GCP uses **Serverless Network Endpoint Groups (Serverless NEGs)**.
+A Serverless Network Endpoint Group (Serverless NEG) is the logical backend object that lets a load balancer target a regional serverless service. A major challenge in serverless environments is that runtimes like Cloud Run do not expose stable VM backend IP addresses in your VPC subnets. To let an external Application Load Balancer target a serverless service, GCP uses **Serverless NEGs**.
 
 ![A serverless NEG lets the global load balancer target regional serverless services.](/content-assets/articles/article-cloud-providers-gcp-networking-connectivity-dns-custom-domains-https-load-balancing/url-map-neg-cold-start.png)
 
@@ -103,7 +103,7 @@ The Serverless NEG functions as the logical adapter that allows the global load 
 
 ## What the Load Balancer Can See
 
-One of the primary latency penalties in serverless computing is the "cold start," which occurs when a service must scale from zero instances to serve an incoming request. The external Application Load Balancer can route requests to the right regional serverless backend, apply URL map rules, serve the public certificate, and enforce frontend traffic policy.
+The load balancer sees request metadata and backend routing state, not the internal health of the serverless process. One of the primary latency penalties in serverless computing is the "cold start," which occurs when a service must scale from zero instances to serve an incoming request. The external Application Load Balancer can route requests to the right regional serverless backend, apply URL map rules, serve the public certificate, and enforce frontend traffic policy.
 
 The load balancer cannot inspect your Cloud Run process like a VM health check agent. It does not know whether your handler will open a database connection quickly or whether a new instance will have a cold start. For serverless backends, monitor Cloud Run request latency, instance startup behavior, error rates, and logs alongside load-balancer metrics. If you need to prevent users from bypassing the load balancer, pair the Serverless NEG with Cloud Run ingress settings that allow load-balancer traffic while blocking direct public calls to the raw service URL.
 

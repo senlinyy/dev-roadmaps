@@ -24,7 +24,9 @@ id: article-containers-orchestration-kubernetes-networking-network-policies
 
 The default Kubernetes networking model allows Pods to communicate across the cluster unless something restricts them. That openness makes service discovery simple, but it is too broad for many production systems. A metrics scraper may need to call every service. A public web Pod may need to call `devpolaris-orders-api`. A random debug Pod in another namespace probably should not reach order creation endpoints.
 
-A NetworkPolicy is a Kubernetes object that describes allowed network traffic for selected Pods. It is label-based, namespace-aware, and enforced by the cluster network plugin. If the network plugin does not support NetworkPolicy, creating the object may succeed while traffic remains unrestricted.
+A NetworkPolicy is a Kubernetes object that describes allowed network traffic for selected Pods. Traffic here means packets, which are small chunks of data moving between network addresses and ports. A policy is label-based, namespace-aware, and enforced by the cluster network plugin.
+
+Example: a policy can allow Pods labeled `app.kubernetes.io/name=devpolaris-web` in the `web` namespace to connect to orders API Pods on TCP port `3000`, while denying a debug Pod from the `default` namespace. If the network plugin does not support NetworkPolicy, creating the object may succeed while traffic remains unrestricted.
 
 ```mermaid
 flowchart TD
@@ -38,7 +40,9 @@ NetworkPolicy is not application authentication. It is a network boundary. The A
 
 ## Select the Protected Pods First
 
-A NetworkPolicy starts by selecting the Pods it protects. For `devpolaris-orders-api`, the policy should select Pods with the stable application label.
+A NetworkPolicy starts by selecting the destination Pods it protects. The `podSelector` is not an allow rule by itself, it defines the set of Pods the policy applies to.
+
+Example: for `devpolaris-orders-api`, the policy should select Pods with the stable application label, then add separate rules for the callers that are allowed to reach them.
 
 ```yaml
 apiVersion: networking.k8s.io/v1
@@ -60,7 +64,7 @@ The key mental model is selection first, permission second. The policy does not 
 
 ## Allow the Web Tier to Call Orders
 
-Now add a rule that allows `devpolaris-web` Pods in the `web` namespace to call port 3000 on the orders API Pods. The Service exposes port 80, but NetworkPolicy checks traffic at the Pod port after forwarding, so the allowed port should match the container listener.
+An ingress allow rule is the exception that lets a selected source reach protected Pods. For `devpolaris-orders-api`, the useful first exception is `devpolaris-web` Pods in the `web` namespace reaching TCP port `3000` on the orders API Pods. The Service exposes port 80, but NetworkPolicy checks traffic at the Pod port after forwarding, so the allowed port should match the container listener.
 
 ```yaml
 apiVersion: networking.k8s.io/v1
@@ -91,7 +95,9 @@ The `namespaceSelector` and `podSelector` inside the same `from` item are combin
 
 ## Egress Rules Control Outbound Calls
 
-Ingress rules control who may connect to selected Pods. Egress rules control where selected Pods may connect. Many teams start with ingress restrictions because it protects service entry points. Egress restrictions are useful when you need to limit where a workload can send data.
+Ingress rules control who may connect to selected Pods. Egress rules control where selected Pods may connect outbound.
+
+Example: the orders API may need outbound traffic to PostgreSQL on port `5432` and DNS on port `53`, but it should not be able to open arbitrary connections to every namespace. Many teams start with ingress restrictions because it protects service entry points. Egress restrictions are useful when you need to limit where a workload can send data.
 
 For example, `devpolaris-orders-api` may need to call PostgreSQL and cluster DNS, but not arbitrary services. A first egress policy might allow DNS plus a database namespace.
 
@@ -125,7 +131,7 @@ If you add egress deny rules and forget DNS, many applications fail in a way tha
 
 ## Failure Mode: Selector Allows Too Much
 
-NetworkPolicy mistakes are often label mistakes. A broad namespace selector can allow every Pod in a namespace when you meant to allow one app.
+A selector that is too broad turns a narrow network boundary into a namespace-wide permission. NetworkPolicy mistakes are often label mistakes, and a namespace selector by itself can allow every Pod in that namespace when you meant to allow one app.
 
 ```yaml
 from:
@@ -172,7 +178,9 @@ If the source labels and namespace labels do not match the rule, fix the labels 
 
 ## NetworkPolicy Limits
 
-NetworkPolicy is useful, but it does not express every security idea. It does not authenticate users, inspect JSON bodies, enforce HTTP methods, or decide whether an order belongs to a customer. It also depends on the network plugin enforcing the API.
+NetworkPolicy is a network reachability control, not a full application security system. It can allow or deny traffic based on Pod labels, namespaces, IP blocks, and ports, but it cannot understand the business meaning of a request.
+
+Example: it can allow `web` Pods to connect to orders Pods on TCP port `3000`, but it cannot decide whether user `123` is allowed to view order `456`. It does not authenticate users, inspect JSON bodies, enforce HTTP methods, or decide whether an order belongs to a customer. It also depends on the network plugin enforcing the API.
 
 | Need | NetworkPolicy fit? | Better layer |
 |------|--------------------|--------------|
@@ -202,7 +210,7 @@ For `devpolaris-orders-api`, the important tradeoff is safety versus surprise. A
 
 ## Production Review Questions
 
-A production review should connect the YAML to the request path. Ask who can call the workload, which component owns the public address, and how a failed health check will be noticed. For `devpolaris-orders-api`, the answer should name the caller, the Service, and the routing layer rather than saying only "Kubernetes handles it."
+A production NetworkPolicy review should connect each allowed flow to one real caller, one destination, and one port. Ask which labels select the protected Pods, which namespace and Pod labels select the caller, and which infrastructure flows such as DNS or metrics must stay allowed. For `devpolaris-orders-api`, the answer should describe the intended packet path rather than saying only "Kubernetes handles it."
 
 ```text
 Request path review:

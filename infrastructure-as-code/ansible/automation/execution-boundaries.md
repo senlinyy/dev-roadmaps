@@ -28,6 +28,8 @@ aliases:
 
 ## The Problem: Orchestrating the Control Plane and Targets
 
+Ansible execution boundaries define where a task runs: on the control node, on a remote managed host, or through a delegated target.
+
 When automating the deployment of a secure customer notification system, system engineering teams must coordinate tasks across different physical environments. The notification service package is compiled as a compressed software tarball on a centralized integration server or resides in a local build directory on the control machine. The target production fleet consists of several remote virtual machines situated behind strict network firewalls.
 
 To deploy the update successfully, the playbook cannot start by modifying the remote servers. Before touching any production server, it must verify that the compiled tarball exists on the local build filesystem, calculate its SHA256 checksum against the expected value, read a version manifest file to determine which target version to deploy, and query a central configuration database or key-value store to retrieve active deployment routing rules. None of these operations can run on the remote nodes because they depend on local files or internal APIs that the remote servers cannot reach.
@@ -38,7 +40,9 @@ Conversely, if developers write separate, custom Bash scripts to handle the loca
 
 ## Ansible's Default Execution Boundary
 
-By default, Ansible playbooks establish an execution boundary that separates the control plane (the machine running the `ansible-playbook` command) from the managed hosts (the target systems listed in the inventory).
+Ansible's default execution boundary is remote execution. The control node runs `ansible-playbook`, but normal tasks execute on managed hosts through the selected connection plugin, usually SSH for Linux.
+
+Example: a file task that creates `/etc/app/config.yml` runs on `app-server-01`, not on your laptop, because that file belongs on the target server. By default, this separates the control node from the managed hosts listed in the inventory.
 
 When you execute a standard task, such as creating a directory, the control plane performs the following actions:
 1. **Module Payload Preparation**: It gathers the code path for the selected module (e.g. `ansible.builtin.file`) and prepares the task parameters for the connection plugin.
@@ -50,7 +54,9 @@ While this default boundary keeps managed hosts isolated and standardizes target
 
 ## Bypassing the SSH Transport: Local Connection Mode
 
-To execute tasks directly on the control plane without opening an SSH socket connection to a remote host, you can override the connection parameter. Ansible provides the `connection: local` directive to instruct the execution engine to use the local connection plugin.
+Local connection mode runs tasks on the control node instead of a remote host. Use it when the task needs local files, local tools, or local cloud credentials.
+
+Example: a task that checks `/opt/builds/checkout/checkout-api-latest.tar.gz` must run on the build server that holds the artifact, not on a production web host. Ansible provides the `connection: local` directive to use this local execution path.
 
 The following playbook demonstrates how to use `connection: local` to audit local software tarballs on the control node before pushing them to production web hosts:
 
@@ -79,7 +85,9 @@ For local plays, set the Python interpreter deliberately when needed. Official A
 
 ## Under the Hood: Subprocess Spawning on the Control Node
 
-When you configure `connection: local`, the execution engine executes a low-level process bypass within the Python runtime on the control node.
+Subprocess spawning means Ansible starts a child process on the same machine that launched the playbook. With `connection: local`, the module payload runs locally through Python instead of being transferred over SSH.
+
+Example: a local `stat` task can run as a child Python process on the CI runner and read `/opt/builds/checkout/checkout-api-latest.tar.gz` directly from the runner filesystem.
 
 Normally, the connection plugin manager loads `ansible.plugins.connection.ssh` to spawn a persistent SSH process. When `connection: local` is active, the manager loads `ansible.plugins.connection.local` instead.
 
@@ -121,7 +129,9 @@ graph TD
 
 ## Target Delegation: Running Tasks on Sibling Hosts
 
-While setting `hosts: localhost` with `connection: local` is excellent for dedicated local plays, developers often need to execute a single local task in the middle of a play that targets remote servers. For example, while deploying to a database server, the playbook might need to update a DNS record on a separate corporate DNS host.
+Delegation means one task runs somewhere other than the current inventory host. It lets a play continue targeting one host while a specific task executes on the control node or another inventory host.
+
+Example: during a database deployment, the active host can be `db-server-01`, but a metadata task can be delegated to `localhost` to write a central deployment log. While setting `hosts: localhost` is useful for dedicated local plays, delegation handles single redirected tasks inside a larger remote play.
 
 To redirect a single task to a different host without changing the scope of the play, you can use the `delegate_to` directive.
 
@@ -154,7 +164,9 @@ You can also use `delegate_to` to point to sibling hosts in the inventory, such 
 
 ## Delegate Facts and the Fact Assignment Boundary
 
-When executing delegated tasks that gather operating system status or host metrics, you must decide which host should own the gathered facts.
+Delegate facts control where facts gathered by a delegated task are stored. The question is whether the facts belong to the original inventory host being processed or to the host that actually ran the delegated task.
+
+Example: while processing `web-01`, a delegated setup task can gather facts from `db-server-01`. With `delegate_facts: true`, those facts are stored under `hostvars["db-server-01"]` instead of being attached to `web-01`.
 
 By default, facts gathered by a delegated task are assigned to the current inventory host, not to the delegated host. This surprises people who delegate a `setup` task to a different machine and expect those facts to appear under the delegated host's `hostvars`.
 
@@ -171,7 +183,9 @@ By adding `delegate_facts: true`, Ansible stores the gathered facts under `hostv
 
 ## Local Process Exhaustion and Throttling Boundaries
 
-While running delegated tasks locally can be efficient, it introduces a process scheduling risk when targeting large fleets. If your inventory contains 100 remote web servers, and the playbook includes a task delegated to `localhost` without serialization controls, Ansible can run multiple copies of that delegated task in parallel up to the active fork and strategy limits.
+Local process exhaustion happens when too many delegated local tasks run at once on the control node. Each copy consumes CPU, memory, file descriptors, credentials, and sometimes external API quota.
+
+Example: a play targeting 100 web hosts can accidentally start many parallel `aws elbv2 describe-target-health` commands on `localhost` if the task is delegated without `run_once` or `throttle`.
 
 Because `delegate_to: localhost` runs the work on the control plane, those parallel task copies consume local CPU, memory, file descriptors, API quota, and credentials.
 
@@ -202,7 +216,9 @@ To protect the control plane from local process exhaustion, you must apply throt
 
 ## The Shorthand Legacy: local_action versus delegate_to
 
-In older Ansible playbooks, developers often used a shorthand legacy notation called `local_action` to run individual tasks locally on the control machine.
+`local_action` is older shorthand for running a task on the control machine. `delegate_to: localhost` is the clearer modern form because it keeps normal YAML module syntax.
+
+Example: a local build archive check is easier to review as a normal `ansible.builtin.stat` task with `delegate_to: localhost` than as a dense one-line `local_action` string.
 
 A comparison of the two syntax formats illustrates the architectural differences:
 
@@ -226,7 +242,9 @@ Furthermore, `delegate_to: localhost` preserves standard YAML block dictionary s
 
 ## Environmental Inheritance and Path Resolution Differences
 
-When you bypass the remote execution boundary, the operating system context changes completely. Developers must understand these differences to prevent path resolution and variable failures.
+Execution context is the filesystem, environment variables, user, and Python runtime a task sees while it runs. Local and remote tasks can have completely different contexts.
+
+Example: `output.txt` in a local delegated task may be written under the CI runner workspace, while the same relative path in a remote task may resolve on `app-server-01`. Developers must understand these differences to prevent path and variable failures.
 
 ### Path Resolution
 
@@ -252,7 +270,9 @@ While this inheritance is highly convenient for cloud integrations, it can intro
 
 ## Security Boundaries and the Risks of Local Actions
 
-Bypassing the SSH transport layer introduces significant security considerations. When a playbook runs a task locally on the control plane, the control plane is directly exposed to the task's inputs and outputs.
+Local actions run with access to the control node's files, credentials, and environment. That makes them powerful, but also riskier than ordinary remote tasks when their inputs come from untrusted hosts.
+
+Example: a delegated shell task that builds a local command from remote host facts can turn a compromised remote fact into command execution on the CI runner. Bypassing the SSH transport layer therefore requires strict input validation.
 
 First, **Command Injection Risks** are highly severe. If a local task executes a shell module using variables gathered from remote, untrusted hosts (such as host facts), a malicious actor who has compromised a remote host can manipulate their facts to inject malicious commands into the local shell. If the control node runs with high privileges, these commands will execute with administrator authority on your orchestration control plane, compromising the root of your entire infrastructure.
 
@@ -270,7 +290,9 @@ If the `local_build_directory` variable is undefined or resolves to an empty str
 
 ## Local and Remote Execution Scenarios
 
-Deciding where to establish your task execution boundary is a key architectural decision. You must select the transport mode that matches the responsibility of the task.
+The right execution location is the machine that owns the resource being inspected or changed. Local tasks should handle local build artifacts and control-node API calls; remote tasks should handle files, packages, and services on managed hosts.
+
+Example: checksum a release tarball on the build runner, call a cloud load balancer API from `localhost`, and render `/etc/app.conf` on the remote application server.
 
 The table below outlines common operations scenarios and the recommended connection boundaries:
 

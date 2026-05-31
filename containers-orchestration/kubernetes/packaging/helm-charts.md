@@ -30,7 +30,9 @@ For `devpolaris-orders-api`, the first chart will package a Deployment and a Ser
 
 ## The Smallest Useful Chart Directory
 
-A chart is just files in a known layout. Helm recognizes some names, and the `templates/` directory is where Kubernetes objects are generated.
+A chart directory is a filesystem layout Helm understands. It contains chart metadata, default values, and templates that generate Kubernetes objects.
+
+Example: the first orders API chart can have `Chart.yaml`, `values.yaml`, a Deployment template, and a Service template. Helm recognizes some names, and the `templates/` directory is where Kubernetes objects are generated.
 
 ```text
 charts/orders-api/
@@ -60,7 +62,9 @@ Those archives would make the API release responsible for database or cache life
 
 ## Chart.yaml and Application Metadata
 
-`Chart.yaml` gives Helm enough information to identify the package. It is not the same thing as the container image version. The chart version describes the package. The app version describes the application the chart commonly deploys.
+`Chart.yaml` is the chart metadata file. It gives Helm enough information to identify the package, but it is not the same thing as the container image version.
+
+Example: chart version `0.1.0` can describe the package structure, while app version `2026.05.07` describes the application release the chart commonly deploys. The actual Deployment image still comes from templates and values.
 
 ```yaml
 apiVersion: v2
@@ -77,7 +81,9 @@ One common mistake is to bump `appVersion` and assume the Deployment image chang
 
 ## Templates Produce Kubernetes Objects
 
-Templates look like Kubernetes YAML with placeholders. Helm uses Go templates, so placeholders appear inside `{{ ... }}`. The rendered output should be valid YAML after those placeholders are replaced.
+A Helm template is Kubernetes YAML plus placeholders that Helm fills from release data and values. Helm uses Go templates, so placeholders appear inside `{{ ... }}`.
+
+Example: `.Values.replicaCount` can render into `spec.replicas: 3` for production and `spec.replicas: 1` for staging. The rendered output should be valid YAML after those placeholders are replaced.
 
 ```yaml
 apiVersion: apps/v1
@@ -142,7 +148,9 @@ Selectors deserve special attention because they are hard to change safely after
 
 ## Named Helpers Keep Labels Consistent
 
-Labels are easy to get almost right. A Service selector must match Pod labels exactly. If one template spells the app label differently from another template, traffic can disappear even when Pods are healthy.
+Named helpers are reusable template snippets, often used for names and labels that must stay identical across objects. They reduce copy mistakes in places where a small mismatch breaks behavior.
+
+Example: a Service selector must match Pod labels exactly. If one template spells the app label differently from another template, traffic can disappear even when Pods are healthy.
 
 Helm helpers reduce that risk by putting repeated names and labels in one place.
 
@@ -167,7 +175,7 @@ The helper file can look strange at first because it is template code, not Kuber
 
 ## Rendering and Linting a Chart
 
-Before installing a chart, render it locally. This catches many mistakes before the cluster is involved.
+Rendering prints the Kubernetes YAML that Helm will send to the cluster. Linting checks the chart source for common chart and template mistakes. Run both before installing so indentation errors, missing values, and malformed objects are caught while the change is still easy to fix.
 
 ```bash
 $ helm template orders ./charts/orders-api --namespace devpolaris-staging
@@ -216,7 +224,7 @@ This is a cheap check. It does not prove the app works, but it catches broken te
 
 ## Failure Mode: A Template Renders Broken YAML
 
-Template whitespace can break YAML. Suppose a helper is inserted without the right indentation. The chart looks reasonable, but rendering produces invalid YAML.
+YAML uses indentation to decide which fields belong together, and Helm templates can change that indentation while they render. Suppose a helper is inserted without the right spacing. The chart source looks reasonable, but rendering produces invalid YAML.
 
 ```bash
 $ helm template orders ./charts/orders-api
@@ -246,7 +254,7 @@ After the fix, render again and inspect the actual YAML. Do not stop at "the com
 
 ## What Belongs in a Chart
 
-A chart should package the repeated shape of the app. For `devpolaris-orders-api`, that might include the Deployment, Service, ConfigMap shape, default probes, default resources, and optional ingress. It should not include environment-specific secrets or one-off production edits hidden deep in templates.
+A chart boundary is the line between reusable application shape and one environment's deployment choice. For `devpolaris-orders-api`, the chart might include the Deployment, Service, ConfigMap shape, default probes, default resources, and optional ingress. It should not include environment-specific secrets or one-off production edits hidden deep in templates.
 
 There is a real tradeoff here. A shared chart gives consistency across services, but a chart that accepts every possible knob becomes a second programming language. A service-owned chart gives app teams control, but repeated patterns can drift across repositories.
 

@@ -15,7 +15,7 @@ aliases:
 2. [Sharing Your App: The Laptop Lid Limits](#sharing-your-app-the-laptop-lid-limits)
 3. [The Cloud as Professional Computers](#the-cloud-as-professional-computers)
 4. [Translating Your Laptop Setup to the Cloud](#translating-your-laptop-setup-to-the-cloud)
-5. [Isolated Network Rooms](#isolated-network-rooms)
+5. [Isolated Network Boundaries](#isolated-network-boundaries)
 6. [Identity and the Default-Deny Access Gate](#identity-and-the-default-deny-access-gate)
 7. [Durable Log Streams Outside the Container](#durable-log-streams-outside-the-container)
 8. [Putting It All Together](#putting-it-all-together)
@@ -44,6 +44,8 @@ To share a website reliably, you need a different hosting model. You need a comp
 
 The cloud is not a gaseous, abstract space. It is a physical network of massive, highly secure buildings filled with professional computer racks owned and operated by AWS. When you deploy an application to AWS, your code is placed onto a real CPU chip and stored on real physical hard drives inside one of these global data centers.
 
+At a high level, AWS behaves like a programmable infrastructure platform: compute, storage, network boundaries, identity rules, and telemetry stores are exposed as API-managed resources instead of local machine features. You still run ordinary software processes and store ordinary data, but the control surface changes from keyboard access on one host to signed service requests that create and connect managed resources.
+
 The primary difference is that you do not physically purchase, wire, or maintain these machines. AWS wraps their physical hardware in automation software and exposes it as programmatic interfaces. Instead of ordering a server from a manufacturer and waiting weeks for it to arrive, you send a signed HTTP command to the AWS control-plane API, which instantly allocates virtualized processor and memory slices on a physical server inside their network.
 
 This virtualization changes how you view compute. You are renting execution capacity on demand. If your application needs more power to handle a surge of customers, you do not need to physically install new RAM chips; you simply send an API command to scale your compute capacity in seconds. This compute job is handled by the AWS compute family, such as virtual EC2 servers, serverless Fargate container tasks, or event-driven Lambda functions. The physical location of the machine changes, but the core job remains the same: executing your application code.
@@ -53,7 +55,7 @@ This virtualization changes how you view compute. You are renting execution capa
 To make sense of the vast AWS console catalog, translate your familiar local laptop setup directly to its cloud-native counterparts. Every cloud resource is simply a specialized version of a job your laptop performed locally:
 
 * **Compute Execution**: Your local application process running on your laptop's CPU maps to ECS Fargate compute tasks in the cloud.
-* **Secrets Management**: Your plaintext `.env` file stored on local disk maps to encrypted Secrets Manager vaults in the cloud. ECS can fetch those values when a task starts, or your application can retrieve them through the AWS SDK with its task role.
+* **Secrets Management**: Your plaintext `.env` file stored on local disk maps to encrypted Secrets Manager records in the cloud. ECS can fetch those values when a task starts, or your application can retrieve them through the AWS SDK with its task role.
 * **Object Storage**: Your local files and exports written to your hard drive map to durable S3 object buckets in the cloud, ensuring files survive container restarts.
 * **Durable Database**: Your local database running on `localhost` maps to transactional RDS relational databases in the cloud.
 * **Observability Logs**: Your local terminal stdout scrollback maps to persistent CloudWatch log groups in the cloud, keeping your logs readable after the process exits.
@@ -64,13 +66,13 @@ This split is the beginner version of the AWS shared responsibility model. AWS o
 
 *The important shift is separation of responsibilities. The laptop bundles execution, files, secrets, data, and logs into one machine; AWS splits those jobs into managed services that cooperate inside network and permission boundaries.*
 
-## Isolated Network Rooms
+## Isolated Network Boundaries
 
 When your application runs on your laptop, it binds to `localhost` or a local IP address block. It is naturally protected from external internet threats because it sits behind your local router and private network. Unless you explicitly configure port forwarding, automated hackers on the public internet cannot connect to your local database.
 
 In the cloud, this private boundary must be designed and created deliberately. When you launch a compute container on an AWS physical host, it sits on a vast network shared by millions of other virtual servers. To prevent unauthorized access, the very first step is to draw a digital boundary around your resources. The service that draws this boundary is the Virtual Private Cloud, commonly called a VPC.
 
-A VPC is a private, logically isolated network partition that you define inside an AWS Region. Inside this private boundary, you create subnets, gateways, and route tables. The core private network habit is to place all application compute containers, relational databases, and background workers inside private VPC subnets that have no direct routing paths to the public internet. You then place public entry points, like load balancers, in narrow public subnets that act as highly controlled front doors, ensuring your core systems are never directly exposed to raw public traffic.
+A VPC acts as your application's private IP address space inside one AWS Region. Inside this private boundary, you create subnets, gateways, and route tables. The core private network habit is to place all application compute containers, relational databases, and background workers inside private VPC subnets that have no direct routing paths to the public internet. You then place public entry points, like load balancers, in narrow public subnets that expose only the controlled ingress layer, ensuring your core systems are never directly exposed to raw public traffic.
 
 ## Identity and the Default-Deny Access Gate
 
@@ -78,13 +80,13 @@ On your laptop, your local user account has administrator sudo privileges. Your 
 
 In the cloud, this all-powerful default posture is a massive security vulnerability. If a container had unrestricted access to your entire AWS account, a single code vulnerability could allow an attacker to delete your databases or access other client data. To prevent this, AWS operates on a default-deny foundation governed by Identity and Access Management, commonly called IAM.
 
-Unless an AWS API action is explicitly allowed by a security policy, AWS blocks it. IAM evaluates AWS service API calls, not every TCP packet, database login, or operating system file read. When your container attempts to write an object to S3 or retrieve a database URL from Secrets Manager, AWS validates the task's identity first. It asks: Who is making the request, what specific action are they attempting, and what target AWS resource is involved? Instead of hardcoding static password keys into your codebase, you assign a low-privilege IAM task role to your container. The runtime exposes temporary credentials for that role, and the AWS SDK uses them to sign API requests.
+IAM functions as the authorization layer for AWS API calls. Unless an AWS API action is explicitly allowed by a security policy, AWS blocks it. IAM evaluates AWS service API calls, not every TCP packet, database login, or operating system file read. When your container attempts to write an object to S3 or retrieve a database URL from Secrets Manager, AWS validates the task's identity first. It asks: Who is making the request, what specific action are they attempting, and what target AWS resource is involved? Instead of hardcoding static password keys into your codebase, you assign a low-privilege IAM task role to your container. The runtime exposes temporary credentials for that role, and the AWS SDK uses them to sign API requests.
 
 ![An infographic showing a task role request passing through an IAM gate that checks who, action, and resource before allowing S3 and Secrets Manager access or denying a database deletion](/content-assets/articles/article-cloud-providers-aws-foundations-aws-mental-model/iam-default-deny-gate.png)
 
 *IAM is the cloud permission checkpoint. A role can be allowed to read one secret or write one bucket while still being denied unrelated actions in the same AWS account.*
 
-Sensitive API credentials, like database connection strings, are vaulted inside AWS Secrets Manager. Secrets Manager encrypts the values at rest and returns them only to authorized callers, allowing ECS task startup or application code to retrieve database credentials without storing plaintext values in Git repositories.
+Sensitive API credentials, like database connection strings, are stored inside AWS Secrets Manager. Secrets Manager encrypts the values at rest and returns them only to authorized callers, allowing ECS task startup or application code to retrieve database credentials without storing plaintext values in Git repositories.
 
 ## Durable Log Streams Outside the Container
 
@@ -108,7 +110,7 @@ When you run an app locally, all components are concentrated on a single physica
 * The private IP namespace moves from localhost to a private, logically isolated VPC network boundary.
 * Unstructured file storage moves from ephemeral local disks to durable S3 object buckets.
 * Structured ledgers move from local database engines to transactional, Multi-AZ RDS database instances.
-* Sensitive configuration credentials move from plaintext env files to encrypted Secrets Manager vaults.
+* Sensitive configuration credentials move from plaintext env files to encrypted Secrets Manager records.
 * Permission gates move from sudo user access to default-deny IAM roles and policies.
 * Diagnostic scrollback moves from the active terminal to persistent CloudWatch log groups.
 

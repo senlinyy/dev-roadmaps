@@ -40,7 +40,9 @@ This order matters. Start with object state so you know which Pod, container, or
 
 ## Start With Object State
 
-The fastest first check is a scoped `kubectl get`. It gives you the current object status without opening a large log stream.
+Object state is the current status Kubernetes reports for Deployments, ReplicaSets, Pods, and related objects. Starting there tells you which object is failing before you open logs.
+
+Example: if one orders API Pod is `CrashLoopBackOff` and two are `Running`, read the failing Pod first instead of streaming logs from every replica.
 
 ```bash
 $ kubectl -n orders get deploy,rs,pod -l app.kubernetes.io/name=devpolaris-orders-api
@@ -62,7 +64,9 @@ This output tells you where to focus. One Pod is repeatedly crashing. Do not sta
 
 ## Read Container Logs
 
-`kubectl logs` reads stdout and stderr from a container. For a Deployment with one container per Pod, you can ask Kubernetes to choose matching Pods through the Deployment name.
+Container logs are the text the application process writes to stdout and stderr. `kubectl logs` reads that text from a container, which makes it the right tool after you know the container actually started.
+
+Example: if the Pod is running but not ready, logs can show `POSTGRES_URL missing` or `database connection refused`, which Kubernetes events cannot explain by themselves.
 
 ```bash
 $ kubectl -n orders logs deploy/devpolaris-orders-api --tail=40
@@ -86,7 +90,9 @@ That second log changes the direction. The issue is not the database itself. The
 
 ## Read Previous Container Logs
 
-When a container restarts, the current log may show only the newest attempt. The `--previous` flag reads logs from the previous terminated container instance. This is one of the most useful flags for CrashLoopBackOff.
+Previous logs are logs from the last terminated instance of the same container. They matter when a container keeps restarting because the current run may not have reached the failing line yet.
+
+Example: in `CrashLoopBackOff`, `kubectl logs --previous` can show the startup error from the run that just died. The `--previous` flag reads logs from the previous terminated container instance.
 
 ```bash
 $ kubectl -n orders logs pod/devpolaris-orders-api-78b6f596dc-mk9z4 -c api --previous --tail=30
@@ -108,7 +114,9 @@ The rollout is waiting because one updated replica never becomes available. Logs
 
 ## Use Events for Kubernetes Decisions
 
-Events are short records created by Kubernetes components when something happens to an object. They are especially useful for platform-side decisions: scheduling, pulling images, mounting volumes, failing probes, killing containers, and scaling ReplicaSets.
+Events are short records created by Kubernetes components when something happens to an object. They explain platform decisions that the application cannot log, such as scheduling, pulling images, mounting volumes, failing probes, killing containers, and scaling ReplicaSets.
+
+Example: the app log may say `POSTGRES_URL missing`, while the Pod event says `secret "orders-prod-env" not found`, which explains why the environment variable never arrived.
 
 ```bash
 $ kubectl -n orders describe pod devpolaris-orders-api-78b6f596dc-mk9z4
@@ -126,7 +134,7 @@ Events are not permanent audit logs. They are meant for recent operational diagn
 
 ## Sort Events and Narrow the Namespace
 
-When you need a wider view, list events sorted by timestamp. Always narrow to the namespace first unless you are debugging a cluster-wide problem.
+An event list is the recent timeline of Kubernetes decisions for objects in a scope. Sorting by timestamp helps you see cause and effect, and narrowing to one namespace keeps unrelated cluster noise out of the first pass. For example, in `orders`, the useful sequence might be a Deployment scaling a ReplicaSet, a Pod failing because a Secret is missing, and kubelet backing off restarts.
 
 ```bash
 $ kubectl -n orders get events --sort-by=.lastTimestamp
@@ -150,7 +158,7 @@ The Deployment expects a Secret that does not exist in the `orders` namespace. A
 
 ## Failure Mode: The Log Is Empty
 
-Sometimes `kubectl logs` returns nothing. That does not mean nothing happened. The container may fail before the process starts, or Kubernetes may be unable to create the container at all.
+An empty application log means the process may not have written anything, but it does not mean the cluster did nothing. The container may fail before the process starts, or Kubernetes may be unable to create the container at all. For example, a missing ConfigMap can keep the orders API container in `CreateContainerConfigError`, so there is no application process to log the error.
 
 ```bash
 $ kubectl -n orders logs pod/devpolaris-orders-api-78b6f596dc-mk9z4 -c api
@@ -171,7 +179,7 @@ The fix direction is to create the missing ConfigMap in the same namespace or co
 
 ## A Debugging Routine
 
-Use a repeatable order when production is noisy:
+A debugging routine is a fixed inspection order that keeps you from chasing the loudest symptom first. In a noisy production namespace, it helps you identify the failing object, read the right container, and use events for platform decisions before changing manifests. For `devpolaris-orders-api`, the routine might start with the `orders` namespace and the `app.kubernetes.io/name=devpolaris-orders-api` label, then narrow to the one Pod that is failing.
 
 1. Scope the namespace and labels.
 2. Read `kubectl get` for current state.

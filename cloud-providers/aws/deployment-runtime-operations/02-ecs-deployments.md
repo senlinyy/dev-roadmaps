@@ -35,7 +35,9 @@ To release software in production safely, you must coordinate a controlled rolli
 
 ## The ECS Service Controller
 
-In an Amazon ECS cluster, the rolling update is managed by the ECS Service Controller. The service controller is a persistent software loop cabled directly to an Application Load Balancer.
+In an Amazon ECS cluster, the rolling update is managed by the ECS Service Controller. The service controller is a persistent software loop integrated with an Application Load Balancer.
+
+The ECS Service Controller behaves like a desired-state reconciliation loop for container tasks. You declare the task definition, desired count, and load balancer target group; ECS continually works to make the actual running fleet match that declaration.
 
 For our application, `devpolaris-orders-api`, the service definition declares the desired state:
 
@@ -56,6 +58,8 @@ The service controller owns the desired state. When you deploy a release, you do
 
 A container image is the immutable package containing your application files. Before an ECS deployment begins, your build system compiles the image and pushes it to an Amazon ECR repository.
 
+Amazon ECR serves as the container image registry for ECS deployments. It stores versioned image artifacts and exposes tags and immutable digests that the task definition can reference.
+
 The image should be clearly identified. While developers often use mutable tags like `latest` or `production` for convenience, these tags can move. If your auto-scaling policies launch new tasks while a tag is being updated, you can end up with different tasks running different versions of the code in the same cluster. 
 
 To maintain strict operational tracking, every release record must document the immutable SHA256 digest of the image:
@@ -73,9 +77,9 @@ The image alone is not enough to run a service. It has no knowledge of environme
 
 ## Versioning the Recipe: Task Definitions
 
-A Task Definition is the blueprint recipe ECS uses to launch tasks. When the blueprint changes (such as updating an image digest or modifying an environment variable), ECS registers a new, numbered Task Definition revision.
+A Task Definition is the versioned launch specification ECS uses to launch tasks. When that specification changes, such as updating an image digest or modifying an environment variable, ECS registers a new, numbered Task Definition revision.
 
-Let us inspect the JSON structure of our application's Task Definition recipe:
+Let us inspect the JSON structure of our application's Task Definition:
 
 ```json
 {
@@ -116,6 +120,8 @@ The Task Definition declares all structural coordinates:
 
 When the ECS service is updated to use a new Task Definition revision, the rolling update begins. The controller manages the rate of task replacement using two percentage-based boundaries:
 
+A rolling update is a replacement algorithm for a running task fleet. It controls how many old tasks must stay healthy and how many new tasks may start at the same time while traffic gradually moves to the new revision.
+
 * **Minimum Healthy Percent**: The minimum number of healthy tasks that must remain active and serving traffic during the deployment, relative to the desired count.
 * **Maximum Percent**: The upper boundary on the number of concurrent tasks allowed to run during the deployment.
 
@@ -138,6 +144,8 @@ With `minimumHealthyPercent=100%`, the service controller tries to keep healthy 
 
 The service controller does not assume a task is healthy simply because the container process is running. It relies on the Application Load Balancer target group to verify health before routing customer packets.
 
+Target health checks function as routing eligibility tests. The load balancer uses repeated probe results to decide whether a task target can receive production traffic.
+
 Let us inspect the recommended production parameters around the ALB target group and ECS service:
 
 Target Group Health Check Configurations:
@@ -156,6 +164,8 @@ The ECS health check grace period is essential. A Node.js or Java application ne
 ## Deployment Evidence Checklist
 
 Deployments can fail in several distinct ways. To debug a failed deployment, you must execute a terminal session to query the service controller for events:
+
+Deployment evidence is the status data emitted by ECS, target groups, and logs while a revision is rolling out. It lets responders distinguish placement failures, boot failures, health-check failures, and traffic failures.
 
 ```bash
 $ aws ecs describe-services \
@@ -209,6 +219,8 @@ This output provides critical diagnostic evidence:
 
 When the Application Load Balancer deregisters an old container task during a rolling update, it does not sever active connections. Instead, it enters a connection draining window, officially called deregistration delay.
 
+Deregistration delay is a load balancer grace interval. It removes the old task from new request routing while allowing already-open connections to finish before ECS stops the container.
+
 During this window (defaulting to 300 seconds, but recommended to set to 30 seconds for web APIs), the ALB stops routing new HTTP requests to the task, while keeping established TCP sockets open to allow in-flight checkouts to complete safely.
 
 Once the deregistration delay window expires, the ECS agent terminates the container process using a strict two-stage Unix signal sequence:
@@ -221,6 +233,8 @@ If your application code does not handle `SIGTERM` or has an infinite loop insid
 ## The Mechanics of Rollback
 
 Rollback is the recovery operation designed to restore the service to a known-good configuration. For ECS, this is achieved by updating the service to use the previous, stable Task Definition revision:
+
+In ECS, rollback is a service update that selects an earlier task definition revision as the desired runtime contract. The controller then performs another rolling deployment, this time replacing the failed revision with the stable one.
 
 ```bash
 $ aws ecs update-service \
@@ -236,6 +250,8 @@ If you have configured the ECS Deployment Circuit Breaker with rollback enabled,
 ## Operational Deployment Tradeoffs
 
 Deployment configurations require balancing speed, cost, and operational risk.
+
+A deployment strategy is the set of controller parameters that decides replacement speed, overlap capacity, failure detection, and recovery behavior.
 
 Starting more replacement tasks in parallel speeds up deployments, but it temporarily increases capacity costs and can saturate downstream databases. Keeping more old tasks active protects availability, but requires sufficient memory headroom in the cluster.
 
@@ -256,7 +272,7 @@ Operating a resilient deployment pipeline requires mastering orchestrator update
 * **Anchor to SHA256 Digests**: Use immutable image digests inside task definitions to completely prevent tag drift.
 * **Enforce Safe Capacity Boundaries**: Set `minimumHealthyPercent` and `maximumPercent` deliberately so deployments have enough overlap without exhausting cluster or database capacity.
 * **Align Grace Periods**: Match ECS health check grace periods and target group thresholds to your application's actual startup times to prevent termination loops.
-* **Design Elegant Shutdowns**: Intercept `SIGTERM` in your code to drain connection pools and close sockets cleanly.
+* **Design Graceful Shutdowns**: Intercept `SIGTERM` in your code to drain connection pools and close sockets cleanly.
 * **Enforce Automated Circuit Breakers**: Enable the deployment circuit breaker to automate rollbacks when new tasks fail to boot.
 
 ## What's Next

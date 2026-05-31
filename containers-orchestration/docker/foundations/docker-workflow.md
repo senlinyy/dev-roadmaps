@@ -21,11 +21,20 @@ id: article-containers-orchestration-docker-docker-workflow
 
 ## The Edit-Build-Run Loop
 
-When you integrate Docker into your everyday development routine, you transition from running commands directly on your laptop to operating on a structured software delivery loop. A typical developer setup requires cloning a repository, compiling the code, running a local server, and monitoring the outputs. 
+A Docker workflow is the repeatable path from source files to image artifact to container process to inspection and cleanup.
+
+
+![Diagram showing the Docker edit, build, run feedback loop from source code to image artifact to running container](/content-assets/articles/article-containers-orchestration-docker-docker-workflow/edit-build-run-loop.png)
+
+*Docker workflow becomes repeatable when source changes produce image artifacts, and image artifacts produce containers.*
+
+When you integrate Docker into your everyday development routine, you transition from running commands directly on your laptop to operating on a structured software delivery loop. A typical developer setup requires cloning a repository, compiling the code, running a local server, and monitoring the outputs.
+
+Example: after editing `src/routes/orders.ts`, a production-like Docker loop usually means rebuilding `orders-api:local`, removing the old `orders-api` container, and starting a new container from the updated image. If you skip the rebuild or keep the old container, Docker may keep running the previous filesystem.
 
 In a traditional development loop, editing a file yields immediate feedback because the runtime reads your project directory directly. In a containerized loop, this immediate connection is broken.
 
-If you edit a source file on your host machine while a container is running, the container process does not see the modification. The process inside the container is sandboxed, reading a virtual filesystem that was frozen at the moment you compiled the image. 
+If you edit a source file on your host machine while a container is running, the container process does not see the modification. The process inside the container is isolated from your live project directory, reading a virtual filesystem that was frozen at the moment you compiled the image.
 
 To see your changes, you must explicitly rebuild the image artifact, destroy the old container, and start a new process from the updated image.
 
@@ -40,7 +49,14 @@ Operating in a containerized environment requires mapping each of your terminal 
 
 ## The Container State Machine
 
-A container is not a static folder or a passive server. A container is a dynamic, kernel-supervised process with a strict state machine. The Docker engine manages this state machine, tracking whether the underlying namespaces, cgroups, write layers, and network interfaces are created, active, or terminated.
+A container state machine is Docker's lifecycle record for one process boundary. A container is a dynamic, kernel-supervised process with a strict state machine. The Docker engine manages this state machine, tracking whether the underlying namespaces, cgroups, write layers, and network interfaces are created, active, or terminated.
+
+
+![Diagram showing Docker container states from created to running to exited](/content-assets/articles/article-containers-orchestration-docker-docker-workflow/container-state-machine.png)
+
+*A container is a lifecycle record around one process run, not the reusable artifact itself.*
+
+Example: a container in `Created` has a record, writable layer, network settings, and resource rules prepared, but its application process has not started. A container in `Exited (1)` did start its process, then recorded that the process ended with error code 1.
 
 ```mermaid
 flowchart TD
@@ -73,13 +89,15 @@ If you attempt to modify or delete resources out of order, the state machine wil
 
 ## Building the Image Artifact
 
+An image artifact is the reusable filesystem and metadata package Docker can use to create one or many containers.
+
 The workflow begins by compiling your application files into a reusable image. This step is driven by the `build` command, which reads a Dockerfile build recipe and packages your project directories:
 
 ```plain
 $ docker build -t orders-api:local .
 ```
 
-The build command accepts two critical inputs:
+The build command accepts two critical inputs. The final `.` is the build context, which means "send this host directory to the Docker engine as the file set available during the build." The tag `orders-api:local` is a readable name for the image Docker produces, so later commands can refer to the image without copying its long image ID.
 
 * **The Build Context**: Represented by the final `.` in the command, this tells the Docker Client to scan the specified host directory and package its contents into a temporary archive. The client transmits this context archive over a UNIX socket to the background engine daemon. The daemon can only build files that are explicitly sent inside this context.
 * **The Image Tag**: Represented by `-t orders-api:local`, this applies a human-readable label to the resulting image. A tag is composed of a repository name (`orders-api`) followed by a version identifier (`local`).
@@ -91,6 +109,8 @@ If you run the build command multiple times, the engine compares the context fil
 The crucial gotcha is that rebuilding an image does not automatically modify running containers. A running container is bound to the specific image layer hash that existed when the container was created. To update the running application, you must push the updated image through the next phases of the lifecycle state machine.
 
 ## Launching and Attaching Processes
+
+`docker run` is the runtime transition that turns an image reference and a set of run options into a container record and a main process.
 
 Once the image artifact is compiled, you use the `run` command to transition it into an active container process on the host:
 
@@ -117,6 +137,8 @@ If your application server listens on a network port, you must configure port pu
 If you omit this port mapping, the container process runs in its isolated network namespace, remaining completely unreachable from host browsers or external clients.
 
 ## Inspecting Live and Stopped States
+
+Docker inspection commands are read-only queries against the runtime evidence Docker recorded for containers and processes.
 
 Operating a containerized system requires checking execution metrics, reading logs, and inspecting filesystem states to ensure the process is behaving correctly. Docker provides a suite of diagnostic commands to make these isolated containers visible:
 
@@ -161,6 +183,8 @@ However, any modifications you make inside this diagnostic shell exist only insi
 
 ## Rebuilding and Replacing Processes
 
+Replacing a container is the update path for image-based development: build a new artifact, stop the old process boundary, and create a new container from the updated image.
+
 Applying a code change requires replacing the running container instance. This replacement loop is a deliberate three-step sequence: compile the new image layer, stop and destroy the old process container to release the host port, and launch a new container from the updated image.
 
 Attempting to run a new container while the old one is active will trigger a port binding collision in the host kernel network stack:
@@ -192,6 +216,10 @@ Using mounts enables rapid local iteration, but you must still execute full rebu
 
 ## Housekeeping: Reclaiming Storage
 
+Docker housekeeping is ownership-aware deletion of retired runtime objects, cached layers, and local networks.
+
+The useful starting point is to name what you are deleting before deleting it. A stopped API container might only hold old logs. A named database volume might hold a week of local test data. Both consume Docker disk space, but they do not have the same value.
+
 Unlike virtual machines that clean up guest memory on shutdown, Docker persists container write layers, cached image directories, and network records on your host storage disk. Over days of development, these retired assets accumulate, slowly consuming disk space.
 
 Docker provides targeted cleanup commands to safely manage this local state:
@@ -211,7 +239,7 @@ Docker provides targeted cleanup commands to safely manage this local state:
   $ docker system prune
   ```
 
-Operating these cleanup sweeps requires strict operational caution. If you append the `-a` flag (all) or prune volumes (`--volumes`), the engine will delete unused tagged images and persistent database volumes. 
+Operating these cleanup sweeps requires strict operational caution. If you append the `-a` flag (all) or prune volumes (`--volumes`), the engine will delete unused tagged images and persistent database volumes.
 
 Always verify which data stores are active before executing destructive prunes.
 
@@ -229,9 +257,13 @@ Mapping each command to its target object ensures your development loop remains 
 
 ## What's Next
 
-Now that we have mastered the container lifecycle and the local developer loop, our next step is to examine how to declare our filesystem images. The Dockerfile is the source of truth for the compiled artifact.
+Now that we have mastered the container lifecycle and the local developer loop, our next step is to examine how to declare our filesystem images. The Dockerfile is the repeatable build recipe for the compiled artifact.
 
 In the next chapter, we will study the **Dockerfile** in deep structural detail. We will learn how to write clean, secure instructions, optimize the build context to prevent slow data transfers, and configure `.dockerignore` files to protect sensitive credentials from entering our image layers.
+
+![Summary infographic for Docker edit, build, run, inspect, replace, and prune workflow](/content-assets/articles/article-containers-orchestration-docker-docker-workflow/docker-workflow-summary.png)
+
+*The workflow summary ties everyday Docker commands back to artifacts, processes, evidence, replacement, and cleanup.*
 
 ---
 

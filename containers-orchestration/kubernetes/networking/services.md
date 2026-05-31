@@ -24,9 +24,9 @@ id: article-containers-orchestration-kubernetes-networking-services
 
 Kubernetes Pods are intentionally replaceable. A Deployment can create a new Pod during a rollout, delete an old one after a node drain, or start a replacement when a health check fails. That is good for operations, but it creates a problem for callers. A Pod IP address is a temporary address for one running copy, not a contract that another service should remember.
 
-A Service is the Kubernetes object that gives a group of Pods a stable network identity. It selects Pods by labels, publishes one virtual address and DNS name, and keeps the backend list fresh as Pods come and go. If `devpolaris-web` needs to call `devpolaris-orders-api`, it should call a Service name such as `http://devpolaris-orders-api.orders.svc.cluster.local`, not a Pod IP like `10.244.2.18`.
+A Service is the Kubernetes object that gives a changing set of Pods a stable network name and virtual address. It selects Pods by labels, publishes one virtual address and DNS name, and keeps the backend list fresh as Pods come and go.
 
-The useful mental model is a small internal phone book. Pods are people who may change desks. The Service is the phone number the rest of the company keeps using. Kubernetes updates the extension list behind that number when Pods are created or removed.
+Example: if `devpolaris-web` needs to call `devpolaris-orders-api`, it should call a Service name such as `http://devpolaris-orders-api.orders.svc.cluster.local`, not a temporary Pod IP like `10.244.2.18`. Kubernetes updates the backend endpoint list behind the Service whenever Pods are created, removed, or marked unready.
 
 ```mermaid
 flowchart TD
@@ -41,7 +41,9 @@ The Service does not make an unhealthy application healthy. It only gives networ
 
 ## The Smallest Useful Service
 
-Start with a Deployment for `devpolaris-orders-api`. The application listens on port `3000` inside the container and exposes an HTTP endpoint at `/healthz`. The Deployment labels matter because the Service will use those labels to find its backends.
+A useful Service starts with a clear backend workload. The Service does not create Pods by itself, so it needs labels on existing Pods to decide where traffic can go.
+
+Example: start with a Deployment for `devpolaris-orders-api`. The application listens on port `3000` inside the container and exposes an HTTP endpoint at `/healthz`. The Deployment labels matter because the Service will use those labels to find its backends.
 
 ```yaml
 apiVersion: apps/v1
@@ -102,7 +104,9 @@ That second command is the practical proof. The Service has a stable cluster IP,
 
 ## Selectors Are the Contract
 
-A Service selector is a label query. It says, in effect, "send traffic to Pods with these labels." The selector does not care which Deployment created the Pods. It only sees labels on live Pod objects. That makes labels powerful, but it also makes typo failures easy.
+A Service selector is the rule that decides which Pods sit behind the Service. It reads labels on live Pod objects and builds the backend list from the Pods that match. For example, a selector for `app.kubernetes.io/name: devpolaris-orders-api` should find the three orders API Pods and ignore unrelated Pods in the same namespace.
+
+The selector does not care which Deployment created the Pods. It only sees labels on live Pod objects. That makes labels powerful, but it also makes typo failures easy.
 
 For `devpolaris-orders-api`, use labels that describe identity rather than rollout details. A label like `app.kubernetes.io/name: devpolaris-orders-api` should survive image tags, replica counts, and node moves. A label like `version: 1.18.0` is usually too specific for the main Service because the Service would lose endpoints during a version change unless every manifest changed together.
 
@@ -131,7 +135,9 @@ The selector has `order-api`, singular, while the Pods are labeled `orders-api`,
 
 ## Ports Need Two Names
 
-A Service port has two audiences. `port` is the number callers use when they connect to the Service. `targetPort` is where traffic lands on the backend Pod. They are often the same number in small examples, but production systems frequently separate them.
+A Service port is the public number inside the cluster contract, while the target port is the number the container actually listens on. `port` is what callers use when they connect to the Service. `targetPort` is where traffic lands on the backend Pod.
+
+Example: callers can use `http://devpolaris-orders-api:80` while the Node.js process listens on container port `3000`. They are often the same number in small examples, but production systems frequently separate them.
 
 For `devpolaris-orders-api`, callers use `http://devpolaris-orders-api:80` because port 80 is the simple in-cluster contract. The container listens on 3000 because the Node.js application uses that port. The Service bridges those two worlds.
 
@@ -162,7 +168,9 @@ That output proves DNS and the Service IP worked. The next inspection target is 
 
 ## Readiness Controls Service Membership
 
-Kubernetes tries to avoid sending Service traffic to Pods that are not ready. A readiness probe is the Pod-level check that says whether this Pod should receive normal traffic. Without a readiness probe, Kubernetes may add a Pod to the Service before the application has opened its listener, warmed its cache, or connected to its database.
+A readiness probe is the Pod-level check that says whether this Pod should receive normal Service traffic. Kubernetes uses it to avoid routing to Pods that started but cannot handle requests yet.
+
+Example: if the orders API process is running but has not connected to PostgreSQL, readiness can fail so the Service keeps that Pod out of the ready backend list. Without a readiness probe, Kubernetes may add a Pod to the Service before the application has opened its listener, warmed its cache, or connected to its database.
 
 For `devpolaris-orders-api`, readiness should represent whether the API can handle ordinary order requests. A simple `/healthz` check is enough for a first pass. A production check might also verify database connectivity if the API cannot serve requests without it.
 
@@ -195,7 +203,9 @@ If a rollout returns intermittent errors, compare the timing of readiness failur
 
 ## What Actually Handles the Traffic
 
-The Service object lives in the Kubernetes API, but packets need help on each node. In many clusters, `kube-proxy` watches Services and EndpointSlices and programs node network rules so traffic to a Service IP can reach a backend Pod. Some clusters use CNI implementations that replace part or all of kube-proxy behavior, but the learner-friendly model is the same: the API object describes the desired route, and node-level networking makes it real.
+The Service object is the API record, but packets still need node-level routing to reach a Pod. A packet is a small chunk of network data moving from one address and port to another.
+
+In many clusters, `kube-proxy` watches Services and EndpointSlices and programs node network rules so traffic to a Service IP can reach a backend Pod. Some clusters use CNI implementations that replace part or all of kube-proxy behavior, but the learner-friendly model is the same: the API object describes the desired route, and node-level networking makes it real.
 
 This distinction matters during debugging. If the Service has endpoints and DNS resolves, but traffic to the cluster IP hangs from every Pod, the problem may be in the Service proxy layer or network plugin. That is less common than selector and port mistakes, so check the simple object state first.
 
@@ -246,7 +256,7 @@ Before you move on, practice reading the three objects together: Deployment labe
 
 ## Service Ownership and Change Review
 
-A Service becomes part of the application contract, so review it like code that other teams call. For `devpolaris-orders-api`, the Service name, namespace, port name, and selector should be treated as stable API surface. Changing any of those can break callers even when the Pods still run.
+A Service becomes part of the application contract, so review it like code that other teams call. For `devpolaris-orders-api`, the Service name, namespace, port name, and selector are the details callers and routing objects depend on. Changing any of those can break callers even when the Pods still run.
 
 A good review asks what will happen to existing clients during and after the change. Renaming the Service forces callers to update URLs. Changing `port` from 80 to 8080 forces callers to update configuration. Changing `targetPort` may be safe if the named container port still exists. Changing the selector can immediately move traffic to a different set of Pods.
 

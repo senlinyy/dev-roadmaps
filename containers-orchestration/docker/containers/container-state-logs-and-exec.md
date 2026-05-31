@@ -22,19 +22,21 @@ id: article-containers-orchestration-docker-container-state-logs-and-exec
 
 ## Why Evidence Matters
 
+A container's state, logs, inspect metadata, and exec access are separate evidence sources for one runtime process.
+
 The orders API container exited after startup. Someone immediately tries:
 
 ```bash
 docker exec -it orders-api sh
 ```
 
-Docker replies that the container is not running. That sounds like a second failure, but it is actually useful evidence. `exec` can only run a process inside a container that already has a running main process. If the main process exited, the door for `exec` is closed.
+Docker replies that the container is not running. That reply is useful evidence rather than a second failure. `exec` can only run a process inside a container that already has a running main process. If the main process exited, `exec` has no active container process namespace to enter.
 
 The better path is to read what Docker already knows. A container leaves behind state, exit code, logs, configuration, and sometimes a writable layer. Those pieces tell you whether the process failed to start, started and crashed, is healthy but unreachable, or is still running with the wrong settings.
 
 ## The Mental Model
 
-Think of a container as a process with a case file. Docker starts the process, watches it, and records evidence around it.
+Docker treats a container as a process plus a runtime evidence record. Docker starts the process, watches it, and records state, output, and configuration around it.
 
 ```mermaid
 flowchart LR
@@ -54,6 +56,13 @@ State tells you whether the process is alive. Logs tell you what the process wro
 
 ## State Comes First
 
+Container state is the first branch in a debugging path because it tells you whether the main process still exists.
+
+
+![Diagram showing a Docker debugging evidence flow from container state to logs to inspect output](/content-assets/articles/article-containers-orchestration-docker-container-state-logs-and-exec/container-evidence-flow.png)
+
+*State, logs, and inspect output answer different questions before you need a shell.*
+
 `docker ps` shows running containers. `docker ps -a` includes stopped containers too:
 
 ```text
@@ -67,6 +76,8 @@ That `STATUS` column decides the next move. If the container is `Up`, you can in
 The exit code is part of the story. Exit code `0` usually means the command completed successfully. That is normal for a one-off command and wrong for a web server that should stay alive. A non-zero code means the process reported failure. Docker did not decide why. The application, shell, or binary did.
 
 ## Logs Are Process Output
+
+Docker logs are the stdout and stderr stream records captured from the container's main process.
 
 Docker logs come from the container's standard output and standard error streams:
 
@@ -88,6 +99,10 @@ DATABASE_URL is not set
 The important detail is not the command itself. It is the layer that produced the message. Docker created the container and started the process. The application then rejected its runtime environment. Rebuilding the image will not fix that unless the image is supposed to include a different default.
 
 ## Inspect Shows Configuration
+
+`docker inspect` is the full metadata record Docker saved for the container's image, command, environment, mounts, network, ports, health, and restart policy.
+
+Metadata is data about how Docker created the container. It does not show your application code directly. It shows the settings Docker used to start the process, which makes it useful when the process behaved differently than expected.
 
 `docker inspect` returns the container metadata Docker used and recorded. It is long because a container crosses many boundaries: image, command, environment, mounts, network, ports, health, and restart policy.
 
@@ -116,6 +131,13 @@ Example fields often worth checking:
 This output connects the same pieces you saw separately. Docker started `node dist/server.js`, passed one environment value, recorded exit code 1, and had a host port mapping configured. If the process exited before it listened, the port mapping is not the first problem.
 
 ## Exec Enters a Running Container
+
+`docker exec` starts a second process inside an already-running container's namespaces and filesystem view.
+
+
+![Diagram comparing Docker logs as past process output with docker exec as a live namespace entry](/content-assets/articles/article-containers-orchestration-docker-container-state-logs-and-exec/exec-vs-logs-boundary.png)
+
+*Logs and exec are separate evidence tools: one reads past output, the other starts a new live process.*
 
 `docker exec` runs an additional command inside an existing running container:
 
@@ -171,7 +193,7 @@ Inspection breaks when you ask the right tool at the wrong time. `exec` is usele
 
 Another trap is changing evidence while reading it. Recreating the container may remove the old writable layer and replace the logs you needed. `docker rm -f` is fine for disposable local retries after you understand the failure. It is a poor first move when the stopped container is still the best record of what happened.
 
-Finally, `exec` can create false confidence. You can fix a file by hand inside a running container and watch the app recover, but the next container will not have that edit unless the source of truth changed. Use shell access to learn, then move the fix to repeatable configuration.
+Finally, `exec` can create false confidence. You can fix a file by hand inside a running container and watch the app recover, but the next container will not have that edit unless the repeatable image or runtime configuration changes. Use shell access to learn, then move the fix to the Dockerfile, Compose file, run command, or application config.
 
 ## Putting It All Together
 
@@ -188,6 +210,10 @@ Docker already records a lot of the story. Good debugging means reading it in th
 ## What's Next
 
 State and logs tell you what happened. The next article explains how Docker decides what command to run in the first place, how runtime arguments interact with image defaults, and why environment values belong at container start.
+
+![Summary infographic for Docker container state, logs, inspect, exec, exit code, and recreation](/content-assets/articles/article-containers-orchestration-docker-container-state-logs-and-exec/state-logs-summary.png)
+
+*The evidence summary keeps lifecycle, output, configuration, and live namespace inspection in order.*
 
 ---
 

@@ -26,14 +26,14 @@ aliases:
 
 ## What Is a VPC
 
-When you build applications in the cloud, your virtual machines, databases, and containerized workloads need to communicate with one another. In the physical world, computers connect using physical network interface cards and ethernet cables plugged into local routers. In a public cloud, where your resources share massive physical datacenters cabled across the globe with millions of other tenants, you need a way to rebuild those secure local limits. A Virtual Private Cloud (VPC) network solves this by serving as a secure, private virtual security fence and cabling network around your resources.
+A GCP Virtual Private Cloud (VPC) is a software-defined private network boundary for cloud resources. It gives workloads private IP space, subnet placement, routing tables, firewall policy, and private connectivity patterns without requiring your team to operate physical routers.
 
-A VPC network gives your virtual machines private internal IP addresses, determines which paths traffic can take to reach different subnets, enforces security gatekeeper rules, and establishes private connections to managed databases. Without a deliberate VPC network, your resources would exist in a fragmented, insecure environment where they could not coordinate privately. A VPC network integrates these resources into a single cohesive network map, ensuring that every private request travels along a secure, well-defined route completely isolated from the public internet.
+When you build applications in the cloud, your virtual machines, databases, and containerized workloads need to communicate with one another. A VPC network gives your virtual machines private internal IP addresses, determines which paths traffic can take to reach different subnets, enforces firewall rules, and establishes private connections to managed databases. Without a deliberate VPC network, your resources would exist in a fragmented environment where they could not coordinate privately. A VPC network integrates these resources into a single network map so private requests follow defined routes instead of depending on public endpoints.
 
 A VPC network in Google Cloud operates as a global virtual network. Although it belongs to a single Google Cloud project, its reach is worldwide. It acts as the shared virtual backbone upon which all regional subnets, routing rules, and security policies are evaluated.
 ## Global Network Scope vs. AWS and Azure
 
-For engineers transitioning from Amazon Web Services (AWS) or Microsoft Azure, the most critical architectural difference is scope. In AWS, a VPC is strictly regional, meaning it is confined to a single AWS region. To connect resources in two different AWS regions privately, you must establish and maintain complex peering connections, VPN tunnels, or AWS Transit Gateways. Similarly, an Azure Virtual Network (VNet) is a regional resource, requiring VNet peering across regions.
+GCP VPC scope defines where the network object exists before you create subnets inside it. For engineers transitioning from Amazon Web Services (AWS) or Microsoft Azure, the most critical architectural difference is scope. In AWS, a VPC is strictly regional, meaning it is confined to a single AWS region. To connect resources in two different AWS regions privately, you must establish and maintain complex peering connections, VPN tunnels, or AWS Transit Gateways. Similarly, an Azure Virtual Network (VNet) is a regional resource, requiring VNet peering across regions.
 
 ![A GCP VPC is global, while its subnets are regional placement pools.](/content-assets/articles/article-cloud-providers-gcp-networking-connectivity-gcp-networking-mental-model/global-vpc-map.png)
 
@@ -59,13 +59,13 @@ This global scope dramatically simplifies multi-region architectures, allowing t
 
 ## Auto Mode and Custom Mode
 
-Google Cloud VPC networks can be created in auto mode or custom mode. Auto mode creates one subnet in each region using predefined IP ranges. This is convenient for quick experiments because you can launch a VM without designing subnet CIDR blocks first.
+Auto mode and custom mode decide whether GCP creates regional subnets for you or whether your team designs each subnet deliberately. Auto mode creates one subnet in each region using predefined IP ranges. This is convenient for quick experiments because you can launch a VM without designing subnet CIDR blocks first.
 
 Production networks usually use custom mode. In custom mode, you create only the subnets you need and choose the IP ranges yourself. This makes the network easier to review, prevents accidental address overlap with VPNs and peer networks, and keeps unused regions from quietly receiving address space.
 
 ## Regional Subnets
 
-Although the VPC network is global, the subnets you create inside it are regional. A subnet represents a designated IP address range bound to a single physical GCP region, such as `us-central1`.
+A subnet is a regional IP address range inside the global VPC network. Although the VPC network is global, the subnets you create inside it are regional. A subnet represents a designated IP address range bound to a single GCP region, such as `us-central1`.
 
 Resources like Compute Engine virtual machines attach directly to subnets and receive private IP addresses from the subnet's range. Other regional services, such as Cloud Run, interact with subnets using direct VPC egress interfaces.
 
@@ -75,7 +75,7 @@ This regional scope aligns directly with Azure's subnet architecture but differs
 
 ## Subnet IP Space and Reserved Addresses
 
-Every subnet requires a primary IPv4 CIDR range, such as `10.30.10.0/24`, which provides 256 logical addresses. When planning subnet allocations, engineers must account for reserved IP addresses.
+Subnet IP space is the finite private address pool that workloads consume when they attach to a subnet. Every subnet requires a primary IPv4 CIDR range, such as `10.30.10.0/24`, which provides 256 logical addresses. When planning subnet allocations, engineers must account for reserved IP addresses.
 
 In GCP, every subnet reserves exactly four IP addresses for internal infrastructure services. For a subnet allocated with the CIDR block `10.30.10.0/24`, the reserved addresses are:
 
@@ -88,7 +88,7 @@ This differs from AWS, which reserves five IP addresses per subnet. Azure simila
 
 ## VPC Routing Mechanics
 
-Routing is the mechanism that determines the next hop for a network packet based on its destination IP address. In GCP, routes are managed in a centralized, global routing table associated with the VPC network.
+VPC routing is the table-driven decision that selects the next hop for a packet based on its destination IP address. In GCP, routes are managed in a centralized, global routing table associated with the VPC network.
 
 ![A packet leaves a workload, matches a subnet route, and follows the next hop selected by the VPC.](/content-assets/articles/article-cloud-providers-gcp-networking-connectivity-gcp-networking-mental-model/subnet-route-path.png)
 

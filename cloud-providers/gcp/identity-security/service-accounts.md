@@ -26,7 +26,7 @@ aliases:
 
 ## Service Accounts for Apps and Automation
 
-A service account is a non-human IAM identity designed specifically for applications, virtual machines, container runtimes, and automated deployment pipelines. Unlike standard human accounts that authenticate using passwords, multi-factor tokens, or single sign-on (SSO) portals, service accounts authenticate programmatically. They represent the machine actor within your GCP project's security boundary.
+A service account is a non-human IAM identity that lets software become the caller in a Google Cloud access decision. It is designed specifically for applications, virtual machines, container runtimes, and automated deployment pipelines. Unlike standard human accounts that authenticate using passwords, multi-factor tokens, or single sign-on (SSO) portals, service accounts authenticate programmatically.
 
 When application code queries a database, reads a bucket, or fetches a secret payload, it does not act under a developer's identity. Instead, the runtime environment runs as a service account, ensuring that the workload has its own dedicated, auditable principal.
 
@@ -38,7 +38,7 @@ By assigning dedicated service accounts to each distinct application job, you es
 
 ## The Dual Nature: Identity and Resource
 
-To build secure architectures, you must understand the dual logical nature of service accounts. A service account operates simultaneously as an **Identity** and as a **Resource**.
+A service account has two roles in the control plane: it can act as an identity that calls APIs, and it is also a resource that other principals can manage or attach to runtimes. To build secure architectures, you must understand this dual logical nature.
 
 ![A service account is both something a workload uses and a resource that must be governed.](/content-assets/articles/article-cloud-providers-gcp-identity-security-service-accounts-apps-automation/service-account-dual-nature.png)
 
@@ -63,7 +63,7 @@ If a developer possesses `actAs` permissions on a highly privileged service acco
 
 ## Runtime Identity and Application Default Credentials
 
-Application Default Credentials (ADC) is the centralized strategy used by Google Cloud client libraries to automatically discover credentials at runtime. ADC allows developers to write environment-portable code: the exact same container code runs on a developer's laptop, in a staging sandbox, and in production without hardcoding authentication keys.
+Application Default Credentials (ADC) is the credential lookup contract used by Google Cloud client libraries. It lets the same application code find the right local or runtime identity on a developer laptop, in a staging sandbox, and in production without hardcoding authentication keys.
 
 ![Application Default Credentials find the local runtime identity and exchange it for short-lived access.](/content-assets/articles/article-cloud-providers-gcp-identity-security-service-accounts-apps-automation/adc-token-flow.png)
 
@@ -113,7 +113,7 @@ This pattern keeps compromised container filesystems from containing long-lived 
 
 ## Deploy Identity and Workload Identity Federation
 
-While applications use a **Runtime Identity** (service accounts attached to containers), deployment pipelines use a **Deploy Identity** to build, configure, and release resources.
+A deploy identity is the principal used by CI/CD or release automation when it creates and changes cloud resources. While applications use a **Runtime Identity** (service accounts attached to containers), deployment pipelines use a **Deploy Identity** to build, configure, and release resources.
 
 Historically, connecting external CI/CD platforms (like GitHub Actions or GitLab CI) to GCP required creating a service account, downloading a static JSON private key, and pasting that key into GitHub Secrets. This introduced severe security risks: if a malicious actor compromised the GitHub repository or accessed the secrets pool, they stole the persistent key and gained permanent access to your GCP project.
 
@@ -123,7 +123,7 @@ Workload Identity Federation allows external CI/CD workloads to access Google Cl
 
 ## Workload Identity Federation Protocol
 
-The WIF token exchange lets an external workload prove its identity to Google without storing a service account key. The workload can then either access supported Google Cloud resources directly as a federated principal or impersonate a service account when your design requires a service account boundary.
+Workload Identity Federation (WIF) is a short-lived token exchange between an external identity provider and Google Cloud. It lets an external workload prove its identity to Google without storing a service account key. The workload can then either access supported Google Cloud resources directly as a federated principal or impersonate a service account when your design requires a service account boundary.
 
 ```mermaid
 sequenceDiagram

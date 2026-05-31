@@ -32,14 +32,16 @@ A common and highly insecure habit is to copy these values directly into the dep
 * **Accidental console leaks**: If an engineer inspects the environment configuration of a running container to debug a minor issue, the database password is displayed in plain text on their screen.
 * **No dynamic lifecycle**: Because the secrets are hardcoded in the deployment configuration, rotating a database password requires editing your deployment scripts, regenerating your task definitions, and running a complete CI/CD deployment pipeline, increasing the risk of downtime.
 
-To eliminate these vulnerabilities, you need to store your sensitive configuration in a vaulted, encrypted storage system in the cloud, deliver the value only to authorized workloads at startup or runtime, and keep it out of your deployment scripts, console screens, and build histories.
+To eliminate these vulnerabilities, you need to store your sensitive configuration in an encrypted storage system in the cloud, deliver the value only to authorized workloads at startup or runtime, and keep it out of your deployment scripts, console screens, and build histories.
 
 ## What Counts as a Secret
 
 To design a clean configuration structure, you must distinguish between ordinary application configuration and true runtime secrets.
 
+The useful distinction is authority. A normal configuration value changes behavior, while a secret grants access to a protected system, account, or paid service if copied by the wrong caller.
+
 * **Configuration**: Values that affect how your application behaves but grant no administrative authority. Examples include the port number your server listens on, the active logging level, or the base URL of a public API. These are safe to store as plaintext environment variables in your codebase or task definitions.
-* **Secrets**: Highly sensitive values that grant direct access to protected data, systems, or third-party paid services. If an unauthorized person copies these values, they can connect directly to your production database, verify fake webhooks, or charge transactions to your company. These must be vaulted and encrypted.
+* **Secrets**: Highly sensitive values that grant direct access to protected data, systems, or third-party paid services. If an unauthorized person copies these values, they can connect directly to your production database, verify fake webhooks, or charge transactions to your company. These must be stored in encrypted secret systems.
 
 Filing settings correctly prevents operational bloat:
 
@@ -56,13 +58,15 @@ Filing settings correctly prevents operational bloat:
   * Type: Configuration
   * Risk: Extremely low. Defines which port the container binds to, but provides no authority to incoming requests.
 
-If you treat every minor configuration setting as a secret, you introduce unnecessary operational overhead, increase system load times, and complicate local testing. Keep your standard configuration settings in ordinary environment files, and reserve your vaulted secure paths strictly for high-risk credentials.
+If you treat every minor configuration setting as a secret, you introduce unnecessary operational overhead, increase system load times, and complicate local testing. Keep your standard configuration settings in ordinary environment files, and reserve your encrypted secret paths strictly for high-risk credentials.
 
 ## Secrets Manager vs Parameter Store
 
 AWS provides two distinct systems for storing and retrieving runtime configurations: AWS Secrets Manager and Systems Manager Parameter Store. While both systems protect sensitive values by integrating with KMS encryption, they are built around different pricing, scale limits, and operational lifecycles.
 
-AWS Secrets Manager is a dedicated vault engineered for high-value sensitive data that changes dynamically. It is optimized for active lifecycle management, supporting out-of-the-box cross-region replication (critical for disaster recovery) and native API integrations with database engines to automate password rotation. Secrets Manager charges a flat monthly fee per secret, making it a design target specifically for production credentials, third-party transactional tokens, and private API keys.
+Secrets Manager serves as a managed secret store for high-value credentials with lifecycle features, while Parameter Store functions as a hierarchical parameter registry that can hold ordinary configuration and encrypted SecureString values.
+
+AWS Secrets Manager is a dedicated secret storage service engineered for high-value sensitive data that changes dynamically. It is optimized for active lifecycle management, supporting out-of-the-box cross-region replication (critical for disaster recovery) and native API integrations with database engines to automate password rotation. Secrets Manager charges a flat monthly fee per secret, making it a design target specifically for production credentials, third-party transactional tokens, and private API keys.
 
 Systems Manager Parameter Store, on the other hand, is a hierarchical configuration and parameter tree designed to manage both plaintext and encrypted settings (via SecureString parameters). Standard parameters are free of charge, making them highly cost-effective for large configuration inventories, such as environment-specific URLs, resource tags, or feature toggles. However, Parameter Store does not support out-of-the-box cross-region replication, and automated rotation must be custom-built using Lambda schedules.
 
@@ -103,6 +107,8 @@ There are two different delivery paths, and the role boundary changes with the p
 ## KMS and Envelope Encryption
 
 When you write an encrypted parameter or secret to AWS storage, the secret value is encrypted at rest. AWS Secrets Manager uses AWS Key Management Service, commonly called KMS, to protect secret values. The secret metadata, such as the name, description, tags, rotation settings, and KMS key ARN, is not the secret payload, so you should avoid putting sensitive information in those fields.
+
+KMS acts as the managed cryptographic key service behind many AWS encryption features. Your application usually does not handle raw storage keys directly; AWS services call KMS to generate, protect, and use keys under policy control.
 
 Envelope encryption is the mechanism behind this protection. The simple idea is that the secret value is encrypted with a data key, and that data key is itself protected by a KMS key. Beginners do not need to memorize every internal step first. The operational lesson is that an authorized read may require two permissions: permission to read the secret and permission to use the KMS key when the secret uses a customer managed key.
 
@@ -158,9 +164,9 @@ This envelope design gives you two useful authorization layers. To retrieve a da
 
 ## Auditing with CloudTrail and Safe Logging
 
-Storing your secrets in a vaulted system and encrypting them via KMS resolves the storage risk, but it leaves an operational question open: How do you prove that only authorized workloads are reading your secrets, and how do you prevent developers from accidentally printing those secrets during system incidents?
+Storing your secrets in an encrypted secret system and protecting them via KMS resolves the storage risk, but it leaves an operational question open: How do you prove that only authorized workloads are reading your secrets, and how do you prevent developers from accidentally printing those secrets during system incidents?
 
-To gather evidence without exposing the secret payload, AWS implements AWS CloudTrail. CloudTrail records management events for your AWS account and can also record selected data events when you configure them. It is not a packet capture system or a full application log, but it gives you a strong audit trail for sensitive AWS API activity:
+CloudTrail is the AWS account activity log for management API calls and selected data events. To gather evidence without exposing the secret payload, AWS implements AWS CloudTrail. CloudTrail records management events for your AWS account and can also record selected data events when you configure them. It is not a packet capture system or a full application log, but it gives you a strong audit trail for sensitive AWS API activity:
 
 * **Identifiable caller**: CloudTrail records the exact assumed workload role session principal that requested the secret.
 * **Precise action**: It logs the exact operation, such as `GetSecretValue` or `Decrypt`.
@@ -191,13 +197,13 @@ By combining AWS CloudTrail audits with safe, explicit application logging, you 
 
 Securing your runtime credentials is the final layer of your application's security posture:
 
-* **Isolate Secrets from Config**: Keep port numbers, debug levels, and URLs in ordinary environment variables. Reserve secure vaults strictly for database passwords and signing keys.
+* **Isolate Secrets from Config**: Keep port numbers, debug levels, and URLs in ordinary environment variables. Reserve encrypted secret stores strictly for database passwords and signing keys.
 * **Inject via ARNs**: Never copy raw secrets into your codebase, container images, or deployment tasks. Reference the secret ARN in your container configuration and let the ECS agent inject it at boot.
 * **Leverage Envelope Encryption**: Understand how Secrets Manager uses KMS-backed envelope encryption, and use customer managed keys when you need custom key policy control.
 * **Separate Startup and Runtime Roles**: Use the task execution role for ECS startup injection and the task role for application SDK reads.
 * **Scrub Your Output Logs**: Never log entire error objects, response payloads, or environment dumps to stdout. Keep your console scrollback clean of credentials.
 
-By implementing vaulted secrets, envelope encryption, and safe logging, you build a cloud system that is highly secure at rest, protected during delivery, and fully audited at runtime.
+By implementing encrypted secret storage, envelope encryption, and safe logging, you build a cloud system that is highly secure at rest, protected during delivery, and fully audited at runtime.
 
 ![Secrets and encryption summary infographic showing plaintext traps, secret versus config, Secrets Manager, Parameter Store, envelope encryption, and audit evidence](/content-assets/articles/article-cloud-providers-aws-identity-security-secrets-encryption-basics/secrets-encryption-summary.png)
 

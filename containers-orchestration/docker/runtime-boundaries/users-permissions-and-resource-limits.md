@@ -22,6 +22,8 @@ id: article-containers-orchestration-docker-users-permissions-and-resource-limit
 
 ## Why Isolation Has Edges
 
+Docker isolation narrows a host process, but the process still uses the host kernel's user, permission, capability, memory, and CPU enforcement systems.
+
 The orders API now has clear network and storage boundaries. Then a different kind of problem appears. A test container writes reports into the project directory, and the host editor cannot modify them. A runaway local process eats all available memory and Docker kills it. A container needs to bind a low port or change a network setting and gets `Operation not permitted`. Someone says "but it is inside Docker" as if that should answer everything.
 
 Docker containers are isolated processes, not separate physical machines. They share the host kernel. Docker uses Linux features such as namespaces, cgroups, capabilities, and filesystem mounts to give each container a controlled view of the system. That control is real, but it has edges.
@@ -31,6 +33,8 @@ Understanding those edges prevents two opposite mistakes: treating a container a
 ## The Mental Model
 
 The container process runs on the host kernel with a narrowed view.
+
+The simple rule is that Docker narrows several host-controlled systems at once. Namespaces decide what the process can see, users decide what files it can access, capabilities decide which privileged operations it can attempt, and cgroups decide how much CPU and memory it may consume.
 
 ```mermaid
 flowchart TD
@@ -50,6 +54,13 @@ flowchart TD
 Namespaces shape the process's view of files, processes, and networking. User and group ids decide file access. Capabilities break root privilege into smaller pieces. Cgroups limit resource usage. Docker combines these into a container boundary.
 
 ## Container Users
+
+Container users are numeric Linux users and groups applied to the process running inside the container.
+
+
+![Diagram showing container UID, capabilities, and CPU and memory limits as separate control surfaces](/content-assets/articles/article-containers-orchestration-docker-users-permissions-and-resource-limits/uid-capabilities-limits.png)
+
+*User identity, capabilities, and cgroup limits protect different boundaries and should not be treated as interchangeable.*
 
 Inside a container, a process still has a user id and group id:
 
@@ -81,6 +92,13 @@ Running as a non-root user narrows what the process can do inside the container 
 
 ## Bind Mount Permissions
 
+Bind mount permissions expose host filesystem ownership directly to the container process.
+
+
+![Diagram showing host file ownership checked against a container process UID through a bind mount](/content-assets/articles/article-containers-orchestration-docker-users-permissions-and-resource-limits/bind-mount-permission-edge.png)
+
+*A bind mount exposes a real host path, so UID and mode bits still decide whether the container process can read or write.*
+
 Bind mounts make user ids visible because they connect a host path directly into the container.
 
 ```bash
@@ -97,6 +115,10 @@ There are several ways to avoid that. Run the container as your host uid and gid
 The exact behavior can differ on Docker Desktop because the daemon runs inside a VM and file sharing translates between host and VM filesystems. The model still helps: ask which numeric user wrote the file and which filesystem boundary carried it.
 
 ## Capabilities
+
+Linux capabilities are smaller privilege bits that split up what root-like processes are allowed to do.
+
+Example: a process may need `NET_BIND_SERVICE` to bind a low port such as `80`, but it does not need every device and kernel permission on the host. Capabilities let you grant that narrower operation instead of making the whole container privileged.
 
 On Linux, root privilege is split into capabilities. Docker grants a default set and drops many others. That is why root inside a container can install packages into the container filesystem but may still fail to change kernel networking behavior.
 
@@ -116,19 +138,27 @@ Capability changes should be narrow and explained by the workload. `--privileged
 
 ## Memory Limits
 
+Memory limits are cgroup ceilings that tell the kernel how much memory the container's process tree may allocate.
+
+Example: `--memory 512m` says the process tree can allocate up to 512 MB. If a leak tries to grow beyond that ceiling, the kernel can kill the process instead of letting it consume the whole host.
+
 By default, a container can use as much memory as the host kernel scheduler allows. That is convenient for local experiments and dangerous for noisy processes. Docker memory limits use cgroups to put a ceiling around the container.
 
 ```bash
 docker run --memory 512m devpolaris/orders-api:local
 ```
 
-When the process goes beyond the allowed memory, the kernel can kill it. From Docker's viewpoint, the container exits. From the application's viewpoint, it may look like a sudden death with little graceful cleanup. That is why an out-of-memory exit is different from a handled application error.
+When the process goes beyond the allowed memory, the kernel can kill it. From Docker's viewpoint, the container exits. From the application's viewpoint, it may appear as an abrupt termination with little graceful cleanup. That is why an out-of-memory exit is different from a handled application error.
 
 Memory limits help in production and in local work. A runaway test should not be able to consume the whole laptop. A local database should have enough memory to behave realistically, but not so much that it hides a leak until CI or staging.
 
 Swap settings add more detail, and platform support varies. The beginner-safe rule is to set a clear memory limit when you need predictable behavior, then read container state and host logs if a process disappears under load.
 
 ## CPU Limits
+
+CPU limits are cgroup scheduling rules that control how much CPU time a container can consume under host load.
+
+Example: `--cpus "1.5"` does not create a new CPU. It tells the kernel scheduler to give this container process tree roughly one and a half CPUs worth of runtime when CPU is contested.
 
 CPU limits are also cgroup controls. The most readable flag is `--cpus`:
 
@@ -167,6 +197,10 @@ Once those pieces are visible, permission errors and resource kills stop feeling
 ## What's Next
 
 The next Docker article uses Compose to put these choices into one application graph: services, images, commands, environment, networks, volumes, health, and repeatable lifecycle commands.
+
+![Summary infographic for Docker USER, UID mapping, capabilities, memory, CPU, and least privilege](/content-assets/articles/article-containers-orchestration-docker-users-permissions-and-resource-limits/users-limits-summary.png)
+
+*The users and limits summary separates permission identity from resource ceilings.*
 
 ---
 

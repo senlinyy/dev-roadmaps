@@ -39,7 +39,9 @@ DNS does not replace Services. It gives clients a readable way to find them. The
 
 ## Service Names Have a Shape
 
-A Service DNS name has predictable pieces. The fully qualified name usually looks like this:
+A Service DNS name is the readable address Kubernetes creates for a Service. It has predictable pieces so callers can name a Service in the same namespace, another namespace, or the whole cluster domain.
+
+Example: a web Pod in the `web` namespace can call the orders Service with `devpolaris-orders-api.orders`, which includes the Service name and namespace. The fully qualified name usually looks like this:
 
 ```text
 <service>.<namespace>.svc.cluster.local
@@ -63,7 +65,9 @@ A lookup for the full Service DNS name should return the Service cluster IP for 
 
 ## Namespace Search Paths Explain Short Names
 
-Inside a Pod, the resolver configuration contains search paths. A short name such as `devpolaris-orders-api` is expanded using those search paths. That is why a Pod in the `orders` namespace can often call `http://devpolaris-orders-api` while a Pod in another namespace may need `http://devpolaris-orders-api.orders`.
+A DNS search path is a list of suffixes the resolver tries when an application uses a short name. Inside a Pod, Kubernetes writes those search paths into `/etc/resolv.conf`.
+
+Example: a Pod in the `orders` namespace can often call `http://devpolaris-orders-api`, while a Pod in the `web` namespace should use `http://devpolaris-orders-api.orders` so it reaches the Service in the intended namespace.
 
 ```bash
 $ kubectl -n web exec deploy/devpolaris-web -- cat /etc/resolv.conf
@@ -87,7 +91,9 @@ When a caller crosses namespaces, include the namespace in the name. That small 
 
 ## CoreDNS Is the Usual Cluster DNS Server
 
-Most Kubernetes clusters run CoreDNS as the cluster DNS implementation. Pods do not usually query CoreDNS Pods directly. They query the `kube-dns` Service IP, and Kubernetes routes that traffic to ready CoreDNS endpoints.
+CoreDNS is the common DNS server implementation that answers Kubernetes Service and Pod name lookups. Pods do not usually query CoreDNS Pods directly. They query the `kube-dns` Service IP, and Kubernetes routes that traffic to ready CoreDNS endpoints.
+
+Example: when a web Pod looks up `devpolaris-orders-api.orders`, the query goes to the cluster DNS Service IP, then to a ready CoreDNS Pod, which reads Kubernetes Service records and returns the orders Service cluster IP.
 
 ```bash
 $ kubectl -n kube-system get svc kube-dns
@@ -126,7 +132,7 @@ That output says DNS did its job. The Service has no endpoints, so inspect selec
 
 ## Failure Mode: DNS Itself Fails
 
-When DNS itself fails, look at the resolver config, the cluster DNS Service, CoreDNS Pods, and CoreDNS logs. A failing lookup usually returns `NXDOMAIN`, timeout, or a server failure.
+DNS itself is failing when the caller cannot turn even a known cluster name into an address. The useful first split is whether one Service name is wrong or whether all cluster lookups are broken. A failing lookup usually returns `NXDOMAIN`, timeout, or a server failure.
 
 ```bash
 $ kubectl -n web exec deploy/devpolaris-web -- nslookup kubernetes.default
@@ -149,7 +155,9 @@ If CoreDNS endpoints exist, inspect logs for plugin errors, upstream DNS failure
 
 ## Headless Services Return Pod Addresses
 
-A normal ClusterIP Service returns one virtual IP. A headless Service sets `clusterIP: None` and lets DNS return backend Pod addresses directly. This is useful for systems that need to discover individual peers, such as some databases or stateful systems.
+A headless Service is a Service that does not hide backends behind one cluster virtual IP. It sets `clusterIP: None` and lets DNS return backend Pod addresses directly.
+
+Example: a stateful cache cluster may need to discover `cache-0`, `cache-1`, and `cache-2` as individual peers. A normal ClusterIP Service returns one virtual IP. A headless Service returns the Pod addresses instead.
 
 ```yaml
 apiVersion: v1
@@ -170,7 +178,7 @@ Do not use a headless Service just because it looks more direct. For ordinary HT
 
 ## DNS Habits for Application Config
 
-Application configuration should prefer names that match the ownership boundary. A service in the same namespace can use the short Service name. A service in another namespace should include the namespace. Shared libraries and templates should use the full name if they may be reused across namespaces.
+Application configuration should use a Service name that stays clear from the caller's namespace. A service in the same namespace can use the short Service name. A service in another namespace should include the namespace. Shared libraries and templates should use the full name if they may be reused across namespaces.
 
 ```yaml
 env:
@@ -182,7 +190,7 @@ The full name is longer, but it is explicit. In an incident, explicit names make
 
 ## Production Review Questions
 
-A production review should connect the YAML to the request path. Ask who can call the workload, which component owns the public address, and how a failed health check will be noticed. For `devpolaris-orders-api`, the answer should name the caller, the Service, and the routing layer rather than saying only "Kubernetes handles it."
+A production DNS review should connect each configured name to the namespace where the caller runs. Ask which Pod uses the name, which Service object should answer, and whether the short form could resolve differently from another namespace. For `devpolaris-orders-api`, the answer should name the caller namespace, the Service namespace, and the exact DNS name in configuration rather than saying only "Kubernetes handles it."
 
 ```text
 Request path review:

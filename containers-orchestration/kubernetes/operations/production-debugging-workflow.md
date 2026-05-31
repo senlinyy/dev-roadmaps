@@ -38,7 +38,9 @@ That request ID can connect ingress logs, API logs, and tracing if the platform 
 
 ## Build a Timeline
 
-A timeline turns scattered facts into cause and effect. Write down when the symptom started, what changed near that time, and which evidence supports each point.
+A timeline is a short sequence of timestamped facts about the symptom, nearby changes, and recovery actions. It turns scattered facts into cause and effect.
+
+Example: if a new image rollout starts at `10:03` and checkout `503` alerts start at `10:05`, the timeline tells you the rollout deserves immediate inspection before you chase unrelated cluster components.
 
 ```text
 10:03 deploy devpolaris-orders-api image 2026-05-07.2 started
@@ -66,7 +68,9 @@ If your team does not set change cause or deploy metadata, add that to the deliv
 
 ## Check the Workload From the Outside In
 
-Move from the user path toward the Pod. This avoids confusing an internal symptom with the first failure.
+Outside-in debugging follows the same path a request takes from the user-facing edge toward the Pod. It avoids confusing an internal symptom with the first failure.
+
+Example: check the external route, then Service, EndpointSlice, ready Pods, container logs, and dependencies instead of starting by deleting a suspicious Pod.
 
 ```mermaid
 flowchart TD
@@ -104,7 +108,7 @@ The old Pod is serving. The two new Pods are running but not ready. This is a ro
 
 ## Separate Rollout, Runtime, and Dependency Failures
 
-Production failures often look similar from the outside. Separate them by asking what changed and which layer reports the failure.
+Failure families are buckets that connect an external symptom to the layer most likely to fix it. Production failures often look similar from the outside, so separate them by asking what changed and which layer reports the failure. For example, a new ReplicaSet with zero ready Pods points toward rollout or readiness behavior, while old and new Pods failing together points more toward a dependency, routing, or cluster condition.
 
 | Failure family | Signal | First useful command |
 |----------------|--------|----------------------|
@@ -136,7 +140,9 @@ The new image expects a database table that does not exist. The next decision is
 
 ## Use Safe Mitigations Before Deep Fixes
 
-During user impact, mitigation comes before the perfect root cause fix. A mitigation reduces impact while keeping evidence intact. For this incident, the safest mitigation is likely rollback because the previous image has a ready Pod and the new image expects an unapplied schema change.
+Mitigation is a change that reduces user impact before the full root cause fix is ready. It is useful when the evidence points to a safe action that can restore service faster than a code or schema fix. During user impact, mitigation comes before the perfect explanation, but it should still match the evidence and preserve useful data.
+
+Example: for this incident, rollback is likely safer than editing probes because the previous image has a ready Pod and the new image expects an unapplied schema change.
 
 Other mitigations might include scaling the last known good ReplicaSet, disabling a feature flag, increasing replicas if capacity is the issue, or routing traffic away from a broken region. Choose a mitigation that matches the evidence.
 
@@ -144,7 +150,9 @@ Avoid speculative edits. Do not change readiness probes to make Pods ready if lo
 
 ## Know When to Roll Back
 
-Rollback is appropriate when a recent rollout is strongly connected to user impact and the previous version is known to work. Kubernetes makes Deployment rollback direct:
+Rollback returns a Deployment to an earlier Pod template revision. It is appropriate when a recent rollout is strongly connected to user impact and the previous version is known to work.
+
+Example: if revision 20 introduces readiness failures and revision 19 still has a healthy Pod, `kubectl rollout undo --to-revision=19` is a reasonable mitigation while the team fixes the release.
 
 ```bash
 $ kubectl -n orders rollout undo deployment/devpolaris-orders-api --to-revision=19
@@ -172,7 +180,9 @@ The rollback does not end the work. It restores service. The follow-up is to fix
 
 ## Failure Mode: Debugging Changes the System
 
-A dangerous debugging habit is making unrecorded changes during diagnosis. Examples include scaling Deployments manually, deleting Pods repeatedly, editing live objects, or disabling policies without recording why. These changes can hide the original failure.
+A mutating debug command is any command that changes the cluster while you are still trying to understand it. Examples include scaling Deployments manually, deleting Pods repeatedly, editing live objects, or disabling policies without recording why. The danger is that the command can remove evidence or create a second problem that looks like part of the original incident.
+
+Example: deleting all orders API Pods during a bad rollout destroys local evidence and simply recreates the same bad Pods because the Deployment still points to the bad image. These changes can hide the original failure.
 
 ```bash
 $ kubectl -n orders delete pod -l app.kubernetes.io/name=devpolaris-orders-api
@@ -186,7 +196,7 @@ Use read-only commands first. When you must mutate, choose the smallest action t
 
 ## The Repeatable Workflow
 
-A production debugging workflow should be boring enough to follow when several people are watching.
+A production debugging workflow is a small sequence of evidence checks and controlled decisions. It should be boring enough to follow when several people are watching. The goal is to move from symptom to scope, then from Kubernetes state to application evidence, before choosing a mitigation.
 
 1. Capture the exact user symptom.
 2. Write a short timeline with evidence.

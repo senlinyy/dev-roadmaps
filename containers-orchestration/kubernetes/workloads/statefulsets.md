@@ -28,7 +28,9 @@ A StatefulSet is the Kubernetes workload object for that kind of application. It
 
 ## Stable Names and Stable Volumes
 
-StatefulSets give you two stable things: ordinal names and persistent volume claims. An ordinal is the number at the end of the Pod name. Kubernetes creates `orders-projection-0` before `orders-projection-1` by default.
+StatefulSets give you two stable things: ordinal names and persistent volume claims. An ordinal is the number at the end of the Pod name, and a persistent volume claim is a request for durable storage that can outlive an individual Pod.
+
+Example: `orders-projection-0` can keep using `data-orders-projection-0` after its Pod is recreated, so the worker returns to the same local projection files instead of starting with an empty disk. Kubernetes creates `orders-projection-0` before `orders-projection-1` by default.
 
 Persistent storage is requested through `volumeClaimTemplates`. Each Pod gets its own claim based on the template. If `orders-projection-0` is recreated, Kubernetes reuses the claim for `orders-projection-0` instead of giving it a brand new empty disk.
 
@@ -44,7 +46,7 @@ The matching between Pod identity and volume identity is the main reason to use 
 
 ## A Stateful Worker for Order Projections
 
-Suppose the orders team runs a projection worker that consumes order events and maintains a local read model cache. The durable source of truth is still PostgreSQL, but each worker keeps local disk state so it can resume quickly after restart.
+A stateful worker is a background process where a particular replica owns local files or identity that should follow it across restarts. Suppose the orders team runs a projection worker that consumes order events and maintains a local read model cache. PostgreSQL still stores the authoritative order records, but each worker keeps local disk state so it can resume quickly after restart.
 
 ```yaml
 apiVersion: apps/v1
@@ -97,7 +99,9 @@ The names are predictable. The volume claims are separate. That is the operating
 
 ## Headless Services and Pod DNS
 
-A StatefulSet needs a headless Service for stable network identity. Headless means the Service has `clusterIP: None`, so Kubernetes DNS returns Pod records instead of hiding all Pods behind one virtual IP.
+A headless Service is a Service without a cluster virtual IP. In Kubernetes YAML, `clusterIP: None` tells DNS to return records for the individual Pods instead of routing every caller through one stable Service address.
+
+Example: a peer process can dial `orders-projection-0.orders-projection.default.svc.cluster.local` when it needs that exact member, rather than any healthy member behind a normal Service.
 
 ```yaml
 apiVersion: v1
@@ -124,7 +128,9 @@ This matters for systems that form a cluster or keep peer lists. A Deployment Po
 
 ## Ordered Startup and Updates
 
-By default, StatefulSets create and update Pods in order. Kubernetes creates `orders-projection-0`, waits for it to become ready, then creates `orders-projection-1`. During updates, it works through the set in reverse ordinal order.
+Ordered startup means Kubernetes handles StatefulSet Pods by their ordinal numbers instead of treating every replica as interchangeable. This exists for systems where one member must be ready before the next member safely joins.
+
+Example: Kubernetes creates `orders-projection-0`, waits for it to become ready, then creates `orders-projection-1`. During updates, it works through the set in reverse ordinal order.
 
 That order is slower than a Deployment rollout, but it protects applications that need a leader, seed member, or primary before followers join. The cost is rollout speed. If your workload does not need ordering, you may be using the wrong controller.
 
@@ -138,7 +144,9 @@ When an update pauses, inspect the lowest or current unready ordinal. Later Pods
 
 ## Failure Mode: Pending Volume Claims
 
-A common StatefulSet failure is a Pod stuck in `Pending` because its volume claim cannot be bound or mounted. Start with Pods and PVCs together.
+A pending volume claim means Kubernetes has not attached the durable storage the Pod identity needs. For a StatefulSet, that blocks the Pod before the application container can start because the Pod is supposed to come back with its own disk.
+
+Example: `orders-projection-0` may stay `Pending` if the claim `data-orders-projection-0` asks for a StorageClass named `fast-ssd` that does not exist in the cluster. Start with Pods and PVCs together.
 
 ```bash
 $ kubectl get pod,pvc -l app=orders-projection
@@ -163,7 +171,9 @@ The Pod is not pending because the image is bad or the application crashed. It i
 
 ## Data Safety Tradeoffs
 
-StatefulSets intentionally do not delete persistent volume claims when you scale down or delete the StatefulSet. That surprises beginners, but it protects data. Removing a controller should not automatically erase disks that may contain production state.
+Persistent volume claims are deliberately more durable than StatefulSet Pods. StatefulSets intentionally do not delete claims when you scale down or delete the StatefulSet because removing a controller should not automatically erase disks that may contain production state.
+
+Example: scaling from two projection workers to one removes `orders-projection-1`, but its claim can remain so the team can recover data, inspect it, or reuse it when scaling back up.
 
 The tradeoff is cleanup work. After a test StatefulSet, you may need to delete PVCs manually. In production, that manual step is good friction because deleting data should be deliberate.
 

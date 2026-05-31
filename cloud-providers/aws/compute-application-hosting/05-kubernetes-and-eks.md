@@ -43,6 +43,8 @@ To use EKS effectively, you must stop viewing it as a simple container runtime a
 
 Amazon EKS is AWS-managed Kubernetes. Kubernetes is an open-source system designed to run containerized workloads by declaring your desired system state in YAML manifests, and letting the cluster automatically work to reconcile reality with that shape.
 
+At a high level, EKS serves as the managed Kubernetes control layer on AWS. Your team uses the Kubernetes API and resource model, while AWS operates the cluster control plane and connects Kubernetes workloads to VPC networking, load balancing, and IAM features.
+
 EKS is different from ECS because Kubernetes becomes the active interface between your team and the AWS cloud runtime. In ECS, your primary operational files describe task definitions, services, and task desired counts. In EKS, you manage Pods, Deployments, Services, and Namespaces.
 
 The architectural request and access pipeline in EKS bridges the Kubernetes API layer with your native VPC subnets:
@@ -57,13 +59,13 @@ flowchart TD
     PodIdentity --> IAM[Scoped AWS IAM Role]
 ```
 
-This pipeline demonstrates how Kubernetes resources are cabled directly into AWS infrastructure. The Application Load Balancer routes external traffic through a Kubernetes Ingress Controller directly into the virtual cluster. 
+This pipeline demonstrates how Kubernetes resources are connected to AWS infrastructure. The Application Load Balancer routes external traffic through a Kubernetes Ingress Controller directly into the virtual cluster.
 
 The AWS Load Balancer Controller watches Kubernetes Ingress and Service resources, then creates or updates AWS load balancer target groups. In IP target mode, the ALB can route directly to pod IPs; in instance target mode, it routes through worker nodes and NodePort. EKS Pod Identity associates the workload's Kubernetes service account with a scoped AWS IAM Role, granting the container dynamic permissions to call AWS APIs.
 
 ## The Control Plane vs Worker Capacity
 
-To operate EKS, you must understand the separation between the cluster's brain, called the Control Plane, and its muscle, called Worker Capacity.
+To operate EKS, you must understand the separation between the Kubernetes management layer, called the Control Plane, and the compute pool, called Worker Capacity.
 
 The **Control Plane** is the core management layer of Kubernetes. It runs the API Server (which receives and authenticates your YAML manifests), the Scheduler (which decides which node runs your containers), the Controller Manager (which monitors replica states), and etcd (the durable database that stores the cluster state). 
 
@@ -80,6 +82,8 @@ This division is an essential operational checkpoint. The EKS control plane can 
 ## Kubernetes Core Nouns: Pods, Deployments, and Services
 
 When you transition to EKS, you write YAML manifests to describe three core Kubernetes resources that manage your application compute:
+
+These nouns map to three runtime jobs. Pods are the running process unit, Deployments are the desired-state controller for pod replicas, and Services are the stable network selection layer in front of changing pod IPs.
 
 * **Pods**: The smallest deployable unit in Kubernetes. A pod wraps one or more container processes that must share the exact same network space and local storage. Kubernetes schedules, scales, and terminates pods, never raw containers.
 * **Deployments**: The desired-state controller for your pods. A Deployment manifest describes the pod template, the desired replica count, and the rollout strategy (such as rolling updates). If a pod crashes, the Deployment controller automatically schedules a replacement.
@@ -104,11 +108,13 @@ Kubernetes Label Binding Mapping:
 
 If a developer makes a minor typo, setting the Service selector to `app: order-api` while the Deployment spawns pods with `app: orders-api`, the service will find zero healthy backends. 
 
-The pods will be running successfully in the cluster, but the load balancer health checks will fail, and users will receive connection timeouts because the network gatekeeper is looking for a label that does not exist.
+The pods will be running successfully in the cluster, but the load balancer health checks will fail, and users will receive connection timeouts because the Service selector is looking for a label that does not exist.
 
 ## VPC CNI Subnet IP Sizing
 
 One of the most significant architectural differences between running containers in EKS and other platforms is how networking is integrated into your VPC. EKS enforces this integration using the Amazon VPC Container Network Interface (CNI) plugin.
+
+The VPC CNI functions as the pod-to-VPC networking adapter. It gives pods real VPC private IP addresses instead of hiding them behind an internal cluster-only overlay network.
 
 Under the Amazon VPC CNI, pods launched on your worker nodes receive real, fully routed private IP addresses from your VPC subnets. On EC2 worker nodes, the CNI attaches secondary ENIs and pre-allocates warm private IPs directly to the hosts.
 
@@ -131,6 +137,8 @@ When designing for EKS, size your private application subnets from expected pod 
 
 Securing your containerized applications in EKS requires separating Kubernetes cluster permissions from AWS API permissions.
 
+EKS Pod Identity acts as the bridge between a Kubernetes service account and an AWS IAM role. It lets a specific pod workload receive temporary AWS credentials without sharing broad node-level permissions.
+
 First, authorize operators and pipelines using Kubernetes Role-Based Access Control (RBAC). RBAC defines what a principal can do inside the Kubernetes API server (such as creating namespaces or editing deployments).
 
 Second, authorize your application code to call AWS APIs (like reading S3 or Secrets Manager) using **EKS Pod Identity**.
@@ -146,6 +154,8 @@ Unrelated pods should not receive that workload role unless they use the associa
 ## ECS vs EKS: The Platform Trade-off
 
 Choosing between Amazon ECS and Amazon EKS is not a technical ranking. It is a decision about which operating layer your organization wants to maintain.
+
+ECS behaves like an AWS-native container service with a smaller platform surface. EKS behaves like a Kubernetes platform that runs on AWS infrastructure. The tradeoff is operational surface area, ecosystem portability, and how much platform engineering your team is ready to own.
 
 * **Amazon ECS (AWS-Native Containers)**:
   * Simplicity: Extremely high. It uses native AWS concepts, integrates out of the box with standard security groups and load balancers, and requires very little specialized container knowledge.

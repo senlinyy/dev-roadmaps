@@ -14,14 +14,14 @@ aliases:
 ## Table of Contents
 
 1. [The Mid-day Traffic Surge](#the-mid-day-traffic-surge)
-2. [Knobs and Switches: Runtime Controls](#knobs-and-switches-runtime-controls)
-3. [The Lever of Capacity Scaling](#the-lever-of-capacity-scaling)
+2. [Runtime Control Surfaces](#runtime-control-surfaces)
+3. [Capacity Scaling](#capacity-scaling)
 4. [Desired Task Count Controls](#desired-task-count-controls)
 5. [Automated Target Tracking Scaling Policies](#automated-target-tracking-scaling-policies)
 6. [Diagnosing Backlogs: SQS Queue Telemetry](#diagnosing-backlogs-sqs-queue-telemetry)
 7. [Schedules and Background Pipeline Jobs](#schedules-and-background-pipeline-jobs)
 8. [Bounding Downstream Pressures: Concurrency Limits](#bounding-downstream-pressures-concurrency-limits)
-9. [The Emergency Stop: Pause Controls](#the-emergency-stop-pause-controls)
+9. [Pause Controls](#pause-controls)
 10. [When Scaling Compute Destroys Database Performance](#when-scaling-compute-destroys-database-performance)
 11. [Putting It All Together](#putting-it-all-together)
 
@@ -35,11 +35,13 @@ Your production application is deployed, configured, healthy, and fully observab
 * A nightly data-cleanup scheduled script launches automatically during peak hours, saturating the relational database.
 * A poison message block reaches the top of the processing queue, causing background workers to crash and restart repeatedly.
 
-When these events occur, you cannot wait 10 minutes to deploy new code. You need immediate controls to adjust how the running systems behave. You need knobs to add compute capacity, slow down background work, pause scheduled jobs, or isolate poison messages in real time while your engineering team gathers evidence.
+When these events occur, you cannot wait 10 minutes to deploy new code. You need immediate controls to adjust how the running systems behave. You need controls that add compute capacity, slow down background work, pause scheduled jobs, or isolate poison messages in real time while your engineering team gathers evidence.
 
-## Knobs and Switches: Runtime Controls
+## Runtime Control Surfaces
 
 Runtime controls are the operational switches built into your cloud architecture that let you adjust the amount, timing, and flow of work without deploying code changes. 
+
+Runtime controls act as production control surfaces for already-deployed systems. They change service capacity, queue consumption, schedule state, concurrency, or feature availability while leaving the application artifact unchanged.
 
 Our application architecture exposes several controls across its layers:
 
@@ -55,22 +57,24 @@ flowchart TD
 
 To operate successfully, you must match every runtime control to the specific pressure it moves:
 
-Runtime Control Levers:
+Runtime Control Surfaces:
 
-| Control Knob | Operational Ingress | Target Pressure Moved |
+| Control Surface | Operational Ingress | Target Pressure Moved |
 | :--- | :--- | :--- |
 | **Desired Task Count** | ECS Service API | Compute thread availability. |
 | **Autoscaling Policy** | Application Auto Scaling | Automatic capacity matching during traffic spikes. |
 | **Queue Redrive Rules** | SQS Dead Letter Queue | Isolates broken payloads from the main processor. |
 | **Schedule State** | EventBridge Scheduler | Pauses or delays heavy recurring operations. |
 | **Concurrency Limits** | Lambda / Application Pools | Limits connection storms sent to databases and APIs. |
-| **Feature Flags** | Configuration Vault | Disables specific features without code rollouts. |
+| **Feature Flags** | Configuration Store | Disables specific features without code rollouts. |
 
-The safe operational question is not: *What switches can I pull?* It is: *What database, queue, or network pressure will this switch move, and what new pressure will it create?*
+The safe operational question is not: *What controls can I change?* It is: *What database, queue, or network pressure will this control move, and what new pressure will it create?*
 
-## The Lever of Capacity Scaling
+## Capacity Scaling
 
 Scaling means changing resource capacity to absorb load. It is a vital operational lever, but it does not fix the root cause of a software bug.
+
+Capacity scaling is the adjustment of runtime resource supply. In AWS operations, that usually means changing task replicas, Lambda concurrency, or worker throughput to match the amount of work arriving at the system.
 
 Scaling ECS tasks helps if your application is CPU-bound, memory-saturated, and downstream databases have idle headroom. Scaling SQS background workers helps if your message backlog is growing and external gateways are healthy. 
 
@@ -79,6 +83,8 @@ However, scaling can also push failure downstream. If an external API is rate-li
 ## Desired Task Count Controls
 
 The desired count is the target number of task replicas the ECS Service Controller tries to maintain. If the desired count is manually set to `4`, ECS continually works toward four running tasks, but placement can still fail if subnets lack IP addresses, capacity providers lack room, images cannot be pulled, or health checks keep terminating replacements.
+
+Desired count is a controller target, not a direct process command. You tell ECS the fleet size you want, and the service controller attempts to place and maintain that many healthy tasks.
 
 For background worker fleets, manual desired count changes are the first operational lever during incidents:
 
@@ -95,7 +101,7 @@ The gotcha of manual overrides is autoscaling policy interaction. If you have en
 
 ## Automated Target Tracking Scaling Policies
 
-Autoscaling automates capacity matching by evaluating real-time metrics against target values. For ECS, target tracking policies act like a home thermostat: if CPU utilization stays above a 70% target, the auto-scaler can launch tasks; if utilization stays below the target after cooldown behavior and scale-in rules allow it, the auto-scaler can remove tasks. There is no special 30% scale-in line unless you configure a policy around that value.
+Autoscaling automates capacity matching by evaluating real-time metrics against target values. For ECS, target tracking policies function as feedback controllers: if CPU utilization stays above a 70% target, the auto-scaler can launch tasks; if utilization stays below the target after cooldown behavior and scale-in rules allow it, the auto-scaler can remove tasks. There is no special 30% scale-in line unless you configure a policy around that value.
 
 Autoscaling is highly effective when the metric you track has a stable, linear relationship with container capacity. It is highly dangerous when the metric is a symptom of a downstream bottleneck.
 
@@ -113,6 +119,8 @@ Autoscaling also has dynamic time behavior. It operates after metrics change, re
 ## Diagnosing Backlogs: SQS Queue Telemetry
 
 Queues separate customer-facing API transactions from slow background processes. The orders API writes the transaction to RDS, publishes a receipt message to SQS, and returns an immediate success page to the user, offloading email delivery to background workers.
+
+SQS queue telemetry is backlog and processing-state evidence. It tells you whether work is waiting, currently invisible to other consumers, aging beyond the customer expectation, or repeatedly returning after failed processing.
 
 To inspect queue depth from your administrative workstation, you query SQS attributes using the AWS CLI:
 
@@ -159,6 +167,8 @@ If visible messages and message age are both rising, check the worker stdout log
 
 Scheduled tasks are background operations triggered by time triggers rather than user actions. AWS provides Amazon EventBridge Scheduler to run scheduled events, targeting ECS tasks or Lambda functions.
 
+EventBridge Scheduler acts as a managed time-based invocation service. It stores a schedule, target, invocation role, retry behavior, and enabled or disabled state outside the application code.
+
 Scheduled tasks write to production databases. They deserve the same review, permissions, and pause controls as your primary API. A nightly database cleanup script that is harmless at low volumes can collide with production traffic spikes or automated backup windows, locking database tables and causing global timeouts.
 
 To prevent scheduled collisions during incidents, you can disable the trigger directly from your terminal:
@@ -181,7 +191,9 @@ This CLI update halts the schedule instantly:
 
 ## Bounding Downstream Pressures: Concurrency Limits
 
-Concurrency is the measure of how many operations run at the same split-second. Enforcing concurrency limits is a vital defensive design pattern that protects databases and APIs from resource saturation.
+Concurrency is the measure of how many operations run at the same time. Enforcing concurrency limits is a vital defensive design pattern that protects databases and APIs from resource saturation.
+
+A concurrency limit is a hard upper bound on simultaneous work. It protects a downstream dependency by preventing the caller fleet from opening too many execution threads, sockets, or API calls at once.
 
 You must apply concurrency controls at the exact boundaries where downstream systems are weak:
 
@@ -189,9 +201,11 @@ You must apply concurrency controls at the exact boundaries where downstream sys
 * **SQS Maximum Concurrency**: Controls the maximum number of concurrent Lambda pollers allowed to read from a queue, slowing down message consumption during downstream database outages.
 * **Database Connection Pools**: Clamps the maximum database connections established per container task (such as limiting the pool to 10 connections), preventing container autoscaling from exhausting relational database connection limits.
 
-## The Emergency Stop: Pause Controls
+## Pause Controls
 
-Pause controls are high-value operational switches designed to stop the bleeding during high-severity incidents. They buy your engineering team time to read evidence without turning the outage into a frantic code-deploy cycle.
+Pause controls are high-value operational switches designed to halt a failing path during high-severity incidents. They buy your engineering team time to read evidence without turning the outage into a frantic code-deploy cycle.
+
+A pause control is a reversible runtime state change. It can disable a schedule, reduce worker count to zero, turn off a feature path, or stop queue consumption without changing the deployed artifact.
 
 Every pause control you design must adhere to three strict operational rules:
 
@@ -234,7 +248,7 @@ Operating live cloud environments requires a thorough understanding of capacity 
 * **Enforce Queue Redrive Policies**: Implement SQS Dead Letter Queues (DLQs) with a `maxReceiveCount` chosen for the workload. A short count isolates poison payloads quickly; a longer count gives flaky dependencies more retry room.
 * **Secure and Version Schedules**: Treat scheduled jobs as active production writers, managing their triggers and permissions with release discipline.
 * **Defend Boundaries with Concurrency**: Enforce strict database connection pool limits to prevent auto-scaling tasks from exhausting database limits.
-* **Design Elegant Pause Controls**: Implement reversible, visible, and owned pause switches to buy diagnostic time during incidents.
+* **Design Reversible Pause Controls**: Implement visible and owned pause controls to buy diagnostic time during incidents.
 
 ![Runtime controls checklist covering desired count, autoscaling, queue age, schedules, concurrency, and pause switch](/content-assets/articles/article-cloud-providers-aws-deployment-runtime-operations-scaling-jobs-and-operational-controls/runtime-controls-checklist.png)
 

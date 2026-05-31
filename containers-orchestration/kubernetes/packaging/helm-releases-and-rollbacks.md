@@ -40,7 +40,9 @@ When a production incident is active, copy the namespace into every command. Gue
 
 ## Installing devpolaris-orders-api
 
-The first install creates the release and the Kubernetes objects rendered from the chart.
+Installing a Helm chart creates a release record and applies the rendered Kubernetes objects. It is the first time a chart, values, release name, and namespace become live cluster state.
+
+Example: installing the orders API chart with release name `orders` in `devpolaris-prod` creates revision 1 and applies the rendered Deployment and Service.
 
 ```bash
 $ helm install orders ./charts/orders-api \
@@ -69,7 +71,9 @@ The label `app.kubernetes.io/instance=orders` connects these objects to the rele
 
 ## Upgrading a Release
 
-An upgrade renders the chart again with new chart source or values, then applies the difference to the cluster. For a normal image release, production might update only the image tag.
+Upgrading a Helm release renders the chart again with new chart source or values, then applies the difference to the cluster. It is how a release moves from one revision to the next.
+
+Example: a normal orders API image release might update only `image.tag` from `2026.05.07` to `2026.05.07.2`, while keeping replicas, Service, and ingress unchanged.
 
 ```yaml
 image:
@@ -104,7 +108,9 @@ Helm's `STATUS: deployed` tells you the Helm operation completed. The Kubernetes
 
 ## Inspecting Release History
 
-Release history shows revisions and chart versions. It is useful during incidents because it gives you a timeline of Helm operations.
+Release history is Helm's record of install, upgrade, rollback, and uninstall actions for a release. It is useful during incidents because it gives you a timeline of Helm operations.
+
+Example: if production fails after revision 2, `helm history orders -n devpolaris-prod` shows which revision is currently deployed and which earlier revision might be a rollback target.
 
 ```bash
 $ helm history orders -n devpolaris-prod
@@ -146,7 +152,7 @@ Now the next question is not "why is Helm broken?" It is "who last changed the l
 
 ## Failure Mode: Upgrade Succeeds but Pods Do Not Become Ready
 
-Suppose a chart upgrade applies successfully, but the new image requires an environment variable that the values file did not provide. Helm may report the release as deployed if it did not wait for readiness.
+A Helm upgrade can succeed at the apply layer while the application still fails at the readiness layer. Suppose a chart upgrade applies successfully, but the new image requires an environment variable that the values file did not provide. Helm may report the release as deployed if it did not wait for readiness.
 
 ```bash
 $ helm upgrade orders ./charts/orders-api -n devpolaris-prod -f environments/prod.values.yaml
@@ -174,7 +180,9 @@ The Helm release changed the Deployment. The application did not become ready. T
 
 ## Rolling Back a Release
 
-`helm rollback` tells Helm to take a previous release revision and apply its stored manifest again. If revision 2 introduced the bad image, roll back to revision 1.
+Helm rollback applies the stored manifest from an earlier release revision as a new revision. It exists to return Kubernetes objects to a previous chart output when the newer output is unhealthy.
+
+Example: if revision 2 introduced a bad image, `helm rollback orders 1` creates revision 3 whose content matches revision 1.
 
 ```bash
 $ helm rollback orders 1 -n devpolaris-prod
@@ -202,7 +210,9 @@ Rollback is a recovery action, not the end of the work. Open a follow-up change 
 
 ## Atomic Upgrades and Waiting
 
-For safer release commands, Helm can wait for resources to become ready. With `--wait`, Helm waits for supported resources before marking the command successful. With `--atomic`, Helm rolls back changes if the upgrade fails, and `--atomic` also enables waiting.
+Waiting tells Helm to watch supported Kubernetes resources for readiness before marking an operation successful. Atomic upgrade is the fail-and-rollback policy layered on top of that waiting behavior. Together, they make the release command care about whether the new Pods become ready, not only whether Kubernetes accepted the new objects.
+
+Example: if the new orders API Pods never become ready within five minutes, `--atomic --timeout 5m` makes the command fail and tries to return the release to the previous revision.
 
 ```bash
 $ helm upgrade orders ./charts/orders-api \
@@ -262,7 +272,7 @@ When the release is automated, CI or the delivery controller can create the same
 
 ## Uninstalling Without Losing the Plot
 
-`helm uninstall` removes a release's managed resources. That is useful for preview environments and temporary test installs. It is dangerous in production if the release owns persistent resources or if another team expects the objects to keep existing.
+`helm uninstall` removes the Kubernetes resources Helm manages for a release. Those managed resources are the objects in the stored manifest, such as Deployments, Services, ConfigMaps, and sometimes PersistentVolumeClaims. Uninstall is useful for preview environments and temporary test installs. It is dangerous in production if the release owns persistent resources or if another team expects the objects to keep existing.
 
 ```bash
 $ helm uninstall orders-preview -n devpolaris-pr-184

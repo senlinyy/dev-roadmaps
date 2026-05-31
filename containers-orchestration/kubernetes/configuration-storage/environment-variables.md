@@ -40,7 +40,9 @@ This article uses environment variables as the link between earlier ConfigMaps a
 
 ## Literals, ConfigMaps, and Secrets
 
-A literal environment variable is written directly in the container spec. This is fine for tiny, non-secret values that are tightly coupled to the workload. It is not a good home for environment-specific settings that change often.
+Environment variables can come from several sources in a Pod spec. A literal value is written directly in the container spec, a ConfigMap reference pulls in plain configuration, and a Secret reference pulls in sensitive values.
+
+Example: `NODE_ENV=production` can be a literal, `CATALOG_API_URL` can come from a ConfigMap, and `DATABASE_URL` should come from a Secret. Literal values are fine for tiny, non-secret values that are tightly coupled to the workload. They are not a good home for environment-specific settings that change often.
 
 ```yaml
 env:
@@ -70,7 +72,9 @@ This split keeps review honest. A teammate can review public routing values in o
 
 ## envFrom and Explicit env Entries
 
-`envFrom` imports all keys from a ConfigMap or Secret. It is convenient, especially when an application owns the whole object. The risk is accidental growth. A new key added for one purpose becomes visible to the container even if the Deployment never named it.
+`envFrom` is a bulk import for environment variables. It imports all keys from a ConfigMap or Secret into the container.
+
+Example: if `orders-api-config` is used only by the orders API, `envFrom` can be reasonable. The risk is accidental growth. A new key added for one purpose becomes visible to the container even if the Deployment never named it.
 
 ```yaml
 envFrom:
@@ -93,7 +97,9 @@ A good review question is: would a new teammate understand the app's startup con
 
 ## Expansion Order and Dependent Variables
 
-Kubernetes can expand environment variables that refer to earlier variables in the same container spec. This is useful for building a URL from smaller pieces, but it only works in order. A variable can reference one that appeared earlier, not one that appears later.
+Environment variable expansion lets one variable include the value of another variable in the same container spec. Kubernetes performs this expansion while it builds the container environment, and it only works in order.
+
+Example: define `ORDERS_HOST` first, then define `ORDERS_BASE_URL` as `http://$(ORDERS_HOST):8080`. A variable can reference one that appeared earlier, not one that appears later.
 
 ```yaml
 env:
@@ -119,7 +125,9 @@ If the application logs `http://$(ORDERS_HOST):8080`, inspect the Deployment spe
 
 ## Failure Mode: CreateContainerConfigError
 
-Environment variable wiring fails before the container starts when a required ConfigMap or Secret reference is missing. The Pod status is usually `CreateContainerConfigError`, and application logs are empty because there is no application process yet.
+`CreateContainerConfigError` is a Pod startup status that means Kubernetes could not assemble the container configuration. For environment variables, this usually happens when a required ConfigMap, Secret, or key is missing before the container starts.
+
+The useful detail is that the application has not run yet. Application logs are empty because there is no application process. The event on the Pod is the place to look first.
 
 ```bash
 $ kubectl get pods -n devpolaris-staging
@@ -148,7 +156,9 @@ Use optional references only when the application treats absence as a deliberate
 
 ## Validating Values in the Application
 
-Kubernetes can check that a referenced object exists. It cannot know whether `PORT="banana"` is valid for your Node process. The application must validate environment variables during startup and exit with a useful error.
+Application validation is the startup check that turns raw environment strings into values the service can safely use. Kubernetes can check that a referenced object exists. It cannot know whether `PORT="banana"` is valid for your Node process, or whether a URL points at the right kind of dependency.
+
+For `devpolaris-orders-api`, validation should parse `PORT` as a number, check that `CATALOG_API_URL` is a URL, and confirm sensitive values are present without printing them. The application should perform those checks during startup and exit with a useful error when a required value is invalid.
 
 A small startup log helps operators connect the Deployment to the process without leaking secrets.
 
@@ -168,7 +178,9 @@ This is an application responsibility because each service knows its own rules. 
 
 ## Rollouts and Environment Changes
 
-A Deployment rollout replaces Pods when the Pod template changes. Editing a ConfigMap that feeds environment variables does not change the Pod template by itself. That means a ConfigMap update and an environment update are not always the same operational event.
+A rollout is the process of replacing old Pods with new Pods from a Deployment template. Environment variables are captured when each container starts, so a rollout is often the moment when a changed value finally reaches the process.
+
+Editing a ConfigMap that feeds environment variables does not change the Pod template by itself. That means a ConfigMap update and an environment update are not always the same operational event.
 
 ```bash
 $ kubectl apply -f k8s/staging/orders-api-configmap.yaml
@@ -237,7 +249,7 @@ When the same error appears on only one node or one Pod revision, that metadata 
 
 ## Environment Drift Across Namespaces
 
-Environment variables become risky when staging and production drift in ways no one intended. A staging namespace may point at `catalog-api.devpolaris-staging`, while production should point at `catalog-api.devpolaris-prod`. If a copied manifest keeps the staging URL in production, Kubernetes will happily inject it.
+Environment drift means two namespaces that should differ in planned ways have drifted in accidental ways. Staging may point at `catalog-api.devpolaris-staging`, while production should point at `catalog-api.devpolaris-prod`. If a copied manifest keeps the staging URL in production, Kubernetes will happily inject it.
 
 The failure can look like a normal dependency error rather than a configuration mistake.
 

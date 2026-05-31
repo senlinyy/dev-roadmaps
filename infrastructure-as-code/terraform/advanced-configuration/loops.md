@@ -23,6 +23,8 @@ id: article-iac-terraform-advanced-loops
 
 ## The Repetition Problem
 
+Terraform repetition features are graph-expansion tools: they let one block or expression produce several planned instances or values from a collection.
+
 Suppose you are building a private network with one subnet in each of three availability zones. Without any looping mechanism, you write three nearly identical resource blocks:
 
 ```hcl
@@ -45,11 +47,13 @@ resource "aws_subnet" "web_c" {
 }
 ```
 
-Three blocks. Three times the code to maintain. If you add a fourth availability zone later, you add a fourth block. If you change the VPC ID — say, you rename the VPC resource — you update it in three places.
+Three blocks. Three times the code to maintain. If you add a fourth availability zone later, you add a fourth block. If you change the VPC ID, say, you rename the VPC resource, you update it in three places.
 
 Terraform provides two mechanisms for creating multiple resources from one block: `count` and `for_each`. Both are meta-arguments, meaning they work on any resource block regardless of the provider. They tell Terraform "create this resource N times" or "create one copy of this resource for each item in this collection."
 
 ## count: Creating Multiple Copies by Number
+
+`count` is a numeric loop for resources. It tells Terraform to create a fixed number of copies from one resource block. Example: `count = 3` creates addresses `aws_subnet.web[0]`, `aws_subnet.web[1]`, and `aws_subnet.web[2]`.
 
 The `count` meta-argument takes a whole number and creates that many copies of the resource. Each copy is a fully independent real resource with its own unique cloud ID.
 
@@ -77,12 +81,14 @@ resource "aws_subnet" "web" {
 
 ## Accessing the Index Inside a count Resource
 
+A `count` index is the copy number for the current resource instance. Terraform starts at `0`, so the first copy is index `0`, the second is index `1`, and so on. Example: `var.availability_zones[count.index]` gives each counted subnet the matching availability zone from the input list.
+
 The subnets created by `count` are stored in state as a list. Their Terraform addresses are:
 - `aws_subnet.web[0]`
 - `aws_subnet.web[1]`
 - `aws_subnet.web[2]`
 
-To reference all of them as a list — for example, to pass all subnet IDs to a load balancer — you use the splat expression:
+To reference all of them as a list, for example, to pass all subnet IDs to a load balancer, you use the splat expression:
 
 ```hcl
 resource "aws_lb" "main" {
@@ -99,12 +105,14 @@ To reference a single specific subnet by index, you use `aws_subnet.web[0].id`. 
 
 ## The Downside of count: Index-Based Addressing
 
+Index-based addressing means Terraform identifies each copy by position instead of by a stable name. Positions can shift when a list changes. Example: removing the middle subnet from `["us-east-1a", "us-east-1b", "us-east-1c"]` moves `us-east-1c` from index `2` to index `1`, which can make Terraform replace the wrong subnet.
+
 The major weakness of `count` is that Terraform identifies each copy by its index. If you remove an element from the middle of the list, every element after it shifts down by one index. Terraform sees this as every resource from that index onward changing its address, which often means destroying and recreating them.
 
 Suppose you have three subnets at indexes 0, 1, and 2 corresponding to zones `us-east-1a`, `us-east-1b`, and `us-east-1c`. You decide to remove `us-east-1b`. The new list is `["us-east-1a", "us-east-1c"]`. After the removal:
 
-- Index 0 is still `us-east-1a` — no change.
-- Index 1 is now `us-east-1c` — but Terraform's state has index 1 as `us-east-1b`.
+- Index 0 is still `us-east-1a`, no change.
+- Index 1 is now `us-east-1c`, but Terraform's state has index 1 as `us-east-1b`.
 
 Terraform sees index 1 changing from `us-east-1b` to `us-east-1c` and proposes to destroy the `us-east-1b` subnet and create a new `us-east-1c` subnet. The `us-east-1c` subnet that was at index 2 is also destroyed because index 2 no longer exists in the new list.
 
@@ -114,7 +122,9 @@ This is the problem that `for_each` solves.
 
 ## for_each: Creating Copies by Name
 
-The `for_each` meta-argument creates one copy of the resource for each element in a set or map. Each copy is identified by a stable key — a string that does not change when you add or remove other elements. Removing one element from the collection removes exactly that one resource and nothing else.
+`for_each` is a keyed loop for resources. It creates one resource instance per map entry or set item, and each instance is tracked by a stable key. Example: `aws_subnet.web["use1a"]` keeps its identity even if you add or remove `use1b`.
+
+The `for_each` meta-argument creates one copy of the resource for each element in a set or map. Each copy is identified by a stable key, a string that does not change when you add or remove other elements. Removing one element from the collection removes exactly that one resource and nothing else.
 
 Rewriting the subnets with `for_each` works best when each key carries the values that must stay stable, such as the availability zone and the subnet number:
 
@@ -150,6 +160,8 @@ The subnet resources now have Terraform addresses keyed by availability zone nam
 If you remove `use1b` from the map, Terraform sees that `aws_subnet.web["use1b"]` no longer exists in the `for_each` collection and proposes to destroy only that subnet. The subnets for `use1a` and `use1c` are untouched. No index shifting. No accidental destroys.
 
 ## for_each With a Map
+
+A map is the best `for_each` input when each resource needs a stable name plus several settings. The map key becomes the resource identity, and the map value holds that instance's configuration. Example: `alice = { email = "alice@example.com", admin = true }` can create one IAM user and one optional admin policy attachment for Alice.
 
 When the resources you want to create differ in more than one attribute, using a map as the `for_each` value is cleaner than managing parallel lists.
 
@@ -187,13 +199,15 @@ resource "aws_iam_user_policy_attachment" "admin" {
 
 `for_each = var.users` creates one IAM user per map entry. `each.key` is the username (like `"alice"`). `each.value` is the corresponding object with `email`, `team`, and `admin` fields. `each.value.email` accesses the email for the current user.
 
-The second resource uses a `for` expression to filter only the admin users: `{ for k, v in var.users : k => v if v.admin }`. This produces a map containing only the entries where `admin` is `true`. Terraform then attaches the admin policy only to those users.
+The second resource uses a `for` expression to filter only the admin users: `{ for k, v in var.users : k => v if v.admin }`. This produces a map containing only the entries where `admin` is `true`. Terraform then attaches the admin policy only to those users. The `AdministratorAccess` policy is intentionally a teaching shortcut here; production IAM modules should use least-privilege policies scoped to the actions each user or workload actually needs.
 
 Adding a new user means adding one entry to the `users` variable map. Removing a user means removing their entry. No index shifting. No risk of removing the wrong resource.
 
 ## for_each With a Set of Strings
 
-When all the resources in a group differ only in one attribute — a name, an ID — a `set(string)` is the cleanest `for_each` value:
+A set of strings works when the string itself is the stable identity and no extra per-item settings are needed. Example: `toset(["logs", "uploads", "backups"])` can create one S3 bucket per name.
+
+When all the resources in a group differ only in one attribute, a name or an ID, a `set(string)` is the cleanest `for_each` value:
 
 ```hcl
 variable "s3_buckets" {
@@ -209,6 +223,8 @@ resource "aws_s3_bucket" "app" {
 
 This creates three S3 buckets: `my-company-logs`, `my-company-uploads`, and `my-company-backups`. Each is tracked in state as `aws_s3_bucket.app["logs"]`, `aws_s3_bucket.app["uploads"]`, and `aws_s3_bucket.app["backups"]`.
 
+Sets remove duplicates and do not preserve input order. That is fine for `for_each` because the string value is the identity, but it is a poor fit when order itself matters. If order matters, use a list for values and convert to a map with explicit stable keys before using `for_each`.
+
 To collect all bucket names into a list (to pass as a variable to another resource or module), use a `for` expression:
 
 ```hcl
@@ -219,10 +235,12 @@ output "bucket_names" {
 
 ## Choosing Between count and for_each
 
+Choosing between `count` and `for_each` is choosing how Terraform should remember each resource instance. Use numeric indexes only when identity does not matter; use stable keys when an individual item may be added, removed, or changed. Example: optional monitoring can use `count`, but named subnets and IAM users should usually use `for_each`.
+
 Use `count` when:
 - You want a simple number of identical resources with no meaningful difference between them (other than an index).
 - You are toggling a resource on or off with a boolean: `count = var.enable_monitoring ? 1 : 0`.
-- The resources will not be added or removed from the middle of the list — you will only ever add to the end or remove from the end.
+- The resources will not be added or removed from the middle of the list, you will only ever add to the end or remove from the end.
 
 ![count uses numeric indexes that can shift, while for_each uses stable keys that preserve resource identity.](/content-assets/articles/article-iac-terraform-advanced-loops/count-vs-foreach-identity.png)
 
@@ -235,7 +253,9 @@ In practice, `for_each` is the better default for almost everything except simpl
 
 ## Dynamic Blocks: Loops Inside Resource Arguments
 
-Sometimes you do not need to create multiple resources — you need to create multiple repeated blocks inside a single resource. AWS security group rules are a classic example: a security group has one `ingress` block per allowed inbound port, and you want to specify those ports as a list without duplicating the block structure.
+A dynamic block is a loop for nested blocks inside one resource. It does not create multiple top-level resources; it creates repeated sub-blocks in a provider schema. Example: one security group can generate one `ingress` block for each allowed port in `[80, 443, 8080]`.
+
+Sometimes you do not need to create multiple resources. You need to create multiple repeated blocks inside a single resource. AWS security group rules are a classic example: a security group has one `ingress` block per allowed inbound port, and you want to specify those ports as a list without duplicating the block structure.
 
 ![Dynamic blocks repeat nested argument blocks inside one resource rather than creating multiple resources.](/content-assets/articles/article-iac-terraform-advanced-loops/dynamic-block-expansion.png)
 
@@ -272,7 +292,9 @@ resource "aws_security_group" "app" {
 
 The `dynamic "ingress"` block generates one `ingress` configuration block for each element in `var.allowed_ports`. Inside the `content` sub-block, `ingress.value` is the current port number. This produces the same result as writing three separate `ingress` blocks manually, but from a list that can be changed without editing the resource structure.
 
-The label after `dynamic` must match the name of the repeated block type in the resource schema — `ingress` for security group inbound rules, `rule` for some IAM resources, `setting` for Elastic Beanstalk, and so on. Check the provider documentation for the resource type to find which blocks can be dynamic.
+For current AWS security group rule management, prefer standalone `aws_vpc_security_group_ingress_rule` and `aws_vpc_security_group_egress_rule` resources in production modules. They give each rule its own Terraform address and metadata. The dynamic block example is still useful for learning how nested block generation works, but it should not be copied as the default production security group pattern.
+
+The label after `dynamic` must match the name of the repeated block type in the resource schema, `ingress` for security group inbound rules, `rule` for some IAM resources, `setting` for Elastic Beanstalk, and so on. Check the provider documentation for the resource type to find which blocks can be dynamic.
 
 ## Putting It All Together
 
@@ -293,6 +315,8 @@ Loops create multiple resources from one definition. The next article covers con
 
 **References**
 
-- [count Meta-Argument (HashiCorp Documentation)](https://developer.hashicorp.com/terraform/language/meta-arguments/count) — Full reference for the `count` argument, `count.index`, and list-based resource collections.
-- [for_each Meta-Argument (HashiCorp Documentation)](https://developer.hashicorp.com/terraform/language/meta-arguments/for_each) — Full reference for the `for_each` argument, `each.key`, `each.value`, and map/set-based resource collections.
-- [Dynamic Blocks (HashiCorp Documentation)](https://developer.hashicorp.com/terraform/language/expressions/dynamic-blocks) — Reference for generating repeated nested blocks with the `dynamic` keyword.
+- [count Meta-Argument (HashiCorp Documentation)](https://developer.hashicorp.com/terraform/language/meta-arguments/count), Full reference for the `count` argument, `count.index`, and list-based resource collections.
+- [for_each Meta-Argument (HashiCorp Documentation)](https://developer.hashicorp.com/terraform/language/meta-arguments/for_each), Full reference for the `for_each` argument, `each.key`, `each.value`, and map/set-based resource collections.
+- [Dynamic Blocks (HashiCorp Documentation)](https://developer.hashicorp.com/terraform/language/expressions/dynamic-blocks), Reference for generating repeated nested blocks with the `dynamic` keyword.
+- [AWS VPC Security Group Ingress Rule Resource](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/vpc_security_group_ingress_rule), Current standalone AWS provider resource for security group ingress rules.
+- [AWS IAM Best Practices](https://docs.aws.amazon.com/IAM/latest/UserGuide/best-practices.html), AWS guidance to grant least privilege instead of broad administrator permissions.

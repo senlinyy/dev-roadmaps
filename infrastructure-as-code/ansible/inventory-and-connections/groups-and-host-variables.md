@@ -21,6 +21,8 @@ id: article-infrastructure-as-code-ansible-groups-host-variables
 
 ## Variable Scoping in Configuration Management
 
+Group and host variables are inventory-scoped configuration values that Ansible merges before running tasks on each selected host.
+
 In system automation, variable scoping is the method of restricting the visibility and lifetime of a variable value to a specific logical boundary, such as a whole infrastructure fleet, a specific service tier, or a single physical server node. Instead of hardcoding concrete parameters like IP addresses, service ports, domain names, and directory paths directly inside your playbook files, you use variables to act as placeholders. You then declare the actual data values inside your host catalog, allowing the playbook to remain a highly reusable blueprint that behaves differently based on the target hosts.
 
 To understand why a disciplined variable scoping strategy is essential, consider our scenario. You are managing a configuration playbook for a web application database cluster.
@@ -87,7 +89,9 @@ You must avoid copying the same variable across multiple individual host files. 
 
 ## Directory-Based Variables beside Inventory
 
-While you can write variables inline inside your main inventory file, this practice quickly leads to massive, unreadable documents as your infrastructure scales. To keep your host maps clean and maintainable, Ansible automatically scans and imports variable files from two dedicated sibling directories placed beside your inventory: `group_vars/` and `host_vars/`.
+Directory-based variables are variable files stored beside the inventory instead of inline inside the host list. This keeps the inventory focused on which machines exist, while `group_vars/` and `host_vars/` hold the values those machines need.
+
+Example: `inventory/hosts.yml` can list `prod-app-02`, while `inventory/host_vars/prod-app-02.yml` stores its unique `drain_before_reload: true` setting. While you can write variables inline inside your main inventory file, this practice quickly leads to massive, unreadable documents as your infrastructure scales.
 
 The directory structure follows a strict naming convention:
 
@@ -107,7 +111,9 @@ When you run a playbook, the Ansible execution engine automatically searches for
 
 ## Under the Hood: Variable Compilation and Memory Resolution
 
-To appreciate the safety and flexibility of scoped variables, it helps to understand how the control plane parses, merges, and isolates namespaces in memory during execution.
+Variable compilation is the step where Ansible builds one final variable dictionary for each selected host. A namespace is that host's isolated set of active values, so one host's exceptions do not automatically become another host's settings.
+
+Example: `prod-app-01` and `prod-app-02` can share `app_port: 9000` from `group_vars/production.yml`, while only `prod-app-02` receives `drain_before_reload: true` from its host file.
 
 Under the hood, when you trigger a playbook, Ansible opens a fresh variable scope in memory for each target host. Group variables merge into this scope starting from the highest-level ancestor group and working down to the most specific child group, with more specific groups overriding broader ones on conflict. If a host belongs to multiple sibling groups at the same hierarchy level, Ansible applies deterministic merge rules, and `ansible_group_priority` can make that ordering explicit when needed. Host variables then layer on top, giving individual machine settings the final word.
 
@@ -162,7 +168,7 @@ The tool parses the inventory and variable directories, resolves parent-child ov
 }
 ```
 
-This output is your single source of truth. If a configuration file is rendered with the wrong port, or a login task uses the wrong username, you inspect this merged JSON block before modifying any playbooks. It tells you instantly whether the issue is a file path typo, a scope leakage, or an incorrect variable overwrite.
+This output is the merged-value record for the selected host. If a configuration file is rendered with the wrong port, or a login task uses the wrong username, you inspect this merged JSON block before modifying any playbooks. It tells you instantly whether the issue is a file path typo, a scope leakage, or an incorrect variable overwrite.
 
 ## Putting It All Together
 

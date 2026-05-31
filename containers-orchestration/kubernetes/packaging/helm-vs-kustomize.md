@@ -44,7 +44,9 @@ Those questions stay the same whether the source is a chart or an overlay. The t
 
 ## When Helm Fits
 
-Helm fits when you want to distribute an application package. A platform team can publish one chart for many HTTP APIs. App teams supply values for image, replicas, ports, probes, and ingress.
+Helm fits when you want to distribute an application package with templates, values, versions, and release history. A platform team can publish one chart for many HTTP APIs.
+
+Example: app teams can supply values for image, replicas, ports, probes, and ingress while the shared chart keeps labels and rollout defaults consistent.
 
 ```text
 Shared chart:
@@ -66,7 +68,9 @@ For an internal service like `devpolaris-orders-api`, the argument for Helm is s
 
 ## When Kustomize Fits
 
-Kustomize fits when the team already owns clear Kubernetes YAML and only needs environment differences. It avoids a template language, which can make reviews easier for learners who are still building Kubernetes fluency.
+Kustomize fits when the team already owns clear Kubernetes YAML and only needs environment-specific changes layered on top. It avoids a template language, which can make reviews easier for learners who are still building Kubernetes fluency.
+
+Example: the orders API base can hold a normal Deployment and Service, while the production overlay changes replicas, image tag, namespace, and ingress host.
 
 ```text
 k8s/
@@ -87,6 +91,8 @@ Kustomize also fits when a team wants the base to remain directly applyable in a
 The cost is that Kustomize has fewer built-in release commands. If you want a rollback, you usually rely on Git history, a GitOps controller, or a previous rendered artifact. That can be perfectly fine, but the team should know the rollback path before production needs it.
 
 ## The Same Change in Both Tools
+
+A useful comparison is one operational change expressed in both tools. For `devpolaris-orders-api`, the change is small: production should run image tag `2026.05.07` with three replicas. Helm represents that as chart inputs, while Kustomize represents it as overlay transformations.
 
 Here is the production image update in Helm values:
 
@@ -122,7 +128,9 @@ The output should answer the same operational questions either way.
 
 ## Release Lifecycle and Drift
 
-Helm stores release history in the cluster. That means you can ask Helm what values and manifests belong to a release.
+Release lifecycle is the tool-supported path for install, upgrade, rollback, and uninstall. Helm stores release history in the cluster, so you can ask Helm what values and manifests belong to a release.
+
+Example: `helm history orders` can show the current revision, while a Kustomize workflow usually gets release memory from Git history or a GitOps controller.
 
 ```bash
 $ helm history orders -n devpolaris-prod
@@ -143,7 +151,7 @@ The tool choice changes where release memory lives. Helm keeps release memory in
 
 ## Reviewability Is the Real Test
 
-A tool is helping if a reviewer can answer these questions quickly:
+Reviewability means a teammate can move from source change to final Kubernetes object without guessing. A tool is helping if a reviewer can answer these questions quickly:
 
 | Question | Helm evidence | Kustomize evidence |
 |----------|---------------|--------------------|

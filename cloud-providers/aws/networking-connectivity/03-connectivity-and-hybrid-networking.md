@@ -32,11 +32,11 @@ aliases:
 
 ## Connecting Beyond the Single Network Container
 
-Our regional VPC topology provides private application tiers, isolated databases, and cabled gateways that balance public internet entry with secure, outbound NAT translation. This structure is sufficient for a single application stack. 
+Our regional VPC topology provides private application tiers, isolated databases, and configured gateways that balance public internet entry with secure, outbound NAT translation. This structure is sufficient for a single application stack.
 
-However, as a platform grows, your secure VPC cannot remain a closed island.
+However, as a platform grows, your secure VPC cannot remain the only private network boundary.
 
-When you develop an application on your local laptop, reaching out to other APIs is trivial. You call public endpoints over the internet, or connect directly to local servers on your office local area network (LAN) because your computer is cabled directly to them. 
+When you develop an application on your local laptop, reaching out to other APIs is trivial. You call public endpoints over the internet, or connect directly to local servers on your office local area network (LAN) because your computer has direct network access to them.
 
 In our secure cloud environment, your application workers reside in private subnets with no direct inbound internet routes, and their outbound NAT egress is strictly monitored.
 
@@ -60,7 +60,7 @@ flowchart TD
     Worker -->|Direct VPN or Fiber| Mainframe
 ```
 
-The key to mastering cloud connectivity is to stop asking which networking product exists, and start by identifying the exact workload requirements: what needs to talk to what, and does the target look like a service, a sibling VPC, an enterprise hub, or a physical corporate network?
+The key to mastering cloud connectivity is to stop asking which networking product exists, and start by identifying the exact workload requirements: what needs to talk to what, and does the target look like a service endpoint, a sibling VPC, an enterprise routing hub, or a physical corporate network?
 
 ![VPC connectivity choice infographic showing a private app VPC choosing PrivateLink, VPC peering, Transit Gateway, VPN, Direct Connect, and Route 53 VPC Resolver paths](/content-assets/articles/article-cloud-providers-aws-networking-connectivity-connectivity-hybrid-networking/vpc-connectivity-choice-map.png)
 
@@ -71,7 +71,7 @@ The key to mastering cloud connectivity is to stop asking which networking produ
 AWS private connectivity becomes manageable once you assign each tool to a specific architectural job.
 
 * **Workload 1: Reach core AWS APIs privately without NAT**
-  * **AWS Tool**: Interface VPC Endpoints cabled with AWS PrivateLink.
+  * **AWS Tool**: Interface VPC Endpoints using AWS PrivateLink.
   * **Network representation**: A private IP address on an Elastic Network Interface in your private subnet.
 * **Workload 2: Connect two sibling VPCs directly**
   * **AWS Tool**: VPC Peering.
@@ -92,9 +92,9 @@ By aligning these tools with their specific connectivity jobs, you can construct
 
 Gateway Endpoints solve private access for S3 and DynamoDB by modifying subnet route tables. S3 and DynamoDB also have interface endpoint options, but gateway endpoints remain a common beginner default because they avoid additional hourly endpoint charges. Other AWS services, SaaS platforms, and third-party partner applications generally do not integrate directly with your route tables in this manner.
 
-For these services, you deploy Interface Endpoints cabled with AWS PrivateLink.
+For these services, you deploy Interface Endpoints using AWS PrivateLink.
 
-An Interface Endpoint places an Elastic Network Interface (ENI) directly inside your private subnets. This interface is assigned a private IP address from your subnet's CIDR range. 
+An Interface Endpoint behaves like a private IP entry point for a service that lives outside your VPC. It places an Elastic Network Interface (ENI) directly inside your private subnets. This interface is assigned a private IP address from your subnet's CIDR range.
 
 When your application worker needs to interact with an external API, it sends its requests directly to the private IP of this interface inside your VPC.
 
@@ -125,7 +125,7 @@ When you configure an Interface Endpoint, AWS provides you with a set of service
 
 If you configure your application code to call these generated hostnames directly, your code becomes highly dependent on AWS-specific configurations, which can make local testing difficult.
 
-AWS solves this through a feature called Private DNS Support. When you enable Private DNS on an Interface Endpoint, AWS registers a private hosted zone in your VPC DNS. 
+Private DNS Support acts as a DNS override for the service name inside your VPC. When you enable Private DNS on an Interface Endpoint, AWS registers a private hosted zone in your VPC DNS.
 
 This hosted zone makes the standard service hostname (such as `secretsmanager.us-east-1.amazonaws.com`) resolve to the private IP addresses of your endpoint interfaces inside your VPC. Your code keeps calling the ordinary AWS service name; the VPC DNS answer changes the packet path.
 
@@ -136,6 +136,8 @@ Your application code may resolve the public IP of the AWS service, attempt to r
 ## VPC Peering: Direct One-to-One Connections
 
 When you need to establish direct, bidirectional communication between two individual VPCs, the simplest architectural pattern is VPC Peering. A peering connection allows resources in VPC-A to communicate privately with resources in VPC-B using standard private IP routing.
+
+VPC Peering is a direct private routing relationship between two non-overlapping VPC CIDR ranges. It is useful when the relationship is simple and one-to-one.
 
 Peering operates purely at the routing layer. Once a peering connection is established, you configure a static route in VPC-A's route tables pointing to VPC-B's CIDR block through the peering connection, and then write the corresponding return route in VPC-B.
 
@@ -164,6 +166,8 @@ Because of these limitations, a peering mesh becomes difficult to manage as your
 ## AWS Transit Gateway: Organization-Scale Hubs
 
 To simplify multi-account and multi-VPC networking at scale, AWS provides Transit Gateway. Transit Gateway acts as a highly redundant, regional virtual router that centralizes all routing policies. 
+
+At a high level, Transit Gateway is a managed regional route hub. VPCs, VPNs, and Direct Connect paths attach to it, and transit route tables decide which attached networks may reach each other.
 
 Instead of constructing a complex mesh of peering links, you connect VPC attachments and VPN attachments to a single central transit gateway hub. Direct Connect commonly reaches Transit Gateway through a Direct Connect gateway and a transit virtual interface, so the physical circuit and the transit router remain separate pieces in the design.
 
@@ -217,7 +221,7 @@ Choosing the right hybrid path requires balancing deployment speed against perfo
 | **Latency and Jitter** | Variable (Internet congestion dependent) | Exceptionally Stable and Predictable |
 | **Primary Use Case** | Fast setup, dev environments, backup paths | Production enterprise hybrid data pipelines |
 
-A resilient enterprise design often deploys a high-bandwidth Direct Connect circuit as the primary data highway, with an AWS Site-to-Site VPN configured in active-standby as a cost-effective, internet-based backup path.
+A resilient enterprise design often deploys a high-bandwidth Direct Connect circuit as the primary private transport, with an AWS Site-to-Site VPN configured in active-standby as a cost-effective, internet-based backup path.
 
 ## Route 53 VPC Resolver: Bridging Cloud and Local DNS
 
@@ -227,7 +231,7 @@ When a virtual instance in AWS attempts to write to a database on-premises, it c
 
 Conversely, when a physical database administrator on-premises attempts to monitor a private cloud worker, their local system cannot query private AWS Route 53 hosted zones.
 
-AWS resolves this DNS boundary using Route 53 VPC Resolver Endpoints. This service was previously called Route 53 Resolver, and you will still see the older name in commands, APIs, and older architecture diagrams:
+Route 53 VPC Resolver Endpoints act as DNS forwarding interfaces between VPC DNS and another private DNS system. This service was previously called Route 53 Resolver, and you will still see the older name in commands, APIs, and older architecture diagrams:
 
 ```mermaid
 flowchart TD
@@ -286,7 +290,7 @@ Securing and scaling an AWS network means systematically extending your private 
 * **Site-to-Site VPN & Direct Connect**: Bridge the gap to physical networks, combining the rapid deployment of encrypted internet VPN tunnels with the stable latency and massive bandwidth of dedicated Direct Connect fiber.
 * **Route 53 VPC Resolver Endpoints**: Connect your cloud and on-premises DNS servers, ensuring that domain names resolve cleanly across hybrid networks.
 
-By mastering these connectivity patterns, you transform AWS networking from a collection of isolated servers into a seamless global architecture, cabled with clear traffic lanes, robust packet filters, and private naming.
+By mastering these connectivity patterns, you transform AWS networking from a collection of isolated servers into a global architecture with clear traffic paths, robust packet filters, and private naming.
 
 ![VPC connectivity summary infographic showing PrivateLink, private DNS, VPC peering, Transit Gateway, VPN versus Direct Connect, and Route 53 VPC Resolver](/content-assets/articles/article-cloud-providers-aws-networking-connectivity-connectivity-hybrid-networking/vpc-connectivity-summary.png)
 

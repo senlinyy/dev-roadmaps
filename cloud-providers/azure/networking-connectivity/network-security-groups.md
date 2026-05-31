@@ -26,13 +26,17 @@ aliases:
 
 ## Packet Flow Filtering: The Network Security Group Checklist
 
-A Network Security Group (NSG) is a stateful packet filtering firewall that controls inbound and outbound network traffic flowing across subnets and individual virtual network interfaces.
+A Network Security Group (NSG) is Azure's checklist of network rules for subnet and network interface traffic. Each rule looks at a packet, which is a small chunk of data traveling across the network, and decides whether that packet is allowed or denied.
+
+Example: an NSG can allow HTTPS traffic on port `443` from `asg-app-gateway` to `asg-orders-api`, while denying Remote Desktop traffic on port `3389` from the internet.
+
+It is a stateful packet filtering firewall that controls inbound and outbound network traffic flowing across subnets and individual virtual network interfaces.
 
 To construct a resilient architecture, you must separate physical layout from traffic permissions. Designing a Virtual Network (VNet) topology with public and private subnets determines where resources *can* physically communicate. However, topology alone does not prevent traffic from crossing those boundaries.
 
 By default, subnets in the same VNet are fully routable to each other. If your database subnet and your public web servers share the same VNet space, the web servers can open sockets directly to your database interfaces, exposing your persistent data blocks to compromise.
 
-Network Security Groups solve this vulnerability by establishing software-defined security checkpoints. An NSG does not look at high-level application headers, HTTP request paths (`/orders`), or user login session cookies.
+Network Security Groups solve this vulnerability by establishing software-defined packet filters. An NSG does not look at high-level application headers, HTTP request paths (`/orders`), or user login session cookies.
 
 It functions at the network layer, inspecting every packet for six fundamental coordinates: direction, source address, source port, destination address, destination port, and protocol. If a packet matches a rule's criteria, the NSG returns an allow or deny decision, blocking unauthorized packets at the virtual switch level before they can reach your workload.
 
@@ -58,15 +62,17 @@ flowchart TD
 
 ## Network Security Groups: The Software-Defined Checkpoint
 
-An NSG contains a list of prioritized security rules. You can associate a single NSG with an entire subnet, an individual Network Interface Card (NIC) attached to a virtual machine, or both.
+An NSG is reusable because Azure lets you attach the same rule list to a subnet, an individual Network Interface Card (NIC), or both. The attachment point decides where packets are checked.
+
+Example: `nsg-orders-api` can protect the whole `snet-orders-api` subnet, while a separate NIC-level NSG can add a stricter rule for one VM that should only accept SSH from a jump host.
 
 When you apply an NSG to `snet-orders-api`, the rules are enforced by Azure's software-defined network layer rather than by your application code. The workload's operating system does not need to run a local firewall rule for the NSG to apply.
 
-This checkpoint design is fast and useful, but it is not a complete DDoS or resource-exhaustion defense by itself. NSGs decide whether packet flows are allowed or denied. Public exposure, volumetric attacks, application-layer floods, and backend saturation still need the right public entry service, DDoS protection posture, health probes, scaling limits, and application controls.
+This packet-filter design is fast and useful, but it is not a complete DDoS or resource-exhaustion defense by itself. NSGs decide whether packet flows are allowed or denied. Public exposure, volumetric attacks, application-layer floods, and backend saturation still need the right public entry service, DDoS protection posture, health probes, scaling limits, and application controls.
 
 ## Rule Shape
 
-An NSG rule has a source, source port, destination, destination port, protocol, direction, priority, and access result. The access result is `Allow` or `Deny`.
+An NSG rule is a packet-match record. It has a source, source port, destination, destination port, protocol, direction, priority, and access result. The access result is `Allow` or `Deny`.
 
 For the orders API, a readable rule looks like this:
 
@@ -87,7 +93,7 @@ That separation is useful. When a request fails, you can ask whether the packet 
 
 ## Priority and Rule Evaluation
 
-Azure evaluates NSG rules in a strict, sequential order based on a priority number ranging from `100` to `65000`. Rules with lower priority numbers are processed first.
+NSG priority is the rule order that decides which matching rule wins. Azure evaluates NSG rules in a strict, sequential order based on a priority number ranging from `100` to `65000`. Rules with lower priority numbers are processed first.
 
 ![An infographic showing Azure NSG rules being evaluated by priority until the first match wins](/content-assets/articles/article-cloud-providers-azure-networking-connectivity-network-security-groups-and-application-security-groups/first-matching-rule-wins.png)
 
@@ -95,12 +101,16 @@ Azure evaluates NSG rules in a strict, sequential order based on a priority numb
 
 When a packet arrives at the virtual switch, the security controller walks the priority list from lowest to highest:
 
-```text
+```plain
 Evaluating Inbound Packet:
   ├── Priority 100: Allow TCP 443 ──> Match! (Stop evaluation and ALLOW)
   ├── Priority 200: Allow TCP 1433 ── (Skipped)
   └── Priority 65000: Deny All Inbound ── (Skipped)
 ```
+
+![A pseudo-code infographic showing an Azure NSG allowing a packet at priority 100 and stopping before a broader deny rule at priority 200](/content-assets/articles/article-cloud-providers-azure-networking-connectivity-network-security-groups-and-application-security-groups/nsg-priority-pseudocode.png)
+
+*A packet is decided by the first matching NSG rule, so a lower-numbered broad rule can hide every specific rule below it.*
 
 The moment a packet matches all parameters of a rule (such as matching the destination port and source IP), the evaluation loop **stops immediately**. Azure applies that rule's access decision (Allow or Deny) and discards the rest of the list.
 
@@ -116,7 +126,7 @@ This surprises teams that assume a new NSG starts as a blank firewall. A workloa
 
 For `orders-api`, the review should answer:
 
-```text
+```plain
 Do we depend on default VNet allow rules?
 Which explicit rules describe intended app flows?
 Which broad flows are denied before they become accidental access?
@@ -124,21 +134,36 @@ Which broad flows are denied before they become accidental access?
 
 Defaults make simple networks easy. Production reviews should still name the flows the app needs.
 
-## Under-the-Hood: Stateful Flow
+## Under-the-Hood: Stateful Flow and Connection Tracking
 
 A Network Security Group is a **stateful firewall**. This means that when a rule permits a connection to open, the NSG remembers that connection state and automatically permits all subsequent response traffic to flow in both directions.
 
-The practical result is simple:
+To implement this stateful behavior without degrading network throughput, Azure's virtual switch hypervisors run a high-performance **connection tracking (conntrack)** engine directly inside the host kernel's packet processing path, similar to the Netfilter conntrack architecture in Linux systems.
 
-Inbound TCP SYN packet -> evaluated by inbound NSG rules -> allowed -> response packets for that established flow are allowed automatically.
+When your application initiates or receives a connection request:
+1.  **SYN Interception**: The virtual switch intercepts the initial TCP SYN packet (or the first packet of a UDP stream). It checks if a matching connection record exists in its conntrack state table.
+2.  **State Insertion**: Since it is a new request, no record exists. The hypervisor runs the packet through the complete NSG rules list by evaluating priorities from lowest to highest. If a rule allows the packet, the conntrack engine creates a new record in its state table, indexing it by the **5-tuple key**:
+    *   Source IP Address
+    *   Source Port
+    *   Destination IP Address
+    *   Destination Port
+    *   Protocol (TCP or UDP)
+    The connection state is marked as `NEW`.
+3.  **Handshake Completion**: Once the three-way TCP handshake completes (SYN -> SYN-ACK -> ACK), the conntrack engine transitions the connection state to `ESTABLISHED`.
+4.  **Bypassing the Rules List**: For all subsequent packets belonging to this 5-tuple, the virtual switch matches the packet directly against the `ESTABLISHED` conntrack cache. The packet bypasses the prioritized NSG rules evaluation entirely, allowing it to traverse the virtual network at near-wire speeds.
 
-When an ingress load balancer opens a connection to `orders-api` on port `443`, Azure evaluates the inbound NSG rules. If the rule allows the connection, the return traffic for that same flow is allowed without you writing a separate outbound ephemeral-port rule.
+```plain
+Inbound TCP SYN -> Evaluated by NSG List -> Allowed -> Conntrack creates 5-tuple record (NEW)
+Response TCP SYN-ACK -> Matches Conntrack Cache -> Bypasses NSG List -> Allowed Automatically (ESTABLISHED)
+```
+
+This stateful architecture operates identically for UDP streams, even though UDP is a stateless protocol. When a UDP packet is sent, the conntrack engine creates a pseudo-connection record with a default idle timeout (typically 4 minutes). As long as packets continue to flow within this timeout window, the return traffic is allowed automatically.
 
 This stateful behavior significantly improves performance and simplifies configuration. You do not need to create fragile outbound rules to allow ephemeral response traffic back to clients. Outbound NSG rules are only evaluated when your container **initiates** a new connection to an external target (such as calling a payment API).
 
 ## The Dual-Evaluation Pipeline: Subnet and NIC NSGs
 
-When you associate an NSG with a subnet and also apply an NSG to an individual network interface (NIC), Azure processes packets through a strict **Dual-Evaluation Pipeline**.
+Dual evaluation means a packet may need to pass both the subnet NSG and the NIC NSG. When you associate an NSG with a subnet and also apply an NSG to an individual network interface (NIC), Azure processes packets through a strict dual-evaluation pipeline.
 
 ![An infographic showing packets checked by both subnet and network interface NSGs](/content-assets/articles/article-cloud-providers-azure-networking-connectivity-network-security-groups-and-application-security-groups/two-nsg-checkpoints.png)
 
@@ -146,7 +171,7 @@ When you associate an NSG with a subnet and also apply an NSG to an individual n
 
 This pipeline evaluates packets sequentially, and the order of evaluation depends entirely on the direction of the traffic:
 
-```text
+```plain
 Inbound Flow:  [Subnet NSG] (Must Allow) ───> [NIC NSG] (Must Allow) ───> Container App
 Outbound Flow: Container App ───> [NIC NSG] (Must Allow) ───> [Subnet NSG] (Must Allow)
 ```
@@ -186,19 +211,55 @@ This command returns the combined, evaluated ruleset and indicates the deciding 
 
 ## Application Security Groups: Logical Role Resolvers
 
-An Application Security Group (ASG) is a logical grouping resource that allows you to write NSG rules using workload roles rather than fragile, hardcoded IP address blocks.
+An Application Security Group (ASG) is a named workload group that NSG rules can reference instead of hardcoded IP addresses. It allows you to write NSG rules using workload roles rather than fragile, hardcoded IP address blocks.
 
-In traditional datacenter networks, if your web servers need to connect to your database servers, you must write firewall rules listing the exact IP addresses of every database node (e.g. allow `10.30.2.4`, `10.30.2.5`, `10.30.2.6`). If your database cluster autoscales and provisions a fourth node, your firewall rules instantly break until an operator manually adds the new IP.
+Example: instead of allowing `10.30.2.4`, `10.30.2.5`, and `10.30.2.6`, an NSG rule can allow traffic from `asg-orders-api` to `asg-orders-sql` on port `1433`.
+
+In traditional datacenter networks, if your web servers need to connect to your database servers, you must write firewall rules listing the exact IP addresses of every database node. If your database cluster autoscales and provisions a fourth node, your firewall rules instantly break until an operator manually adds the new IP.
 
 Application Security Groups solve this maintenance overhead by acting as logical role groups. You create an ASG (such as `asg-orders-api` and `asg-orders-sql`) and associate the network interfaces of your resources with these groups.
 
-This enables you to write clean, architectural rules inside your NSG:
+Under the hood, when a virtual machine's network interface card (NIC) is associated with an ASG:
+1.  **Dynamic Metadata Registration**: The ARM controller writes the NIC-to-ASG mapping into the software-defined networking directory database.
+2.  **Hypervisor Table Updates**: The controller immediately pushes this mapping to the physical host hypervisors that run your virtual machines.
+3.  **Real-Time IP Resolution**: When an NSG rule references `asg-orders-sql` as a destination, the hypervisor's virtual switch evaluates the rule by dynamically resolving the ASG to the list of active private IP addresses in real time.
 
-```text
-Allow Inbound: Source: asg-orders-api ── Destination: asg-orders-sql ── Port: TCP 1433
+This means your security rules stay completely decoupled from your physical IP space. If your database cluster scales out from three nodes to ten, the automation simply tags the new virtual machine NICs with the `asg-orders-sql` group. The new nodes inherit the firewall rules instantly, and the NSG configuration remains untouched, preventing manual security changes during autoscale events.
+
+To construct this relationship in Bicep, you define the network interface resource and link its IP configuration block directly to the target ASG resource ID:
+
+```bicep
+// Reference the existing Application Security Group
+resource dbAsg 'Microsoft.Network/applicationSecurityGroups@2021-08-01' existing = {
+  name: 'asg-orders-sql'
+}
+
+// Provision the Network Interface Card associated with the ASG
+resource dbNic 'Microsoft.Network/networkInterfaces@2021-08-01' = {
+  name: 'nic-orders-db-prod'
+  location: resourceGroup().location
+  properties: {
+    ipConfigurations: [
+      {
+        name: 'ipconfig1'
+        properties: {
+          privateIPAllocationMethod: 'Dynamic'
+          subnet: {
+            id: '/subscriptions/.../subnets/snet-orders-db'
+          }
+          applicationSecurityGroups: [
+            {
+              id: dbAsg.id
+            }
+          ]
+        }
+      }
+    ]
+  }
+}
 ```
 
-If your database cluster scales out, the new node's network interface must be associated with the `asg-orders-sql` group by your deployment automation or platform process. Your firewall rules remain untouched, but ASG membership still has to be assigned correctly for the new node to inherit the intended network permissions.
+This clean declarative structure makes your network architecture portable and easy to audit across environments.
 
 ## Effective Rules: Resolving Conflict
 
@@ -206,7 +267,7 @@ When packet behavior is surprising, inspect the effective security rules for the
 
 Good evidence names the flow and the matching rule:
 
-```text
+```plain
 Flow:
   Source: asg-app-gateway
   Destination: asg-orders-api
@@ -232,6 +293,10 @@ Operating a secure virtual network requires managing packet flows through the pr
 ## What's Next
 
 The private packet path is now controlled. The next article moves to the public side: when users visit a hostname, which Azure entry point receives the request first?
+
+In the next chapter, we will study **Public Entry Points**. We will compare Layer 4 load balancing (Azure Load Balancer) with regional Layer 7 application routing (Application Gateway) and global Anycast routing (Azure Front Door). We will learn how to design secure public entries and configure backend ingress locking to prevent direct public network attacks.
+
+This ensures our private network interfaces remain insulated while accepting verified internet traffic.
 
 ![An infographic showing packet filtering through subnet and NIC network security groups, priority rules, stateful flow, and application security groups](/content-assets/articles/article-cloud-providers-azure-networking-connectivity-network-security-groups-and-application-security-groups/nsg-packet-check.png)
 

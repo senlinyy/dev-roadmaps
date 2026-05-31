@@ -48,6 +48,8 @@ To run securely in the cloud, you must recreate the isolation of localhost by de
 
 A Virtual Private Cloud, commonly referred to as a VPC, is a logically isolated private network container that you create inside a single AWS Region. It is dedicated to your AWS account, separated from other virtual networks by AWS networking controls. Within this boundary, you define private IP address spaces, divide those spaces into subnets, attach route tables, and choose which gateways or endpoints can carry traffic.
 
+You can think of a VPC as the Regional private IP namespace for your application. It gives AWS resources a shared address plan and routing system while keeping that network separate from other customers and other VPCs unless you deliberately connect them.
+
 The VPC acts as the baseline for cloud infrastructure security. Without an explicit VPC topology, network placement becomes accidental. A database might land in a subnet whose route table and public access settings do not match its risk level, exposing critical data to unnecessary reachability.
 
 By defining a deliberate VPC topology, you ensure that every resource is assigned to an isolated network tier with explicit paths inside and outside your system.
@@ -75,6 +77,8 @@ flowchart TD
 
 Before you can place virtual servers or databases inside your VPC, you must define the IP address range they will use. AWS represents this range using Classless Inter-Domain Routing (CIDR) notation. A CIDR block consists of an IP address followed by a slash and a number, such as `10.40.0.0/16`. 
 
+A CIDR block functions as the address allocation range for the private network. It defines which private IPs the VPC and its subnets can assign to interfaces, databases, load balancer nodes, endpoints, and container tasks.
+
 The number after the slash represents the subnet mask, which dictates the size of the address block. A smaller number after the slash provides a larger pool of addresses, whereas a larger number provides fewer addresses. AWS allows you to choose private VPC CIDR blocks between a `/16` (65,536 addresses) and a `/28` (16 addresses).
 
 Planning your CIDR block requires careful foresight. If you allocate a tiny CIDR block for your initial VPC, you may run out of IP addresses as your application scales or as you add managed services that require network interfaces. 
@@ -89,6 +93,8 @@ To prevent IP collisions, follow these three foundational habits:
 ## Subnet Segmentation Across Availability Zones
 
 A subnet is a dedicated range of IP addresses within your overall VPC CIDR block. It serves as the primary placement unit for virtual servers, database interfaces, container tasks, and load balancers. 
+
+A subnet behaves like a zonal placement slice of the VPC address range. Choosing a subnet chooses both the IP pool and the Availability Zone where the network interface will live.
 
 By segmenting your VPC into distinct subnets, you can establish clear physical boundaries between public entry points, internal application logic, and backend data stores.
 
@@ -122,7 +128,9 @@ Duplicating this three-tier layout across multiple Availability Zones provides a
 
 A route table contains a set of routing rules that determines where network packets are sent when they leave a subnet. Each rule consists of a destination and a target. The destination represents the destination IP address range that the packet is trying to reach, while the target represents the gateway, network interface, or connector through which the packet must pass.
 
-Every route table in a VPC is automatically cabled with a default `local` route for the VPC's overall CIDR block. This local route allows all resources within the VPC to communicate privately with one another across subnets, subject to packet filters. 
+A route table is the subnet's forwarding table. It does not inspect application data or decide whether the packet is allowed; it only maps destination address ranges to the next network target.
+
+Every route table in a VPC automatically includes a default `local` route for the VPC's overall CIDR block. This local route allows all resources within the VPC to communicate privately with one another across subnets, subject to packet filters.
 
 To control how a subnet interacts with the outside world, you add a default route, represented as `0.0.0.0/0` in IPv4, pointing to an external target.
 
@@ -145,6 +153,8 @@ Every VPC contains a default main route table. If a subnet is created without an
 ## Internet Gateways vs. NAT Gateways
 
 To allow traffic to enter or leave your VPC, you must attach network gateways. The type of gateway you choose dictates whether the communication path is bidirectional or strictly outbound-initiated.
+
+At a high level, a gateway is a managed routing target that connects the private VPC address space to another network path. Internet Gateways provide direct public internet reachability for public resources, while NAT Gateways provide private resources with outbound IPv4 egress without allowing unsolicited inbound connections.
 
 An Internet Gateway is a horizontally scaled, redundant VPC component that enables direct, bidirectional communication between resources in your public subnets and the internet. To communicate through an Internet Gateway, a resource must live in a public subnet, its route table must point default traffic to the Internet Gateway, and the resource must be assigned a public IPv4 or Elastic IP address.
 
@@ -175,7 +185,7 @@ flowchart TD
 
 Operating NAT Gateways introduces two critical engineering tradeoffs:
 
-* **Resilience and AZ Alignment**: A zonal NAT Gateway is cabled with built-in redundancy within a single Availability Zone. If you deploy only one zonal NAT Gateway and share it across private subnets in multiple Availability Zones, a failure in that NAT Gateway's zone can take down outbound internet access for workloads in the other zones. In the zonal pattern, deploy one public NAT Gateway per Availability Zone and route private subnets to their same-zone gateway. In the Regional NAT pattern, AWS manages the multi-zone expansion for one Regional NAT gateway.
+* **Resilience and AZ Alignment**: A zonal NAT Gateway has built-in redundancy within a single Availability Zone. If you deploy only one zonal NAT Gateway and share it across private subnets in multiple Availability Zones, a failure in that NAT Gateway's zone can take down outbound internet access for workloads in the other zones. In the zonal pattern, deploy one public NAT Gateway per Availability Zone and route private subnets to their same-zone gateway. In the Regional NAT pattern, AWS manages the multi-zone expansion for one Regional NAT gateway.
 * **Processing and Idle Costs**: AWS charges a continuous hourly fee for each active NAT Gateway, plus a processing charge for every gigabyte of data passing through it. If your private application workers send heavy volumes of traffic through a NAT Gateway, your bill can escalate rapidly.
 
 NAT gateways are an IPv4 tool. For IPv6-only outbound internet access, AWS uses an egress-only internet gateway. It lets your IPv6 workloads initiate outbound internet connections, but it prevents the internet from starting new inbound connections to those workloads.
@@ -183,6 +193,8 @@ NAT gateways are an IPv4 tool. For IPv6-only outbound internet access, AWS uses 
 ## VPC Gateway Endpoints
 
 When application workers running in private subnets need to interact with core AWS services like Amazon S3 or Amazon DynamoDB, directing that traffic through a NAT Gateway is a costly design mistake. Because S3 and DynamoDB are regional public AWS services, private resources would ordinarily have to route through the NAT Gateway to reach them, incurring processing charges for every gigabyte of data transferred.
+
+A Gateway Endpoint acts as a service-specific route-table target for supported AWS services. Instead of treating S3 or DynamoDB traffic like generic internet-bound traffic, the route table sends matching service prefixes onto the AWS endpoint path.
 
 A VPC Gateway Endpoint solves this problem by establishing a private, direct routing path to supported AWS services. When you create a Gateway Endpoint for S3 or DynamoDB, you associate it with your VPC's route tables. AWS automatically appends a highly specific route to these tables, pointing the service's public prefix list (such as `pl-63a5400a` for Amazon S3) directly to the gateway endpoint (`vpce-xxxxxxxx`).
 
@@ -199,14 +211,14 @@ AWS does not charge hourly or per-GB endpoint processing fees for Gateway Endpoi
 
 Designing a secure cloud network topology means moving from accidental placement to deliberate boundaries. By applying the structure of a VPC, you replicate the isolation of localhost at a regional cloud scale.
 
-* **The Regional VPC**: Establishes your private network container, cabled apart from all other cloud customers.
-* **CIDR Planning**: Reserves a distinct, non-overlapping street-grid (such as `10.40.0.0/16`) that leaves ample room for subnets and avoids future IP address conflicts.
+* **The Regional VPC**: Establishes your private network container, isolated from all other cloud customers.
+* **CIDR Planning**: Reserves a distinct, non-overlapping address range (such as `10.40.0.0/16`) that leaves ample room for subnets and avoids future IP address conflicts.
 * **Subnet Segmentation**: Duplicates a secure three-tier layout (Public, Private App, Data) across multiple Availability Zones to eliminate single points of failure.
-* **Route Tables**: Act as the routing brain, making subnets public, private, or isolated based on where their default routes and service-specific routes point.
+* **Route Tables**: Act as forwarding tables, making subnets public, private, or isolated based on where their default routes and service-specific routes point.
 * **Gateways**: Internet Gateways allow public entry points to accept user requests, while NAT Gateways and egress-only internet gateways provide private subnets with outbound-initiated egress for IPv4 and IPv6 patterns.
 * **VPC Endpoints**: Bypass NAT Gateway paths for supported AWS services like S3 and DynamoDB, keeping high-volume traffic private while reducing NAT processing costs.
 
-A clean topology outlines where network paths are cabled. However, routing rules only make paths possible; they do not dictate which packets are permitted to use those paths. To lock down our system, we need to apply precise packet-filtering gates at both the subnet and resource levels.
+A clean topology outlines which network paths exist. However, routing rules only make paths possible; they do not dictate which packets are permitted to use those paths. To lock down our system, we need to apply precise packet-filtering rules at both the subnet and resource levels.
 
 ## What's Next
 

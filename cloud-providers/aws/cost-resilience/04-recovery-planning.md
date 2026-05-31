@@ -49,6 +49,8 @@ A backup vault only proves that you are compiling data storage bills. A verified
 
 To build an effective recovery plan, you must first define your operational recovery targets. Rather than aiming for immediate recovery (which carries extreme infrastructure costs), you establish realistic boundaries based on two industry-standard metrics:
 
+RTO and RPO are the recovery service-level targets for a failure. RTO defines the maximum acceptable downtime; RPO defines the maximum acceptable data loss window.
+
 Recovery Time and Point Coordinates:
 
 | Target Metric | Definition | Plain-English Question | Operational Focus |
@@ -63,6 +65,8 @@ A major Gotcha is data asymmetry. Different data classes within the same applica
 ## The Disaster Recovery Ladder
 
 AWS categorizes recovery patterns into four major strategies. As you climb this disaster recovery ladder, RTO and RPO shrink, while baseline operational cost and infrastructure complexity scale exponentially.
+
+A disaster recovery strategy is the standby shape of your secondary environment. It defines which data, compute, networking, and traffic-routing resources already exist before the failure happens.
 
 Disaster Recovery Tradeoff Matrix:
 
@@ -104,6 +108,8 @@ The primary trap of Active-Active is write conflicts. If your application logic 
 When database corruption occurs due to a faulty application release or malicious write, standard daily backups are insufficient. If your last snapshot was taken at midnight and the corruption happened at 2:15 p.m., restoring that midnight snapshot would lose 14 hours of valid customer orders. 
 
 To solve this, you use Amazon RDS Point-in-Time Recovery (PITR). PITR combines daily automatic snapshots with transaction logs archived by RDS, allowing you to restore a database near a chosen timestamp within your retention window, subject to the latest restorable time for that engine.
+
+PITR functions as a timestamped database restore workflow. It creates a new database instance from snapshots plus transaction logs, rather than overwriting the existing corrupted instance.
 
 Let us execute a terminal session to restore a corrupted production database to a clean state just before a bad migration ran:
 
@@ -150,6 +156,8 @@ Every returned parameter provides critical recovery evidence:
 
 To execute recovery successfully, you must understand the physical storage mechanisms that occur during an Amazon RDS restore. When you execute `restore-db-instance-to-point-in-time`, the AWS control plane does not wait for gigabytes of data to copy before marking the database online. Doing so would result in hours of RTO downtime.
 
+Lazy block restore and WAL replay are the storage and transaction mechanisms behind a fast RDS restore. The restored volume can become available before every data block is local, while the database engine replays transaction logs to reach the chosen restore point.
+
 Instead, the recovery engine performs a two-stage process:
 
 ```mermaid
@@ -177,6 +185,8 @@ The engine replays these logs step-by-step, applying insert, update, and delete 
 
 Data recovery is not limited to database instances. If your orders service stores transaction receipts, customer invoices, or static assets inside Amazon S3, you must design S3 for recovery before a corruption event occurs.
 
+A resilient storage architecture is the set of object-versioning, retention, deletion-protection, and lifecycle controls around durable data. It protects against application bugs and operator mistakes, not only hardware failure.
+
 Standard Amazon S3 buckets are highly durable, but they are not immune to user errors. If a developer runs an un-tested cleanup script that performs a bulk delete on your production bucket, S3 will execute the command instantly.
 
 To protect your object storage, you must configure three core features:
@@ -196,6 +206,8 @@ If S3 Versioning is disabled, a delete operation permanently erases the physical
 ## The Recovery Drill Blueprint
 
 The worst time to test your disaster recovery plan is during a real outage. To guarantee that your recovery targets can be met, you must run regular, non-disruptive recovery drills. A recovery drill is a simulated restoration that tests the entire application path without interrupting your live production traffic.
+
+A recovery drill is a controlled validation run for the restore path. It proves that backup data, network access, secrets, IAM roles, DNS changes, and application checks work together within the target RTO.
 
 Use this operational blueprint to execute a complete recovery drill for your orders service:
 

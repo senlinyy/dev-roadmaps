@@ -26,6 +26,8 @@ aliases:
 
 ## Why Storage Needs a Boundary
 
+Docker storage boundaries decide which filesystem source owns a path and how long data at that path should survive.
+
 The orders API is reachable now. The browser can call it through a published port, and the API can reach Postgres by service name. Then storage creates a different kind of surprise. You remove and recreate the database container, and yesterday's orders are gone. You bind-mount the source directory for live editing, and suddenly the `dist` directory that existed in the image has disappeared. You run tests in a container, and the generated files on the host are owned by a user your editor cannot modify.
 
 Those are all questions about where a path gets its contents and how long those contents should live.
@@ -36,7 +38,9 @@ A container has a filesystem view, but Docker assembles that view from several p
 
 The image is the base filesystem. When Docker creates a container, it adds a writable layer on top. That writable layer catches changes the container makes at runtime unless a mount redirects the path elsewhere.
 
-Mounts act like doors cut into that filesystem view. At a mount point, Docker shows content from somewhere else. A named volume shows Docker-managed storage. A bind mount shows a specific host path. The process does not need to know that `/var/lib/postgresql/data` came from a volume or that `/app` came from your laptop. It just sees files.
+Mounts are runtime mount-table entries inside that filesystem view. At a mount point, Docker shows content from somewhere else. A named volume shows Docker-managed storage. A bind mount shows a specific host path. The process does not need to know that `/var/lib/postgresql/data` came from a volume or that `/app` came from your laptop. It just sees files.
+
+Example: `/var/lib/postgresql/data` can come from a named volume called `orders-db-data`, while `/app/src` can come from your host repository through a bind mount. Both paths look normal to the process, but they have different owners and lifetimes.
 
 ```mermaid
 flowchart TD
@@ -56,6 +60,13 @@ The important rule is that a mount replaces what the process sees at its destina
 
 ## The Writable Layer
 
+The writable layer is the container-private filesystem layer that captures runtime writes not redirected by a mount.
+
+
+![Diagram comparing a Docker container writable layer with a named volume outside the container record](/content-assets/articles/article-containers-orchestration-docker-volumes-and-bind-mounts/writable-layer-vs-volume.png)
+
+*The writable layer belongs to one container, while a named volume gives data a separate lifetime.*
+
 The writable layer is created with the container and removed with the container. It is useful precisely because it is disposable. A process can write temporary files, package managers can create caches during a debugging shell, and an application can write short-lived output without changing the image.
 
 This is why two containers from the same image get separate runtime filesystems. They share the read-only image layers, but each gets its own writable layer. If one container writes `/tmp/audit.log`, the other container does not automatically see it.
@@ -63,6 +74,8 @@ This is why two containers from the same image get separate runtime filesystems.
 The writable layer is the wrong place for data that defines the application over time. A database directory, user uploads, queue state, and source-code edits need a lifetime outside one disposable container. If they live only in the writable layer, `docker rm` removes them.
 
 ## Named Volumes
+
+A named volume is Docker-managed storage with a lifecycle outside any one container's writable layer.
 
 A named volume is storage Docker creates and manages outside the container's writable layer. You mount it into a container at a path:
 
@@ -83,6 +96,8 @@ Named volumes fit data that belongs to Docker-managed services: local databases,
 
 ## Bind Mounts
 
+A bind mount maps an existing host path into the container's filesystem view.
+
 A bind mount takes a path that already exists on the host and shows it inside the container:
 
 ```bash
@@ -93,7 +108,7 @@ docker run --rm \
   devpolaris/orders-api:local
 ```
 
-Now `/app` inside the container is the current host directory. Edit a file on the host, and the container sees the edit. Write a file in `/app` from inside the container, and the host sees the file. The source of truth is the host path.
+Now `/app` inside the container is the current host directory. Edit a file on the host, and the container sees the edit. Write a file in `/app` from inside the container, and the host sees the file. The host path owns the visible files.
 
 That makes bind mounts excellent for development loops. You can run a tool inside a container while editing source in your normal editor. You can mount one config file for a local experiment. You can collect generated reports into a host directory.
 
@@ -103,9 +118,16 @@ Use a bind mount when the host should own the files. Use a named volume when Doc
 
 ## Mounts Hide Files
 
+Mount hiding is the rule that a mounted source replaces the container view at the destination path while the mount is active.
+
+
+![Layer diagram showing a bind mount overlay hiding files that were baked into the image at the same path](/content-assets/articles/article-containers-orchestration-docker-volumes-and-bind-mounts/bind-mount-hides-files.png)
+
+*A mount target overlays the image path, so files can be hidden without being deleted.*
+
 Mount hiding is one of the least obvious Docker storage behaviors. If a mount destination already has files from the image, the mount covers them for that container.
 
-Imagine the image contains:
+Suppose the image contains:
 
 ```text
 /app
@@ -129,6 +151,10 @@ This is the storage equivalent of `localhost` in networking. The same path can r
 
 ## Ownership
 
+Ownership is still Linux uid/gid ownership, even when the write passes through a Docker mount.
+
+UID means numeric user ID. GID means numeric group ID. Linux stores those numbers on files, so a username displayed inside the container matters less than the number the process writes as.
+
 Containers share the host kernel. File ownership is still represented by numeric user ids and group ids. A process running as root inside a container can write root-owned files into a bind-mounted host directory. On the host, your normal user may then fail to edit or delete those files.
 
 You can see the process user from inside the container:
@@ -148,6 +174,8 @@ The numeric uid and gid matter more than the username. If the container writes t
 Named volumes have ownership issues too, but they usually show up inside the container path. A database image often initializes its data directory with the expected user. A custom image that writes to `/data` should make that path writable by the user the process will run as.
 
 ## Seeing Mounts
+
+Mount inspection shows the source-to-destination map Docker used to assemble a container's filesystem view.
 
 `docker inspect` shows how Docker assembled the filesystem view. The useful part is the `Mounts` array:
 
@@ -203,6 +231,10 @@ The container process sees one filesystem tree. Docker builds that tree from ima
 ## What's Next
 
 Storage showed that containers share more with the host than they first appear to. The next article makes that boundary explicit for users, file permissions, Linux capabilities, memory, and CPU limits.
+
+![Summary infographic for Docker writable layers, named volumes, bind mounts, overlays, ownership, and inspect mounts](/content-assets/articles/article-containers-orchestration-docker-volumes-and-bind-mounts/volumes-mounts-summary.png)
+
+*The storage summary keeps lifetime, ownership, host paths, and mount inspection in one mental model.*
 
 ---
 

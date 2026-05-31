@@ -22,15 +22,19 @@ id: article-iac-terraform-modules-inputs-outputs
 
 ## The Contract Between a Module and Its Caller
 
-When you write a module, you are making a promise to everyone who calls it. You are saying: give me these specific pieces of information and I will build the resources correctly, every time, no matter what environment you are running in. The caller only needs to understand the promise — not the internal machinery. The variables file is how you state the inputs you require. The outputs file is how you state what you give back.
+A module contract is the boundary between what callers may provide as inputs and what the module returns as outputs.
+
+When you write a module, you are making a promise to everyone who calls it. You are saying: give me these specific pieces of information and I will build the resources correctly, every time, no matter what environment you are running in. The caller only needs to understand the promise, not the internal machinery. The variables file is how you state the inputs you require. The outputs file is how you state what you give back.
 
 ![A module interface contract defines which inputs callers may set and which outputs the module exposes.](/content-assets/articles/article-iac-terraform-modules-inputs-outputs/module-contract.png)
 
 This promise is called the module's interface, and it matters enormously as teams grow. If you change a variable's name or remove an output without warning, every configuration that calls the module breaks the next time someone runs `terraform plan`. Designing a thoughtful interface upfront saves your team from painful refactoring later.
 
-Consider a module that provisions an application load balancer with SSL termination. The module needs to know the VPC to place the load balancer in, the subnets it should span, the domain name for the SSL certificate, and whether to keep access logs. Once built, the caller needs the load balancer's DNS name to point their DNS records at. Those four inputs and one output form the complete interface. Everything else — the target group health check config, the listener rules, the log group retention settings — is an internal detail that the caller should never have to think about.
+Consider a module that provisions an application load balancer with SSL termination. The module needs to know the VPC to place the load balancer in, the subnets it should span, the domain name for the SSL certificate, and whether to keep access logs. Once built, the caller needs the load balancer's DNS name to point their DNS records at. Those four inputs and one output form the complete interface. Everything else, the target group health check config, the listener rules, the log group retention settings, is an internal detail that the caller should never have to think about.
 
 ## Declaring Input Variables
+
+An input variable is one value the caller is allowed or required to pass into the module. The `variable` block names that input and defines its expected shape. Example: a load balancer module can require `vpc_id`, `subnet_ids`, and `domain_name` so it never guesses where it should run.
 
 Variables are declared with a `variable` block. The block's label is the variable name. Terraform enforces that callers use this exact name when they pass values.
 
@@ -65,11 +69,13 @@ The `default` field makes a variable optional. If a caller does not provide a va
 
 ## Variable Types: Scalars, Collections, and Objects
 
+A variable type describes the shape of input a module accepts. Simple inputs can be strings, numbers, or booleans, while larger inputs can be lists, maps, sets, or objects. Example: `subnet_ids` is clearer as `list(string)` than as three separate variables named `subnet_1`, `subnet_2`, and `subnet_3`.
+
 Terraform's type system covers more ground than simple strings and numbers. Understanding it lets you design module interfaces that pass complex structures cleanly rather than decomposing everything into a flat list of individual string variables.
 
-**Scalar types** are the simplest. `string` is a text value. `number` accepts integers and decimals — Terraform is permissive here and will silently convert a string like `"3"` to the number `3`. `bool` accepts `true` or `false`.
+**Scalar types** are the simplest. `string` is a text value. `number` accepts integers and decimals, Terraform is permissive here and will silently convert a string like `"3"` to the number `3`. `bool` accepts `true` or `false`.
 
-**Collection types** hold multiple values of the same type. `list(string)` is an ordered list of strings, where order matters and duplicates are allowed. `set(string)` is an unordered collection of unique strings — Terraform automatically removes duplicates and sorts them alphabetically in the state file. `map(string)` is a collection of string values each identified by a string key. You might use `map(string)` to pass a set of resource tags:
+**Collection types** hold multiple values of the same type. `list(string)` is an ordered list of strings, where order matters and duplicates are allowed. `set(string)` is an unordered collection of unique strings. Terraform removes duplicates from a set, and you should not rely on a set preserving the caller's original order. `map(string)` is a collection of string values each identified by a string key. You might use `map(string)` to pass a set of resource tags:
 
 ```hcl
 variable "tags" {
@@ -118,6 +124,8 @@ variable "health_check" {
 ```
 
 A caller can now override the value by passing a full object. If they pass an object that is missing any of the required declared attributes, Terraform reports an error. If Terraform is converting a larger object into this object type, extra attributes can be discarded during conversion, so design object inputs carefully and document the exact attributes your module uses.
+
+Object attributes can also be optional when the module has sensible defaults for only part of a nested object. That lets a caller set the health check path without repeating every threshold value. For module interfaces, optional object attributes are often clearer than using `any` and then trying to validate the shape manually.
 
 **The `any` type** turns off type checking for that variable entirely. Avoid it. It removes Terraform's ability to give you useful error messages and makes the module harder to understand. Use it only as a last resort when you are wrapping a module that genuinely cannot know the shape of its inputs ahead of time.
 
@@ -177,6 +185,8 @@ Keep validation focused on input correctness. If a rule needs information from r
 
 ## Sensitive Variables
 
+A sensitive variable is an input Terraform should redact from normal output. It protects logs and terminal display, but it does not encrypt the value in state. Example: mark `db_password` sensitive so the plan shows `(sensitive value)` instead of the actual password.
+
 Some variable values should never appear in terminal output, in logs, or in plan files that engineers might share. Database passwords, API keys, and private certificate contents all fall into this category.
 
 Terraform marks a variable as sensitive by adding `sensitive = true` to the variable block:
@@ -193,9 +203,11 @@ When a variable is sensitive, Terraform replaces its value with `(sensitive valu
 
 Sensitive values propagate automatically. If you pass a sensitive variable into a resource argument, that argument's value is also treated as sensitive in the plan output. If you use a sensitive variable in a local value, the local is also sensitive. You do not have to manually track where a secret flows; Terraform's type system tracks it for you.
 
-There is one important limitation: Terraform marks a variable sensitive in its own output, but the state file stores values in plain text. If your state file is accessible to people who should not see the database password, the `sensitive` flag alone does not protect it. You need to restrict access to the state file itself — for example, by using an S3 bucket with a strict IAM policy and server-side encryption.
+There is one important limitation: Terraform marks a variable sensitive in its own output, but the state file often stores values in plain text. If your state file is accessible to people who should not see the database password, the `sensitive` flag alone does not protect it. You need to restrict access to the state file itself, for example, by using an S3 bucket with a strict IAM policy and server-side encryption. For temporary values that should not be stored in Terraform artifacts, use `ephemeral` inputs and provider-supported write-only arguments where they are available.
 
 ## Declaring Outputs
+
+An output is one selected value a module returns to its caller. Outputs are the only supported way for callers to use resource details created inside a child module. Example: a load balancer module can return `load_balancer_dns_name`, while keeping listener rules and health check internals private.
 
 Outputs give callers access to information produced by a module. They are declared with `output` blocks in the module's `outputs.tf` file:
 
@@ -211,21 +223,23 @@ output "target_group_arn" {
 }
 ```
 
-The `value` field is any Terraform expression. It most commonly references an attribute of a resource created inside the module, but it can also be a processed value — a list comprehension, a string interpolation, or a conditional expression — that reshapes raw resource data into something more convenient for the caller.
+The `value` field is any Terraform expression. It most commonly references an attribute of a resource created inside the module, but it can also be a processed value, a list comprehension, a string interpolation, or a conditional expression, that reshapes raw resource data into something more convenient for the caller.
 
 You can also mark outputs as sensitive:
 
 ```hcl
-output "rds_endpoint" {
-  value       = aws_db_instance.main.endpoint
+output "rds_connection_string" {
+  value       = "postgres://${aws_db_instance.main.address}:${aws_db_instance.main.port}/${aws_db_instance.main.db_name}"
   sensitive   = true
-  description = "The connection endpoint for the RDS database. Treat as sensitive."
+  description = "Full database connection string. Treat as sensitive because callers may combine it with credentials."
 }
 ```
 
-A sensitive output is still accessible to callers — they can reference it in their own resources — but Terraform hides it from plain display in terminal output. This is useful when the output is an endpoint or hostname that, combined with credentials, could be used to access a protected resource.
+A sensitive output is still accessible to callers, they can reference it in their own resources, but Terraform hides it from plain display in terminal output. This is useful when the output is an endpoint or hostname that, combined with credentials, could be used to access a protected resource.
 
 ## Chaining Module Outputs Into Other Modules
+
+Chaining modules means wiring an output from one module into an input of another module at the root layer. This keeps modules independent while still letting them work together. Example: `module.network.vpc_id` can feed both the load balancer module and database module without either module knowing how the network was built.
 
 One of the most powerful patterns in Terraform is passing one module's output directly as another module's input. This lets you build complex infrastructure from small, independent pieces without creating tight coupling between the pieces themselves.
 
@@ -266,11 +280,13 @@ You do not write any explicit `depends_on` to express this ordering. The referen
 
 ## What Happens to Outputs in the State File
 
+Outputs become stored values in Terraform state after apply. The state stores the result, not the expression text that produced it. Example: an output expression like `aws_lb.this.dns_name` becomes the actual DNS name string assigned by AWS.
+
 Root module outputs are written to the state file after a successful `terraform apply`. The state file stores the computed value, not the expression that produced it, but the actual string or list or map that the expression evaluated to.
 
 Child module outputs are available to the calling module through expressions like `module.network.vpc_id`. Terraform evaluates those expressions from the resources and values inside the child module as part of the plan. If those values already exist in state, Terraform can often plan with the known values; if they depend on resources that will be created in the same apply, they may appear as `(known after apply)` until the provider returns them.
 
-Root-level outputs — outputs declared directly in the root module rather than inside a child module — are shown to the user at the end of `terraform apply`. They are also accessible via `terraform output` after the fact. This is how you surface key information to the operators running the infrastructure: the load balancer's DNS name, the database's connection string (marked sensitive), or the public IP address of a bastion host that engineers need to connect through.
+Root-level outputs, outputs declared directly in the root module rather than inside a child module, are shown to the user at the end of `terraform apply`. They are also accessible via `terraform output` after the fact. This is how you surface key information to the operators running the infrastructure: the load balancer's DNS name, the database's connection string (marked sensitive), or the public IP address of a bastion host that engineers need to connect through.
 
 Child module outputs are not shown directly at the end of apply unless you re-export them from the root module. If you want the root module to surface `module.load_balancer.load_balancer_dns_name` to the user, you add an output block in the root module's `outputs.tf`:
 
@@ -283,7 +299,7 @@ output "lb_dns_name" {
 
 ## Putting It All Together
 
-The load balancer module now has a clear interface. Callers pass four inputs: the VPC ID, the subnet IDs, the domain name, and optionally a health check configuration object. The module validates that the instance count is reasonable, marks the database password as sensitive, and exposes two outputs: the load balancer's DNS name and the target group ARN. None of the internal details — the listener rules, the access log group, the ACM certificate lookup — leak outside the module's boundary.
+The load balancer module now has a clear interface. Callers pass four inputs: the VPC ID, the subnet IDs, the domain name, and optionally a health check configuration object. The module validates that the instance count is reasonable, marks the database password as sensitive, and exposes two outputs: the load balancer's DNS name and the target group ARN. None of the internal details, the listener rules, the access log group, the ACM certificate lookup, leak outside the module's boundary.
 
 The root configuration chains three modules by passing outputs directly as inputs. Terraform reads these references, builds a dependency graph, and applies resources in the correct order without any manual instruction from you. When the apply finishes, the load balancer's DNS name appears as a root-level output so the infrastructure operator knows exactly where to point the DNS record.
 
@@ -291,7 +307,7 @@ This is the power of a well-designed module interface: simple inputs, clear vali
 
 ## What's Next
 
-With inputs and outputs covered, the next article looks at how modules express their own dependency on specific Terraform versions and provider versions — what version constraints mean, how to pin them, and why getting this wrong in a shared module can break callers across your entire organization.
+With inputs and outputs covered, the next article looks at how modules express their own dependency on specific Terraform versions and provider versions, what version constraints mean, how to pin them, and why getting this wrong in a shared module can break callers across your entire organization.
 
 
 ![Module inputs and outputs summary: define inputs, validate shape, expose outputs, and chain safely.](/content-assets/articles/article-iac-terraform-modules-inputs-outputs/module-io-summary.png)
@@ -300,6 +316,8 @@ With inputs and outputs covered, the next article looks at how modules express t
 
 **References**
 
-- [Input Variables (HashiCorp Documentation)](https://developer.hashicorp.com/terraform/language/values/variables) — Full reference for variable blocks, type system, defaults, and the sensitive flag.
-- [Output Values (HashiCorp Documentation)](https://developer.hashicorp.com/terraform/language/values/outputs) — Reference for output blocks, sensitive outputs, and how they integrate with module chaining.
-- [Custom Validation Rules (HashiCorp Documentation)](https://developer.hashicorp.com/terraform/language/values/variables#custom-validation-rules) — Documentation for the `validation` block syntax and the expressions allowed inside `condition`.
+- [Input Variables (HashiCorp Documentation)](https://developer.hashicorp.com/terraform/language/values/variables), Full reference for variable blocks, type system, defaults, and the sensitive flag.
+- [Output Values (HashiCorp Documentation)](https://developer.hashicorp.com/terraform/language/values/outputs), Reference for output blocks, sensitive outputs, and how they integrate with module chaining.
+- [Type Constraints (HashiCorp Documentation)](https://developer.hashicorp.com/terraform/language/expressions/type-constraints), Reference for collection ordering, object types, and optional object attributes.
+- [Manage Sensitive Data (HashiCorp Documentation)](https://developer.hashicorp.com/terraform/language/manage-sensitive-data), Current guidance on sensitive, ephemeral, and write-only value handling.
+- [Custom Validation Rules (HashiCorp Documentation)](https://developer.hashicorp.com/terraform/language/values/variables#custom-validation-rules), Documentation for the `validation` block syntax and the expressions allowed inside `condition`.

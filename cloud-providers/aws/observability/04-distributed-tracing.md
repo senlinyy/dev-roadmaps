@@ -16,7 +16,7 @@ aliases:
 
 1. [The Distributed Silent Wait](#the-distributed-silent-wait)
 2. [Correlation IDs vs. Distributed Tracing](#correlation-ids-vs-distributed-tracing)
-3. [The Trace Context batons](#the-trace-context-batons)
+3. [Trace Context Propagation](#trace-context-propagation)
 4. [Spans: Segments and Subsegments](#spans-segments-and-subsegments)
 5. [OpenTelemetry: The Industry Standard](#opentelemetry-the-industry-standard)
 6. [Tracing Across Asynchronous Queue Boundaries](#tracing-across-asynchronous-queue-boundaries)
@@ -43,6 +43,8 @@ Every isolated team inspects their own charts and text files, declares their sys
 
 To bridge this operational disconnect, you must establish request correlation. Responders use two progressive techniques to track requests:
 
+Request correlation is the practice of carrying one transaction identity across service boundaries. A correlation ID makes logs searchable across components; distributed tracing extends that identity into a timed dependency graph.
+
 * **Correlation ID**: A unique, non-meaningful string (such as a UUID generated at your entry network gateway). This ID is injected into the incoming request context and passed as a header to every downstream service. Standardizing on correlation IDs ensures that an operator can search a centralized log manager for a specific ID and read the entire transaction history chronologically, regardless of which container or task wrote the log lines.
 * **Distributed Tracing**: An advanced, standardized extension of correlation IDs. While a correlation ID connects text log lines, distributed tracing records the exact start times, end times, parent-child relationships, and network boundaries crossed by a request. It maps the request path as an active call tree, measuring not just *what* events occurred, but exactly *where* latency was introduced.
 
@@ -57,9 +59,9 @@ flowchart TD
 
 By transitioning from simple correlation strings to active distributed tracing, you transform isolated, disjointed log files into a cohesive visual timeline that exposes the exact origin of latency and errors.
 
-## The Trace Context batons
+## Trace Context Propagation
 
-Distributed tracing is made possible by context propagation. You can think of trace context like a relay baton passed between runners in a race. If a single service down the line fails to propagate the context header, the tracing chain breaks, resulting in disconnected single-hop fragments instead of a single, continuous end-to-end trace.
+Distributed tracing is made possible by context propagation. Trace context is a small set of identifiers carried in request headers or message attributes so each downstream service can attach its work to the same transaction graph. If a single service fails to propagate the context header, the tracing chain breaks, resulting in disconnected single-hop fragments instead of a single, continuous end-to-end trace.
 
 In the AWS ecosystem, trace context is propagated using the custom `X-Amzn-Trace-Id` HTTP header. The header contains three key attributes separated by semicolons:
 
@@ -79,6 +81,8 @@ For tracing to succeed across a microservice fleet, every HTTP client and messag
 
 A distributed trace is structurally modeled as a directed acyclic graph of spans. A span is a single, named unit of work containing a start time, an end time, parent-child relationships, and metadata attributes. AWS X-Ray categorizes spans into two distinct structural types:
 
+A span is the timing record for one unit of work. Segments and subsegments are AWS X-Ray's names for service-level spans and nested dependency-call spans.
+
 * **Segment**: Represents the overall execution boundary of a single service component (such as the orders API or the email worker). The segment captures the service's internal startup latencies, guest OS overhead, and total network duration.
 * **Subsegment**: Represents isolated blocks of work *within* that service segment. You use subsegments to isolate external database queries (e.g., measuring an RDS SQL query duration), S3 bucket API writes, or third-party payment gateway SDK calls.
 
@@ -96,6 +100,8 @@ Trace Timing Distribution:
 ## OpenTelemetry: The Industry Standard
 
 When instrumenting your applications for distributed tracing, you must select the appropriate SDK and telemetry standard:
+
+OpenTelemetry functions as the common instrumentation API and data model for traces, metrics, and logs. It lets application code produce telemetry once and export it to AWS X-Ray or other compatible backends through collectors and exporters.
 
 * **The Maintenance Stance (Older X-Ray SDKs)**: The legacy AWS X-Ray SDKs and the host X-Ray daemon entered official maintenance mode on February 25, 2026. AWS strongly advises against using these older libraries for new application deployments.
 * **The Forward-Looking Standard (OpenTelemetry)**: OpenTelemetry (OTel) is the open-source, vendor-neutral industry standard for instrumenting, collecting, and exporting traces, metrics, and logs. AWS distributes the AWS Distro for OpenTelemetry (ADOT), which is a secure, production-grade distribution of the OTel SDK and collector optimized for AWS systems.
@@ -139,6 +145,8 @@ This configuration initializes the tracing environment step-by-step:
 ## Tracing Across Asynchronous Queue Boundaries
 
 Asynchronous messaging queues (like SQS) break the synchronous HTTP request-response path. The producer publishes a message and exits immediately; the message may sit in the queue for several seconds or minutes before a worker consumes it.
+
+An asynchronous queue boundary separates producer timing from consumer timing. To keep the trace connected, the producer must write the trace context into message metadata and the consumer must extract it before starting its own span.
 
 To prevent the trace from breaking at these asynchronous boundaries, you must configure trace context injection and extraction:
 
@@ -189,6 +197,8 @@ This script ensures the distributed tracing chain is preserved:
 
 For distributed tracing to work without requiring developers to pass tracing identifiers through every function signature, OTel SDKs rely on thread-local storage or asynchronous context mechanics in runtime engines.
 
+Thread-local or async-local state is the runtime storage mechanism for the active trace context. It lets instrumentation libraries find the current transaction identity when code makes outbound HTTP calls, SQS publishes, or database queries.
+
 When an application receives an incoming request, the OTel parser intercepts the HTTP headers, extracts the trace context, and mounts it into the thread's execution namespace (such as Python's `threading.local()` or Java's `ThreadLocal`). In single-threaded, asynchronous runtimes like Node.js, the SDK mounts the context into an `AsyncLocalStorage` boundary. 
 
 Whenever the application code makes a downstream HTTP call or publishes an SQS message, the SDK hooks into the runtime libraries. It silently queries the active thread-local storage, retrieves the running trace ID, and injects the proper correlation context into the outgoing request or message metadata. For database queries, the SDK usually records a child span around the call rather than injecting a trace header into the database protocol. If your application code spins up background threads manually without copying this thread-local context, the tracing chain immediately drops, isolating the downstream spans into disconnected traces.
@@ -196,6 +206,8 @@ Whenever the application code makes a downstream HTTP call or publishes an SQS m
 ## Visualizing Topologies: X-Ray Service Maps
 
 Once your microservice fleet is instrumented with OpenTelemetry, AWS X-Ray aggregates the span data to generate an interactive, real-time Service Map. The service map automatically renders your entire architecture as a node topology. Each service component (ALB, container task, database, queue) is represented as a node, and request flows are rendered as edges:
+
+An X-Ray service map is a topology view derived from trace spans. It summarizes which services call each other, how often those calls fail, and where latency appears along the dependency graph.
 
 * **Dynamic Traffic Coloring**: Nodes are visually colored to represent execution success (green for `2xx` responses, red for `5xx` errors, yellow for `4xx` client errors, and purple for throttles).
 * **Latency Percentiles**: Edges display the latency percentiles (such as p50, p90, and p95) between service calls, allowing you to instantly isolate where network delay is introduced.
@@ -205,6 +217,8 @@ During a cascading outage, the service map is an invaluable tool. It allows you 
 ## Connecting Traces Directly to Logs
 
 Tracing tells you which service is slow, but it cannot replace the granular error stack traces held in your log files. To create a seamless debugging workflow, you must connect your traces directly to your structured JSON logs.
+
+Trace-to-log correlation is a shared identifier strategy. Every log event should include the active trace ID and span ID so a slow trace can lead directly to the exact structured logs for that transaction.
 
 You achieve this by configuring your application logging framework to automatically inject the active X-Ray `TraceId` and `SpanId` into every JSON log line:
 
@@ -224,6 +238,8 @@ By linking trace IDs to structured logs, tools like CloudWatch ServiceLens enabl
 ## Dynamic Trace Sampling and Cost Controls
 
 Tracing every single request in a high-volume production environment is a major cost and network overhead trap. If your API handles millions of requests daily, collecting trace spans for 100% of successful transactions generates massive telemetry storage fees and consumes excessive network bandwidth.
+
+Trace sampling is the selection policy that decides which request graphs are stored. It preserves the traces most useful for diagnosis, such as errors and high latency, while reducing the cost of routine successful traffic.
 
 To balance visibility against cost, you must implement dynamic sampling rules inside your OpenTelemetry Collector (`collector.yaml`) daemon:
 
@@ -265,7 +281,7 @@ This hybrid sampling approach greatly improves the chance that critical failures
 
 Request correlation is the final layer that transforms disconnected cloud telemetry into a transparent, self-healing architecture:
 
-* **Generate Context at the Edge**: Ingress gateways must generate a unique trace ID and inject the `X-Amzn-Trace-Id` header at the front door.
+* **Generate Context at the Edge**: Ingress gateways must generate a unique trace ID and inject the `X-Amzn-Trace-Id` header at the ingress boundary.
 * **Enforce Propagators**: Configure HTTP clients and message queue publishers to parse and propagate trace context across boundaries that support it, and instrument database clients as timed spans.
 * **Default to OpenTelemetry Standards**: Use the AWS Distro for OpenTelemetry (ADOT) as your default instrumentation framework, avoiding legacy X-Ray SDK libraries.
 * **Isolate Queries via Subsegments**: Map complex database writes and third-party APIs to dedicated subsegments to pinpoint exact bottlenecks.

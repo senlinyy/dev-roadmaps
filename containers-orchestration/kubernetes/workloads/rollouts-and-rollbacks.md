@@ -20,7 +20,9 @@ id: article-containers-orchestration-kubernetes-workloads-rollouts-and-rollbacks
 
 ## Changing Pods Without Dropping Traffic
 
-An update to `devpolaris-orders-api` usually means the team has built a new container image and wants production Pods to use it. Kubernetes cannot change the image inside a running container. It creates new Pods from a new template and removes old Pods when enough new Pods are ready.
+A rollout is the controlled replacement of old Pods with new Pods from a changed template. A rollback is the same mechanism pointed back at an earlier template revision.
+
+Example: an update to `devpolaris-orders-api` usually means the team has built a new container image and wants production Pods to use it. Kubernetes cannot change the image inside a running container. It creates new Pods from a new template and removes old Pods when enough new Pods are ready.
 
 That process is called a rollout. A rollback tells Kubernetes to return a Deployment to an earlier Pod template revision. Both operations depend on readiness probes because Kubernetes needs a signal that a new Pod can receive traffic.
 
@@ -37,7 +39,9 @@ flowchart TD
 
 ## The RollingUpdate Strategy
 
-Deployments use `RollingUpdate` by default. Two fields control the pace: `maxUnavailable` and `maxSurge`.
+`RollingUpdate` is the default Deployment strategy that replaces Pods gradually instead of deleting every old Pod at once. It exists so a service can keep serving traffic while Kubernetes introduces the new Pod template.
+
+Example: for a three-replica orders API, Kubernetes can start one new Pod, wait until it is ready, then remove one old Pod. Two fields control the pace: `maxUnavailable` and `maxSurge`.
 
 ```yaml
 spec:
@@ -54,7 +58,9 @@ These values are a tradeoff. More surge can make rollouts faster, but it needs s
 
 ## Starting and Watching a Rollout
 
-In a GitOps workflow, you usually change the image in a file and let automation apply it. For learning, `kubectl set image` makes the moving parts visible.
+Starting a rollout means changing the Deployment's Pod template so Kubernetes creates a new ReplicaSet. Watching a rollout means following the controller while new Pods become ready and old Pods leave service.
+
+Example: changing the orders API image from `2026-05-07.1` to `2026-05-07.2` changes the template. In a GitOps workflow, you usually make that change in a file and let automation apply it. For learning, `kubectl set image` makes the moving parts visible.
 
 ```bash
 $ kubectl set image deployment/devpolaris-orders-api \
@@ -80,7 +86,9 @@ That proves the desired Pod template changed. You still need application-level v
 
 ## Reading ReplicaSets During a Release
 
-ReplicaSets are useful during rollouts because they show old and new template revisions at the same time.
+ReplicaSets are useful during rollouts because each one represents a particular Pod template revision. During a release, they let you see how many old-version Pods and new-version Pods Kubernetes is managing.
+
+Example: if the new ReplicaSet has one desired Pod and zero ready Pods, the release is blocked by the new template, not by the old Pods that are still serving traffic.
 
 ```bash
 $ kubectl get rs -l app=devpolaris-orders-api
@@ -105,7 +113,9 @@ Many teams record change cause through annotations or through their deployment s
 
 ## Failure Mode: Rollout Stuck on Readiness
 
-Suppose the new image starts but never becomes ready. The rollout waits because removing more old Pods would reduce available capacity too far.
+A rollout stuck on readiness means the new Pods were created but Kubernetes will not count them as traffic-ready. The Deployment pauses replacement because removing more old Pods would reduce available capacity too far.
+
+Example: the new orders API image may start the Node.js process but fail `/health/ready` because a required environment variable is missing.
 
 ```bash
 $ kubectl rollout status deployment/devpolaris-orders-api --timeout=60s
@@ -145,7 +155,9 @@ The fix direction is specific. The new image expects `ORDERS_EVENT_TOPIC`, but t
 
 ## Rolling Back a Bad Revision
 
-A rollback changes the Deployment's Pod template back to a previous revision. For a bad image or missing environment variable, this can restore the old known-good Pods quickly.
+A rollback changes the Deployment's Pod template back to a previous revision. It exists to restore an older set of Pods when the new template is clearly unhealthy.
+
+Example: if image `2026-05-07.2` starts but fails readiness because it needs `ORDERS_EVENT_TOPIC`, rolling back can return the Deployment to image `2026-05-07.1` while the team fixes the missing configuration.
 
 ```bash
 $ kubectl rollout undo deployment/devpolaris-orders-api
@@ -167,7 +179,9 @@ Rollback is a production safety tool, but it is not a substitute for fixing the 
 
 ## Pause, Resume, and Safer Changes
 
-Deployments can be paused. While paused, you can make several template changes without starting multiple rollout revisions. This is useful when a release needs an image change plus an environment variable change and you want them to roll out together.
+A paused Deployment accepts template changes without immediately starting a new rollout. It is a safety tool for grouping related changes into one revision instead of creating several half-finished revisions.
+
+Example: if a release needs both a new image and a new `ORDERS_EVENT_TOPIC` variable, pausing lets you apply both changes before new Pods begin replacing old Pods.
 
 ```bash
 $ kubectl rollout pause deployment/devpolaris-orders-api
@@ -184,7 +198,9 @@ This is helpful for emergency command-line work. In a steady team workflow, pref
 
 ## What Kubernetes Rollback Does Not Prove
 
-Kubernetes can tell you whether Pods became ready. It cannot prove that checkout totals are correct, that a new API field is backward compatible, or that a downstream payment provider accepted the new request shape.
+Kubernetes readiness is a platform signal, not a full application test. It can tell you whether Pods became ready according to their probes, but it cannot prove that checkout totals are correct, that a new API field is backward compatible, or that a downstream payment provider accepted the new request shape.
+
+Example: a Pod can pass `/health/ready` because the process and database connection work, while still returning the wrong tax calculation for a real order request.
 
 For `devpolaris-orders-api`, a rollout check should be followed by a small application check:
 

@@ -27,7 +27,7 @@ When you are the only developer working on a local laptop app, team collaboratio
 
 However, the moment you move your application to the cloud to share it with users, your team begins to grow. You invite other developers, testers, and operations engineers to help manage the workload. In this shared environment, giving everyone direct access to a single cloud sandbox leads to immediate friction and critical errors. A developer attempting to clean up a staging test environment can accidentally delete the live, customer-facing database if all resources reside in the same flat area.
 
-To prevent these accidents, you must establish logical boundaries. The strongest everyday boundary you can create in AWS is the AWS account. An account has its own unique 12-digit account ID, identity namespace, billing ledger, service quotas, and policy boundary. It is not a physical wall around servers, and it is not impossible to cross. Cross-account access is common in mature AWS environments, but it must be configured deliberately through trust policies, resource policies, organizations, or shared networking.
+To prevent these accidents, you must establish logical boundaries. An AWS account acts as the top-level administrative container for a workload or environment. It has its own unique 12-digit account ID, identity namespace, billing ledger, service quotas, and policy boundary. It is not a physical wall around servers, and it is not impossible to cross. Cross-account access is common in mature AWS environments, but it must be configured deliberately through trust policies, resource policies, organizations, or shared networking.
 
 AWS makes this logical coordinate visible in every CLI session. Before running any command, you must verify which account ID and role your terminal is actively targeting:
 
@@ -59,9 +59,9 @@ If you combine development and production in the same account, you rely on human
 
 ## Geographic Regional Placements for User Latency
 
-Once your team is collaborating safely within isolated logical accounts, you must decide where your application's servers will physically reside. AWS does not host all its servers in a single building. It organizes its global physical infrastructure into separate geographic Regions cabled in specific countries, such as `eu-west-2` in London, `us-east-1` in Virginia, or `ap-southeast-2` in Sydney.
+Once your team is collaborating safely within isolated logical accounts, you must decide where your application's servers will physically reside. AWS does not host all its servers in a single building. It organizes its global physical infrastructure into separate geographic Regions located in specific geographic areas, such as `eu-west-2` in London, `us-east-1` in Virginia, or `ap-southeast-2` in Sydney.
 
-Each Region is physically isolated and independent from other Regions. Most AWS services are Regional, meaning when you create a resource like a private network or database, it exists physically within the data centers of that chosen Region. Its Regional service endpoint is completely isolated from other territories.
+A Region represents a geographic service boundary with its own control-plane endpoints and data-plane capacity. Each Region is physically isolated and independent from other Regions. Most AWS services are Regional, meaning when you create a resource like a private network or database, it exists physically within the data centers of that chosen Region. Its Regional service endpoint is completely isolated from other territories.
 
 Selecting your primary Region is a critical architectural decision based on user proximity and operational requirements:
 
@@ -76,7 +76,7 @@ A common point of confusion is S3 object storage. While S3 bucket names are glob
 
 Within every geographic Region, AWS physical infrastructure is divided into isolated data center clusters called Availability Zones, commonly abbreviated as AZs. A Region typically contains three or more AZs, identified in your account by letters at the end of the Region name, such as `eu-west-2a`, `eu-west-2b`, and `eu-west-2c`.
 
-An Availability Zone is not a single server rack. AWS describes each AZ as one or more discrete data centers with independent power, networking, and connectivity. AZs are physically separated inside a Region and connected by high-bandwidth, low-latency private links. That separation is the reason a well-designed workload can survive a localized infrastructure problem in one zone.
+An Availability Zone behaves like a physical failure domain inside a Region. It is not a single server rack. AWS describes each AZ as one or more discrete data centers with independent power, networking, and connectivity. AZs are physically separated inside a Region and connected by high-bandwidth, low-latency private links. That separation is the reason a well-designed workload can survive a localized infrastructure problem in one zone.
 
 One cross-account gotcha matters early: AZ names are account-mapped. `us-east-1a` in one AWS account may not be the same physical zone as `us-east-1a` in another account. AWS also exposes stable AZ IDs, such as `use1-az1`, so platform teams can coordinate the same physical zone across accounts when they design shared networks or disaster recovery layouts.
 

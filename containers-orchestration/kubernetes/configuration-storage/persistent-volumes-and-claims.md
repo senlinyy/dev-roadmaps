@@ -38,7 +38,9 @@ The separation matters because the application should not need to know whether t
 
 ## The PV and PVC Mental Model
 
-Think of a PVC like a ticket at a storage desk. The application says, "I need 10Gi of filesystem storage that one node can write." The cluster matches that ticket to an available PV or asks a provisioner to create one. Once bound, the Pod uses the claim by name.
+A PVC is the application's storage request, and a PV is the cluster storage object that satisfies that request. The application says, "I need 10Gi of filesystem storage that one node can write." The cluster matches that request to an available PV or asks a provisioner to create one. Once bound, the Pod uses the claim by name.
+
+Example: `orders-api-workdir` can request `10Gi` with `ReadWriteOnce`, and Kubernetes can bind it to a dynamically created cloud disk represented by a PV.
 
 The PV is the supply side. It describes capacity, access modes, reclaim policy, and connection details for the real storage. In dynamic provisioning, you may never write PV YAML by hand. The provisioner creates it for you after it sees a PVC.
 
@@ -54,7 +56,9 @@ This boundary keeps application manifests portable. A local development cluster 
 
 ## A Claim for devpolaris-orders-api
 
-Here is a PVC that asks for 10Gi of storage using a class named `standard-retain`. The class is covered in the next article, but you can read it here as the storage profile the cluster offers.
+A PVC manifest is the workload-facing request for durable storage. It names the storage profile, access pattern, and requested capacity.
+
+Example: the claim below asks for `10Gi` of storage using a class named `standard-retain`. The class is covered in the next article, but you can read it here as the storage profile the cluster offers.
 
 ```yaml
 apiVersion: v1
@@ -85,7 +89,9 @@ orders-api-workdir   Bound    pvc-4d8c1d2e-6f35-4b70-9cb5-93e6d0fbb14f   10Gi   
 
 ## Mounting a Claim into a Pod
 
-A Pod uses a PVC through a volume entry. The Deployment names the claim, then mounts that volume into the container.
+A Pod uses a PVC by turning the claim into a volume in the Pod spec. The Deployment names the claim, gives it a local volume name, and mounts that volume into the container at a path the application can use.
+
+Example: `orders-api-workdir` becomes a volume named `workdir`, and the container sees it at `/var/lib/devpolaris/orders-work`.
 
 ```yaml
 apiVersion: apps/v1
@@ -129,7 +135,9 @@ That small probe demonstrates persistence across Pod replacement. Use a harmless
 
 ## Access Modes and Volume Modes
 
-Access modes describe how a volume can be mounted. They are a request and matching mechanism, not a distributed filesystem guarantee. The storage plugin must support the mode you ask for.
+Access modes describe how a volume may be mounted by nodes or Pods. They are a request and matching mechanism, not a distributed filesystem guarantee, and the storage plugin must support the mode you ask for.
+
+Example: `ReadWriteOnce` is a good starting shape for one orders API writer using one work directory. `ReadWriteMany` requires storage that supports multiple writers, usually a shared filesystem class.
 
 | Access Mode | Meaning | Common Use |
 |-------------|---------|------------|
@@ -151,7 +159,9 @@ If you ask for `ReadWriteMany` but the cluster only has block-disk storage, the 
 
 ## Binding, Reclaim Policy, and Lifecycle
 
-A PVC has its own lifecycle, and the bound PV has a reclaim policy. The reclaim policy tells Kubernetes what should happen to the PV after the claim is deleted. Common policies are `Delete` and `Retain`.
+Binding is the step where Kubernetes connects a PVC request to a PV that can satisfy it. After binding, the PVC has its own lifecycle, and the bound PV has a reclaim policy.
+
+Example: deleting `orders-api-workdir` might delete the backing storage if the PV uses `Delete`, or keep it for manual recovery if the PV uses `Retain`. Common policies are `Delete` and `Retain`.
 
 `Delete` is convenient for disposable environments. Delete the claim, and the dynamically provisioned backing storage is also deleted. `Retain` protects data by keeping the PV after the claim is gone, but it requires human cleanup or recovery steps.
 
@@ -167,7 +177,9 @@ Review reclaim policy before deleting claims. The dangerous mistake is assuming 
 
 ## Failure Mode: Pending Claims
 
-A Pending PVC means Kubernetes has not bound the claim to a volume. The Pod may remain Pending because it cannot mount storage that does not exist.
+A Pending PVC means Kubernetes has not connected the claim to real storage yet. The claim exists, but the cluster has not found or created a matching PV, so any Pod that needs the claim may also wait.
+
+Example: `orders-api-workdir` can stay Pending if it asks for a StorageClass named `fast-rwx` that the cluster does not have.
 
 ```bash
 $ kubectl get pvc -n devpolaris-staging
@@ -236,7 +248,9 @@ The operating habit is to ask what should survive, who writes it, who reads it, 
 
 ### Quotas and Requests
 
-A PVC request can also fail because the namespace has a storage quota. Quotas are useful because they stop one team from consuming all storage in a shared cluster. They also create a diagnostic path that looks different from a missing StorageClass.
+A storage quota is a namespace limit on how much storage a team can request. It protects a shared cluster from one namespace consuming all available capacity, and it also creates a failure path that looks different from a missing StorageClass.
+
+Example: `devpolaris-staging` may allow `100Gi` of requested PVC storage. If the namespace already uses `80Gi`, a new `50Gi` claim cannot fit under that quota.
 
 ```bash
 $ kubectl describe pvc orders-api-workdir -n devpolaris-staging
@@ -259,7 +273,9 @@ This is an engineering tradeoff. Quotas slow down surprise growth, but they also
 
 ### Migrating Data Between Claims
 
-Sometimes the fix is moving data from one PVC to another, perhaps because the original claim used the wrong StorageClass. Kubernetes does not have a universal "change this PVC to another class" button. The migration depends on the storage system and the data.
+PVC migration means moving files or application data from one claim to another claim. Teams do this when the first claim used the wrong StorageClass, needs a different reclaim policy, or must move to a larger or better-backed storage profile.
+
+Kubernetes does not have a universal "change this PVC to another class" button. The migration depends on the storage system and the data.
 
 A simple file-level migration uses a temporary Job or Pod that mounts both claims and copies files. This is appropriate for small work directories, not live databases.
 

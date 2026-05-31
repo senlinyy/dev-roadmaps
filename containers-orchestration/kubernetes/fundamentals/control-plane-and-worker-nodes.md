@@ -27,265 +27,406 @@ aliases:
 
 ## Two Kinds of Work
 
-The previous article built the cluster picture: API objects describe the application, Pods run on nodes, Services route to ready Pods, and labels connect related objects. This article opens the cluster and looks at the components that make that picture work.
+At its core, a Kubernetes cluster has two kinds of work: deciding what should happen and running the containers.
+The control plane is the API and coordination layer that stores requests, checks permissions, and makes placement decisions.
+Worker nodes are the physical or virtual servers that provide CPU, memory, disks, and network interfaces for Pods.
 
-A Kubernetes cluster has two broad kinds of work.
+This structural split is critical for operational stability.
+The control plane processes API requests, validates manifests, monitors health, and schedules workloads.
+The worker nodes provide the actual CPU cores, RAM bytes, and network interfaces to run the application containers.
+If a worker node crashes, the control plane remains unaffected.
+It immediately detects the loss and schedules replacement container workloads on the remaining healthy nodes.
 
-The control plane coordinates the cluster. It is the part you talk to when you use `kubectl` or when CI applies a manifest. It accepts API requests, stores objects, watches for changes, makes scheduling decisions, and runs controllers that move the cluster toward desired state.
-
-Worker nodes run the application Pods. Each node has a local agent, a container runtime, and networking pieces that let Pods start and communicate.
+To understand this split, consider our Customer Notification Service.
+This service is packaged as a container image that listens on port `3000` to send transactional SMS alerts.
+When you deploy this service, you communicate entirely with the control plane.
+The control plane processes your request, stores the configuration, and assigns the workload to worker nodes.
+The worker nodes then initialize the containers, establish network routing, and host the active processes.
 
 ```mermaid
 flowchart TD
-    A["kubectl or CI"] --> B["API server"]
-    B --> C["etcd"]
-    B --> D["Scheduler"]
-    B --> E["Controllers"]
-    D --> F["worker-01"]
-    D --> G["worker-02"]
-    F --> H["kubelet"]
-    F --> I["container runtime"]
-    F --> J["Pod"]
-    G --> K["kubelet"]
-    G --> L["container runtime"]
-    G --> M["Pod"]
+    subgraph ControlPlane["Logical Control Plane (API and State)"]
+        A["kube-apiserver<br/>(REST Gateway)"] --> B["etcd<br/>(Raft DB)"]
+        C["kube-scheduler<br/>(Placement Engine)"] --> A
+        D["kube-controller-manager<br/>(State loop)"] --> A
+    end
+    subgraph WorkerFleet["Physical Worker Fleet (Execution)"]
+        subgraph Node01["worker-01 (Host VM)"]
+            E["kubelet<br/>(Node Agent)"] --> H["containerd<br/>(CRI Engine)"]
+            H --> J["Pod<br/>(Notification App)"]
+        end
+        subgraph Node02["worker-02 (Host VM)"]
+            F["kubelet<br/>(Node Agent)"] --> I["containerd<br/>(CRI Engine)"]
+            I --> K["Pod<br/>(Notification App)"]
+        end
+    end
+    A --> |Watches API state| E
+    A --> |Watches API state| F
 ```
 
-For `devpolaris-api`, customer traffic goes to application Pods through Services and ingress paths. The control plane coordinates those Pods. It is the place where desired state is accepted, stored, watched, and reported.
+The diagram outlines the core architectural boundaries of the cluster.
+All configuration requests pass through the control plane components.
+Once a workload is assigned, the local node agent on each worker host coordinates container startup.
 
-This split is useful during debugging. If `kubectl` cannot reach the API server, you have a control plane access problem. If the API accepts a Deployment but Pods remain Pending, the scheduler or capacity is closer to the issue. If a Pod is assigned to a node but cannot pull an image, the node-side path is closer.
+This division of labor changes how you troubleshoot cluster failures.
+If your command-line commands fail to connect, you have a control plane connectivity problem.
+If your commands succeed but the Pods remain pending, the scheduler or physical capacity is the bottleneck.
+If the Pods are scheduled but fail to start due to registry errors, the node-side runtime is the root cause.
 
 ## From Request to Running Pod
 
-The component names make more sense if you follow one Deployment request. Imagine CI applies a manifest that asks Kubernetes to run three copies of `devpolaris-api`.
+At its core, deploying a Pod is a chain of handoffs between control-plane components and node-side components.
+A handoff means one component records or observes a small piece of work, then another component reacts to it.
+Example: the API Server stores a Deployment, the scheduler chooses a node for each Pod, and the kubelet on that node starts the containers.
+For the notification API, that means a single `kubectl apply` request becomes several separate system actions before any user traffic reaches port `3000`.
 
-The path is not one giant operation. It is a series of handoffs:
+- **api-server**: Accepts the request, validates the schema, and authorizes the caller.
+- **etcd**: Persists the validated configuration in the cluster's backing database.
+- **controller-manager**: Detects the new deployment and creates the lower-level Pod resources.
+- **scheduler**: Evaluates node capacity and binds the Pods to healthy worker hosts.
+- **kubelet**: Detects the local Pod assignments, mounts disks, and calls containerd.
+- **containerd**: Pulls the container images and starts the application processes.
+- **CNI plugin**: Allocates unique IP addresses and creates virtual switches.
 
-| Step | Component | Plain job |
-| --- | --- | --- |
-| Accept the request | API server | Check and store the Deployment object |
-| Store cluster data | etcd | Persist the objects and status the API server manages |
-| Notice desired state | Controllers | Create lower-level objects needed by the Deployment |
-| Choose machines | Scheduler | Assign each new Pod to a suitable node |
-| Start containers | Kubelet and runtime | Pull images, create containers, and report status |
-| Connect traffic | Networking components | Give Pods addresses and route Service traffic |
-
-This sequence is the useful mental model. You do not have to memorize every binary name first. Start by asking which handoff the request has reached. A validation error means the API server rejected the object. A Pending Pod with no node means scheduling has not succeeded. An image pull error means the request reached a node, but the node could not start the container.
+This execution path provides a clear diagnostic roadmap.
+You do not need to memorize every binary parameter.
+Instead, ask which handoff your request has reached.
+A schema validation error indicates the request failed at the api-server.
+A `Pending` status indicates the scheduler cannot place the Pod.
+An `ErrImagePull` warning indicates the request reached the node, but containerd failed to fetch the image.
 
 ## The API Server
 
-The API server is the front door of the Kubernetes control plane. `kubectl`, CI systems, dashboards, controllers, and operators all send requests to it.
+At its core, the API Server is the secure HTTP entry point for the cluster.
+Developers running commands, CI/CD pipelines, and internal controllers all communicate through this API.
+The API Server binary is named `kube-apiserver`.
+It exposes a secure REST API over HTTPS, serving as the single entry point for cluster administration.
 
-For a beginner, the API server's job is easier to understand as a sequence. It receives a request, confirms who is making the request, checks whether that caller is allowed to do it, validates the object, runs admission rules if the cluster has them, and stores the accepted object.
+The API Server executes a strict, multi-stage processing pipeline for every incoming request:
 
-Those checks matter because Kubernetes is shared. A production cluster may have many teams and automation systems talking to the same API. The API server is where the cluster can reject malformed objects and enforce access rules before a bad request becomes desired state.
+- **Authentication**: Verifies the identity of the caller using TLS certificates or bearer tokens.
+- **Authorization**: Checks whether the caller has permission to perform the action using RBAC rules.
+- **Admission Control**: Intercepts the request using mutating and validating webhooks to enforce policies.
+- **Schema Validation**: Ensures the submitted manifest matches the required Kubernetes resource schemas.
+- **Persistence**: Writes the validated resource configurations to etcd.
 
-When you apply a Deployment, the API server is the first component that matters:
+This centralized intercept design is critical for security.
+In a shared production cluster, multiple teams and pipelines are continuously updating resources.
+The API Server ensures that every change is authenticated, authorized, and audited before it becomes desired state.
 
-```bash
-$ kubectl apply -f deployment.yaml
-deployment.apps/devpolaris-api configured
+Here is a basic standalone Pod configuration manifest that the API Server would process:
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: notification-api-test
+  namespace: notifications-prod
+spec:
+  containers:
+    - name: api
+      image: ghcr.io/devpolaris/notification-api:1.4.2
+      ports:
+        - containerPort: 3000
 ```
 
-That output means the request reached the API server and the object was accepted. It does not mean the application is running. Other components still need to react.
-
-The API server can also reject the request before it becomes cluster state:
+When you apply this manifest, the API Server processes the request:
 
 ```bash
-$ kubectl apply -f deployment.yaml
-error: error validating "deployment.yaml": error validating data: ValidationError(Deployment.spec): missing required field "selector"
+kubectl apply -f pod.yaml
 ```
 
-This error is still early in the path. The object shape is invalid, so there is no useful Pod to inspect yet. Fix the manifest before reading node events or application logs.
+The terminal reports that the resource has been accepted:
 
-Because the API server is the normal entry point, direct changes on worker nodes should be rare. If someone SSHes to a node and starts a container by hand, Kubernetes does not manage that container as part of a Deployment. The API server stores Kubernetes objects, and the rest of the cluster works from those objects.
+```text
+pod/notification-api-test created
+```
+
+This output confirms that the manifest passed authentication, authorization, and schema validation.
+It does not mean the application container is running on a server.
+It means the API Server accepted the resource and wrote it to persistent storage.
+Other cluster components must now coordinate to execute it.
 
 ## etcd
 
-etcd is the distributed key-value store where Kubernetes persists API data. It is the control plane's backing store. The API server writes objects and status into etcd. Deployments, Pods, Services, ConfigMaps, Secrets, Leases, and many other records live there as API data.
+At its core, etcd is the small database where Kubernetes stores cluster objects.
+A key-value store saves records under keys, similar to storing a resource path and its JSON data together.
+etcd holds the desired configurations and observed statuses of every resource in the cluster.
+The API Server is the only component allowed to communicate directly with etcd.
+All other components query and update state by sending REST requests to the API Server.
 
-etcd is not your application database. `devpolaris-api` still uses its own database for product data, users, courses, or orders. etcd stores Kubernetes cluster state: the objects that describe what should run and the status Kubernetes reports about those objects.
+Example: when you create the `notification-api` Deployment, etcd stores the Deployment spec, and later stores status updates reported by controllers and kubelets.
 
-Most application developers do not talk to etcd directly. In managed Kubernetes, the cloud provider usually operates the control plane storage. The important idea is that cluster state is stored centrally through the API server rather than scattered across worker nodes.
+etcd uses the Raft consensus algorithm to maintain database consistency across multiple control plane nodes:
 
-That design has a serious operational consequence. If etcd is unhealthy in a self-managed cluster, the control plane may be unable to reliably create, update, or read objects. Existing containers on worker nodes may continue running for a while, but the cluster cannot safely coordinate new desired state.
+- A cluster typically runs three or five etcd replicas to tolerate node crashes.
+- One node acts as the active leader, processing all state changes.
+- The leader writes transactions to a local write-ahead log (WAL) and replicates them to followers.
+- A transaction is only confirmed as committed after a quorum of replicas acknowledge the write.
+- If the leader crashes, the remaining nodes hold a rapid election to select a new leader.
 
-```text
-Healthy path:
-  kubectl -> API server -> etcd
+etcd is not an application database.
+Our Customer Notification Service still uses its own database (like PostgreSQL) to store SMS transaction logs.
+etcd is strictly reserved for cluster configuration state and telemetry metadata.
 
-If etcd is unhealthy:
-  New API writes may fail
-  Rollouts may stop
-  Controllers may lose reliable state
-```
-
-This is why etcd backup matters in self-managed clusters. Backing up a worker node disk is not the same as backing up Kubernetes state. The API data that defines the cluster lives in etcd.
+If etcd experiences an outage or loses quorum in a self-managed cluster, the control plane stops working.
+Existing container processes on worker nodes will continue running, but the API Server will reject all writes.
+You cannot deploy new applications, scale workloads, or delete resources until etcd recovers.
+This is why regular etcd backups are a non-negotiable requirement for operational safety.
 
 ## The Scheduler
 
-In Kubernetes, scheduling means choosing a node for a Pod. The word is about placement, not time or cron.
+At its core, scheduling means choosing which node should run a Pod.
+It does not mean calendar scheduling, cron execution, or timed jobs.
+The scheduler binary is named `kube-scheduler`.
+It runs as a continuous loop, watching for newly created Pods that have no assigned node name in their spec.
 
-The scheduler watches for Pods that have no assigned node. Its job is to choose a suitable node based on resource requests, node health, taints, affinity rules, topology constraints, and other scheduling inputs. After it chooses, it records the node assignment through the API server.
+Example: if a notification API Pod requests `512Mi` of memory, the scheduler filters out nodes that do not have enough unallocated memory before it chooses a host.
 
-For `devpolaris-api`, a new rollout may create a Pod with a request for `250m` CPU and `256Mi` memory. The scheduler finds a node with enough available capacity and assigns the Pod there.
+To select the best worker host for a Pod, the scheduler executes a two-phase evaluation matrix:
+
+1.  **Filtering (Predicates)**:
+    - The scheduler evaluates a set of hard constraints called predicates to eliminate unsuitable hosts.
+    - It filters out nodes that lack sufficient unallocated CPU or memory capacity.
+    - It eliminates nodes that suffer disk-pressure, memory-pressure, or network outages.
+    - It checks taints and affinity rules to ensure the Pod is allowed to run on the node.
+2.  **Scoring (Priorities)**:
+    - The scheduler runs the remaining healthy nodes through a priority scoring matrix.
+    - It prioritizes spreading replicas of the same application across different host racks and zones.
+    - It scores nodes based on image locality (favoring nodes that already have the required image cached).
+    - The node that scores the highest is selected, and its name is written to the Pod's `spec.nodeName` field.
+
+Once scheduled, you can verify the node assignment from your terminal:
 
 ```bash
-$ kubectl get pod devpolaris-api-6d8f7d9f8c-h6p8d -n devpolaris-prod -o wide
-NAME                              READY   STATUS    IP           NODE
-devpolaris-api-6d8f7d9f8c-h6p8d   1/1     Running   10.42.2.19   worker-02
+kubectl get pod notification-api-test -n notifications-prod -o wide
 ```
 
-The `NODE` column shows that scheduling happened. If a Pod is still Pending with no node, read the scheduling events:
+The output reveals the active worker node placement:
 
 ```text
-Warning  FailedScheduling  default-scheduler  0/3 nodes are available: 2 Insufficient cpu, 1 node(s) had untolerated taint {maintenance: planned}.
+NAME                     READY   STATUS    IP           NODE
+notification-api-test    1/1     Running   10.42.2.19   worker-02
 ```
 
-That event tells you the application has not reached the node startup phase. The image has not been pulled. The container has not started. The scheduler could not place the Pod.
+If a Pod remains stuck in a `Pending` status with no node assigned, you must inspect the scheduling events:
 
-This separation prevents wasted work. You do not read container logs for a Pod that was never assigned to a node.
+```bash
+kubectl describe pod notification-api-test -n notifications-prod
+```
+
+The scheduler records its failure details in the event log:
+
+```text
+Warning  FailedScheduling  default-scheduler  0/3 nodes are available: 2 Insufficient memory, 1 node(s) had untolerated taint {maintenance: planned}.
+```
+
+This event explains why the Pod is blocked.
+The scheduler could not find a node that satisfied the Pod's CPU and memory requests.
+No containers have started because the Pod was never bound to a node.
+You must add node capacity or adjust your resource requests to resolve the block.
 
 ## Controllers
 
-Controllers are loops that watch API objects and take action when current state differs from desired state. Kubernetes includes many built-in controllers. The Deployment controller watches Deployments. The ReplicaSet controller watches ReplicaSets. The Job controller watches Jobs. The Node controller watches node health.
+At its core, a controller is a background process that watches API objects and makes follow-up changes.
+Reconciliation is the repeated act of comparing the requested configuration with the observed state, then fixing the difference.
+The control plane runs many controller loops inside a single binary named `kube-controller-manager`.
+Every resource type (Deployments, ReplicaSets, StatefulSets, Services) is managed by a dedicated controller loop.
 
-Controllers work through the API server. A Deployment controller does not run your container directly. It creates or updates ReplicaSets. ReplicaSets create or delete Pods. The scheduler and kubelets handle later steps.
+Controllers operate by watching the API Server for state changes and updating resources:
 
-That indirect design is the first controller detail to understand. A controller usually changes Kubernetes objects, then other components react to those objects. The Deployment controller does not need to know which node will run the container. It needs to make sure the right ReplicaSet and Pod objects exist for the requested Deployment state.
+- The developer updates a Deployment manifest, requesting four replicas instead of three.
+- The Deployment controller detects this change and updates the matching ReplicaSet spec.
+- The ReplicaSet controller detects the scale mismatch (current: 3, desired: 4).
+- It immediately submits a request to the API Server to create a fourth Pod resource.
+- The scheduler detects the unassigned Pod and binds it to a healthy node.
+- Kubelet and containerd start the container, and the node agent updates the Pod status.
+- The ReplicaSet controller reads the updated status and reports that the replica count matches the spec.
 
-For `devpolaris-api`, the chain looks like this:
+This decoupled, event-driven loop design ensures high system resiliency.
+Each controller manages a small, focused task, using the central API Server to read desired intent and write observed telemetry.
 
-```mermaid
-flowchart TD
-    A["Deployment<br/>(3 replicas)"] --> B["Deployment controller"]
-    B --> C["ReplicaSet"]
-    C --> D["ReplicaSet controller"]
-    D --> E["Pod"]
-    D --> F["Pod"]
-    D --> G["Pod"]
-```
-
-This layered behavior is why a rollout has several visible objects. You may start by editing a Deployment, but the running work appears as Pods created through ReplicaSets. The handoff is normal. It is how Kubernetes breaks a large operating task into smaller control loops.
-
-You can see controller activity in events:
+You can audit these controller operations by reading the event logs of a Deployment:
 
 ```bash
-$ kubectl describe deployment devpolaris-api -n devpolaris-prod
+kubectl describe deployment notification-api -n notifications-prod
+```
+
+The output documents the scaling actions performed by the controllers:
+
+```text
 Events:
   Type    Reason             From                   Message
   ----    ------             ----                   -------
-  Normal  ScalingReplicaSet  deployment-controller  Scaled up replica set devpolaris-api-75c9444bd7 to 3
+  Normal  ScalingReplicaSet  deployment-controller  Scaled up replica set notification-api-7c8d9f to 3
 ```
 
-The `From` column names the component that reported the event. When the event comes from `deployment-controller`, you are reading a control plane report. When it comes from `kubelet`, you are reading a node-side report.
+The `From` column identifies the controller that executed the step.
+`deployment-controller` confirms that the control plane processed your manifest and managed the ReplicaSet scale.
 
 ## The Kubelet
 
-The kubelet is the node agent. It runs on each worker node and watches for Pods assigned to that node. If the control plane is the coordinating side of Kubernetes, the kubelet is the local worker that makes assigned Pods happen on one machine.
+At its core, the kubelet is the local Kubernetes agent on each worker node.
+An agent is a process that runs on a machine and carries out instructions for a larger system.
+It registers the host server with the API Server, sends regular node status heartbeats, and executes workloads.
 
-It asks the container runtime to pull images and start containers, mounts volumes, runs probes, reports Pod status, and sends node heartbeats.
+Example: after the scheduler assigns `notification-api-test` to `worker-02`, the kubelet on `worker-02` pulls the image, mounts volumes, starts the container, and reports status back to the API Server.
 
-When the scheduler assigns a Pod to `worker-02`, the kubelet on `worker-02` becomes responsible for making that Pod real.
+The kubelet runs as a native system service (like a systemd daemon) directly on the host operating system.
+It does not run inside a container.
+It continuously queries the API Server for Pods assigned to its node, executing the actions required to run them:
 
-```mermaid
-flowchart TD
-    A["Pod assigned<br/>to worker-02"] --> B["kubelet"]
-    B --> C["Pull image"]
-    B --> D["Mount volumes"]
-    B --> E["Start container"]
-    E --> F["Run probes"]
-    F --> G["Report status"]
-```
+- It interacts with the local container runtime to pull images and initialize containers.
+- It mounts local storage volumes and decrypts Secrets into volatile memory paths.
+- It executes HTTP, TCP, or command-line health checks (readiness and liveness probes).
+- It monitors container resource usage, reporting metrics and statuses back to the API Server.
 
-Node-side failures usually appear in Pod events. These examples point to different parts of the kubelet's work:
+When a container crashes, the kubelet immediately detects the process drop.
+It reads the Pod's restart policy, waits for a back-off cooldown window, and restarts the container.
+This local recovery loop guarantees that crashed application processes are restored without control plane intervention.
+
+If a Pod fails to start, the node agent records the failure in the Pod's events:
 
 ```text
-Warning  FailedMount    kubelet  configmap "devpolaris-api-config" not found
-Warning  Failed         kubelet  Failed to pull image "ghcr.io/devpolaris/api:1.4.3": not found
-Warning  Unhealthy      kubelet  Readiness probe failed: HTTP probe failed with statuscode: 500
+Warning  FailedMount  kubelet  configmap "notification-api-settings" not found
+Warning  Failed       kubelet  Failed to pull image "ghcr.io/devpolaris/notification-api:1.4.3": not found
 ```
 
-The kubelet did not make the same mistake in all three cases. The first is missing mounted configuration. The second is image pull failure. The third is an application readiness failure after the container started. Reading the event reason and message matters.
+These warnings pinpoint where the node agent got blocked.
+The first indicates a configuration mount error, while the second indicates an image registry pull failure.
+The container process has not started because the kubelet was blocked from preparing the runtime environment.
 
 ## The Container Runtime
 
-The container runtime starts and manages containers on the node. Kubernetes uses the Container Runtime Interface, often called CRI, to work with runtimes such as containerd and CRI-O. The kubelet tells the runtime what container to run, and the runtime pulls images, creates containers, and reports container state.
+At its core, the container runtime is the node-side engine that pulls images and starts container processes.
+Kubernetes uses the Container Runtime Interface (CRI) to decouple the kubelet from specific runtime implementations.
+The CRI defines a standard gRPC API over a local UNIX socket.
+containerd and CRI-O are the most common OCI-compliant runtimes in production clusters.
 
-You usually notice the runtime boundary when image or container startup fails. If the image tag does not exist, the runtime cannot pull it. If the image exists but the command exits immediately, Kubernetes can report the exit, but the problem may be inside the application or image.
+The kubelet communicates with containerd using this gRPC interface:
 
-This is the closest part of Kubernetes to the container runtime you already know from Docker. The difference is ownership. In Kubernetes, the kubelet asks the runtime to start containers because a Pod was assigned to the node through the API. The runtime is doing container work, but Kubernetes owns the Pod lifecycle around it.
+- The kubelet sends an RPC request to pull a specific container image.
+- containerd pulls the image from the registry and extracts the layers onto local storage.
+- The kubelet sends an RPC request to initialize the container process namespace.
+- containerd calls low-level OCI engines (like runC) to configure Linux cgroups and namespaces.
+- runC executes the container process, and containerd monitors the active PID.
+
+This interface ensures that Kubernetes remains runtime-agnostic.
+Whether the node uses containerd, CRI-O, or virtualized microVM runtimes, the kubelet executes workloads using the same standard commands.
+
+If containerd fails to pull an image or start a process, the Pod status reports the runtime block:
 
 ```bash
-$ kubectl get pods -n devpolaris-prod -l app=devpolaris-api
-NAME                              READY   STATUS             RESTARTS   AGE
-devpolaris-api-75c9444bd7-j9vhw   0/1     ImagePullBackOff   0          7m
+kubectl get pods -n notifications-prod
 ```
 
-The status says the Pod reached a node, but the container image could not be pulled successfully. `describe pod` gives the specific registry or tag message.
+The status column indicates that containerd cannot initialize the runtime environment:
 
-Container runtime details usually stay behind Kubernetes abstractions for application teams. Still, the boundary matters because a Pod can fail before application code runs. In that case, application logs may be empty, and events are the better evidence.
+```text
+NAME                                READY   STATUS             RESTARTS   AGE
+notification-api-test               0/1     ImagePullBackOff   0          7m
+```
+
+The container process has not executed.
+The failure occurred at the runtime layer, indicating you must fix the image tag or pull secrets.
 
 ## Cluster Networking Components
 
-Kubernetes also needs networking components so Pods can receive IP addresses and Services can route traffic. Without this layer, a node could start containers, but workloads would not have the cluster networking behavior that Kubernetes promises.
+At its core, Kubernetes networking gives each Pod a private IP address that other Pods can reach.
+This exists so application containers can communicate across nodes without knowing which physical server each Pod uses.
+Example: a payment worker on `worker-01` can call a notification API Pod on `worker-03` through a Service name, even though the packet eventually crosses host networking, virtual interfaces, and kernel routing rules.
+Every Pod is allocated a unique, cluster-routable IP address.
+Pods must be able to communicate with all other Pods without using network address translation (NAT).
 
-Most clusters use a network plugin that implements the Container Network Interface, often called CNI. Many clusters also use kube-proxy or another dataplane component to make Service routing work.
+This model is implemented by three cooperative networking components:
 
-The exact implementation varies by cluster. A local kind cluster, a managed cloud cluster, and a cluster using Cilium or Calico may implement the dataplane differently. The beginner model stays the same: Pods get network identity, Services route to selected ready Pods, and network components make that possible on the nodes.
+1.  **The CNI Plugin**:
+    - The Container Network Interface (CNI) standardizes how network plugins configure container interfaces.
+    - Calico, Cilium, and Flannel are common CNI plugins.
+    - When a Pod is scheduled, the CNI plugin creates a virtual ethernet pair (`veth`).
+    - It binds one interface inside the Pod's network namespace and the other to the host's virtual switch.
+    - It assigns a unique IP address to the Pod and updates the host's routing tables.
+2.  **kube-proxy**:
+    - Every worker node runs a network utility process named `kube-proxy`.
+    - It watches for Service and Endpoint objects via the API Server.
+    - When a Service is created, `kube-proxy` configures iptables or IPVS rules on the local host kernel.
+    - These rules perform destination NAT (DNAT) to route Service IP requests to ready Pod IPs.
+3.  **CoreDNS**:
+    - Runs as a cluster-internal DNS directory service.
+    - Automatically resolves Service names to their virtual ClusterIP addresses.
 
-You can often see Service routing from the Kubernetes API:
+You can audit these networking targets by inspecting Service endpoints:
 
 ```bash
-$ kubectl get endpoints devpolaris-api -n devpolaris-prod
-NAME             ENDPOINTS                         AGE
-devpolaris-api   10.42.1.21:3000,10.42.2.19:3000   18d
+kubectl get endpoints notification-svc -n notifications-prod
 ```
 
-If endpoints are empty, the Service has no ready selected Pods. If endpoints exist but traffic still fails, the next layer may be DNS, Service routing, network policy, ingress, or the application itself. The networking module will cover those details later.
+The output lists the active private IP addresses allocated by the CNI plugin:
+
+```text
+NAME               ENDPOINTS                         AGE
+notification-svc   10.42.1.42:3000,10.42.2.56:3000   18d
+```
+
+These endpoints prove that the CNI plugin successfully configured the virtual network interfaces.
+It confirms that the CNI plugin routed traffic from the Service to the container ports.
 
 ## Managed Kubernetes
 
-Managed Kubernetes services such as EKS, AKS, and GKE run much of the control plane for you. The provider usually operates the API server and etcd. Your team still manages worker node pools, add-ons, namespaces, RBAC, workload manifests, application rollouts, and workload troubleshooting.
+At its core, managed Kubernetes means the cloud provider operates the control plane for you.
+Services like AWS EKS, Azure AKS, and Google GKE manage the API Server, etcd quorums, scheduler, and controller managers.
+They guarantee high availability and manage control plane upgrades automatically.
 
-The component model remains the same:
+Example: in AKS, your team still deploys the notification API and manages its Services, RBAC, probes, and resource requests, but Azure operates the control plane machines.
 
-| Component area | Self-managed cluster | Managed cluster |
+However, your engineering team still owns significant operational responsibilities:
+
+| Responsibility | Self-Managed Cluster | Managed Cloud Cluster |
 | --- | --- | --- |
-| API server | Your team operates it | Provider usually operates it |
-| etcd | Your team backs it up and restores it | Provider usually manages it |
-| Worker nodes | Your team manages them | Your team manages them, often with provider tooling |
-| Workload objects | Your team owns them | Your team owns them |
-| Application health | Your team owns it | Your team owns it |
+| API Server Scalability | Your team tunes and scales control nodes | Cloud provider scales nodes automatically |
+| etcd Database Quorums | Your team manages backups and Raft consensus | Cloud provider manages snapshots and replication |
+| Worker Node Pools | Your team provisions, patches, and monitors hosts | Your team configures scale bounds and node sizes |
+| RBAC Access Rules | Your team configures users and permissions | Your team configures users and permissions |
+| Workload Manifests | Your team deploys and manages application specs | Your team deploys and manages application specs |
+| Observability & Debugging | Your team troubleshoots Pod and application logs | Your team troubleshoots Pod and application logs |
 
-Managed Kubernetes reduces a large amount of control plane work. It does not remove the need to understand what the control plane does. When a rollout is stuck, the same handoff still applies: API object, controller, scheduler, kubelet, runtime, network, application.
+Managed services eliminate database maintenance and server patching, but they do not eliminate application operations.
+When a deployment rollout stalls or a Pod remains pending, you must trace the same execution pipeline:
+API Server validation, controller scheduling, node agent startup, network routing, and application health.
 
 ## Putting It All Together
 
-When you apply a Deployment for `devpolaris-api`, several components act in sequence:
+We began with a simple split: the control plane coordinates the cluster, while worker nodes run the actual applications.
+The API Server acts as the secure REST gateway, storing cluster configurations inside etcd.
+The scheduler selects healthy worker hosts based on capacity, and controllers run background loops to maintain desired state.
+On each worker node, the kubelet agent watches for assigned workloads, using containerd over CRI sockets to start container processes.
+Finally, CNI plugins and `kube-proxy` configure virtual network interfaces and route Service traffic.
 
-1. `kubectl` sends the request to the API server.
-2. The API server validates and stores the object in etcd.
-3. Controllers notice the Deployment and create lower-level objects.
-4. The scheduler assigns new Pods to suitable nodes.
-5. The kubelet on each selected node starts the containers through the runtime.
-6. Networking components give Pods and Services their network behavior.
-7. Status and events flow back through the API.
+For our Customer Notification Service, this cooperative architecture executes in a reliable pipeline:
 
-That sequence gives you a practical debugging map. Ask where the work stopped. A validation error points at the API request. A Pending Pod with no node points at scheduling. An image pull error points at node-side startup and the registry. A readiness failure points at the application or its dependencies.
+- `kubectl` sends your Deployment manifest to the `kube-apiserver` HTTPS endpoint.
+- The api-server validates the schema and writes the resource configuration to `etcd`.
+- The `deployment-controller` loop reads `etcd` and creates the required ReplicaSet.
+- The `kube-scheduler` filters out overloaded nodes and scores `worker-02` as the best host for Pod `notification-api-test`.
+- The `kubelet` agent on `worker-02` detects the assignment via watch APIs.
+- The kubelet calls `containerd` over UNIX gRPC sockets to pull the image and start the container process.
+- The CNI plugin configures the virtual network namespace and allocates IP `10.42.2.19`.
+- `kube-proxy` configures local node `iptables` rules to route Service traffic to the Pod.
 
-Kubernetes has many objects, but the core path is steady: request, store, watch, schedule, run, report.
+Understanding this architecture provides you with a clear troubleshooting model.
+You can isolate failures by tracing the handoff chain from logical API validation to physical node execution.
 
 ## What's Next
 
-The next article focuses on desired state and reconciliation. You have seen the components. Now you will follow the loop they create: specs describe what should happen, status reports what happened, and controllers keep comparing the two.
+In the next article, we will focus on namespaces and `kubectl` configurations.
+We will explore the essential command-line tools and environments required to manage these API resources safely.
 
 ---
 
 **References**
 
-- [Kubernetes Components](https://kubernetes.io/docs/concepts/overview/components/) - Official overview of control plane components, node components, and add-ons.
-- [Nodes](https://kubernetes.io/docs/concepts/architecture/nodes/) - Official documentation for node behavior, status, heartbeats, and node controllers.
-- [Controllers](https://kubernetes.io/docs/concepts/architecture/controller/) - Official explanation of controller loops and desired state.
-- [Container Runtime Interface](https://kubernetes.io/docs/concepts/architecture/cri/) - Official page describing Kubernetes container runtime integration.
-- [Cluster Networking](https://kubernetes.io/docs/concepts/cluster-administration/networking/) - Official overview of the Kubernetes networking model.
+- [Kubernetes Components](https://kubernetes.io/docs/concepts/overview/components/) - Official guide on control plane binaries, worker daemons, and plugins.
+- [etcd Consensus](https://etcd.io/docs/current/learning/consensus/) - Technical documentation on Raft quorums and WAL transactions.
+- [kube-scheduler Algorithms](https://kubernetes.io/docs/concepts/scheduling-eviction/kube-scheduler/) - Systems-level reference for node filtering predicates and priority scoring.
+- [CRI Specifications](https://kubernetes.io/docs/concepts/architecture/cri/) - Official reference for the Container Runtime Interface and containerd UNIX sockets.
+- [Cluster Networking Model](https://kubernetes.io/docs/concepts/cluster-administration/networking/) - Systems guide on CNI standards, virtual ethernet interfaces, and kube-proxy NAT.

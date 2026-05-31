@@ -33,11 +33,13 @@ A common catastrophe occurs when a developer accidentally commits this local `.e
 
 An image moves through developer machines, registries, local caches, and vulnerability scanners. Baking secrets inside the image exposes them to every system that handles the package. 
 
-To operate secure cloud services, you must decouple code compilation from environment configuration. The compiled container image must remain identical across environments, loading ordinary settings and sensitive credentials dynamically at boot time from secure, remote coordinate vaults.
+To operate secure cloud services, you must decouple code compilation from environment configuration. The compiled container image must remain identical across environments, loading ordinary settings and sensitive credentials dynamically at boot time from secure managed stores.
 
 ## Decoupling Runtime Configurations
 
 Runtime configuration is the collection of environment-specific values and references an application process loads at startup. Decoupling configuration ensures that the exact same ECR container image runs in staging and production without recompilation.
+
+At its core, runtime configuration is an input contract for a running process. It supplies deployment-specific values outside the compiled artifact so staging, production, and recovery environments can run the same image with different endpoints, feature settings, and credentials.
 
 The container image contains only pure code, shared packages, and static assets. The orchestrator binds environment-specific facts at boot time:
 
@@ -46,13 +48,15 @@ Runtime Settings vs. Sensitive Secrets:
 | Setting Type | Example Parameters | Secure Storage Coordinate |
 | :--- | :--- | :--- |
 | **Non-Sensitive Configurations** | `NODE_ENV=production`<br/>`LOG_LEVEL=info`<br/>`PORT=3000` | Task Definition environment variables array or Parameter Store keys. |
-| **Sensitive Credentials** | `DATABASE_URL` connection strings<br/>`STRIPE_API_TOKEN` API keys | AWS Secrets Manager securely encrypted vaults. |
+| **Sensitive Credentials** | `DATABASE_URL` connection strings<br/>`STRIPE_API_TOKEN` API keys | AWS Secrets Manager encrypted secret records. |
 
 Config changes are releases. Modifying a timeout parameter, database URL, or feature flag setting alters production execution paths as radically as a code change. Every configuration update deserves the same review, rolling update, and rollback discipline as a software deployment.
 
 ## Environment Variables for Non-Sensitive Settings
 
 Environment variables are standard key-value string parameters delivered to the operating system process at startup. In an Amazon ECS Task Definition, non-sensitive configurations are declared directly inside the container definitions array:
+
+An environment variable acts as a process-level configuration field. ECS writes these fields into the container's startup environment, and the application reads them through its normal language runtime.
 
 ```json
 {
@@ -71,6 +75,8 @@ These values are non-sensitive. It is completely safe for operators to read them
 ## Securing Sensitive Credentials with Secrets Manager
 
 Sensitive credentials must be stored securely outside the task definition plain-text. AWS provides Amazon Secrets Manager, which encrypts values at rest using KMS keys. Many workloads use the AWS managed key for Secrets Manager; customer managed keys are useful when you need custom key policies, cross-account access patterns, or stricter audit boundaries.
+
+Secrets Manager functions as a managed encrypted key-value store for sensitive runtime material. The task definition should hold only the lookup coordinate, while the plaintext value remains behind AWS authorization, KMS encryption, and audit logging.
 
 For ECS tasks, instead of writing plain-text passwords, you store the secure Amazon Resource Name (ARN) coordinate reference inside the `secrets` array of the container definition:
 
@@ -110,7 +116,9 @@ This output provides critical operational coordinates:
 
 ## ECS Delivery: Task Execution Roles vs. Task Roles
 
-ECS delivers configurations, secrets, and permissions using two distinct IAM roles cabled to the task. Mixing up these roles is the most common permission debugging failure for beginners:
+ECS delivers configurations, secrets, and permissions using two distinct IAM roles attached to the task. Mixing up these roles is the most common permission debugging failure for beginners:
+
+These roles represent separate caller identities. The execution role belongs to the platform startup path, while the task role belongs to application code after the container is running.
 
 ```mermaid
 flowchart TD
@@ -146,6 +154,8 @@ If Fargate cannot boot the task because it cannot pull the image or fetch the da
 ## Enforcing Startup Validation and Fail-Fast Habits
 
 An application must validate its runtime contract immediately upon booting. It must verify the presence, syntax, and connectivity of its required configurations before claiming to be ready for customer traffic.
+
+Startup validation is a pre-traffic contract check. It converts missing or malformed configuration into an early task failure while the deployment controller can still keep older healthy capacity online.
 
 Let us write a robust Node.js initialization script demonstrating startup contract validation with safe logging practices:
 
@@ -205,6 +215,8 @@ By calling this validator at the absolute entrypoint of your application thread,
 
 When a deployment fails due to a configuration mismatch, developers are often tempted to print the entire environment array to stdout (using commands like `console.log(process.env)`). This dangerous practice dumps plaintext database passwords, Stripe keys, and webhook signing credentials directly into CloudWatch Logs. 
 
+Safe debugging means proving the presence, identity, and permissions of a configuration value without exposing the value itself. Logs should describe coordinates and validation results, not plaintext credentials.
+
 Anyone with log access (support teams, dashboard users, security auditors) can read these credentials, creating a severe data compliance leak.
 
 To debug configurations safely, you must structure your diagnostic checks to prove presence and shape without printing actual values:
@@ -217,6 +229,8 @@ To debug configurations safely, you must structure your diagnostic checks to pro
 
 In a Linux OS, when a process starts, the kernel allocates environment variables inside the process's address space. The variables are placed in the stack pointer memory region (`envp`) immediately above the command-line arguments. 
 
+Environment injection is a process memory mechanism, not just an ECS convenience feature. Once a secret is injected as an environment variable, it becomes part of the process environment inherited by child processes unless you deliberately avoid that path.
+
 Any child process spawned by the primary container task inherits a full copy of this `envp` stack memory. 
 
 If your primary container task spawns background shell wrappers or third-party diagnostic scripts, those child processes gain access to every database password and Stripe key loaded in the environment. Even worse, if the application experiences a core dump crash, the OS writes the stack memory to disk, leaving plaintext passwords stored inside the container's volatile block storage layers.
@@ -227,6 +241,8 @@ To minimize process memory leaks, high-security applications may bypass environm
 
 Secret rotation is the security practice of changing sensitive credentials regularly to minimize the blast radius of leaks. Secrets Manager can store multiple secret versions and can run rotation through a configured Lambda rotation function, but rotation is not automatic for every secret just because the value lives in Secrets Manager. The running application tasks must coordinate to absorb the change:
 
+Rotation is a coordinated credential version transition. The storage service can create a new secret version, but the running application must fetch, reload, or restart against that version before the old credential can be removed safely.
+
 * **Startup Injection Caveat**: If secrets are injected as environment variables at task boot time, running containers will continue to use the old password until they are replaced. You must trigger an ECS service deployment (`forceNewDeployment`) to force Fargate to spin up new task replicas that fetch the rotated password.
 * **Dynamic API Fetching**: If your application fetches secrets dynamically over the SDK, configure your client wrappers with a local cache TTL (such as 1 hour) and a database retry trigger. If a database transaction fails due to authentication errors, the client must bypass the cache, fetch the rotated password from Secrets Manager, re-establish the pool, and resume transactions without downtime.
 * **Reversible Rotation Windows**: When the database engine and rotation strategy support it, configure a brief overlap where old and new credentials can both work. This overlap window helps active tasks continue during the rolling update without dropping database connections.
@@ -236,7 +252,7 @@ Secret rotation is the security practice of changing sensitive credentials regul
 Decoupling configuration from code packaging is the foundation of secure cloud operations:
 
 * **Strictly Decouple Configurations**: Never hardcode environment settings or secrets inside source repositories or container images.
-* **Enforce Decoupled Secrets Manager**: Inject sensitive credentials via the Task Definition `secrets` block, keeping plaintext passwords out of Plaintext properties.
+* **Enforce Decoupled Secrets Manager**: Inject sensitive credentials via the Task Definition `secrets` block, keeping plaintext passwords out of plain-text task definition fields.
 * **Trace Role Partition Boundaries**: Assign startup orchestrator permissions to the Task Execution Role, and application API permissions to the Task Role.
 * **Enforce Fail-Fast Startup Checks**: Validate all required keys and syntax parameters immediately upon boot to trigger automated rollbacks during failed deploys.
 * **Prevent Process Log Leaks**: Never print raw process environments or exception objects to standard output streams.

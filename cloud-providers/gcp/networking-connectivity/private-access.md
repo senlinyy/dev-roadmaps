@@ -20,9 +20,7 @@ aliases:
 
 ## Private Access to Managed Services
 
-When you construct a secure office building, you typically build separate, dedicated rooms for highly sensitive assets like safe deposit boxes, backup generator controls, or master key vaults. You would not place these sensitive rooms out on the public street where anyone can walk past them. Instead, you keep them isolated inside administrative boundaries. However, your authorized staff working in the main office still need to reach these rooms securely throughout the day.
-
-Rather than forcing staff to exit the building, walk down a public sidewalk, and enter through a public front door, you construct secure private corridors, underground tunnels, or localized badge-reader doors connecting your main floor directly to the sensitive vaults. In the cloud, private access patterns act as these secure corridors and tunnels.
+Private access is the set of routing and endpoint patterns that let a workload reach managed services without treating the public internet as the normal application path. The destination may be a Google-managed producer network, a Google API VIP, or a local private endpoint that forwards to a producer service.
 
 Managed platform services do not all use the same private access pattern. Cloud SQL private IP is reached through a private services connection. Cloud Storage and Secret Manager are Google APIs, so a VM without an external IP commonly reaches them through Private Google Access or through Private Service Connect for Google APIs. A partner or producer service can be reached through Private Service Connect. The first job is to identify what kind of destination you are calling.
 
@@ -34,7 +32,7 @@ Managed platform services do not all use the same private access pattern. Cloud 
 
 ## Private Services Access and Peering Boundaries
 
-When you deploy a managed database like Cloud SQL with a private IP, the physical database engine does not sit in your application subnet. Google provisions the database in a dedicated, Google-owned **Service Producer Project**. To make this database reachable from your VPC, you must establish **Private Services Access (PSA)**.
+Private Services Access (PSA) is a peering-based private reachability pattern between your VPC and a Google-managed producer network. When you deploy a managed database like Cloud SQL with a private IP, the physical database engine does not sit in your application subnet. Google provisions the database in a dedicated, Google-owned **Service Producer Project**. To make this database reachable from your VPC, you establish PSA.
 
 ![Private Services Access creates a private connection between your VPC and a producer service network.](/content-assets/articles/article-cloud-providers-gcp-networking-connectivity-private-access-managed-services/private-services-peering.png)
 
@@ -68,7 +66,7 @@ Because this is a VPC Network Peering-based connection, you must guarantee that 
 
 ## Private Google Access and DNS Virtual IPs
 
-VM instances and serverless containers that lack public IP addresses still need to call Google APIs (like reading secrets or uploading logs). By default, these APIs are resolved to public IP addresses. To route these calls privately, you enable **Private Google Access (PGA)** on your subnets.
+Private Google Access (PGA) is a subnet setting and DNS/routing pattern that lets private workloads call Google APIs without external IP addresses. VM instances and serverless containers that lack public IP addresses still need to call Google APIs like reading secrets or uploading logs. By default, these APIs are resolved to public IP addresses. To route these calls privately, you enable **PGA** on your subnets.
 
 Private Google Access allows VM instances without external IP addresses to reach Google APIs and services. It is enabled on a subnet. For private VIP use, you also configure DNS so Google API hostnames resolve to `private.googleapis.com` or `restricted.googleapis.com`.
 
@@ -81,7 +79,7 @@ The route to these VIP ranges commonly uses a default internet gateway next hop 
 
 ## Private Service Connect and Proxy Translation
 
-While VPC Peering is highly effective, it introduces significant architectural constraints in enterprise environments. VPC Peering is non-transitive, meaning you cannot route packets through one peering connection to reach another. Furthermore, if two companies or departments have overlapping IP space (e.g., both use `10.0.0.0/16`), they cannot peer their VPCs.
+Private Service Connect (PSC) is an endpoint and forwarding pattern that presents a private IP in your VPC for a producer service or Google API target. VPC Peering is highly effective, but it introduces significant architectural constraints in enterprise environments. VPC Peering is non-transitive, meaning you cannot route packets through one peering connection to reach another. Furthermore, if two companies or departments have overlapping IP space (e.g., both use `10.0.0.0/16`), they cannot peer their VPCs.
 
 ![Private Service Connect presents a local endpoint that forwards traffic to a producer service.](/content-assets/articles/article-cloud-providers-gcp-networking-connectivity-private-access-managed-services/private-service-connect-proxy.png)
 

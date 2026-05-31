@@ -27,7 +27,7 @@ aliases:
 
 ## GCP Compute Runtimes
 
-Google Cloud compute is where your application code gets a place to run. Instead of buying physical servers, you choose a runtime that gives your code CPU, memory, network access, startup behavior, scaling behavior, identity, logs, and failure boundaries. Choosing the correct compute runtime is not a matter of selecting the most advanced service; it requires matching your application's operational shape, deployment frequency, scaling behavior, and security boundaries to the runtime that fits those requirements.
+Google Cloud compute is the runtime layer where application code gets CPU, memory, network access, startup behavior, scaling behavior, identity, logs, and failure boundaries. Instead of buying physical servers, you choose the managed runtime contract that fits how your code starts, receives work, scales, and fails. Choosing the correct compute runtime is not a matter of selecting the most advanced service; it requires matching your application's operational shape, deployment frequency, scaling behavior, and security boundaries to the runtime that fits those requirements.
 
 This spectrum matches the compute runtime tiering found in other major cloud providers. Engineers transitioning from AWS or Azure will recognize Compute Engine virtual machines as the direct counterpart to Amazon EC2 and Azure Virtual Machines, offering bare-metal operating system control at the cost of high administrative overhead. Conversely, Cloud Run provides a serverless container hosting environment comparable to AWS App Runner or Azure Container Apps, while Cloud Run functions handle event-driven, pay-per-execution payloads similar to AWS Lambda or Azure Functions. Finally, Google Kubernetes Engine (GKE) serves as the managed Kubernetes platform equivalent to Amazon EKS and Azure AKS, designed for complex, orchestrator-driven architectures.
 
@@ -39,7 +39,7 @@ This boundary matters more than the implementation names underneath the platform
 
 ## Workload Shapes and Responsibilities
 
-Every compute runtime establishes a distinct division of labor between your engineering team and Google Cloud. While you always retain ownership of your application code and configuration, the runtime defines who handles operating system patching, process supervision, network ingress routing, and instance scaling.
+A workload shape describes how code receives work and how much runtime control it needs. Every compute runtime establishes a distinct division of labor between your engineering team and Google Cloud. While you always retain ownership of your application code and configuration, the runtime defines who handles operating system patching, process supervision, network ingress routing, and instance scaling.
 
 ![Choose a runtime by the shape of the work and the operating responsibility you want to keep.](/content-assets/articles/article-cloud-providers-gcp-compute-application-hosting-gcp-compute-hosting-mental-model/compute-shapes-map.png)
 
@@ -56,31 +56,31 @@ Forcing a workload into an incompatible runtime shape out of familiarity leads t
 
 ## Compute Engine (Virtual Machines)
 
-Compute Engine is the GCP runtime designed for server-shaped workloads that require direct access to the operating system kernel, specialized kernel modules, host-level monitoring agents, or legacy processes that do not fit containerized contracts.
+Compute Engine functions as a cloud virtual server for workloads that need operating-system control. It is the GCP runtime designed for server-shaped workloads that require direct access to the operating system kernel, specialized kernel modules, host-level monitoring agents, or legacy processes that do not fit containerized contracts.
 
 When you boot a Compute Engine virtual machine (VM), you receive a dedicated software-defined server. You select the CPU and memory capacity (machine type), the operating system (image), and the attached virtual hard drives (persistent disks). This control is valuable when migrating legacy applications, running stateful databases, or installing custom host daemons. However, this flexibility places the operational burden on your team: you must configure process managers like `systemd` to keep applications alive, execute OS security patching, and manage the scaling of VM instances manually.
 
 ## Cloud Run (Serverless Containers)
 
-Cloud Run is the default runtime for stateless HTTP backend services, microservices, and web applications. It abstracts the virtual machine layer entirely, allowing you to deploy container images directly from Artifact Registry without managing underlying server nodes.
+Cloud Run behaves like a managed service wrapper around a container image or source deployment. It is the default runtime for stateless HTTP backend services, microservices, and web applications because it abstracts the virtual machine layer entirely, allowing you to deploy container images directly from Artifact Registry without managing underlying server nodes.
 
 The core abstraction of Cloud Run is the application contract: you provide a container that starts without manual shell steps, listens on a dynamically injected `PORT` environment variable, and handles stateless HTTP requests. Cloud Run handles the scheduling, provisions instances dynamically to meet incoming traffic demands, and automatically routes packets from its public HTTPS entry points. Because the environment is stateless, any data written to the container's local directory is volatile, requiring you to decouple durable state and store it in managed databases or object storage.
 
 ## Cloud Run Functions (Event-Driven Handlers)
 
-Cloud Run functions are designed for small, single-purpose handlers that execute asynchronously in response to system events. You write source code for the handler, and Google builds and deploys it as a Cloud Run-backed function so you do not manage the container image directly.
+Cloud Run functions are event handlers packaged as managed Cloud Run-backed runtimes. They are designed for small, single-purpose handlers that execute asynchronously in response to system events. You write source code for the handler, and Google builds and deploys it as a Cloud Run-backed function so you do not manage the container image directly.
 
 A function operates on an event-driven lifecycle: it remains completely idle (scaling to zero instances) until a configured trigger routes a platform event (such as a file upload to Cloud Storage, a Pub/Sub message, or a scheduled timer) to the runtime. The function boots instantly, processes the single payload, and terminates. Because the trigger model operates on an "at-least-once" delivery contract, temporary network interruptions can cause the same event to be delivered multiple times. Therefore, you must design function handlers to be strictly idempotent, ensuring that duplicate execution attempts do not corrupt database records or duplicate billing transactions.
 
 ## Google Kubernetes Engine (Managed Orchestration)
 
-Google Kubernetes Engine (GKE) is the managed orchestration platform designed for organizations that standardize their operations around the Kubernetes API. GKE provides a highly integrated environment to run containerized workloads across a shared pool of machine nodes.
+Google Kubernetes Engine (GKE) is managed Kubernetes on GCP: Google operates the cluster control plane, while your team declares workloads through Kubernetes objects. GKE is designed for organizations that standardize their operations around the Kubernetes API and need a shared platform for containerized workloads across a pool of machine nodes.
 
 GKE shifts the deployment unit from simple container services to Kubernetes-native objects like Pods, Deployments, and Services. The GKE control plane coordinates cluster state dynamically, matching your desired replica counts and rollout strategies to the physical worker nodes. GKE is exceptionally powerful when managing complex, multi-service platforms that require specialized network policies, service mesh integrations, sidecar containers, or custom resource operators. The tradeoff is architectural complexity: your team must possess the expertise to manage Kubernetes manifests, network interfaces, cluster upgrades, and Workload Identity mapping.
 
 ## Scaling and Failure Evidence
 
-The choice of compute runtime dictates how your application scales under load and where you must look to gather evidence when an outage occurs.
+Scaling and failure evidence are the signals that show how the runtime reacted to work pressure. The choice of compute runtime dictates how your application scales under load and where you must look to gather evidence when an outage occurs.
 
 ![Scaling is useful only when logs and metrics show what pressure the runtime is responding to.](/content-assets/articles/article-cloud-providers-gcp-compute-application-hosting-gcp-compute-hosting-mental-model/evidence-scale-loop.png)
 

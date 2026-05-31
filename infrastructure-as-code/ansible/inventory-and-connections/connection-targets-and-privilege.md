@@ -22,6 +22,8 @@ id: article-infrastructure-as-code-ansible-connection-targets-privilege
 
 ## The Security Boundary of Host Connections
 
+An Ansible connection target is the remote host plus user, transport, privilege escalation settings, and Python execution path Ansible will use for a run.
+
 In server automation, managing connections and privilege escalation is the practice of separating the initial network authentication layer from the administrative system access layer on your managed nodes. Instead of logging directly into your servers as the root superuser (which introduces a major security risk and violates standard access control rules), the automation system uses a multi-tiered security model. It logs in as a restricted, non-privileged user account first, and then escalates privileges only for the specific tasks that require administrative permissions to modify the host state.
 
 To see why this separation of concerns is a vital operational safeguard, consider our scenario. You are setting up an administrative account that must configure Nginx virtual hosts and start background application services on a remote managed server.
@@ -76,9 +78,11 @@ The name Ansible uses inside inventory files does not need to match the actual I
 
 ## The Login User Layer
 
-The remote user (configured via the `ansible_user` variable or the `remote_user` playbook keyword) represents the restricted identity used by Ansible to establish the initial secure network shell connection to the managed host.
+The login user is the account Ansible uses for the first SSH connection to the host. It should usually be a restricted automation account, not `root`, because the login step only needs enough permission to start a controlled task session.
 
-When the control node opens an SSH socket, it uses the credentials matching the configured remote user -- typically a deployment SSH key path or standard agent forwarder socket -- verifies the host key against local known-hosts lists, and completes the handshake by establishing a secure shell session inside the non-privileged user namespace.
+Example: Ansible can log in to `app-server-01` as `deployer` with an SSH key, then use `become: true` only for tasks that need to write under `/etc`. The remote user is configured via the `ansible_user` variable or the `remote_user` playbook keyword.
+
+When the control node opens an SSH socket, it uses the credentials matching the configured remote user, typically a deployment SSH key path or standard agent forwarder socket, verifies the host key against local known-hosts lists, and completes the handshake by establishing a secure shell session inside the non-privileged user namespace.
 
 Using a dedicated, restricted login user (such as `deployer` or `ansible-run`) rather than a shared personal user account is a critical security convention. It gives your automation a clearer audit trail in the host's authentication logs, and it lets you keep the initial SSH key separate from the decision to run a specific task with administrative privileges.
 
@@ -92,7 +96,9 @@ A successful response proves that Ansible can connect with the selected address,
 
 ## Privilege Escalation: The Sudo Protocol
 
-Once the login user has established the SSH connection, many tasks (such as writing configurations under `/etc`, modifying package directories, and enabling systemd background processes) will require administrative authority. To execute these tasks, Ansible uses **Privilege Escalation** (commonly triggered by the `become: true` directive).
+Privilege escalation means starting from a restricted login account and temporarily running a specific task as a more powerful user. On most Linux hosts, Ansible does this through sudo when you set `become: true`.
+
+Example: the `deployer` user can run a read-only health check without extra privileges, but a task that writes `/etc/nginx/sites-enabled/app.conf` needs to become `root` for that one module execution. Once the login user has established the SSH connection, many administrative tasks require this extra authority.
 
 Under the hood, when you set `become: true` on a task or play:
 1. **Transfer Module Payload**: Ansible packages the task module payload and transfers it to a temporary directory on the remote host as usual.
@@ -140,7 +146,9 @@ You must keep privilege boundaries highly visible. While setting `become: true` 
 
 ## Under the Hood: Sudoers Configuration and NOPASSWD
 
-Because Ansible playbooks are designed to run non-interactively (such as inside automated pipelines or scheduled cron loops), the remote privilege escalation must be completely seamless. If the remote sudo configuration requires entering a password, and no password is supplied, the run will crash with a `Missing sudo password` error.
+The sudoers file is the host policy that decides which users may run commands as other users. `NOPASSWD` is a sudoers option that allows a permitted user to run approved sudo commands without an interactive password prompt.
+
+Example: an unattended CI runner cannot type a sudo password, so a carefully scoped `deployer` sudoers rule lets the pipeline configure Nginx without hanging at a prompt. Because Ansible playbooks are designed to run non-interactively, the remote privilege escalation path must be completely predictable.
 
 To ensure non-interactive execution, systems administrators configure the remote managed hosts' `/etc/sudoers` database to allow the Ansible login user to run commands as root without a password challenge.
 

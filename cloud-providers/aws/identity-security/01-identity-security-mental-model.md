@@ -31,7 +31,7 @@ aliases:
 
 When you run a web application on a personal laptop, security is rarely a boot-time obstacle. Your laptop is an environment built on local trust. The database running on localhost accepts connections because you configured a local password in a dot-environment file, and your application code reads and writes local files because your laptop operating system automatically trusts the logged-in user session. If you need to make an API call to a cloud provider from your local terminal, the local command-line interface simply reads a static, administrative access key from a hidden credentials file in your home directory.
 
-However, once that same application moves to a professional cloud provider like AWS, this expectation of automatic local trust completely breaks down. The application container boots in an isolated virtual cluster, attempts to retrieve its database credentials from a vaulted storage system, and immediately crashes with an Access Denied error. The team is left with several confusing questions:
+However, once that same application moves to a professional cloud provider like AWS, this expectation of automatic local trust completely breaks down. The application container boots in an isolated virtual cluster, attempts to retrieve its database credentials from an encrypted secret store, and immediately crashes with an Access Denied error. The team is left with several confusing questions:
 
 * Why did the deployment pipeline report success when the running application cannot perform its basic startup duties?
 * Why does the S3 upload work perfectly from the developer's laptop terminal, but fail when run inside the cloud container?
@@ -43,7 +43,7 @@ These are not general security problems. They are specific authorization questio
 
 AWS Identity and Access Management, commonly known as IAM, is the core service that controls authentication and authorization for every request made to AWS resources. Authentication is the process of verifying who is making the request, while authorization is the process of deciding whether that verified caller is allowed to perform the specific task they are asking to do.
 
-To build a reliable mental model of IAM, you must stop thinking of security as a broad network wall and start viewing it as a precise request gatekeeper. Every action in AWS is a structured API request, and IAM evaluates that request by dissecting it into four primary coordinates:
+At a high level, IAM behaves like the authorization engine for AWS service APIs. Every action in AWS is a structured API request, and IAM evaluates that request by dissecting it into four primary coordinates:
 
 * **The Principal**: The caller asking AWS to do something.
 * **The Action**: The specific operation the caller wants to perform.
@@ -52,7 +52,7 @@ To build a reliable mental model of IAM, you must stop thinking of security as a
 
 Every request evaluates to either allowed or denied. If IAM cannot find a policy that explicitly permits the request, the default decision is a strict denial. This is the foundation of least-privilege security. You do not write rules to block dangerous behavior; instead, you block everything by default and write narrow rules that open precise, audited pathways for the exact jobs your workloads must perform.
 
-The workflow of a request moving through this gatekeeper follows a vertical path from authentication to final authorization.
+The workflow of a request moving through this authorization engine follows a vertical path from authentication to final authorization.
 
 ```mermaid
 flowchart TD
@@ -67,13 +67,15 @@ flowchart TD
 
 ![IAM request gate infographic showing principal, action, resource, context, explicit deny, default deny, and least privilege](/content-assets/articles/article-cloud-providers-aws-identity-security-identity-security-mental-model/iam-request-gate.png)
 
-*Every AWS API call enters IAM as a request with a caller, action, target resource, and context. The safest mental model is a narrow gate: explicit denies win, and anything without a written allow is denied by default.*
+*Every AWS API call enters IAM as a request with a caller, action, target resource, and context. The safest mental model is a narrow authorization engine: explicit denies win, and anything without a written allow is denied by default.*
 
 By mapping every Access Denied error to these coordinates, debugging becomes an operational checklist rather than a guessing game. If your container cannot write to an S3 bucket, you do not broad-stroke the permissions of the entire account. You identify the exact principal of the running container, the specific write action it attempted, the unique ARN of the bucket, and the exact policy that failed to authorize the path.
 
 ## Principals
 
 A principal is the authenticated identity that makes a request to AWS. In your local development environment, the principal is effectively your personal user account. In a professional cloud environment, however, we must separate human identities from application workloads to prevent administrative power from leaking into running code.
+
+A principal acts as the caller record IAM evaluates. It can represent a person, an automated pipeline, a workload role session, or a service acting through a trusted role.
 
 IAM recognizes several distinct categories of principals, each tailored to a specific operational role:
 
@@ -102,6 +104,8 @@ If Maya uses her personal developer credentials to run a local script that write
 
 Once IAM authenticates the principal, it evaluates what that caller is trying to do and where they are trying to do it. These are represented by actions and resources. 
 
+Actions and resources are IAM's operation and target coordinates. The action names the API operation, and the resource names the AWS object that operation tries to affect.
+
 An action is a specific API operation exposed by an AWS service, written in a lowercase, service-prefixed format. A resource is the target object, often identified by a standardized Amazon Resource Name (ARN). ARNs give AWS a precise way to name resources across partitions, services, regions, accounts, and resource paths, though each service has its own exact ARN shape.
 
 Common Application Actions and Resources:
@@ -123,6 +127,8 @@ If the application is ever compromised, the blast radius is strictly limited to 
 ## How Policies Are Evaluated
 
 An IAM policy is a JSON document that explicitly defines authorization rules. Policies do not float freely; they are attached to principals (identity-based policies) or directly to resources (resource-based policies) to establish who can perform which actions.
+
+An IAM policy functions as a rule document for API authorization. It binds principals, actions, resources, effects, and conditions into statements that IAM can evaluate consistently.
 
 To write effective policies, you must understand how IAM evaluates them. The evaluation logic operates under a strict set of rules:
 

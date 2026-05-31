@@ -15,7 +15,7 @@ aliases:
 
 1. [Connecting the Standalone Pieces](#connecting-the-standalone-pieces)
 2. [The Job-Based Service Map](#the-job-based-service-map)
-3. [Networking: Private IP Network Rooms](#networking-private-ip-network-rooms)
+3. [Networking: Private IP Boundaries](#networking-private-ip-boundaries)
 4. [Traffic: Public DNS and HTTP Load Balancing](#traffic-public-dns-and-http-load-balancing)
 5. [Compute: Containerized Scaling Under Surges](#compute-containerized-scaling-under-surges)
 6. [State: Relational Databases and Object Buckets](#state-relational-databases-and-object-buckets)
@@ -42,6 +42,8 @@ To build this production-grade architecture, you must learn how the core familie
 
 This job-based map groups services by the specific operational role they perform. Instead of asking which service is "best", ask what job your application needs completed and select the family built to handle it.
 
+You can loosely think of the AWS catalog as a set of managed subsystems around the request path. One subsystem accepts traffic, one runs code, one stores state, one authorizes access, one records signals, and one protects the operating lifecycle. The product names matter less once the underlying job is clear.
+
 **Core Service Families**
 
 * **Traffic Routing**: Manages public DNS records and handles how internet requests enter your private VPC boundary. Key services include Route 53 and Application Load Balancers.
@@ -55,9 +57,9 @@ This job-based map groups services by the specific operational role they perform
 
 *The production request path is a chain of jobs. DNS finds the entry point, the load balancer checks healthy targets, compute runs the container, state lives outside compute, and signals leave a trail for debugging.*
 
-## Networking: Private IP Network Rooms
+## Networking: Private IP Boundaries
 
-Before public requests can enter or internal systems can communicate, you must establish the private IP network room for your workloads. In AWS, this foundation is the Virtual Private Cloud, commonly referred to as a VPC. A VPC is a logically isolated private network block that you define inside a single Region. It defines the IP address coordinates and route tables that decide where packets can travel.
+Before public requests can enter or internal systems can communicate, you must establish the private IP boundary for your workloads. In AWS, this foundation is the Virtual Private Cloud, commonly referred to as a VPC. A VPC behaves like a Regional private network namespace: it defines the IP address coordinates and route tables that decide where packets can travel.
 
 To protect your system from threat actors, you must design a structured three-tier subnet architecture inside your VPC:
 
@@ -73,11 +75,11 @@ By separating your VPC network into these three tiers, you establish a solid arc
 
 ## Traffic: Public DNS and HTTP Load Balancing
 
-Traffic routing is the system's public gatekeeper. When a customer enters `orders.devpolaris.com` in their browser, the request must traverse a structured entry chain before it can reach your app containers.
+Traffic routing is the managed entry layer between public clients and private compute targets. When a customer enters `orders.devpolaris.com` in their browser, the request must traverse a structured entry chain before it can reach your app containers.
 
 This traffic entry path uses Route 53 and an Application Load Balancer (ALB):
 
-* Route 53 acts as your global DNS telephone book. It translates the human name `orders.devpolaris.com` into the specific, dynamic public IP addresses of your ALB nodes cabled in the Region.
+* Route 53 acts as your global DNS directory. It translates the human name `orders.devpolaris.com` into the specific, dynamic public IP addresses of your ALB nodes in the Region.
 * The ALB receives the incoming public HTTP request. It manages TLS certificates, evaluates listener rules, and forwards accepted requests to healthy targets. DDoS and application-layer filtering are handled by related services such as AWS Shield and AWS WAF, not by the ALB alone.
 * The target group continuously audits the health of your compute tasks by sending recurring HTTP health probes to the container's health path. If the tasks are healthy, the ALB forwards the HTTP packet directly to their private IP and port inside the private subnet.
 
@@ -86,6 +88,8 @@ This pipeline introduces a major operational gotcha: target group health checks.
 ## Compute: Containerized Scaling Under Surges
 
 Compute is the runtime engine that executes your application code. AWS provides three distinct compute paradigms based on how much server infrastructure your team wants to manage:
+
+At its core, a compute service is a managed process runtime with a different ownership contract. EC2 gives you the operating system, ECS Fargate gives you a container task contract, and Lambda gives you an event handler contract.
 
 * **EC2 (Virtual Servers)**: Provides complete administrative access to virtual server operating systems. You are responsible for patching kernels, scaling capacity, and configuring network routing directly.
 * **ECS with Fargate (Containers)**: Packages your application into Docker containers. Fargate runs the containers serverless, managing the virtual machine hosts underneath so you only focus on task configurations.
@@ -105,9 +109,11 @@ Fargate compute can scale under surges when you configure ECS Service Auto Scali
 
 State represents the persistent business data that must survive after your dynamic compute tasks exit. In the cloud, compute tasks are ephemeral; they are constantly created and destroyed by the orchestrator. You must separate state entirely from the compute hosts, matching the storage service to your data contract:
 
+The useful anchor is interface shape: RDS behaves like a managed SQL database endpoint, S3 behaves like an object API for whole files, DynamoDB behaves like a key-addressed table service, and EBS behaves like a block device attached to a server.
+
 * **Amazon RDS**: Runs managed relational database engines like PostgreSQL and MySQL. The database engine provides SQL transactions and ACID behavior, while RDS automates infrastructure work such as provisioning, backups, patch windows, and failover features you configure.
 * **Amazon S3**: Houses serverless object storage buckets. S3 is designed for cost-efficient, high-volume file persistence, storing flat CSV exports, system logs, or user attachments indexed by text keys.
-* **DynamoDB**: Houses managed NoSQL tables. DynamoDB is cabled for single-digit millisecond latency at massive scale, using specific primary key queries rather than complex relational joins.
+* **DynamoDB**: Houses managed NoSQL tables. DynamoDB is designed for single-digit millisecond latency at massive scale, using specific primary key queries rather than complex relational joins.
 
 **State Service Mapping Checklist**
 
@@ -129,7 +135,7 @@ AWS Identity and Access Management (IAM) enforces a default-deny gate. Every AWS
 
 This locked-down configuration reduces credential blast radius. Instead of hardcoding access keys into Docker images, the ECS runtime exposes temporary task-role credentials to the container, and the AWS SDK uses those credentials to sign service API calls.
 
-AWS Secrets Manager vaults sensitive database connection strings. ECS can fetch a referenced secret at task startup and place the value into an environment variable, or the application can call Secrets Manager at runtime and cache the value in process memory. If a startup-injected secret is rotated, running containers continue using the old value until the ECS service launches fresh tasks.
+AWS Secrets Manager stores sensitive database connection strings. ECS can fetch a referenced secret at task startup and place the value into an environment variable, or the application can call Secrets Manager at runtime and cache the value in process memory. If a startup-injected secret is rotated, running containers continue using the old value until the ECS service launches fresh tasks.
 
 ## Signals: Observability Pipelines and Logs
 
@@ -202,6 +208,6 @@ By following this functional map and tracing failures along the request path, yo
 - [Amazon ECS on Fargate](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/AWS_Fargate.html) - Introduction to serverless container execution, task definition blueprints, and service scheduling.
 - [Amazon RDS Postgres Engine Guide](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/CHAP_PostgreSQL.html) - Documentation on provisioning relational databases, Multi-AZ backups, and engine settings.
 - [Amazon S3 Buckets Overview](https://docs.aws.amazon.com/AmazonS3/latest/userguide/UsingBucket.html) - Guide on S3 bucket structure, global name requirements, and object key structures.
-- [AWS Secrets Manager Integration](https://docs.aws.amazon.com/secretsmanager/latest/userguide/integration.html) - Guide on securely vaulting credentials and dynamically injecting secrets into ECS runtimes.
+- [AWS Secrets Manager Integration](https://docs.aws.amazon.com/secretsmanager/latest/userguide/integration.html) - Guide on securely storing credentials and dynamically injecting secrets into ECS runtimes.
 - [Amazon CloudWatch Logs Overview](https://docs.aws.amazon.com/AmazonCloudWatch/latest/logs/WhatIsCloudWatchLogs.html) - Documentation on centralized logging, agent setups, and log stream retentions.
 - [Regional NAT gateways](https://docs.aws.amazon.com/vpc/latest/userguide/nat-gateways-regional.html) - Documents regional NAT mode and how it differs from zonal NAT gateways.

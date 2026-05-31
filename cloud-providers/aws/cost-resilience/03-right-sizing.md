@@ -40,6 +40,8 @@ The goal of right-sizing is to provision the smallest resource footprint that st
 
 Right-sizing is the practice of matching provisioned AWS resources to actual, measured work and verified risk profiles. It can mean reducing capacity, increasing capacity, changing resource families, tuning autoscaling boundaries, applying lifecycle data rules, or deleting idle resources.
 
+At its core, right-sizing is evidence-based resource fit. It compares provisioned AWS capacity, storage, retention, and scaling limits against observed workload behavior and verified resilience requirements.
+
 To right-size successfully, you must replace high-level assumptions with a specific, evidence-backed question:
 
 ```text
@@ -51,6 +53,8 @@ This work requires combining both cost data and deep runtime metrics. A low aver
 ## ECS Fargate Compute Tuning
 
 Compute right-sizing starts with the active Fargate task size. When you configure an ECS task definition, you select the exact CPU shares (such as 0.5 vCPU) and RAM limits (such as 1 GB) allocated to the container process. 
+
+Fargate compute tuning is task-level capacity adjustment. You change CPU, memory, desired count, or scaling bounds in the service's runtime contract, then verify latency, restart, and saturation signals.
 
 A service can be over-sized because the individual tasks are too large, because too many task replicas run permanently, or because autoscaling limits keep too much idle capacity.
 
@@ -71,6 +75,8 @@ Never change task configurations during high-traffic windows. Every task size ad
 
 Database right-sizing is a high-risk operational change because databases hold shared state. If a compute task crashes, the orchestrator replaces it. If a database locks up or runs out of storage, the entire application path halts.
 
+Database tuning is stateful capacity management. It must account for CPU, memory, connections, storage I/O, query plans, batch windows, and recovery objectives before changing instance class.
+
 When reviewing Amazon RDS spending, you must look beyond simple CPU utilization graphs. The database capacity may be constrained by write latency, connection limits, storage I/O bottlenecks, or single query designs:
 
 * **Active Connections**: Relational databases dedicate memory handles to active connection sockets. If your compute tasks scale out, connection limits can be exhausted even while CPU utilization remains low.
@@ -82,6 +88,8 @@ If database query performance is poor, look for missing query indexes or redunda
 ## Storage Optimization: Aligning Prefix Lifecycles
 
 Storage right-sizing means applying automated retention rules rather than executing manual deletions. In Amazon S3, you configure Lifecycle Rules to transition files to cheaper S3 Glacier storage classes or expire them permanently.
+
+Storage optimization is lifecycle alignment. You match object prefixes and data classes to the retention, retrieval-speed, and compliance rules that apply to that data.
 
 To configure lifecycle rules safely, you must align your S3 key prefixes with the data class and business lifecycle:
 
@@ -95,6 +103,8 @@ The gotcha is bucket-level rules. If you apply a single, overriding lifecycle ru
 
 Log cost is driven by ingestion volume, storage retention, and subscription queries. The safe operating answer to high log costs is not "turn off logs." Doing so removes the critical evidence needed to diagnose outages.
 
+Log right-sizing is signal-quality management. You reduce noisy ingestion, tune log levels, and set retention by environment while preserving the diagnostic records needed for incidents.
+
 Instead, you right-size logs by improving signal quality:
 
 * **Eradicate Error Loops**: A single application bug that writes a traceback string 1,000 times per second under load will generate gigabytes of log noise. Fix the underlying error loop to reduce log volume instantly.
@@ -104,6 +114,8 @@ Instead, you right-size logs by improving signal quality:
 ## Analyzing Background Queue Worker Efficiency
 
 Background queues and workers compile costs through request counts, Lambda invocations, running container hours, and downstream API calls.
+
+Queue worker efficiency is the relationship between queue input, worker capacity, successful deletes, retries, and downstream cost. A larger worker fleet is efficient only when it converts backlog into completed work.
 
 When an SQS queue backlog grows (visible messages and oldest message age are rising), a naive responder will immediately scale the worker task count. However, you must first verify whether the backlog represents useful work or failing work:
 
@@ -115,6 +127,8 @@ If the queue is backed up due to failing work, scaling your worker fleet will mu
 ## AWS Compute Optimizer: Machine-Learning Evidence
 
 AWS provides native tools to identify optimization opportunities:
+
+AWS Compute Optimizer acts as a recommendation engine over utilization history. It can identify over-allocated or under-allocated resources, but its output must be validated against application behavior and recovery requirements.
 
 * **AWS Compute Optimizer**: Consolidates and analyzes historical utilization metrics to provide recommendations for supported resources such as EC2 instances, Auto Scaling groups, EBS volumes, Lambda functions, ECS services on Fargate, RDS databases, and certain commercial software licenses.
 * **Cost Optimization Hub**: A consolidated dashboard that aggregates cost recommendations across accounts and Regions, prioritizing actions by estimated savings.
@@ -135,6 +149,8 @@ Treat machine-learning recommendations as empirical evidence, but always require
 ## Executing Safe, Reversible Resource Adjustments
 
 Right-sizing changes must be rolled out with the exact same discipline as a software release. To optimize safely, execute changes step-by-step:
+
+A safe right-sizing adjustment is a reversible infrastructure change. It has a bounded blast radius, target telemetry, versioned implementation, rollback setting, and post-change observation window.
 
 ```text
 Step 1: Isolate the blast radius.

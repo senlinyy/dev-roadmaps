@@ -51,7 +51,7 @@ This billing latency boundary requires teams to establish proactive budget alarm
 
 ## Slicing Spend with Cost Analysis
 
-Azure Cost Analysis is the primary analytical portal used to slice and investigate subscription spending. To isolate the root cause of an unexpected billing increase, structure your investigation as a logical query pipeline:
+Azure Cost Analysis is the query and visualization surface for delayed Azure billing records. It is the primary analytical portal used to slice and investigate subscription spending. To isolate the root cause of an unexpected billing increase, structure your investigation as a logical query pipeline:
 
 1. **Define the Scope**: Select the target Billing Account, Enrollment, Subscription, or specific Resource Group to focus your analysis.
 2. **Set the Time Frame**: Compare the active billing period (e.g., the last 30 days) directly against the previous historical period to isolate the exact date of the spend deviation.
@@ -60,7 +60,7 @@ Azure Cost Analysis is the primary analytical portal used to slice and investiga
 
 By running this multi-dimensional analysis, you can transform a generic "our cloud bill is too high" statement into an actionable operational fact:
 
-```text
+```plain
 The staging resource group's Log Analytics workspace (law-orders-staging)
 grew by 42% on May 16th due to a verbose log ingestion spike from release v2.4.
 ```
@@ -69,7 +69,7 @@ This structural analysis ensures that your engineering team targets the correct 
 
 ## Resource Group Boundaries and Tagging Schemas
 
-Allocating costs accurately across diverse engineering teams requires establishing clear resource group perimeters and metadata tagging policies:
+Cost allocation needs two stable coordinates: the lifecycle boundary where resources are grouped, and the tag fields that identify owner, service, environment, and budget. Allocating costs accurately across diverse engineering teams requires establishing clear resource group perimeters and metadata tagging policies:
 
 ![An infographic showing resource tags connecting Azure spend to a cost record, owner, and team](/content-assets/articles/article-cloud-providers-azure-cost-resilience-cost-management-budgets-tags/tag-cost-owner-chain.png)
 
@@ -126,7 +126,7 @@ flowchart TD
 
 ## Budget Alarms and Notification Constraints
 
-Azure Budgets provide a financial alarm system designed to drive operational accountability across your subscriptions:
+Azure Budgets are delayed financial threshold alerts, not real-time resource circuit breakers. They provide a financial alarm system designed to drive operational accountability across your subscriptions:
 
 ![An infographic showing resource usage happening before cost data processing and a delayed budget alert](/content-assets/articles/article-cloud-providers-azure-cost-resilience-cost-management-budgets-tags/budget-alert-delay.png)
 
@@ -140,13 +140,13 @@ Azure Budgets provide a financial alarm system designed to drive operational acc
 
 ## Azure Advisor and Safe Right-Sizing
 
-Azure Advisor is an automated platform recommendation engine that continuously evaluates your running infrastructure against the Well-Architected Framework:
+Azure Advisor is the platform recommendation engine that flags underused, risky, or improvable resources from telemetry and configuration signals. It continuously evaluates your running infrastructure against the Well-Architected Framework:
 
 * **Advisor Cost Scans**: The engine scans your active resources for underutilization patterns using metrics such as CPU, memory, and outbound network utilization, depending on the recommendation type. It can recommend shutting down unused virtual machines, resizing virtual machines or scale sets to cheaper SKUs, deallocating idle resources, pruning unattached disks, or buying reservation plans.
 * **Context-Aware Evaluation**: Do not apply Advisor cost recommendations automatically. An automated scan cannot detect the operational context of a resource. A database or virtual machine that appears completely idle may be a dedicated disaster recovery standby, a rare but critical end-of-month batch processor, or an active scale target for a high-priority product launch.
 * **Safe Right-Sizing Workflow**: Before downsizing any compute or database resource, verify the workload's performance envelope:
 
-```text
+```plain
 1. Identify low-utilization target in Azure Advisor.
 2. Review active metrics (p95 CPU, peak memory, IOPS, latency) over a 30-day window.
 3. Verify the service promise and rollback plan (know how to scale the tier back instantly).
@@ -156,7 +156,7 @@ Azure Advisor is an automated platform recommendation engine that continuously e
 
 ## Mitigating Common Azure Cost Leaks
 
-In complex cloud environments, unmanaged resources can quietly accumulate unnecessary fees. Build operational practices to detect and resolve the most common Azure cost leaks:
+A cost leak is an active billing source that no longer supports the intended workload. In complex cloud environments, unmanaged resources can quietly accumulate unnecessary fees. Build operational practices to detect and resolve the most common Azure cost leaks:
 
 ### 1. Unattached Managed Disks
 When you delete a Virtual Machine, Azure can either delete or detach related disks and network resources depending on the delete options configured on the VM and the tool used to create it. Detached managed disks remain persistent in your resource group and continue billing for their full storage capacity.
@@ -180,7 +180,7 @@ Cost visibility transforms cloud spending from an unmanaged operational expense 
 
 * **Decoupled Billing Pipelines**: Understand the 8-to-24 hour latency boundary of Azure's billing aggregation pipeline to set realistic budget expectations.
 * **Granular Cost Analysis**: Investigate billing spikes systematically by defining scopes, setting time frames, and grouping by service names and resource IDs.
-* **Standardized Metadata**: Enforce resource group perimeters and metadata tagging policies cabled to Azure Policy rules to automate cost allocation.
+* **Standardized Metadata**: Enforce resource group perimeters and metadata tagging policies through Azure Policy rules to automate cost allocation.
 * **Uptime Budgets**: Rely on Azure Budgets as early-warning alarms, recognizing that they only change running workloads when connected to explicit, tested automation.
 * **Safe Optimization**: Audit Azure Advisor recommendations against real-world systems context, executing right-sizing changes during maintenance windows with verified rollback plans.
 * **Eliminate Waste**: Establish automated checks to clean up unattached managed disks, prune orphaned database backups, and manage storage version lifecycles.

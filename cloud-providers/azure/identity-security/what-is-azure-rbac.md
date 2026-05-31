@@ -17,142 +17,171 @@ aliases:
 ## Table of Contents
 
 1. [Request Evaluation: The Authorization Pipeline](#request-evaluation-the-authorization-pipeline)
-2. [An AWS Bridge](#an-aws-bridge)
+2. [Comparing Azure RBAC and AWS IAM Models](#comparing-azure-rbac-and-aws-iam-models)
 3. [Microsoft Entra ID Directory Services](#microsoft-entra-id-directory-services)
-4. [Differentiating Principals](#differentiating-principals)
+4. [Differentiating Security Principals](#differentiating-security-principals)
 5. [The Object ID vs. Application ID Interface](#the-object-id-vs-application-id-interface)
 6. [Actions and Resource Planes](#actions-and-resource-planes)
 7. [Role Definitions: Structuring Operations](#role-definitions-structuring-operations)
 8. [Hierarchical Scopes and Inheritance](#hierarchical-scopes-and-inheritance)
 9. [Role Assignments: Binding Scopes](#role-assignments-binding-scopes)
-10. [Inspecting CLI Evidence and Mapping GUIDs](#inspecting-cli-evidence-and-mapping-guids)
-11. [Sample Access Shape](#sample-access-shape)
-12. [Putting It All Together](#putting-it-all-together)
-13. [What's Next](#whats-next)
+10. [Under the Hood: The ARM Access Evaluation Loop](#under-the-hood-the-arm-access-evaluation-loop)
+11. [Declarative Bicep Custom Role and Assignment Previews](#declarative-bicep-custom-role-and-assignment-previews)
+12. [Hands-On CLI Walkthrough: Creating and Assigning Custom Roles](#hands-on-cli-walkthrough-creating-and-assigning-custom-roles)
+13. [Putting It All Together](#putting-it-all-together)
+14. [What's Next](#whats-next)
 
 ## Request Evaluation: The Authorization Pipeline
 
-Azure role-based access control (Azure RBAC) is the central authorization system used to manage who can perform actions on Azure resources, evaluating every request at the control plane layer before any physical operation is allowed.
+Azure Role-Based Access Control (Azure RBAC) is Azure's permission system for management and data actions. It decides whether a verified identity can perform a specific operation on a specific Azure scope.
 
-![An infographic showing authentication and authorization as two separate gates before an Azure request reaches a resource](/content-assets/articles/article-cloud-providers-azure-identity-security-azure-identity-and-security-mental-model/authentication-authorization-gates.png)
+Example: `mi-orders-api-prod` might be allowed to read secrets from `kv-orders-prod`, while the same identity is denied permission to delete the vault or resize an Azure SQL database.
 
-*Read every Azure access problem as two gates: first prove who the caller is, then prove what that identity is allowed to do.*
+To construct a secure, compliant cloud architecture, you must understand the absolute boundary between authentication and authorization.
 
-To build a secure cloud architecture, you must understand the absolute boundary between authentication and authorization. Authentication is the act of verifying a caller's identity (who they are). Authorization is the act of verifying whether that authenticated identity has permission to perform a specific action on a specific target resource (what they are allowed to do).
+Authentication is the identity proof step that answers who the caller is before Azure evaluates permissions.
+When you enter a username, password, or security certificate, you authenticate.
+Authorization is the permission evaluation step that checks what actions the authenticated identity may perform.
+It answers the question of what that identity is allowed to do.
 
 ```mermaid
 flowchart LR
-    Principal["Security Principal<br/>(The Employee)"]
-    Role["Role Definition<br/>(Security Clearance)"]
-    Scope["Hierarchical Scope<br/>(Target Room/Floor)"]
+    Principal["Security Principal<br/>(User, Group, Service Principal)"]
+    Role["Role Definition<br/>(Allowed Operations List)"]
+    Scope["Hierarchical Scope<br/>(Target Resource Boundary)"]
 
-    Principal --> Assignment["Role Assignment<br/>(The Security Badge)"]
+    Principal --> Assignment["Role Assignment<br/>(Active Permission)"]
     Role --> Assignment
     Scope --> Assignment
 
-    Assignment --> Gateway{"ARM Gatekeeper<br/>(Evaluation Loop)"}
+    Assignment --> Gateway{"ARM Evaluator<br/>(Evaluation Loop)"}
     Gateway --> |Allow| Resource[("Azure Resource")]
     Gateway --> |Deny| Reject["403 Forbidden"]
 ```
 
-To explain this boundary, think of a high-security research facility. To enter the building, you must present a passport or corporate badge at the front gate. The guard checks your photo, validates your identity, and lets you inside. This is **authentication**.
+In the Azure cloud, this three-part authorization relationship is called a Role Assignment.
+A role assignment is the binding record that connects an identity, a reusable role definition, and a target scope.
+It is the absolute foundational binding that makes access real.
+A role definition has no effect on its own.
+It is simply an abstract checklist of allowed operations.
+Access is established only when that checklist is bound to an Entra security principal at a designated boundary.
+This boundary is the scope.
 
-However, just because you are inside the building does not mean you can walk into any laboratory, open any filing cabinet, or operate any heavy machinery. Each door inside the facility is locked and equipped with a keycard reader. When you tap your badge against a specific door's reader, the security system checks three coordinates:
-1.  **The Principal (Who you are)**: Does this badge belong to you?
-2.  **The Role Definition (Your security clearance)**: Are you registered as an active researcher, a custodian, or a platform administrator?
-3.  **The Scope (The specific room or floor)**: Does your clearance cover this exact door on the third floor, or is it restricted to the development laboratory on the first floor?
+When a command is run via the Azure command-line interface or the web portal, the Azure Resource Manager (ARM) engine intercepts the request at `management.azure.com`.
+The gateway validates that the caller holds an authenticated security token.
+Next, it evaluates the active role assignments bound to that principal at the targeted resource scope.
+If a role assignment allows the requested operation, the engine forwards the request to the backend service.
+If no role assignment matches, the gateway aborts the request immediately, returning an HTTP `403 Forbidden` REST error.
 
-Only when all three coordinates align does the keycard reader return success and unlock the door. This is **authorization**.
+![Azure RBAC evaluates a principal, role, and scope binding before allowing or rejecting a request.](/content-assets/articles/article-cloud-providers-azure-identity-security-azure-identity-and-security-mental-model/rbac-access-check.png)
 
-In the Azure cloud, this three-coordinate relationship is called a **Role Assignment**. It is the absolute foundational binding that makes access real. A role definition (such as `Reader` or `Key Vault Secrets User`) has no effect on its own; it is simply a checklist of allowed operations. Access is only established when that checklist is cabled to an Entra security principal at a specific, designated boundary (the scope).
+*Treat Azure RBAC as a request-time gate: identity proves who is calling, while the role assignment proves what that caller can do at this exact scope.*
 
-When a command is run via the CLI or Portal, the Azure Resource Manager (ARM) engine acts as the central security reader at `management.azure.com`. It validates that the access token identifies an authenticated principal, then evaluates that principal's role assignments at the target scope. If a role assignment allows the requested operation, the command is forwarded to the service controller; if not, the request is aborted at the front gate with a `403 Forbidden` REST error.
+## Comparing Azure RBAC and AWS IAM Models
 
-## An AWS Bridge
+If you are coming from an AWS background, the core security goals remain identical.
+Workloads still require a workload identity to authenticate, a policy to describe permissions, and a boundary to lock down access.
+However, AWS IAM and Azure RBAC structure these coordinates differently.
 
-If you are coming from AWS, the fundamental requirements of cloud identity remain identical. A microservice still needs an identity to authenticate, a policy to describe permissions, and a boundary to restrict those permissions to a specific database or storage account.
+In AWS IAM, a policy document is self-contained.
+The JSON document defines both the allowed actions (such as `s3:GetObject`) and the specific resource paths those actions target (such as `arn:aws:s3:::my-bucket/*`).
+Azure RBAC decouples these concerns.
+An Azure role definition is a purely abstract checklist of allowed operations.
+It does not contain any resource paths or subscription IDs inside its definition block.
+The target boundary is decoupled entirely and applied only when the role is assigned to a principal.
 
-However, AWS IAM and Azure RBAC structure these concepts through different shapes:
-
-```text
-AWS: Principal + Action + Resource + Policy Document = Allowed Operations
-Azure: Principal + Role Definition + Scope = Role Assignment (Real Access)
-```
-
-The differences in how these systems organize security are highly structured:
+This decoupled design makes roles highly reusable.
+You can define a custom database reader role once and then assign it to ten different teams at ten completely different resource scopes.
+We contrast the core terminology of the two cloud platforms below:
 
 | AWS IAM Concept | Azure Foundation Equivalent | Architectural Difference |
 | :--- | :--- | :--- |
-| **IAM Principal (User/Role)** | Entra Security Principal | AWS IAM roles are assumed to obtain temporary sessions; Entra identities are direct principals that receive role assignments directly. |
-| **IAM Policy Document** | Role Definition | AWS policies contain explicit `Resource` and `Condition` blocks inside the JSON document; Azure role definitions are reusable checklists of actions without hardcoded targets. |
+| **IAM Principal** | Entra Security Principal | AWS IAM roles are assumed to obtain temporary sessions; Entra identities are direct directory principals that receive role assignments directly. |
+| **IAM Policy Document** | Role Definition | AWS policies contain explicit target resource paths inside the JSON document; Azure role definitions are abstract checklists of actions without hardcoded targets. |
 | **Policy Attachment** | Role Assignment | In AWS, policies are attached directly to users or roles; in Azure, a role assignment connects a principal and a role definition at an explicit, hierarchical scope. |
-
-In AWS IAM, a policy document is self-contained. The JSON document defines both the allowed actions (such as `s3:GetObject`) and the specific resources those actions target (such as `arn:aws:s3:::my-bucket/*`).
-
-Azure RBAC separates these concerns. An Azure role definition is a purely abstract checklist of allowed operations (such as `Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read`). It does not contain any resource paths or subscription IDs inside its definition block. The target boundary is decoupled entirely and applied only when the role is cabled to a principal. This decoupled design makes roles highly reusable: you can define a `Blob Reader` role once, and then assign it to ten different teams at ten completely different subscription scopes.
 
 ## Microsoft Entra ID Directory Services
 
-Microsoft Entra ID is the central identity provider and directory service behind Azure. It stores, manages, and secures all identities within your organization. Understanding the Entra directory is vital because Azure RBAC relies entirely on Entra to verify caller credentials before evaluating any access rules.
+Microsoft Entra ID is the central identity provider and directory service behind Azure.
+It serves as the centralized directory database for your organization's users, groups, application registrations, and workload identities.
+It stores, manages, and secures all identities within your organization.
+Understanding the Entra directory is vital because Azure RBAC relies entirely on Entra to verify caller credentials before evaluating any access rules.
 
-In a modern cloud deployment, identity management is decoupled from resource hosting. All human user accounts, security groups, application registrations, and workload identities are defined once inside a central corporate catalog called the **Microsoft Entra ID Tenant**.
-
+In a modern cloud deployment, identity management is decoupled from resource hosting.
+All human user accounts, security groups, application registrations, and workload identities are defined once inside a central corporate catalog called the Microsoft Entra ID Tenant.
 When a developer signs in to the Azure Portal, or when a container app requests a token at startup, Microsoft Entra ID validates the credentials, evaluates multi-factor authentication policies, and issues a cryptographically signed JSON Web Token (JWT).
 
-This JWT acts as the caller's digital passport. When the caller sends a request to Azure Resource Manager, ARM does not ask the database or storage service to verify the password. Instead, ARM parses the JWT's claims (such as the issuer `iss`, signature, expiration `exp`, and principal ID `oid`) to confirm that Microsoft Entra ID has authenticated the caller. Only after this digital badge is verified does ARM pass the request to the RBAC authorization engine to evaluate whether that specific principal ID holds a valid role assignment at the target scope.
+This JWT is the signed identity token ARM can verify without handling the original password or certificate.
+When the caller sends a request to Azure Resource Manager, ARM does not ask the database or storage service to verify the password.
+Instead, ARM parses the JWT's claims to confirm that Microsoft Entra ID has authenticated the caller.
+Only after this digital token is verified does ARM pass the request to the RBAC authorization engine.
+The engine then evaluates whether that specific principal ID holds a valid role assignment at the target scope.
 
-## Differentiating Principals
+## Differentiating Security Principals
 
-An Entra security principal is any identity that can be authenticated by Microsoft Entra ID and receive permissions inside Azure. To maintain least privilege, you must differentiate between four distinct principal types:
+An Entra security principal is any directory identity object that can receive permission assignments. It is the "who" side of an Azure RBAC decision.
 
-### 1. User
-A directory object representing a physical human being (such as `maya@devpolaris.example`). Human principals should strictly be used for interactive tasks (such as running manual diagnostic CLI queries or inspecting dashboards in the web portal). They must never be hardcoded into automated application deployment scripts or container runtimes.
+Example: a human user, a support group, a CI/CD service principal, and a managed identity can all be security principals, but they should receive different roles because they do different jobs.
 
-### 2. Group
-A collection of user accounts, service principals, or other groups managed as a single directory object. Utilizing groups is the primary mechanism to simplify administrative overhead. Instead of creating twenty separate role assignments for twenty separate engineers, you assign the role once to a support group (such as `grp-prod-support-readers`). When engineers join or leave the team, you simply update their group membership in Entra ID, and their Azure permissions inherit automatically.
+To maintain least privilege, you must differentiate between four distinct principal types:
 
-### 3. Application & Service Principal
-An application registration is the global blueprint of an application identity in Entra ID. A **Service Principal** is the local instance of that application registration cabled to a specific tenant subscription. Think of the application registration as a compiled `.exe` file, and the service principal as the active, running process instance of that file in your memory space. For automated CI/CD pipelines and deployment scripts, the service principal is the principal that receives role assignments.
-
-### 4. Managed Identity
-A specialized service principal managed entirely by Azure for Azure-hosted workloads. They eliminate the need for developers to manage client secrets or rotate keys. Managed identities are cabled directly to the compute hosting layer, allowing the container or virtual machine to obtain secure, ephemeral tokens automatically.
+*   **User**: A directory object representing a physical human being. Human principals should strictly be used for interactive tasks (such as running manual diagnostic CLI queries or inspecting dashboards in the web portal). They must never be hardcoded into automated application deployment scripts or container runtimes.
+*   **Group**: A collection of user accounts, service principals, or other groups managed as a single directory object. Utilizing groups is the primary mechanism to simplify administrative overhead. Instead of creating twenty separate role assignments for twenty separate engineers, you assign the role once to a support group. When engineers join or leave the team, you simply update their group membership in Entra ID, and their Azure permissions inherit automatically.
+*   **Application and Service Principal**: An application registration is the global template for an application identity in Entra ID. A service principal is the local tenant instance of that registration. For automated CI/CD pipelines and deployment scripts, the service principal is the principal that receives role assignments.
+*   **Managed Identity**: A specialized service principal managed entirely by Azure for Azure-hosted workloads. A managed identity is a credential-free resource identity whose token path is operated by the cloud provider, eliminating the need to write passwords in your code. Managed identities are attached directly to the compute hosting layer, allowing the container or virtual machine to obtain secure, ephemeral tokens automatically.
 
 ## The Object ID vs. Application ID Interface
 
-To inspect and manage these directory identities, you must understand the absolute difference between two critical GUID properties returned by Microsoft Entra ID: the **Object ID** and the **Application ID** (also called the Client ID).
+Object ID and Application ID are different identifiers for different layers of an identity. The Object ID identifies one local directory object in your tenant, while the Application ID identifies the reusable application registration template.
 
-![An infographic showing why Azure role assignments bind to an object ID rather than an application ID](/content-assets/articles/article-cloud-providers-azure-identity-security-azure-identity-and-security-mental-model/object-id-matters.png)
+Example: RBAC role assignments need the Object ID for `mi-orders-api-prod`, because Azure must bind permission to the exact principal instance in your tenant.
 
-*The object ID is the security principal that receives access, so copying only an application ID can point your troubleshooting at the wrong identity.*
+To inspect and manage these directory identities, you must understand the absolute difference between these two critical GUID properties returned by Microsoft Entra ID.
 
-*   **Application ID (App ID / Client ID)**: This is the stable, logical identifier representing the global application registration in Entra ID. It is shared across all tenants and is used inside your application code and SDKs to specify *which* identity the workload is requesting to use.
-*   **Object ID (Principal ID)**: This is the absolute, unique UUID representing the specific service principal instance inside your active tenant directory database.
+An Application ID is the global identifier for an application registration template that can appear across tenants.
+It is the stable, logical identifier representing the global application registration in Entra ID.
+It is shared across all tenants and is used inside your application code and SDKs to specify which identity the workload is requesting to use.
+An Object ID is the local directory key for a specific user, group, service principal, or managed identity inside your active tenant.
+It is the absolute, unique UUID representing the specific service principal instance inside your active tenant directory database.
 
-This distinction is crucial for authorization:
-
-> [!IMPORTANT]
-> Azure RBAC role assignments are ultimately bound to the **Object ID (Principal ID)** of the user, group, service principal, or managed identity in the tenant. Some CLI commands can resolve friendly names or application IDs for you, but infrastructure-as-code templates should use the principal/object ID explicitly. If you pass the wrong identifier, the role assignment can fail or bind to a different principal than the workload actually uses.
+Azure RBAC role assignments are ultimately bound to the Object ID (Principal ID) of the user, group, service principal, or managed identity in the tenant.
+Some CLI commands can resolve friendly names or application IDs for you, but infrastructure-as-code templates should use the principal/object ID explicitly.
+If you pass the wrong identifier, the role assignment can fail or bind to a different principal than the workload actually uses.
 
 ## Actions and Resource Planes
 
-An action is the specific operation Azure is being asked to execute, while the target resource is the absolute URI address of the object. In Azure, these operations are strictly partitioned into two distinct planes: the **management plane** and the **data plane**.
+An action is the operation Azure is being asked to perform, such as read, write, delete, or list secrets. The target resource is the Azure resource path where that operation would happen.
 
-*   **The Management Plane (Control Plane)**: Manages the administrative metadata and infrastructure boundaries. This includes creating a key vault, deleting a resource group, modifying a virtual network, or provisioning a new SQL database. All management plane requests are handled by ARM at the global endpoint `management.azure.com`.
-*   **The Data Plane (Runtime)**: Accesses or alters the actual business data stored inside a resource. This includes reading a secret value out of a key vault, downloading a file blob from a storage container, or querying rows inside a SQL database. Data plane operations are handled directly by the specific service's data endpoints (such as `*.vault.azure.net` or `*.blob.core.windows.net`), bypassing the central ARM control plane for maximum performance.
+Example: `Microsoft.KeyVault/vaults/write` changes the vault resource itself, while `Microsoft.KeyVault/vaults/secrets/read/action` reads a secret value through the vault's data API.
 
-```text
+In Azure, these operations are strictly partitioned into two distinct planes: the management plane and the data plane.
+
+The management plane is Azure's administrative API surface for provisioning, modifying, or deleting cloud resources.
+It manages the administrative metadata and infrastructure boundaries.
+This includes creating a key vault, deleting a resource group, modifying a virtual network, or provisioning a new SQL database.
+All management plane requests are handled by ARM at the global endpoint `management.azure.com`.
+
+The data plane is the service-specific API surface for reading, writing, or altering the business files and records stored inside a resource.
+It accesses or alters the actual business data stored inside a resource.
+This includes reading a secret value out of a key vault, downloading a file blob from a storage container, or querying rows inside a SQL database.
+Data plane operations are handled directly by the specific service's data endpoints, bypassing the central ARM control plane for maximum performance.
+
+```plain
 Management plane action format: {ProviderNamespace}/{ResourceType}/write | delete | read
 Data plane action format:       {ProviderNamespace}/{ResourceType}/{SubResource}/[action]/action
 ```
 
-For example, a role that can manage Key Vault settings needs the management action `Microsoft.KeyVault/vaults/write`. An application that needs to read a database secret value requires the data action `Microsoft.KeyVault/vaults/secrets/read/action` (often grouped under the `dataActions` block of a role definition).
-
+For example, a role that can manage Key Vault settings needs the management action `Microsoft.KeyVault/vaults/write`.
+An application that needs to read a database secret value requires the data action `Microsoft.KeyVault/vaults/secrets/read/action` (often grouped under the `dataActions` block of a role definition).
 This structural separation ensures that an engineer managing the network infrastructure (control plane) can be completely blocked from reading customer credit card credentials (data plane), maintaining strict security boundaries.
 
 ## Role Definitions: Structuring Operations
 
-A role definition is a structured JSON metadata block that lists the precise set of allowed and denied operations. It serves as the master contract of what a principal can do.
+A role definition is the reusable checklist of allowed and excluded operations. It does not grant access until it is assigned to a principal at a scope.
 
+Example: `Key Vault Secrets User` can include secret read actions, but the role only becomes active when assigned to `mi-orders-api-prod` at `kv-orders-prod` or a specific secret scope.
+
+It serves as the master contract of what a principal can do.
 Let us inspect the JSON structure of a standard built-in data role definition, `Key Vault Secrets User` (definition ID: `4633a12f-17cd-4111-b297-82cbb36c534d`):
 
 ```json
@@ -184,202 +213,267 @@ Let us inspect the JSON structure of a standard built-in data role definition, `
 
 Every property in the role definition block defines operational boundaries:
 
-*   **`actions`**: Contains management plane actions. In this role, the only allowed control-plane action is reading secret metadata (`readMetadata/action`), allowing a user or app to list active secret names and expiration dates.
-*   **`dataActions`**: Contains data plane actions. This contains the direct GET and READ operations (`secrets/get/action`, `secrets/read/action`) required to decrypt and download the physical secret string value.
+*   **`actions`**: Contains management plane actions. In this role, the only allowed control-plane action is reading secret metadata, allowing a user or app to list active secret names and expiration dates.
+*   **`dataActions`**: Contains data plane actions. This contains the direct GET and READ operations required to decrypt and download the physical secret string value.
 *   **`notActions` & `notDataActions`**: Contains explicit exclusions. These are subtracted from the allowed actions list, allowing you to easily define roles like "Contributor on everything, except networking."
 *   **`assignableScopes`**: Defines where this role definition can be assigned. A value of `["/"]` means it can be assigned anywhere from the root management group down to individual resources. Custom roles can be restricted to specific subscriptions to prevent accidental cross-department usage.
 
-:::expand[Pitfall: notActions Is Not an Explicit Deny]{kind="pitfall"}
-A common security mistake is assuming that `notActions` or `notDataActions` in a role definition behaves as an explicit deny. You might assign a custom role to an engineer that grants administrative access but lists `Microsoft.Authorization/*/write` under `notActions`, thinking you have guaranteed they cannot modify role assignments. However, if that same engineer is also assigned the `User Access Administrator` role (which allows role assignments) at the same scope, the request to write permissions will succeed.
+A common security mistake is assuming that `notActions` or `notDataActions` in a role definition behaves as an explicit deny.
+You might assign a custom role to an engineer that grants administrative access but lists `Microsoft.Authorization/*/write` under `notActions`, thinking you have guaranteed they cannot modify role assignments.
+However, if that same engineer is also assigned the `User Access Administrator` role at the same scope, the request to write permissions will succeed.
 
-This is because Azure RBAC evaluates authorizations as a logical union of all active role assignments. The `notActions` property is not a deny rule; it is simply a subtraction filter applied to the allowed `actions` list of that *particular* role definition. If a security principal is assigned multiple roles, any action allowed by *at least one* assignment is authorized, completely ignoring the `notActions` filters of the other roles. The only true deny in Azure RBAC is an explicit **Deny Assignment**, which is a system-managed resource (often created by Azure Blueprints or deployment guards) that takes absolute precedence over all allows.
-
-This behavior is identical to AWS IAM. In AWS, listing an operation under `NotAction` in a policy statement does not block that operation if another policy statement grants it. In both clouds, if you want a bulletproof block that overrides all other permissions, you must use an explicit deny construct: an AWS IAM explicit `"Effect": "Deny"` statement, or an Azure Deny Assignment.
-
-The top-down evaluation logic below shows how the authorization engine handles overlapping role assignments:
-
-```mermaid
-flowchart TD
-    Request["Request: Microsoft.Authorization/*/write"] --> Aggregation["1. Aggregate Active Assignments"]
-    Aggregation --> Role1{"Role 1: Contributor<br/>(Has notActions)"}
-    Aggregation --> Role2{"Role 2: Owner<br/>(Allows everything)"}
-
-    Role1 -->|"Evaluates as: Not Allowed"| Decision{"Is Action Allowed by ANY Assignment?"}
-    Role2 -->|"Evaluates as: Allowed"| Decision
-
-    Decision -->|"Yes (Allowed Wins)"| DenyCheck{"2. Active Deny Assignments Check"}
-    DenyCheck -->|"No Deny Found"| AllowAccess["Request Allowed"]
-    DenyCheck -->|"Explicit Deny Found"| DenyAccess["403 Forbidden (Deny Wins)"]
-```
-
-**Rule of thumb:** Never rely on `notActions` as a security guardrail against overlapping privileges. If a principal must be strictly prevented from executing an action, audit all assigned roles to ensure none of them allow it, or apply an explicit Deny Assignment.
-:::
+This is because Azure RBAC evaluates authorizations as a logical union of all active role assignments.
+The `notActions` property is not a deny rule.
+It is simply a subtraction filter applied to the allowed `actions` list of that particular role definition.
+If a security principal is assigned multiple roles, any action allowed by at least one assignment is authorized, completely ignoring the `notActions` filters of the other roles.
+The only true deny in Azure RBAC is an explicit Deny Assignment, which is a system-managed resource that takes absolute precedence over all allows.
 
 ## Hierarchical Scopes and Inheritance
 
-Scope is the precise boundary where a role assignment applies. Azure organizes scopes into a strict, four-level nested hierarchy:
+Scope is the Azure boundary where a role assignment applies. Hierarchical scope means that a permission can be assigned at a parent level and flow down to children.
 
-![An infographic showing Azure RBAC scope inheritance from management group to subscription, resource group, and resource](/content-assets/articles/article-cloud-providers-azure-identity-security-azure-identity-and-security-mental-model/scope-inheritance.png)
+Example: assigning `Reader` at a subscription lets the principal read all resource groups and resources inside that subscription, while assigning `Reader` at one vault limits visibility to that vault.
 
-*Assignments flow down the Azure scope tree, which makes broad permissions powerful and dangerous when they are placed too high.*
+Azure organizes scopes into a strict, four-level nested hierarchy:
 
-```text
+```plain
 Management Group (Top-level organizational folders)
   └── Subscription (Billing and quota pools)
         └── Resource Group (Flat lifecycle folders)
               └── Resource (Individual service instances)
 ```
 
-The fundamental rule of Azure scope is **inheritance**. Any role assignment granted to a principal at a higher scope automatically cascades and applies to all child resources nested below that scope. If you grant `Reader` to a support group at the Subscription scope, every user in that group automatically inherits `Reader` access on every resource group and individual resource inside that subscription.
+The fundamental rule of Azure scope is inheritance.
+Any role assignment granted to a principal at a higher scope automatically cascades and applies to all child resources nested below that scope.
+If you grant `Reader` to a support group at the Subscription scope, every user in that group automatically inherits `Reader` access on every resource group and individual resource inside that subscription.
 
-```text
-Subscription Scope Assignment: Reader
-  ├── RG A Scope (Inherits: Reader)
-  │     └── Virtual Machine A (Inherits: Reader)
-  └── RG B Scope (Inherits: Reader)
-        └── Storage Account B (Inherits: Reader)
-```
+This inheritance behavior simplifies governance but introduces significant risk.
+If you grant an application's managed identity `Contributor` access at the resource group scope, the app inherits management plane control over every resource in that group.
+If a developer accidentally deploys an unrelated database into that same group, the app automatically obtains administrative power over it.
 
-This inheritance behavior simplifies governance but introduces significant risk. If you grant an application's managed identity `Contributor` access at the resource group scope, the app inherits management plane control over every resource in that group. If a developer accidentally deploys an unrelated database into that same group, the app automatically obtains administrative power over it.
-
-To maintain a secure system, always choose the **lowest practical scope** for role assignments. If a container app only needs to read secrets from one specific vault, assign the `Key Vault Secrets User` role at the **Resource scope** of that specific vault, leaving the parent resource group completely un-authorized.
+To maintain a secure system, always choose the lowest practical scope for role assignments.
+If a container app only needs to read secrets from one specific vault, assign the `Key Vault Secrets User` role at the Resource scope of that specific vault, leaving the parent resource group completely un-authorized.
 
 ## Role Assignments: Binding Scopes
 
-A role assignment is the physical binding that makes access active. It is an independent ARM resource managed by the `Microsoft.Authorization` resource provider. It maps a security principal ID (Object ID) to a role definition ID at a specific scope.
+A role assignment is the binding record that makes access active. It connects one principal, one role definition, and one scope.
 
-```text
+Example: binding Object ID `5f1f64a4-0a2c-4f3c-91f4-3b9e68b9f6d1` to `Key Vault Secrets User` at `/vaults/kv-orders-prod` is what lets that workload read secrets from that vault.
+
+It is an independent ARM resource managed by the `Microsoft.Authorization` resource provider.
+It maps a security principal ID (Object ID) to a role definition ID at a specific scope.
+
+```plain
 Role Assignment Resource ID:
 /subscriptions/{subId}/resourceGroups/{rgName}/providers/Microsoft.KeyVault/vaults/kv-orders-prod/providers/Microsoft.Authorization/roleAssignments/{assignmentGuid}
 ```
 
-This path shows that the role assignment itself is a child resource cabled directly to the target scope.
+This path shows that the role assignment itself is a child resource bound directly to the target scope.
+Azure RBAC models every role assignment as a separate, first-class resource.
+Rather than embedding permission lists inside the security principal (e.g. as attributes on an Entra user account) or inside the target resource (e.g. as a property inside the storage account config), the authorization binding is a distinct relationship resource between them.
 
-Under the hood, when ARM evaluates a request, it runs a highly structured **Access Evaluation Loop**:
+The primary design driver for this architectural choice is central auditing and compliance decoupling.
+Because role assignments are independent ARM resources, a security team can audit every single permission across a subscription with a single query to the ARM control plane.
+They do not need to query the internal state of every virtual machine, database engine, or storage container.
+It also maintains clean decoupling: the team managing the database resource does not need write access to the identity directory, and the identity team does not need database access to grant permissions.
 
-1.  **Scope Tree Scan**: ARM parses the target resource ID and traces the parent tree upwards from the resource to the resource group, subscription, and management groups.
-2.  **Assignment Aggregation**: ARM queries the `Microsoft.Authorization` provider database and pulls all active role assignments matching the caller's principal ID (or any group IDs the caller belongs to) across that entire scope path.
-3.  **Operation Check**: ARM matches the requested HTTP verb (such as `DELETE`) or service data action against the aggregated list of allowed actions.
-4.  **Deny Check**: ARM evaluates whether any explicit **Deny Assignments** (often placed by Azure Blueprints or deployment guards) cover the target resource. Deny assignments are absolute; they take precedence over any allow assignments.
-5.  **Binary Decision**: If the action is allowed and no deny matches, ARM returns success and routes the request; otherwise, it returns a `403 Forbidden` error.
+The tradeoff of this design is deployment orchestration complexity.
+When provisioning a workload using Bicep or Terraform, you cannot simply declare "grant app access" as a property inside the SQL database block.
+You must write a third, distinct resource block for the role assignment that references the IDs of both the application and the database.
 
-:::expand[Design: Why Role Assignments Are First-Class ARM Resources]{kind="design"}
-Azure RBAC models every role assignment as a separate, first-class resource under the `Microsoft.Authorization/roleAssignments` provider. Rather than embedding permission lists inside the security principal (e.g., as attributes on an Entra user account) or inside the target resource (e.g., as a property inside the storage account config), the authorization binding is a distinct resource cabled between them.
+## Under the Hood: The ARM Access Evaluation Loop
 
-The primary design driver for this architectural choice is central auditing and compliance decoupling. Because role assignments are independent ARM resources, a security team can audit every single permission across a subscription with a single query to the ARM control plane (`az role assignment list`). They do not need to query the internal state of every virtual machine, database engine, or storage container. It also maintains clean decoupling: the team managing the database resource does not need write access to the identity directory, and the identity team does not need database access to grant permissions.
+A request-time access evaluation loop is the sequence ARM runs before it allows or blocks a request. It exists because Azure cannot rely on static permission files copied into each service.
 
-The tradeoff of this design is deployment orchestration complexity. When provisioning a workload using Bicep or Terraform, you cannot simply declare "grant app access" as a property inside the SQL database block. You must write a third, distinct resource block for the role assignment that references the IDs of both the application and the database.
+Example: when a pipeline sends `DELETE` for `rg-orders-prod`, ARM checks the caller token, scope path, role assignments, action match, and deny assignments before any resource provider receives the delete request.
 
-This stands in contrast to AWS IAM, which supports both identity-based policies and embedded resource-based policies (such as Amazon S3 Bucket Policies or KMS Key Policies). While AWS resource-based policies allow quick, local access configuration, they complicate centralized compliance tracking because security scanners must crawl and parse both IAM policy attachments and individual resource-level JSON documents to find who has access.
-
-The top-down diagram below compares Azure's decoupled first-class binding with the embedded resource policy model:
+Understanding how Azure enforces role assignments requires looking at the step-by-step execution logic of the Azure Resource Manager (ARM) authorization engine.
+When a client sends an HTTP request to the management endpoint, the gateway processes the transaction through a series of five validation gates:
 
 ```mermaid
 flowchart TD
-    subgraph AzureDecoupled["Azure: Decoupled RBAC Binding"]
-        PrincipalA["Security Principal"]
-        ResourceA["Azure Resource"]
-        Assignment["Role Assignment Resource"]
-
-        Assignment -->|"Binds"| PrincipalA
-        Assignment -->|"Applies to"| ResourceA
-    end
-
-    subgraph AWSEmbedded["AWS: Embedded Resource Policy"]
-        PrincipalB["IAM Role"]
-        ResourceB["S3 Bucket"]
-        Policy["S3 Bucket Policy JSON"]
-
-        PrincipalB -->|"Requests Access"| ResourceB
-        ResourceB ---|"Contains"| Policy
-    end
+    Request["1. HTTP REST Request arrives at ARM gateway"] --> TokenGate["2. Token Validation Gate"]
+    TokenGate -->|"Validates JWT Signature"| ScopeScan["3. Scope Path Reconstruction"]
+    ScopeScan -->|"Compiles hierarchy path"| PullAssignments["4. Active Assignments Aggregation"]
+    PullAssignments -->|"Queries local DB and groups"| OperationCheck["5. Action Matching Check"]
+    OperationCheck -->|"Matches actions and dataActions"| DenyCheck["6. Deny Assignment Check"]
+    DenyCheck -->|"No Deny Found"| RouteRequest["7. Allow: Forward to Service"]
+    DenyCheck -->|"Deny Match Found"| BlockRequest["8. Deny: HTTP 403 Forbidden"]
 ```
 
-**Rule of thumb:** Treat role assignments as independent infrastructure dependencies. When writing Bicep or Terraform modules, separate the resource deployment from its RBAC assignments, allowing the database to deploy first and binding the permissions in a downstream step.
-:::
+First, the gateway validates the incoming JWT token signature against the public keys published by Microsoft Entra ID.
+It verifies that the token has not expired and extracts the caller's Object ID and active tenant membership properties.
 
-## Inspecting CLI Evidence and Mapping GUIDs
+Second, the gateway parses the URI request path to identify the target resource coordinates.
+It reconstructs the full hierarchical scope path from the resource level up to the root management group.
 
-To audit these permission coordinates directly from the terminal, you use the Azure CLI to query active role assignments.
+Third, the gateway queries the central role assignments database.
+It aggregates all role assignments that match the caller's Object ID, as well as any assignments matching the IDs of any Entra Security Groups the caller belongs to, across every node in the scope path.
 
-Let us execute a terminal session to list all active role assignments for our production key vault scope:
+Fourth, the gateway compares the requested operation verb (such as HTTP `DELETE`) or data plane action string against the aggregated list of allowed `actions` and `dataActions` in the assigned roles.
+It applies subtraction filters from any `notActions` or `notDataActions` definitions.
 
-```bash
-$ az role assignment list \
-    --scope "/subscriptions/88888888-4444-4444-4444-121212121212/resourceGroups/rg-orders-prod-uksouth/providers/Microsoft.KeyVault/vaults/kv-orders-prod" \
-    --output json
-```
+Fifth, the gateway checks for any active Deny Assignments attached to the target scope.
+If the action is allowed by at least one role assignment and is not blocked by a Deny Assignment, the gateway forwards the request to the backend service.
+If the validation checks fail at any point, the gateway blocks the request instantly, returning an HTTP `403 Forbidden` response.
 
-This terminal command queries the ARM engine to return the collection of active role assignments:
+## Declarative Bicep Custom Role and Assignment Previews
 
-```json
-[
-  {
-    "id": "/subscriptions/88888888-4444-4444-4444-121212121212/resourceGroups/rg-orders-prod-uksouth/providers/Microsoft.KeyVault/vaults/kv-orders-prod/providers/Microsoft.Authorization/roleAssignments/e5e5e5e5-f5f5-4444-9999-000000000000",
-    "principalId": "5f1f64a4-0a2c-4f3c-91f4-3b9e68b9f6d1",
-    "principalType": "ServicePrincipal",
-    "roleDefinitionId": "/subscriptions/88888888-4444-4444-4444-121212121212/providers/Microsoft.Authorization/roleDefinitions/4633a12f-17cd-4111-b297-82cbb36c534d",
-    "roleDefinitionName": "Key Vault Secrets User",
-    "scope": "/subscriptions/88888888-4444-4444-4444-121212121212/resourceGroups/rg-orders-prod-uksouth/providers/Microsoft.KeyVault/vaults/kv-orders-prod"
+To deploy secure permissions programmatically, we declare custom role definitions and assignments using Bicep.
+The configuration template below defines a custom role named `Key Vault Metadata Reader` that is restricted to reading secret metadata (no data plane access).
+It then creates a role assignment to bind this custom role to a workload's managed identity at a resource group scope.
+
+```bicep
+targetScope = 'resourceGroup'
+
+param principalId string
+param vaultName string
+
+var roleDefinitionName = 'Key Vault Metadata Reader'
+var roleDefinitionId = guid(subscription().id, roleDefinitionName)
+
+resource customRole 'Microsoft.Authorization/roleDefinitions@2022-04-01' = {
+  name: roleDefinitionId
+  properties: {
+    roleName: roleDefinitionName
+    description: 'Allows reading Key Vault secret metadata and tags, but blocks data plane access.'
+    type: 'CustomRole'
+    assignableScopes: [
+      subscription().id
+    ]
+    permissions: [
+      {
+        actions: [
+          'Microsoft.KeyVault/vaults/secrets/readMetadata/action'
+        ]
+        notActions: []
+        dataActions: []
+        notDataActions: []
+      }
+    ]
   }
-]
-```
+}
 
-This returns exact permission evidence. If you see an anonymous GUID inside the `principalId` field and need to map it back to an actual Entra ID directory object, you run the service principal show query:
+resource vault 'Microsoft.KeyVault/vaults@2023-07-01' existing = {
+  name: vaultName
+}
 
-```bash
-$ az ad sp show --id "5f1f64a4-0a2c-4f3c-91f4-3b9e68b9f6d1" --query "{displayName:displayName, appId:appId, objectId:id}" --output json
-```
-
-This terminal execution queries the Microsoft Entra directory to resolve the anonymous Object ID:
-
-```json
-{
-  "appId": "1d6d5d2d-25d8-4d4a-92a0-d58df00f55e1",
-  "displayName": "mi-devpolaris-orders-api-prod",
-  "objectId": "5f1f64a4-0a2c-4f3c-91f4-3b9e68b9f6d1"
+resource roleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(vault.id, principalId, customRole.id)
+  scope: vault
+  properties: {
+    roleDefinitionId: customRole.id
+    principalId: principalId
+    principalType: 'ServicePrincipal'
+  }
 }
 ```
 
-This output provides clear directory coordinates, mapping the anonymous `principalId` to our production managed identity (`mi-devpolaris-orders-api-prod`), and confirming that the workload holds the necessary access to the vault.
+## Hands-On CLI Walkthrough: Creating and Assigning Custom Roles
 
-## Sample Access Shape
+To manage custom role permissions directly from the terminal, we execute a sequence of Azure CLI commands.
+In this hands-on walkthrough, we define a custom role JSON file, register the role inside our subscription, and create a role assignment for an active service principal.
 
-For a secure orders microservice, the authorization landscape remains compact:
+First, we write our custom role definition to a local file named `custom-role.json`.
+The definition permits reading storage account network settings but blocks all other actions.
 
-```mermaid
-flowchart TB
-    App["app-orders-prod<br/>(App Service)"] --> |Assigned Identity| Identity["mi-devpolaris-orders-api-prod<br/>(Service Principal Object)"]
-
-    subgraph Authorization Bindings
-        Identity --> Assignment["Role Assignment<br/>(Microsoft.Authorization)"]
-        Role["Key Vault Secrets User<br/>(4633a12f-...-82cbb36c534d)"] --> Assignment
-        Scope["kv-orders-prod<br/>(Vault Resource Scope)"] --> Assignment
-    end
-
-    Assignment --> |Allows dataActions secrets/get| Vault["kv-orders-prod<br/>(Physical Key Vault)"]
+```json
+{
+  "Name": "Storage Network Auditor",
+  "IsCustom": true,
+  "Description": "Allows auditing storage account firewall rules.",
+  "Actions": [
+    "Microsoft.Storage/storageAccounts/read"
+  ],
+  "NotActions": [],
+  "DataActions": [],
+  "NotDataActions": [],
+  "AssignableScopes": [
+    "/subscriptions/88888888-4444-4444-4444-121212121212"
+  ]
+}
 ```
 
-This diagram maps a highly secure deployment model. The container app runs with a dedicated managed identity. That identity holds exactly one role assignment cabled strictly to the individual Key Vault resource scope. It cannot touch other vaults, cannot scale the resource group, and has no control plane permissions, keeping the production blast radius extremely tight.
+Next, we execute the terminal command to import the custom role JSON document into our Azure subscription.
+
+```bash
+az role definition create --role-definition @custom-role.json
+```
+
+The CLI queries the ARM database and registers the role, returning the metadata summary:
+
+```json
+{
+  "id": "/subscriptions/88888888-4444-4444-4444-121212121212/providers/Microsoft.Authorization/roleDefinitions/77777777-6666-5555-4444-333333333333",
+  "properties": {
+    "roleName": "Storage Network Auditor",
+    "type": "CustomRole",
+    "permissions": [
+      {
+        "actions": [
+          "Microsoft.Storage/storageAccounts/read"
+        ],
+        "notActions": [],
+        "dataActions": [],
+        "notDataActions": []
+      }
+    ],
+    "assignableScopes": [
+      "/subscriptions/88888888-4444-4444-4444-121212121212"
+    ]
+  }
+}
+```
+
+Once the custom role is registered, we retrieve the Object ID of our target service principal.
+
+```bash
+az ad sp list \
+  --display-name "mi-ecommerce-prod" \
+  --query "[].{Name:displayName, ObjectID:id}" \
+  --output table
+```
+
+This returns the directory coordinate details:
+
+```plain
+Name               ObjectID
+-----------------  ------------------------------------
+mi-ecommerce-prod  5f1f64a4-0a2c-4f3c-91f4-3b9e68b9f6d1
+```
+
+Finally, we bind the custom role to the service principal's Object ID at our production resource group scope.
+
+```bash
+az role assignment create \
+  --assignee "5f1f64a4-0a2c-4f3c-91f4-3b9e68b9f6d1" \
+  --role "Storage Network Auditor" \
+  --resource-group "rg-ecommerce-prod"
+```
+
+This terminal execution completes the authorization loop.
+The service principal now holds the custom read permissions on all storage resources within the resource group scope, while remaining completely blocked from reading the physical file bytes.
 
 ## Putting It All Together
 
-Operating a secure, transparent cloud hierarchy requires evaluating every access request through the structural pipeline of Azure RBAC:
+Operating a secure, transparent cloud hierarchy requires evaluating every access request through the structural pipeline of Azure RBAC.
 
-*   **Cable Role Assignments**: Access is never a flat setting on a resource; it is a three-coordinate relationship connecting a Principal ID, a Role Definition, and a Scope.
-*   **Isolate Management from Data**: Differentiate between control plane actions (`management.azure.com`) and data plane actions (`*.vault.azure.net`) to prevent administrative over-granting.
+*   **Cable Role Assignments**: Access is never a flat setting on a resource. It is a three-part relationship connecting a Principal ID, a Role Definition, and a Scope.
+*   **Isolate Management from Data**: Differentiate between control plane actions (`management.azure.com`) and data plane actions (service data endpoints) to prevent administrative over-granting.
 *   **Apply the Lowest Scope**: Avoid assigning roles at the subscription or resource group scope, anchoring permissions strictly to individual resource scopes.
 *   **Target the Object ID**: When scripting deployments or configuring Bicep templates, always pass the Entra Object ID (Principal ID), bypassing the App ID.
 *   **Leverage Hierarchical Inheritance**: Recognize that permissions flow downwards from management groups to resources, auditing parent scopes continuously for access creep.
 
 ## What's Next
 
-We have established the core mechanics of request evaluation, role definitions, hierarchical scopes, and role assignments. Now we are ready to answer the runtime authentication question: how does our running application code securely prove its identity to ARM without carrying passwords or storing API keys? In the next article, we will go deep into managed identities. We will trace system-assigned and user-assigned lifecycles, and dissect the step-by-step token flow handshake.
+We have established the core mechanics of request evaluation, role definitions, hierarchical scopes, and role assignments.
+Now we are ready to answer the runtime authentication question: how does our running application code securely prove its identity to ARM without carrying passwords or storing API keys?
+In the next article, we will go deep into managed identities.
+We will trace system-assigned and user-assigned lifecycles, and dissect the step-by-step token flow handshake.
 
-![An infographic showing Azure RBAC access as principal, role, and scope joined by a role assignment before the ARM check allows or denies a request](/content-assets/articles/article-cloud-providers-azure-identity-security-azure-identity-and-security-mental-model/azure-rbac-map.png)
+![A five-part Azure RBAC summary showing Principal ID, Role definition, Scope inheritance, Role assignment, and ARM evaluation.](/content-assets/articles/article-cloud-providers-azure-identity-security-azure-identity-and-security-mental-model/rbac-summary.png)
 
-*Use this as the RBAC checklist: identify the principal, choose the role, place it at the narrowest useful scope, then verify the assignment and evidence before trusting access.*
-
+*Use this map as the quick checklist for debugging any Azure access question: caller, operation list, scope, binding, then ARM's final evaluation.*
 
 ---
 

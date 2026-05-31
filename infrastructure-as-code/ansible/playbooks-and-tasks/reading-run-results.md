@@ -24,6 +24,8 @@ aliases:
 
 ## The Feedback Loop of Playbook Execution
 
+Ansible run output is per-host execution evidence showing which tasks changed, failed, skipped, or could not connect.
+
 Ansible's command-line output is a structured audit trail that provides real-time feedback during a playbook execution. Because Ansible manages fleets of servers rather than a single local machine, the terminal output does not present a single success or failure status. Instead, it breaks down the execution timeline by play, task, and host, providing detailed proof of exactly how each remote system responded. Reading this output allows you to diagnose connection drops, identify configuration errors, and confirm that your infrastructure has settled into a safe, predictable state.
 
 To understand why analyzing this feedback loop is critical, consider our scenario. You are executing a configuration update across a three-node database and application cluster containing `db-node-01`, `app-node-01`, and `app-node-02`. The playbook installs a security library, modifies a cluster config file, and reloads the service.
@@ -106,7 +108,9 @@ When a host encounters either failure state, Ansible drops it from the active ru
 
 ## Execution Branching: Skipped, Rescued, and Ignored
 
-Ansible's runtime output also captures execution branching, which occurs when playbooks use conditionals, error handling, or error overrides to control task flow:
+Execution branching means a task's path changes because a condition, error handler, or override changed what Ansible should do next. These statuses matter because a run can finish without every task actually running.
+
+Example: a task that installs `apt` packages on Debian hosts should be `skipped` on a Red Hat host when its `when` condition checks `ansible_os_family`. A failed configuration task can be `rescued` if a recovery block restores the previous file, while `ignored` means the task failed but the playbook was told to keep going.
 
 | Status | Meaning |
 |---|---|
@@ -116,7 +120,9 @@ Ansible's runtime output also captures execution branching, which occurs when pl
 
 ## Under the Hood: Standard Out Capture and JSON Parsing
 
-To understand how these colors and formatting lines land in your terminal, it helps to look at the process isolation and data streams operating inside the control plane.
+Standard output is the text stream a process writes back to the program that launched it. Ansible modules return structured JSON through that stream, and the control node turns that data into the status lines you see in the terminal.
+
+Example: a remote command module can return `{"rc": 0, "stdout": "active", "changed": false}` over SSH. The callback plugin then renders that dictionary as an `ok` result for the specific host instead of showing raw JSON.
 
 When you run a playbook, the Ansible execution engine on your control node forks a separate worker process for each targeted managed host (up to the limit set by your concurrency settings, commonly defaulting to 5 forks).
 
@@ -148,7 +154,9 @@ This process is why Ansible can keep output readable even when tasks run across 
 
 ## The Play Recap: Auditing Fleet Health
 
-At the very end of every playbook run, Ansible prints a final, aggregated summary table called the **Play Recap**. The recap compiles the execution metrics for each targeted host, acting as a high-level compliance dashboard.
+The Play Recap is the final per-host scorecard for a run. It tells you how many tasks succeeded, changed the host, failed, skipped, or never reached the host because the connection failed.
+
+Example: if `app-node-02` ends with `ok=1 changed=0 unreachable=0 failed=1 skipped=2`, that host did not complete the same work as the others. You should treat it as partially configured until the failed task is fixed and the playbook is rerun successfully.
 
 Here is a quick reference table showing the meaning and diagnostic focus of each Play Recap column:
 
