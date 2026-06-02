@@ -73,6 +73,11 @@ Every invocation is treated as an independent execution unit. The platform alloc
 
 An event is a durable work notification that tells a handler something changed and work should run. In an asynchronous architecture, events are typically captured as payloads (like JSON messages) inside messaging systems, changes in database documents, or new files written to storage accounts.
 
+![Azure Functions event flow from source to trigger, invocation, bindings, and target service](/content-assets/articles/article-cloud-providers-azure-compute-application-hosting-azure-functions-event-driven-work/functions-event-flow.png)
+
+*A function run starts with an event source and trigger, then bindings connect the short-lived invocation to surrounding services.*
+
+
 Designing event-shaped workloads requires separating the physical transport of the event from your application's state management. An event should be designed as an immutable, self-contained record that contains all the metadata required to process the request. For example, a queue event indicating a new order checkout should contain the immutable order ID, customer identifier, and timestamp.
 
 A critical systems constraint of event processing is that you must guarantee your application logic is idempotent. In distributed cloud systems, messaging platforms operate on an "at-least-once" delivery contract, meaning that network disruptions, worker recycles, or duplicate retries can cause the same event payload to be delivered to your function multiple times. If your receipt-sending function processes the same order message twice and does not check database state before sending, it will send duplicate emails to the customer. To prevent this, check an idempotency key (such as the order ID) against a fast storage cache or database index before executing any side effects.
@@ -103,9 +108,10 @@ Furthermore, invocation monitoring is key to debugging. When an application exce
 
 Bindings are declarative data connections that handle the boilerplate plumbing of reading from and writing to external resources. Instead of writing custom code to establish database connections, initialize clients, authenticate, and manage connection pools, you configure input and output bindings in your function's metadata.
 
-![An infographic showing an Azure Function trigger and bindings around a handler](/content-assets/articles/article-cloud-providers-azure-compute-application-hosting-azure-functions-event-driven-work/trigger-binding-map.png)
+![Azure Function trigger and bindings around a handler with input and output bindings](/content-assets/articles/article-cloud-providers-azure-compute-application-hosting-azure-functions-event-driven-work/trigger-binding-map.png)
 
 *Triggers start the function, while bindings connect the handler to inputs and outputs without writing every plumbing call by hand.*
+
 
 Input bindings automatically fetch data based on the incoming event payload and inject it directly as an argument into your code handler. For example, a queue trigger containing a customer ID can be paired with a Cosmos DB input binding that automatically queries the database and passes the customer document to your function. Output bindings work in reverse, automatically writing whatever object your function returns back to the configured storage, queue, or database.
 
@@ -115,9 +121,10 @@ While bindings simplify code, they do not bypass network or security boundaries.
 
 Every serverless execution environment imposes runtime timeouts to protect the platform from runaway infinite loops or resource starvation. On the classic Consumption plan, Azure Functions uses a 5-minute default execution timeout and allows a maximum of 10 minutes. Other hosting plans, including Flex Consumption, Premium, and Dedicated, have different timeout behavior and scaling tradeoffs. If your function exceeds its configured or plan-supported limit, the host runtime stops the execution and releases the worker.
 
-![An infographic showing a retry-safe function handler using idempotency around repeated invocations](/content-assets/articles/article-cloud-providers-azure-compute-application-hosting-azure-functions-event-driven-work/retry-safe-handler.png)
+![Retry-safe Azure Function handler using idempotency around repeated invocations](/content-assets/articles/article-cloud-providers-azure-compute-application-hosting-azure-functions-event-driven-work/retry-safe-handler.png)
 
 *Retries are useful only when the handler can safely receive the same event more than once.*
+
 
 To prevent timeout failures, split long-running tasks into small, independent units of work that can execute concurrently. For example, instead of running a single function that processes a batch of 10,000 files, write a generator function that reads the batch and writes 10,000 individual messages to a queue. You can then write a queue-triggered function that processes one file per invocation, allowing the platform to scale out across dozens of workers to process the files concurrently.
 

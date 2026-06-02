@@ -37,6 +37,11 @@ Azure Monitor provides the data routing and storage fabric to capture these logs
 
 A Diagnostic Setting is the routing rule that tells an Azure resource where to send its logs and metrics. It exists because many Azure resources do not automatically place detailed diagnostic records into a queryable workspace.
 
+![Azure diagnostic settings router sending resource logs to Log Analytics, Event Hub, and Storage destinations](/content-assets/articles/article-cloud-providers-azure-observability-azure-monitor-log-analytics/diagnostic-settings-router.png)
+
+*Diagnostic settings decide which resource logs leave the service and where they can be queried, streamed, or archived.*
+
+
 Example: a Storage Account diagnostic setting can send blob read, write, and delete records to `law-orders-prod` for KQL search and to a storage account for long-term audit files.
 
 A Diagnostic Setting is the telemetry routing rule for a resource, directing raw resource logs to a workspace, archive bucket, or streaming endpoint.
@@ -184,6 +189,11 @@ This declarative configuration ensures that all blob reads, writes, and deletion
 Kusto Query Language (KQL) is a read-only data processing language designed for fast telemetry search.
 KQL is structured as a left-to-right query pipeline, where each pipe-delimited step filters, reshapes, or summarizes the result set from the previous step.
 
+![KQL query pipeline showing table, where, parse, summarize, chart, and answer](/content-assets/articles/article-cloud-providers-azure-observability-azure-monitor-log-analytics/kql-query-pipeline.png)
+
+*KQL turns raw log rows into an answer by filtering, shaping, aggregating, and visualizing the evidence.*
+
+
 KQL is a read-only query language where each operator refines and shapes the data stream before passing it to the next step.
 
 Example: start with `StorageBlobLogs`, filter to the last hour, keep only `StatusCode == 403`, select the useful columns, and summarize failures by blob path.
@@ -306,6 +316,11 @@ By routing diagnostic logs securely, the platform ensures that operational failu
 
 The next article covers Application Insights.
 We will examine how to track application performance, trace distributed user requests across microservice boundaries using OpenTelemetry standards, and correlate requests, dependencies, and exceptions.
+
+
+![Azure log routing workspace map showing resources, diagnostic settings, Log Analytics workspace, tables, KQL query, cost, and alert rule](/content-assets/articles/article-cloud-providers-azure-observability-azure-monitor-log-analytics/log-routing-workspace.png)
+
+*Use this as the log routing checklist: emit deliberately, route through diagnostic settings, query in the workspace, and watch retention and cost.*
 
 ---
 

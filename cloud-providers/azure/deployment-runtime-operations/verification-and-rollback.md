@@ -44,6 +44,11 @@ A watch window is a time-boxed telemetry review period immediately after a traff
 During this window, the engineering team closely monitors system signals to verify that the deployment candidate is healthy and stable.
 A watch window must have a defined duration, specific owners, and explicit exit criteria.
 
+![Release watch window timeline showing deploy, errors, latency, saturation, healthy continue, and rollback decision](/content-assets/articles/article-cloud-providers-azure-deployment-runtime-operations-release-verification-rollback-decisions/watch-window-timeline.png)
+
+*A watch window gives the new version enough time to show evidence before the team decides to continue or roll back.*
+
+
 For a production release of the orders API, the watch window properties are defined in the release catalog:
 
 ```plain
@@ -245,6 +250,11 @@ A rollback decision framework is the predefined rule set for choosing rollback, 
 A rollback decision must be guided by structured data rather than emotional reaction.
 A team should define a clear framework that balances user impact, recovery time, and data risks.
 
+![Rollback decision loop showing deploy, monitor, decide, rollback, fix forward, and release record](/content-assets/articles/article-cloud-providers-azure-deployment-runtime-operations-release-verification-rollback-decisions/rollback-decision-loop.png)
+
+*Rollback is a decision loop: protect users first, preserve evidence, and decide whether reverting or fixing forward is safer.*
+
+
 The table below provides a decision matrix to guide rollback actions:
 
 | Incident Signal | Data and Code Risk Assessment | Target Operational Action |
@@ -341,6 +351,11 @@ By establishing a thorough post-deployment verification loop, engineering teams 
 
 This article completes the deployment and runtime operations module.
 The next module covers observability, detailing how to query logs using Kusto Query Language (KQL), construct robust monitoring dashboards, and trace requests across microservice boundaries.
+
+
+![Rollback versus fix-forward decision map showing previous version, rollback, patch, new version, time, and risk](/content-assets/articles/article-cloud-providers-azure-deployment-runtime-operations-release-verification-rollback-decisions/rollback-vs-fix-forward.png)
+
+*Use this as the recovery decision check: rollback when the previous version is safer, fix forward when reverting would create more risk.*
 
 ---
 

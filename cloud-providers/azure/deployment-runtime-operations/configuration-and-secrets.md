@@ -48,6 +48,11 @@ Runtime configuration is the set of environment-specific values injected into th
 These parameters decouple environment-specific details from the application code.
 This decoupling allows the exact same application package or container image to run in development, staging, and production environments.
 
+![Azure runtime configuration map showing app settings, managed identity, Key Vault references, runtime memory, deployment slots, and config rollback](/content-assets/articles/article-cloud-providers-azure-deployment-runtime-operations-runtime-settings-secrets-configuration/runtime-configuration-map.png)
+
+*Runtime configuration is part of the deployed system, so settings, identity, secret references, slots, and rollback must be designed together.*
+
+
 For a production deployment of the orders API, the runtime configuration typically includes:
 
 ```plain
@@ -114,6 +119,11 @@ The preferred approach is to version secrets in the vault and update the configu
 Key Vault references are platform-resolved pointers from App Service or Azure Functions settings to secrets stored in a separate vault.
 The platform resolves these references automatically at runtime.
 This process keeps sensitive values out of application settings, deployment scripts, and deployment logs.
+
+![Azure secret reference resolution from app configuration through managed identity to Key Vault and runtime memory](/content-assets/articles/article-cloud-providers-azure-deployment-runtime-operations-runtime-settings-secrets-configuration/secret-reference-resolution.png)
+
+*A secret reference still needs identity, network reachability, vault permission, and runtime refresh behavior before the app can use it.*
+
 
 ```plain
 @Microsoft.KeyVault(SecretUri=https://kv-prod.vault.azure.net/secrets/database-password/)
@@ -318,6 +328,11 @@ Slot sticky settings are the App Service configuration records that stay with a 
 App Service deployment slots introduce the risk of environment configuration mixing during a swap.
 By default, application settings migrate with the application package when a swap is executed.
 This migration means that staging values can travel to production, and production settings can travel to staging.
+
+![Azure slot sticky settings map showing production and staging slots, swapped package, sticky setting, and shared setting](/content-assets/articles/article-cloud-providers-azure-deployment-runtime-operations-runtime-settings-secrets-configuration/slot-sticky-settings-map.png)
+
+*Sticky settings prevent environment-specific values from moving with the app package during a slot swap.*
+
 
 To prevent this issue, you must configure settings to be slot-specific, which is also known as being sticky to the slot.
 

@@ -31,6 +31,11 @@ aliases:
 
 A managed identity is an Azure-managed identity for running software. It gives an Azure resource, such as a VM, Web App, Function App, or Container App, a Microsoft Entra identity without giving your code a stored password.
 
+![Managed identity flow showing a workload getting a token through IMDS and calling an Azure resource through RBAC](/content-assets/articles/article-cloud-providers-azure-identity-security-managed-identities-and-workload-access/managed-identity-flow.png)
+
+*A managed identity lets the runtime request short-lived proof from Azure instead of storing a reusable password in code.*
+
+
 Example: `app-orders-prod` can use its managed identity to ask Key Vault for `db-orders-password`, and Key Vault can decide access from that app's Object ID instead of from a copied client secret.
 
 It allows an Azure-hosted compute service to authenticate to other Azure resources without storing passwords, client secrets, or access keys.
@@ -112,10 +117,6 @@ The application code utilizes standard Azure SDK libraries.
 At runtime, the SDK automatically detects the Azure hosting environment, contacts the managed identity endpoint for that host type, and retrieves a short-lived access token.
 The SDK handles token caching and refresh behavior, keeping application code clean and free of credential-handling logic.
 
-![A managed identity token path where app code calls the host identity endpoint, receives a short-lived token, and uses it for a Key Vault request.](/content-assets/articles/article-cloud-providers-azure-identity-security-managed-identities-and-workload-access/managed-identity-token-path.png)
-
-*The important boundary is local: the app asks the host for temporary proof instead of carrying a reusable client secret.*
-
 ## System-Assigned: Resource Bound Lifecycle
 
 A system-assigned managed identity is a one-resource identity whose lifecycle is tied to exactly one Azure resource instance.
@@ -142,6 +143,11 @@ The platform does not automatically transfer permissions to the new identity sim
 A user-assigned managed identity is a standalone identity resource that you create independently and attach to one or more compute hosts.
 It is a standalone Azure resource created and managed independently of the compute resources that use it.
 
+![System-assigned and user-assigned managed identity lifecycles compared across one workload and many workloads](/content-assets/articles/article-cloud-providers-azure-identity-security-managed-identities-and-workload-access/system-vs-user-assigned.png)
+
+*System-assigned identities follow one resource lifecycle, while user-assigned identities can be reused across workloads deliberately.*
+
+
 ```plain
 Standalone Identity Resource (mi-orders-api-prod)
   ├── Attached to compute: app-orders-prod-slot-a
@@ -161,6 +167,11 @@ The newly provisioned compute host simply binds to the existing identity, inheri
 
 The Instance Metadata Service (IMDS) is Azure's local metadata and token endpoint for a running compute host.
 For a VM, IMDS is the local HTTP endpoint the workload calls to request a token without storing a secret.
+
+![IMDS token handshake showing workload, metadata endpoint, short-lived token, Azure service, and RBAC check](/content-assets/articles/article-cloud-providers-azure-identity-security-managed-identities-and-workload-access/imds-token-handshake.png)
+
+*The token handshake is local first: the workload asks the host identity endpoint for a short-lived token, then Azure checks RBAC on the target resource.*
+
 
 Example: code running on `vm-orders-worker` can call `http://169.254.169.254` with the `Metadata: true` header and request a token for `https://vault.azure.net`.
 
@@ -205,6 +216,11 @@ Fifth, IMDS routes the token back through the hypervisor switch to the guest OS 
 ## SDK Authentication: Tracing DefaultAzureCredential Fallbacks
 
 DefaultAzureCredential is the Azure SDK helper that tries common authentication sources in order until one returns a token. It exists so the same code can run on a developer laptop, VM, App Service, Container Apps, or AKS without hardcoding a different login path for each host.
+
+![Managed identity token path from app code to host identity endpoint, short-lived token, and Key Vault request](/content-assets/articles/article-cloud-providers-azure-identity-security-managed-identities-and-workload-access/managed-identity-token-path.png)
+
+*The important boundary is local: the app asks the host for temporary proof instead of carrying a reusable client secret.*
+
 
 Example: locally it may use your `az login` session, while in production it can use the managed identity attached to `ca-orders-api-prod`.
 
@@ -378,7 +394,8 @@ Now we are ready to examine the secure boundary where our sensitive passwords, c
 In the next article, we will go deep into Azure Key Vault.
 We will contrast secrets, keys, and certificates, evaluate access control architectures, and examine soft-delete and purge protection mechanisms.
 
-![A five-part managed identity checklist covering no stored secret, platform identity, short-lived token, RBAC binding, and runtime versus pipeline separation.](/content-assets/articles/article-cloud-providers-azure-identity-security-managed-identities-and-workload-access/managed-identity-summary.png)
+
+![Managed identity checklist with no stored secret, platform identity, short-lived token, RBAC binding, and runtime separation](/content-assets/articles/article-cloud-providers-azure-identity-security-managed-identities-and-workload-access/managed-identity-summary.png)
 
 *Use this checklist before shipping a workload identity: remove stored secrets, bind the platform identity narrowly, and keep runtime access separate from deployment power.*
 

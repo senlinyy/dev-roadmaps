@@ -30,6 +30,11 @@ aliases:
 
 The Azure service catalog is easiest to read as a job-to-service index. Each service family owns a specific runtime responsibility: entry, execution, state, access, evidence, or release.
 
+![Azure service job map connecting traffic, compute, state, access, telemetry, and release to an application job](/content-assets/articles/article-cloud-providers-azure-foundations-core-services/service-jobs-map.png)
+
+*Start from the application job, then choose the Azure service family that owns traffic, compute, state, access, telemetry, or release behavior.*
+
+
 The sheer number of services in the Azure catalog can feel overwhelming. But if you group these services by the specific operational jobs they perform for your application, the catalog suddenly transforms into a clean, easy-to-read map:
 
 *   **Public Traffic Entry (Ingress & Routing)**: How does a customer's browser request safely reach your running code?
@@ -223,6 +228,11 @@ Every returned parameter provides critical runtime evidence:
 
 The Container Apps serverless fabric is the managed runtime path between the REST resource you configure and the replicas that run your image. It exists so you can describe an app, ingress, revisions, and scale rules without operating Kubernetes nodes yourself.
 
+![Azure Container Apps fabric showing ingress, revisions, Envoy, KEDA scaling, and managed Kubernetes underneath](/content-assets/articles/article-cloud-providers-azure-foundations-core-services/container-apps-fabric-gpt.png)
+
+*Container Apps looks simple from the app surface, but ingress, revisions, Envoy, KEDA, and managed Kubernetes still shape runtime behavior.*
+
+
 Example: when you update `app-orders-prod` from image `v2.1.0` to `v2.2.0`, Container Apps creates a new revision, routes traffic through Envoy, and uses KEDA to adjust replica count from the configured scale rules.
 
 To design a robust compute architecture, you must understand the orchestration layers that Azure manages beneath the surface. When you deploy a container app to Azure Container Apps (ACA), the platform does not run your container directly on a bare metal host. Instead, ACA abstracts a Kubernetes orchestration framework behind a simple, serverless REST API:
@@ -324,6 +334,11 @@ We have established the core Azure mental model, directory boundaries, physical 
 In the next chapter, we will study **Role-Based Access Control (RBAC)**. We will dissect the three-part RBAC equation, write custom role definitions using JSON action blocks, and learn how to manage access control at scale using group-level assignments rather than static user bindings.
 
 By standardizing access rules at this level, we protect our cloud resources from security leaks while maintaining flexible team boundaries.
+
+
+![Azure core services checklist with public entry, runtime, durable state, identity, logs, and release path](/content-assets/articles/article-cloud-providers-azure-foundations-core-services/core-services-checklist.png)
+
+*Use this as the core services checklist: every production app needs an entry path, runtime, durable state, identity, evidence, and release path.*
 
 ---
 

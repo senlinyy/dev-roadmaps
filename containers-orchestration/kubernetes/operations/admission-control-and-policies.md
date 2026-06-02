@@ -3,7 +3,7 @@ title: "Admission Control and Policies"
 description: "Use Kubernetes admission control and policy engines to reject unsafe workload changes before they run."
 overview: "Admission control is the API server checkpoint between a submitted manifest and stored cluster state. You will learn how policies protect devpolaris-orders-api from unsafe images, missing labels, and weak Pod settings."
 tags: ["admission", "policies", "security", "validatingadmissionpolicy"]
-order: 7
+order: 8
 id: article-containers-orchestration-kubernetes-operations-admission-control-and-policies
 aliases:
   - containers-orchestration/cluster-operations/policy-enforcement.md

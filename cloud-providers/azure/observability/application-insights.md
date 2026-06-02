@@ -98,6 +98,11 @@ Correlation is the mechanism that connects separate telemetry rows from the same
 The power of Application Insights lies in correlation.
 Because every request, dependency, exception, and trace record inherits the exact same `operation_Id`, a single KQL query can reconstruct the timeline of a transaction.
 
+![Application Insights trace correlation path showing browser, API, queue, worker, operation ID, span IDs, logs, and metrics](/content-assets/articles/article-cloud-providers-azure-observability-azure-application-insights-backend-apis/trace-correlation-path.png)
+
+*Trace correlation lets separate service events become one operation story instead of isolated log lines.*
+
+
 If a user encounters a `500` error during checkout, run a query to isolate all events sharing that specific request's operation ID:
 
 ```plain
@@ -211,6 +216,11 @@ This template establishes a secure, workspace-based Application Insights instanc
 
 The Application Map is a dependency graph built from request and dependency telemetry. It shows which application components call each other and which downstream services are slow or failing.
 
+![Application Insights application map showing API dependencies, database, queue, cache, and external API latency and errors](/content-assets/articles/article-cloud-providers-azure-observability-azure-application-insights-backend-apis/application-map-dependencies.png)
+
+*Application Map is useful because it shows dependency health around the application, not just the application process itself.*
+
+
 Example: the map can show `orders-api` calling Redis, Azure SQL, and Blob Storage, with the Blob Storage edge highlighted because receipt uploads have a high failure rate.
 
 It evaluates the metadata inside the `AppRequests` and `AppDependencies` tables to map all active application components and downstream dependency nodes.
@@ -314,6 +324,11 @@ By implementing distributed request tracing, cloud teams gain the context requir
 
 The next article covers Metrics and Alerts.
 We will examine how to track system-wide trends, create operational dashboards, construct high-signal alert rules, and coordinate action groups to notify on-call engineers.
+
+
+![OpenTelemetry portability path showing app spans, metrics, logs, OpenTelemetry, Application Insights, and another backend](/content-assets/articles/article-cloud-providers-azure-observability-azure-application-insights-backend-apis/otel-portability-path.png)
+
+*Use this as the instrumentation boundary: collect portable telemetry where possible, then send it to the backend that fits the operations workflow.*
 
 ---
 

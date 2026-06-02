@@ -71,9 +71,10 @@ This structural analysis ensures that your engineering team targets the correct 
 
 Cost allocation needs two stable coordinates: the lifecycle boundary where resources are grouped, and the tag fields that identify owner, service, environment, and budget. Allocating costs accurately across diverse engineering teams requires establishing clear resource group perimeters and metadata tagging policies:
 
-![An infographic showing resource tags connecting Azure spend to a cost record, owner, and team](/content-assets/articles/article-cloud-providers-azure-cost-resilience-cost-management-budgets-tags/tag-cost-owner-chain.png)
+![Azure resource tags connecting spend to cost record, owner, team, and chargeback](/content-assets/articles/article-cloud-providers-azure-cost-resilience-cost-management-budgets-tags/tag-cost-owner-chain.png)
 
 *Tags turn raw spend into accountable cost records by connecting resources to owners and teams.*
+
 
 * **Resource Group Boundaries**: Organize resources into dedicated resource groups based on their common lifecycles and environments (e.g., separating `rg-orders-prod` from `rg-orders-staging`). This allows you to track and filter the total cost of an entire service tier instantly.
 * **Standardized Metadata Tagging**: Apply a strict key-value metadata tagging policy to every provisioned resource. A standard cloud tagging schema includes the following essential dimensions:
@@ -128,9 +129,10 @@ flowchart TD
 
 Azure Budgets are delayed financial threshold alerts, not real-time resource circuit breakers. They provide a financial alarm system designed to drive operational accountability across your subscriptions:
 
-![An infographic showing resource usage happening before cost data processing and a delayed budget alert](/content-assets/articles/article-cloud-providers-azure-cost-resilience-cost-management-budgets-tags/budget-alert-delay.png)
+![Azure budget alert delay showing usage now, cost data collection, processing delay, and alert later](/content-assets/articles/article-cloud-providers-azure-cost-resilience-cost-management-budgets-tags/budget-alert-delay.png)
 
 *Budget alerts are guardrails for reaction, not hard stops that prevent spend in real time.*
+
 
 * **Budget Scopes**: You can provision budgets at diverse levels, including the entire subscription scope, a target resource group boundary, or filtered by specific resource tags (e.g., monitoring all resources tagged `service=orders-api`).
 * **Actual vs. Forecasted Thresholds**: Configure alerts based on both actual spending and forecasted spending:
@@ -189,10 +191,11 @@ Cost visibility transforms cloud spending from an unmanaged operational expense 
 
 Now that we have established cost visibility and mitigated active spending leaks, we will explore Recovery Planning. We will define Recovery Time Objectives (RTO) and Recovery Point Objectives (RPO), analyze database and storage replication levels, and construct tested disaster recovery strategies.
 
-![An infographic showing a cost visibility loop from tags through cost analysis, budget alerts, owner review, right-sizing, and common leak sources](/content-assets/articles/article-cloud-providers-azure-cost-resilience-cost-management-budgets-tags/cost-visibility-loop.png)
+
+
+![Azure cost visibility loop from tags through cost analysis, budget alerts, owner review, right-sizing, and leak sources](/content-assets/articles/article-cloud-providers-azure-cost-resilience-cost-management-budgets-tags/cost-visibility-loop.png)
 
 *Use this as the cost visibility loop: every spend line should have tags, an owner, a budget signal, a review habit, and a right-sizing action when usage changes.*
-
 
 ---
 

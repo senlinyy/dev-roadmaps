@@ -142,6 +142,11 @@ If an alert does not require an immediate, manual action by an engineer to preve
 
 Metric aggregation is the math Azure applies to many raw metric samples before comparing them with an alert threshold. It exists because a single second of data is usually too noisy for paging decisions.
 
+![Metric threshold window design showing metric data, threshold, evaluation window, severity, action group, and alert](/content-assets/articles/article-cloud-providers-azure-observability-azure-metrics-dashboards-alerts/threshold-window-design.png)
+
+*Alert behavior depends on the evaluation window and severity rules, not only on the raw metric line.*
+
+
 Example: instead of alerting on one brief CPU spike, you can evaluate average CPU over a 5-minute lookback window and require it to stay above 85 percent.
 
 To configure metric alert rules correctly, you must understand the underlying mathematical aggregation models utilized by the Azure Monitor Metrics engine.
@@ -278,6 +283,11 @@ Decoupling rules from destinations ensures that if an engineer joins or leaves t
 Alert noise occurs when alerts fire too frequently, do not require human action, or monitor variables that do not affect users.
 High alert noise leads to alert fatigue, training engineers to ignore pages and increasing the resolution time for real production outages.
 
+![Alert noise filter showing noisy events grouped, suppressed, assigned severity, and routed to an owner](/content-assets/articles/article-cloud-providers-azure-observability-azure-metrics-dashboards-alerts/alert-noise-filter.png)
+
+*Good alerts route attention carefully: group noise, suppress duplicates, set severity, and send each signal to the right owner.*
+
+
 To mitigate alert noise, follow these five operational design patterns:
 1. **Alert on Sustained Rates, Not Single Events**: Never configure alerts on single transient errors or momentary spikes. Set rules to evaluate rates over consecutive intervals to filter out transient fluctuations.
 2. **Use Multi-Dimensional Metric Splitting**: Create a single alert rule that splits by dimensions, such as `InstanceId` or `Computer`, to monitor multiple resources without creating duplicate alert rules.
@@ -304,6 +314,11 @@ By managing the alerting loop programmatically, cloud teams protect service avai
 
 This article completes the observability module.
 The next submodule covers cost and resilience, detailing how to track cloud expenses, configure budgets, and plan disaster recovery replication across Azure regions.
+
+
+![Azure metric alert loop showing metric data, rule evaluation, action group, on-call signal, threshold, window, severity, and suppression](/content-assets/articles/article-cloud-providers-azure-observability-azure-metrics-dashboards-alerts/metric-alert-loop.png)
+
+*Use this as the alert loop: measure the right signal, evaluate it over a meaningful window, route it, and tune noise after real incidents.*
 
 ---
 

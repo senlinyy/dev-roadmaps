@@ -29,6 +29,11 @@ aliases:
 
 Azure App Service is Azure's managed web runtime for applications that need a long-running HTTP host without owning the server operating system. It is a Platform as a Service (PaaS) designed to host web applications, REST APIs, and background processes. It removes the operational chores of traditional infrastructure management. You do not need to configure virtual networks, install operating system patches, configure IIS or Nginx servers, set up systemd supervisors, write custom startup scripts, or coordinate manual SSL/TLS certificate renewals. You create the Web App, provide the application code or container image, and let Azure's platform controller prepare the runtime environment.
 
+![App Service runtime map showing app settings, managed identity, health checks, plan capacity, slots, logs, and scale-out](/content-assets/articles/article-cloud-providers-azure-compute-application-hosting-app-service-web-backends/app-service-runtime-map.png)
+
+*App Service runs web code inside a managed runtime boundary, but plan capacity, settings, identity, slots, logs, and health still shape production behavior.*
+
+
 :::expand[Under the Hood: Front-End Pools and Noisy Neighbors]{kind="design"}
 The physical architecture of App Service is split into two primary layers: the Front-End pool and the Worker pool. The Front-End layer consists of redundant load-balancing routing nodes at the entry point of Azure's regional data centers. These Front-End gateways receive all inbound public HTTP/HTTPS requests, handle SSL/TLS decryption, and route the traffic over a private internal network to the specific WebWorkers hosting your code.
 
@@ -91,13 +96,14 @@ This configuration sets up the physical infrastructure required to support zero-
 
 An App Service Plan (ASP) is the shared compute pool that your Web Apps run on. It decides how much CPU, memory, storage quota, and scale capacity are available before any individual app code starts.
 
+![Several web apps sharing the CPU and memory boundary of one Azure App Service plan](/content-assets/articles/article-cloud-providers-azure-compute-application-hosting-app-service-web-backends/plan-capacity-boundary.png)
+
+*The App Service plan is the capacity boundary; multiple web apps inside it can compete for the same CPU and memory.*
+
+
 Example: `asp-orders-prod-eus` might host the public `orders-api` Web App and a smaller `orders-admin` Web App. If the API consumes all CPU in the plan, the admin app can slow down too because both apps draw from the same worker capacity.
 
 When you create an ASP, you are creating Virtual Machine Scale Sets (VMSS) managed by Azure's fabric, hidden behind the PaaS abstraction layer. The tier you choose (Basic, Standard, Premium v3, or Isolated) dictates the availability of advanced features, such as regional virtual network integration, deployment slots, custom domains, and autoscale rules.
-
-![An infographic showing several web apps sharing the capacity boundary of one App Service plan](/content-assets/articles/article-cloud-providers-azure-compute-application-hosting-app-service-web-backends/plan-capacity-boundary.png)
-
-*The App Service plan is the capacity boundary; multiple web apps inside it can compete for the same CPU and memory.*
 
 Because the ASP provides the physical RAM and CPU allocations, you must monitor it using host-level metrics. If a Web App returns a gateway timeout or becomes unresponsive, inspect the App Service Plan's overall CPU and Memory utilization. Scaling up the ASP changes the size of the worker VMs (e.g., shifting from 2 cores and 8 GB of RAM to 4 cores and 16 GB of RAM), whereas scaling out increases the number of running VM instances.
 
@@ -156,9 +162,10 @@ The identity does not grant permission by itself. Creating a system-assigned man
 
 Deployment slots are fully functional, independent Web App instances that run under the same App Service parent resource. A slot has its own unique hostnames, environment configuration settings, and deployment history, but it shares the underlying worker VM resources of the App Service Plan by default.
 
-![An infographic showing a staging slot warming up before a production slot swap](/content-assets/articles/article-cloud-providers-azure-compute-application-hosting-app-service-web-backends/slot-swap-safety.png)
+![Staging slot warming up before an Azure App Service production slot swap](/content-assets/articles/article-cloud-providers-azure-compute-application-hosting-app-service-web-backends/slot-swap-safety.png)
 
 *Deployment slots are safest when the candidate slot is warmed, checked, and only then swapped into production traffic.*
+
 
 When you swap deployment slots (such as swapping `staging` with `production`), App Service runs a controlled swap workflow rather than a blind URL flip. It applies target-slot settings that must be tested on the source slot, restarts and warms the source instances as needed, and then switches routing so the warmed source slot becomes the production target. After the routing switch, the previous production app is moved into the other slot.
 

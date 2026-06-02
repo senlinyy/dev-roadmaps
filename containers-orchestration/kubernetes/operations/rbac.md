@@ -3,7 +3,7 @@ title: "RBAC"
 description: "Use Kubernetes RBAC to grant users, service accounts, and controllers the smallest permissions they need."
 overview: "RBAC is Kubernetes authorization for API actions. You will learn how Roles, ClusterRoles, RoleBindings, and service accounts protect devpolaris-orders-api without blocking normal operations."
 tags: ["rbac", "roles", "serviceaccounts", "security"]
-order: 4
+order: 5
 id: article-containers-orchestration-kubernetes-operations-rbac
 ---
 

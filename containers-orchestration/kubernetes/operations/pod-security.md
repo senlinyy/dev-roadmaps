@@ -3,7 +3,7 @@ title: "Pod Security"
 description: "Harden Kubernetes Pods with safe security contexts, restricted defaults, and practical runtime boundaries."
 overview: "Pod security is about reducing what a compromised container can do. You will harden devpolaris-orders-api with security contexts, namespace labels, and review habits that keep normal deploys practical."
 tags: ["security", "pods", "securitycontext", "psa"]
-order: 5
+order: 6
 id: article-containers-orchestration-kubernetes-operations-pod-security
 ---
 

@@ -29,6 +29,11 @@ aliases:
 
 An Azure Virtual Machine (VM) is Azure's server-shaped compute option: you get a full guest operating system, persistent disks, a network interface, and administrative control inside the OS. Under that familiar server contract, the guest operating system instance is executed by a physical hypervisor using software-defined virtualized hardware allocations. Azure manages the physical datacenter facilities, server blade hardware, hypervisor scheduling, and cooling infrastructure. Your team, however, retains full administrative control and operational ownership over everything inside the guest operating system boundary.
 
+![Azure VM responsibility stack separating app processes, operating system, network interface, managed disk, Azure host, and team operations](/content-assets/articles/article-cloud-providers-azure-compute-application-hosting-azure-virtual-machines/vm-responsibility-stack.png)
+
+*A VM gives the team the most host control, but it also leaves operating system, patching, process, disk, and network responsibility with the team.*
+
+
 To deploy a Virtual Machine, you declare its size, OS image, network placement, and credential parameters. The following command launches a standard database node inside a dedicated network subnet:
 
 ```plain
@@ -93,10 +98,6 @@ The VM Size also imposes strict, non-adjustable hardware limits on network inter
 
 VM disks are the storage devices the guest operating system mounts and reads through its normal filesystem path. An Azure Virtual Machine normally utilizes two distinct categories of storage: managed disks (durable, network-attached storage) and temporary local disks (ephemeral, physically attached SSDs).
 
-![An infographic showing a VM attached to disks and a network interface](/content-assets/articles/article-cloud-providers-azure-compute-application-hosting-azure-virtual-machines/disk-nic-attachment.png)
-
-*VM behavior is shaped by attached resources: disks hold state and the network interface controls where traffic can flow.*
-
 ```mermaid
 flowchart LR
     OSFS["Guest OS Block I/O<br/>(/dev/sda)"] --> VController["Virtual Disk Controller"]
@@ -149,6 +150,11 @@ Consider this before-and-after storage architecture:
 ## Network Interface
 
 A Network Interface Card (NIC) is the VM's network attachment. It gives the guest operating system a private IP address inside a subnet and connects that VM to routing and security rules.
+
+![Azure VM attached to OS disk, data disk, network interface, public IP, subnet, and NSG](/content-assets/articles/article-cloud-providers-azure-compute-application-hosting-azure-virtual-machines/disk-nic-attachment.png)
+
+*VM behavior is shaped by attached resources: disks hold state and the network interface controls where traffic can flow.*
+
 
 Example: `nic-inventory-prod` can place `vm-inventory-prod` in `snet-inventory` with private IP `10.30.8.12`, attach no public IP, and use an NSG rule set that only allows traffic from the application subnet.
 
@@ -230,9 +236,10 @@ By chaining Custom Script Extensions, you can transition a generic marketplace O
 
 The VM startup path represents the bridge between virtual machine creation and application process readiness. When the guest OS boots, the system must parse configuration metadata to set hostnames, wire network routing, retrieve secrets, and install runtimes.
 
-![An infographic showing a VM boot path from image to OS to agent to application process](/content-assets/articles/article-cloud-providers-azure-compute-application-hosting-azure-virtual-machines/vm-boot-path.png)
+![Azure VM boot path from image to OS disk, VM size, network connectivity, startup script, processes, and health](/content-assets/articles/article-cloud-providers-azure-compute-application-hosting-azure-virtual-machines/vm-boot-path.png)
 
 *A VM has a startup chain, and any broken step before the app process can make the service appear down.*
+
 
 To automate this provisioning flow without manual SSH commands, rely on the guest VM Agent (`waagent`) and cloud-init. During the boot sequence, the guest OS starts the VM Agent daemon. The agent can use the Instance Metadata Service (IMDS) at the private IP `169.254.169.254` to retrieve metadata such as the VM's resource group, subscription, private IP, and user-provided custom data scripts.
 

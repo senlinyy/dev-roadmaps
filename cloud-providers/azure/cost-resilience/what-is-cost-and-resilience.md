@@ -54,9 +54,10 @@ flowchart TD
 
 A cost shape is the billing pattern a resource follows: always-on capacity, usage-based work, stored data, data movement, or safety copies. Understanding your cloud bill requires analyzing how different resources measure and bill for resource usage. Azure expenditures organize into five primary cost shapes:
 
-![An infographic showing capacity headroom balanced against waste and cost](/content-assets/articles/article-cloud-providers-azure-cost-resilience-mental-model/headroom-waste-balance.png)
+![Azure capacity headroom balanced against right-sizing and waste](/content-assets/articles/article-cloud-providers-azure-cost-resilience-mental-model/headroom-waste-balance.png)
 
 *Reliable systems need spare capacity, but unused headroom still has a bill attached to it.*
+
 
 * **Always-On Capacity**: Fixed, pre-provisioned resource allocations that generate a steady hourly charge regardless of actual query volume. Examples include Azure App Service Plans, provisioned Azure SQL vCore tiers, and Azure Firewall instances.
 * **Usage-Based Work**: Dynamic, consumption-based charges that scale directly with execution events. Examples include Azure Functions (Consumption plan), Azure Container Apps serverless scaling, and transactional storage operation counts.
@@ -70,9 +71,10 @@ The most common cost surprises do not come from always-on compute; they come fro
 
 A failure shape is the infrastructure layer where something can break: instance, zone, data state, database write, or region. A resilient architecture is designed to survive specific physical failures at different layers of the cloud infrastructure. Each failure layer requires a targeted mitigation strategy that directly impacts your resource budget:
 
-![An infographic comparing single-zone and multi-zone designs by cost and outage impact](/content-assets/articles/article-cloud-providers-azure-cost-resilience-mental-model/failure-cost-envelope.png)
+![Single-zone and multi-zone Azure design comparison showing cost, failure impact, and live service status](/content-assets/articles/article-cloud-providers-azure-cost-resilience-mental-model/failure-cost-envelope.png)
 
 *Resilience choices change both the failure blast radius and the monthly cost envelope.*
+
 
 | Failure Layer | Physical Cause | Azure Platform Mitigation | Cost Impact |
 | --- | --- | --- | --- |
@@ -144,10 +146,11 @@ Cost and resilience are not separate design considerations; they are the two opp
 
 Now that we have paired cost and resilience tradeoffs conceptually, we will explore Cost Visibility. We will use Microsoft Cost Management, budgets, tags, and right-sizing models to analyze our active spending, track accountability, and eliminate common cloud cost leaks.
 
-![An infographic showing cost and resilience tradeoffs across baseline cost, elastic demand, redundancy, recovery plan, headroom, and waste](/content-assets/articles/article-cloud-providers-azure-cost-resilience-mental-model/cost-resilience-tradeoff-map.png)
 
-*Use this as the cost-resilience tradeoff map: buy enough headroom and redundancy to meet the service promise, then trim idle waste and prove the recovery path with drills.*
 
+![Azure cost and resilience tradeoff map with baseline cost, elastic demand, redundancy, recovery plan, headroom, and waste](/content-assets/articles/article-cloud-providers-azure-cost-resilience-mental-model/cost-resilience-tradeoff-map.png)
+
+*Use this as the cost-resilience tradeoff map: buy enough headroom and redundancy to meet the service promise, then trim idle waste and prove recovery with drills.*
 
 ---
 

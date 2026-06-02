@@ -33,6 +33,11 @@ aliases:
 
 Azure compute is the part of Azure that runs your code. More precisely, it is the virtualized platform layer that executes application logic by allocating processor cycles and memory segments to running guest processes. Rather than choosing a compute service based on product brand names, you must evaluate the runtime contract your workload requires. Every hosting platform in Azure solves a core set of operational needs, but they distribute the ownership boundary differently between your team and Azure.
 
+![Azure workload shape map comparing web app, container API, event handler, full server, and Kubernetes platform](/content-assets/articles/article-cloud-providers-azure-compute-application-hosting-azure-compute-mental-model/workload-shape-first.png)
+
+*Choose compute by workload shape first: the service should match how the code runs, scales, and needs to be operated.*
+
+
 When you design a cloud architecture, you face a direct trade-off between control and convenience. If you select a service that gives you total control, you inherit the chore of patching operating systems, configuring network ports, and maintaining runtime runtimes. If you select a fully managed service, you delegate these tasks to Azure, but you must conform your application code to the platform's specific execution boundaries.
 
 To illustrate these trade-offs, we follow a team building a multi-tier commerce portal. The portal consists of a public-facing Node.js web storefront, a legacy inventory daemon requiring custom kernel parameters, a serverless checkout microservice, and an event-driven image processing engine.
@@ -59,6 +64,11 @@ flowchart TD
 ## Comparing Abstraction Models
 
 A compute abstraction model is the amount of infrastructure Azure hides from you. Lower models give you more control over the operating system and network details, while higher models let you focus on code, containers, or event handlers.
+
+![Azure compute control versus operations spectrum from Functions through Container Apps, App Service, AKS, and VMs](/content-assets/articles/article-cloud-providers-azure-compute-application-hosting-azure-compute-mental-model/control-vs-operations.png)
+
+*Less operational work usually means less low-level control, so choose the runtime at the point where responsibility and flexibility fit the team.*
+
 
 Example: a legacy inventory daemon that needs custom kernel settings fits a VM, while a receipt thumbnail processor that only runs after a blob upload fits Azure Functions.
 
@@ -311,6 +321,11 @@ Designing a resilient cloud architecture requires selecting the correct level of
 ## What's Next
 
 Now that we have mapped the Azure compute landscape, we will explore Azure Virtual Machines in depth. In the next chapter, we will select VM sizing series, manage OS and data disks, configure virtual machine scale sets, and write custom script extensions to automate database VM boot sequences.
+
+
+![Azure compute choices checklist with App Service, Container Apps, Functions, Virtual Machines, and AKS](/content-assets/articles/article-cloud-providers-azure-compute-application-hosting-azure-compute-mental-model/azure-compute-choices.png)
+
+*Use this as the compute chooser: match service shape, scaling model, operations burden, and control level before choosing the brand.*
 
 ---
 

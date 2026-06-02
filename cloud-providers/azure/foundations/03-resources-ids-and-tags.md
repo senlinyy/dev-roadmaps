@@ -32,6 +32,11 @@ aliases:
 
 The primary defense against resource identity mistakes is the Azure Resource ID. A resource ID is Azure's absolute URI for one deployed resource, similar in structure to an API route or filesystem path that fully qualifies where an object lives.
 
+![Azure resource ID route from subscription through resource group, provider, type, and name to the exact resource](/content-assets/articles/article-cloud-providers-azure-foundations-resource-groups-and-ids/resource-id-route.png)
+
+*A resource ID is the exact coordinate ARM uses to route a request to the provider, type, and resource name that owns the change.*
+
+
 Every Azure resource ID follows a strict, standardized REST API path structure:
 
 ```plain
@@ -128,10 +133,6 @@ A major architectural gotcha is the control-plane and data-plane mismatch. A `Re
 
 The confusing part is that some operations feel like data access but still depend on management-plane actions. For example, listing account keys, changing diagnostic settings, updating firewall rules, or modifying a service configuration can be blocked by a `ReadOnly` lock. To protect your systems, use `CanNotDelete` locks for most production resources, reserve `ReadOnly` locks for cases where you truly want to freeze management settings, and protect actual records with database permissions, Key Vault RBAC, storage data-plane RBAC, soft delete, versioning, and backups.
 
-![A pseudo-code infographic showing a management lock blocking an ARM delete request while a SQL data-plane query bypasses the lock](/content-assets/articles/article-cloud-providers-azure-foundations-resource-groups-and-ids/management-lock-plane-split.png)
-
-*Management locks protect resource configuration through ARM; the data inside a service still needs service-level permissions, recovery controls, and backups.*
-
 ## The CLI Scope: Inspecting Resources and Enforcing Locks
 
 To audit resources and protect them without using the slow Web Portal, you use the Azure CLI to query exact resource IDs and provision management locks directly from your terminal.
@@ -225,13 +226,14 @@ This central interception makes lock evaluation incredibly fast and robust. The 
 
 Tag inheritance is the expectation that labels from a parent container automatically copy to child resources. In Azure, resource group tags are useful coordinates, but they do not automatically become tags on the resources inside the group.
 
+![Azure tag inheritance trap showing resource group tags not automatically copied to child resources](/content-assets/articles/article-cloud-providers-azure-foundations-resource-groups-and-ids/tag-inheritance-trap-gpt.png)
+
+*Resource group tags are useful context, but child resources still need direct tags or an audit process will find gaps.*
+
+
 Example: tagging `rg-orders-prod-uksouth` with `team=commerce-platform` does not automatically tag `kv-orders-prod` or `ca-orders-api-prod`; your deployment template or policy must apply those tags too.
 
 For engineers transitioning from AWS, this is the most common Azure metadata gotcha.
-
-![An infographic showing that resource group tags do not automatically copy to child resources](/content-assets/articles/article-cloud-providers-azure-foundations-resource-groups-and-ids/tag-inheritance-trap-gpt.png)
-
-*Resource group tags are a useful coordinate, but child resources still need their own tags or an audit process will find gaps.*
 
 In many AWS environments, tags applied to a CloudFormation stack or an Account automatically cascade and apply to every child resource provisioned under that scope.
 
@@ -304,9 +306,10 @@ Operating a secure, transparent cloud hierarchy requires transitioning from frie
 
 We have established our resource identifiers, metadata tags, tagging flow behaviors, and management locks. Now we are ready to map our application jobs to physical Azure services. In the next article, we will construct the complete core services map, choosing the first Azure service families to inspect for public ingress, container runtime, persistent storage, secrets management, and observability.
 
-![A six-tile Azure resource safety checklist covering exact IDs, provider routing, business tags, delete locks, read lock caution, and auditing first](/content-assets/articles/article-cloud-providers-azure-foundations-resource-groups-and-ids/resource-safety-checklist.png)
 
-*Use this as the resource safety checklist: identify the exact resource path, understand which provider owns the action, apply business tags directly, protect production with delete locks, treat read locks carefully, and audit before changing anything.*
+![Azure resource safety checklist with exact ID, provider, tags, delete lock, read lock, and audit first](/content-assets/articles/article-cloud-providers-azure-foundations-resource-groups-and-ids/resource-safety-checklist.png)
+
+*Use this as the resource safety checklist: identify the exact ID, know the provider, tag the resource itself, choose locks carefully, and audit before changing it.*
 
 ---
 

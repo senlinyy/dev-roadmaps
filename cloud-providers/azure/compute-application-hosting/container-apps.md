@@ -189,6 +189,11 @@ Consider this deployment tag transformation:
 
 A revision is the read-only deployment record for one Container App template. It captures the exact image reference, resource limits, environment variables, and scale rules used by that version.
 
+![Container Apps revision map showing ingress, active revisions, traffic weights, scale rules, secrets, and managed identity](/content-assets/articles/article-cloud-providers-azure-compute-application-hosting-azure-container-apps/container-apps-revision-map.png)
+
+*A Container Apps revision is an immutable runtime snapshot; traffic, scale, secrets, and identity determine how safely it runs.*
+
+
 Example: revision `ca-orders-api-prod--0000123` can run image tag `2026-05-16.7` with `0.5` CPU, while revision `ca-orders-api-prod--0000124` runs image tag `2026-05-17.1` with `1.0` CPU during a canary rollout.
 
 Any change to a revision-scope property (such as deploying a new image tag, updating CPU/Memory limits, or altering App Settings) automatically triggers the creation of a new revision.
@@ -221,13 +226,14 @@ This multiple-revision architecture enables safe, progressive rollouts (such as 
 
 Ingress is the traffic entry setting for a Container App. It decides whether the app has no inbound endpoint, a private endpoint inside the environment or VNet, or a public HTTPS endpoint on the internet.
 
+![Container Apps ingress mapping external traffic to the configured target port and failing when the container listens elsewhere](/content-assets/articles/article-cloud-providers-azure-compute-application-hosting-azure-container-apps/target-port-contract.png)
+
+*Ingress works only when the platform target port matches the port your container actually listens on.*
+
+
 Example: `orders-worker` should usually have ingress disabled because it only reads from a queue, while `orders-api` might use external ingress on target port `3000` so browsers and API clients can reach it.
 
 Container Apps supports three ingress states: disabled (fully private background workers), internal (only reachable by other services inside the same environment or virtual network), and external (exposed to the public internet).
-
-![An infographic showing Container Apps ingress mapping external traffic to the configured target port](/content-assets/articles/article-cloud-providers-azure-compute-application-hosting-azure-container-apps/target-port-contract.png)
-
-*Ingress works only when the platform target port matches the port your container actually listens on.*
 
 When ingress is enabled, the platform allocates an external endpoint or internal reachability for the app and routes traffic to the configured target port of your running container replicas. Container Apps can handle TLS at the managed endpoint, but your container still has to listen on the correct target port and become ready before traffic can succeed.
 
@@ -236,6 +242,11 @@ If your service needs to execute background jobs or process messages from a queu
 ## Serverless Scaling with KEDA
 
 KEDA is the scale controller that watches external demand signals and changes replica count for you. Instead of waiting for CPU to rise inside an already-running container, KEDA can watch a queue, HTTP concurrency, or another event source.
+
+![Container Apps scaling from zero to replicas and back down when demand disappears](/content-assets/articles/article-cloud-providers-azure-compute-application-hosting-azure-container-apps/scale-to-zero-loop.png)
+
+*Scale-to-zero is a loop: no traffic means no replicas, new demand wakes replicas, and idle time shuts them down again.*
+
 
 Example: if `orders-queue` grows past five messages per worker, KEDA can increase `orders-worker` from zero replicas to several replicas even before those containers have CPU usage.
 
@@ -251,10 +262,6 @@ KEDA operates as a detached polling loop:
 4.  **Queue-Length Scaling**: If the message backlog exceeds your configured threshold (for example, if you set a `queueLength` of `5` and the queue has `50` messages), KEDA automatically scales out the replica count (up to your configured maximum) to process the backlog concurrently.
 
 By using KEDA, your background workers scale dynamically to match the volume of pending events, ensuring that your compute footprints align perfectly with active workloads.
-
-![An infographic showing Container Apps scaling from zero to replicas and back down when demand disappears](/content-assets/articles/article-cloud-providers-azure-compute-application-hosting-azure-container-apps/scale-to-zero-loop.png)
-
-*Scale-to-zero is a loop: no traffic means no replicas, new demand wakes replicas, and idle time shuts them down again.*
 
 A key capability of Container Apps is the ability to scale to zero replicas when no traffic or events are present. This can dramatically lower costs for development workloads or background processors that only run sporadically. However, scaling to zero introduces the physical constraint of cold starts.
 

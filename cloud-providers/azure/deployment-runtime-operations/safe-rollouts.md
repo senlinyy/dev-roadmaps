@@ -63,6 +63,11 @@ It runs on the same App Service Plan as the production instance.
 Each slot is assigned its own fully qualified domain name, its own application settings, and its own managed identity.
 Common slot configurations include a production slot and a staging slot.
 
+![App Service slot swap safety checks showing staging slot, warmup, smoke test, config check, and production slot](/content-assets/articles/article-cloud-providers-azure-deployment-runtime-operations-slots-revisions-safe-rollouts/slot-swap-safety-checks.png)
+
+*Slot swaps are safest when the candidate slot is warm, tested, and protected by sticky settings before traffic moves.*
+
+
 Example: `orders-api-staging.azurewebsites.net` can run image digest `sha256:7a4198...` at 0 percent public traffic while `orders-api.azurewebsites.net` continues serving the stable production version.
 
 Deployment slots isolate the candidate version physically and logically:
@@ -154,6 +159,11 @@ The team can query the revision status, perform network checks against its uniqu
 
 Traffic splitting is the release control that distributes incoming user requests across more than one active version.
 In a canary rollout, a small percentage of production traffic is routed to the candidate revision while the majority of traffic remains on the stable version.
+
+![Container Apps revision traffic shift showing users, ingress, revision A, revision B, traffic weights, and health](/content-assets/articles/article-cloud-providers-azure-deployment-runtime-operations-slots-revisions-safe-rollouts/revision-traffic-shift.png)
+
+*Canary traffic should move gradually while health evidence decides whether the new revision earns more traffic.*
+
 
 Example: route 95 percent of requests to `orders-api--v30` and 5 percent to `orders-api--v31` for 30 minutes, then increase the candidate only if errors and latency stay within the release threshold.
 
@@ -304,6 +314,11 @@ By managing the rollout pathway, engineering teams can verify application update
 
 The next article covers verification and rollback.
 After routing traffic, the team must monitor telemetry, manage alerts, and use structured data checks to decide whether to complete the release or trigger a rollback.
+
+
+![Azure safe rollout lanes comparing App Service slots and Container Apps revisions with direct test, health check, and rollback target](/content-assets/articles/article-cloud-providers-azure-deployment-runtime-operations-slots-revisions-safe-rollouts/safe-rollout-lanes.png)
+
+*Use this as the rollout map: isolate the candidate version, test it directly, shift traffic deliberately, and keep a rollback target ready.*
 
 ---
 

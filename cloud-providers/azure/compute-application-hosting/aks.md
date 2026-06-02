@@ -29,6 +29,11 @@ aliases:
 
 Azure Kubernetes Service (AKS) is Azure's managed way to run a Kubernetes cluster when your platform needs the Kubernetes API, pod scheduling, services, ingress, and node pools. While Kubernetes provides a declarative API that describes how containers connect, scale, and update, operating a cluster introduces significant infrastructure overhead. AKS addresses this by separating the cluster management into a hosted control plane and dedicated worker node virtual machine pools.
 
+![AKS cluster layers showing managed Kubernetes API, node pools, pods, services, ingress, identity, and cluster logs](/content-assets/articles/article-cloud-providers-azure-compute-application-hosting-aks/aks-cluster-layers.png)
+
+*AKS separates the managed control plane from worker capacity, pod placement, service routing, identity, and operations evidence.*
+
+
 To deploy an Azure Kubernetes Service cluster, you declare its size, network plugin, and identity integration. The following CLI command provisions a standard three-node user cluster with CNI overlay enabled:
 
 ```plain
@@ -84,9 +89,10 @@ You must also manage cluster upgrades. Kubernetes regularly deprecates old API v
 
 Node Pools represent the worker VM capacity where your pods run. Every node pool maps directly to an Azure Virtual Machine Scale Set (VMSS) running in a specialized infrastructure resource group.
 
-![An infographic showing AKS node pools placing pods on worker nodes with different capacity shapes](/content-assets/articles/article-cloud-providers-azure-compute-application-hosting-aks/node-pool-placement.png)
+![AKS node pool placement showing system pool, user pool, pods, VM scale sets, taints, and autoscale](/content-assets/articles/article-cloud-providers-azure-compute-application-hosting-aks/node-pool-placement.png)
 
 *Node pools are the capacity lanes where Kubernetes places pods, so pool sizing affects cost, scale, and scheduling.*
+
 
 AKS divides pools into two functional roles:
 * **System Node Pools**: Dedicated to hosting critical cluster system pods, such as CoreDNS and other required cluster add-ons. System node pools must run Linux and must maintain enough healthy capacity to keep the cluster operational. Ingress controllers can run on system or user pools depending on how your platform team designs scheduling, taints, and isolation.
@@ -219,11 +225,12 @@ Under the hood, a Service uses selectors to target pods with specific labels (su
 
 Ingress is the API layer that manages external HTTP/HTTPS routing into your cluster. While a Service load-balances traffic internally, an Ingress resource defines the public routing rules (such as mapping `api.devpolaris.com/orders` to the `orders-service` on port `80`).
 
-To execute these rules, you must run an Ingress Controller (such as the NGINX Ingress Controller or Azure Application Gateway Ingress Controller) in your cluster. The Ingress Controller runs as a reverse-proxy deployment in your User Node Pool.
-
-![An infographic showing traffic moving from ingress to service to pods in AKS](/content-assets/articles/article-cloud-providers-azure-compute-application-hosting-aks/service-to-ingress-path.png)
+![AKS traffic moving from ingress to service to pods with load balancing, stable targets, and readiness checks](/content-assets/articles/article-cloud-providers-azure-compute-application-hosting-aks/service-to-ingress-path.png)
 
 *AKS traffic reaches pods through stable service routing instead of relying on changing pod IPs directly.*
+
+
+To execute these rules, you must run an Ingress Controller (such as the NGINX Ingress Controller or Azure Application Gateway Ingress Controller) in your cluster. The Ingress Controller runs as a reverse-proxy deployment in your User Node Pool.
 
 The public path depends on the ingress controller you choose. With an in-cluster controller such as NGINX Ingress, an Azure Load Balancer can forward traffic to ingress controller pods, and those pods route requests to Kubernetes Services. With Application Gateway Ingress Controller, Application Gateway becomes the regional Layer 7 entry point and is configured from Kubernetes resources.
 

@@ -78,9 +78,10 @@ Separate your data assets into distinct storage containers based on their recove
 
 Redundancy is the replica placement policy for storage data. It controls how many physical copies of your data the Azure storage fabric maintains, and where those copies are distributed.
 
-![An infographic comparing LRS, ZRS, and GRS across datacenter, zone, and second-region scope](/content-assets/articles/article-cloud-providers-azure-cost-resilience-recovery-planning-redundancy-backups/redundancy-choice-map.png)
+![Azure redundancy choice map comparing LRS, ZRS, and GRS across datacenter, zone, and region scope](/content-assets/articles/article-cloud-providers-azure-cost-resilience-recovery-planning-redundancy-backups/redundancy-choice-map.png)
 
 *Redundancy levels widen the failure scope the data can survive, and the wider scope usually costs more.*
+
 
 Select the redundancy level that matches your durability budget:
 
@@ -148,9 +149,10 @@ Choose the strategy that aligns with your workflow's financial value and downtim
 
 A restore drill is a controlled proof that the recovery workflow works inside the target RTO and RPO. A disaster recovery plan is merely a theory until a successful restore drill demonstrates that your team can recover the system within your target RTO.
 
-![An infographic showing backup, isolated restore environment, app verification, and recording restore drill results](/content-assets/articles/article-cloud-providers-azure-cost-resilience-recovery-planning-redundancy-backups/restore-drill-loop.png)
+![Azure restore drill loop showing backup, feature sandbox, verify app, record result, RTO, and RPO](/content-assets/articles/article-cloud-providers-azure-cost-resilience-recovery-planning-redundancy-backups/restore-drill-loop.png)
 
 *Restore drills close the loop between written recovery targets and evidence that the system can actually recover.*
+
 
 To run a safe, isolated recovery drill without disrupting production traffic, establish a structured sequence:
 
@@ -205,10 +207,11 @@ A resilient Azure architecture is built on verified recovery pipelines, aligned 
 * **Match Strategies**: Size your disaster recovery strategy (Backup and Restore, Pilot Light, Warm Standby, Active-Active) to the business value of your service workflows.
 * **Verify Drills**: Run regular, isolated restore drills to measure active RTOs and RPOs, validate traffic and identity cutover, and discover configuration gaps under safe, non-production perimeters.
 
-![An infographic showing recovery planning across healthy state, failure, restore, verification, RPO, RTO, LRS, ZRS, GRS, and restore drills](/content-assets/articles/article-cloud-providers-azure-cost-resilience-recovery-planning-redundancy-backups/recovery-planning-ladder.png)
+
+
+![Azure recovery planning ladder showing healthy state, failure, restore, verification, RPO, RTO, LRS, ZRS, GRS, and restore drills](/content-assets/articles/article-cloud-providers-azure-cost-resilience-recovery-planning-redundancy-backups/recovery-planning-ladder.png)
 
 *Use this as the recovery planning ladder: redundancy changes which failures you can survive, but RPO, RTO, and restore drills decide whether the business can actually recover.*
-
 
 ---
 

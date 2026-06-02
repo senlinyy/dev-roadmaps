@@ -32,6 +32,11 @@ aliases:
 
 Azure's core operating model is a split between identity records, billing and quota containers, lifecycle groups, and resource APIs. That split is the first anchor to hold onto: Azure does not keep every user, invoice, and server setting inside one account-shaped object.
 
+![Azure mental model showing user or workload requests crossing tenant, subscription, resource group, and ARM boundaries before reaching services](/content-assets/articles/article-cloud-providers-azure-foundations-azure-mental-model/identity-resource-split.png)
+
+*Azure separates identity, payment and quota, lifecycle grouping, and the ARM control gate before a request reaches a service.*
+
+
 When you operate applications locally on a workstation, boundary management is straightforward. You run a single development environment on your laptop where your identity is absolute, your database has no external billing quotas, and your services communicate privately without security gateways.
 
 However, once you scale an engineering team to manage multiple environments (such as development, staging, and production) across distributed teams, this flat model creates two severe operational frictions:
@@ -142,6 +147,11 @@ Now that we have established the hierarchical scope path from Entra tenants down
 
 Azure Resource Manager (ARM) is Azure's central management API for creating, changing, and deleting cloud resources. It exists so every administrative change can pass through the same identity, permission, policy, and provider-routing checks.
 
+![Azure Resource Manager control path showing token, RBAC, policy, provider routing, and resource change](/content-assets/articles/article-cloud-providers-azure-foundations-azure-mental-model/arm-control-path.png)
+
+*ARM is the management gate: a create or update request must pass token, RBAC, and policy checks before a provider changes a resource.*
+
+
 Example: when you run `az sql db create`, the request goes to ARM first. ARM checks who you are, whether you can write at that scope, whether policy allows the location and settings, and only then forwards the work to the SQL resource provider.
 
 Whether you click a button in the web portal, run a terminal CLI command, trigger a CI/CD pipeline, or deploy an infrastructure-as-code template, your request is formatted as an HTTP REST call and sent to a single global endpoint at `management.azure.com`.
@@ -165,10 +175,6 @@ flowchart LR
     ARM --> ARMValidation
     ARMValidation -->|Authorized| Provider["Resource Provider<br/>(Microsoft.Compute, Microsoft.Sql)"]
 ```
-
-![A pseudo-code infographic showing an Azure Resource Manager request moving through token validation, RBAC, policy, and provider routing](/content-assets/articles/article-cloud-providers-azure-foundations-azure-mental-model/arm-request-pipeline-pseudocode.png)
-
-*Read ARM as a request pipeline: the caller token, action, target scope, and payload must pass token, RBAC, and policy checks before a provider receives work.*
 
 The control plane is the management path for resource settings. The data plane is the runtime path for application data. This central routing model enforces a strict boundary between them:
 
@@ -328,6 +334,11 @@ Structuring your cloud boundaries around this hierarchy prevents resource drift 
 Now that we have established the core Azure mental model, directory boundaries, ARM control pipeline, and hierarchy layout, our next step is to examine how this logical tree maps to physical geography.
 
 In the next chapter, we will go deep into **Tenants, Subscriptions, and Regions**. We will explore subscription partitioning strategies, regional datacenter selections, regional pairs, and the physical availability zone architectures that keep workloads resilient against hardware failures.
+
+
+![Azure mental model summary with tenant, subscription, resource group, ARM gate, provider, and evidence tiles](/content-assets/articles/article-cloud-providers-azure-foundations-azure-mental-model/azure-mental-model-summary.png)
+
+*Use this as the Azure mental model checklist: locate the tenant, subscription, resource group, ARM gate, provider, and evidence trail before changing anything.*
 
 ---
 

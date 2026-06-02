@@ -104,9 +104,10 @@ When the packet arrives at the destination PaaS host, the receiving hypervisor d
 
 Split-brain DNS is a name-resolution design where the same service hostname returns a private IP inside the VNet and a public answer outside it. To implement private endpoints seamlessly, your network must use this DNS pattern.
 
-![An infographic showing public and private DNS resolving the same service name to different addresses](/content-assets/articles/article-cloud-providers-azure-networking-connectivity-public-and-private-access/split-dns-decision.png)
+![Private and public DNS resolving the same Azure service name to different inside and outside addresses](/content-assets/articles/article-cloud-providers-azure-networking-connectivity-public-and-private-access/split-dns-decision.png)
 
 *Private connectivity often works or fails at DNS first because the same name can resolve differently inside and outside the VNet.*
+
 
 When your application connects to a database, your code must continue using the canonical public domain name (e.g. `devpolaris-orders-sql.database.windows.net`). You must never hardcode a raw private IP address inside your source code, because the underlying virtual network interfaces can be recreated or reassigned during platform updates.
 
@@ -124,10 +125,6 @@ flowchart TD
         PublicDNS --> |Standard Public Directory| PublicIP["52.174.12.99 (Public IP)"]
     end
 ```
-
-![A pseudo-code infographic showing the same Azure service hostname resolving to a public IP outside the VNet and a private endpoint IP inside the VNet](/content-assets/articles/article-cloud-providers-azure-networking-connectivity-public-and-private-access/split-dns-pseudocode.png)
-
-*Private Link often keeps the same hostname in application code, but DNS returns a private endpoint address when the query originates inside the linked VNet.*
 
 ### 1. The Inside-VNet Query Path
 When your application container calls `devpolaris-orders-sql.database.windows.net`, the request is resolved through the DNS settings for the virtual network. With Azure-provided DNS, the platform IP is `168.63.129.16`. If you use custom DNS servers, those servers must forward or resolve the relevant private DNS zones correctly.
@@ -191,9 +188,10 @@ az network private-dns link vnet create \
 
 Azure provides two primary private connectivity patterns: Private Endpoints create a private IP interface for one service instance, while Service Endpoints keep the service endpoint public but add subnet-based trust. Differentiating between these architectures is a core design requirement:
 
-![An infographic comparing private endpoints and service endpoints for Azure managed services](/content-assets/articles/article-cloud-providers-azure-networking-connectivity-public-and-private-access/endpoint-choice.png)
+![Azure service endpoint and private endpoint comparison showing trust through subnet versus private IP in the VNet](/content-assets/articles/article-cloud-providers-azure-networking-connectivity-public-and-private-access/endpoint-choice.png)
 
 *Private endpoints create a local private IP for a service, while service endpoints keep the public service endpoint and add VNet-based trust.*
+
 
 | Feature Coordinate | Service Endpoints (`Microsoft.VNet`) | Private Endpoints (`Microsoft.Network`) |
 | :--- | :--- | :--- |
@@ -310,10 +308,11 @@ Operating a secure virtual network requires routing all PaaS service dependencie
 *   **Secure PaaS firewalls**: Harden resource firewalls on databases and key vaults to reject all public IP ranges, permitting connections strictly from approved private endpoint NICs.
 *   **Peering through Fiber Hubs**: Interconnect spoke networks through central hubs utilizing VNet Peering to preserve low-latency, private backbone transits globally.
 
-![An infographic showing Private DNS resolving an Azure service name to a private endpoint IP inside the VNet before reaching the managed service](/content-assets/articles/article-cloud-providers-azure-networking-connectivity-public-and-private-access/private-link-path.png)
 
-*Use this as the Private Link path: DNS must resolve to the private endpoint IP, the app talks to that local VNet address, and Azure carries the connection to the managed service privately.*
 
+![Private Link path showing private DNS resolving to a private endpoint IP before reaching an Azure managed service](/content-assets/articles/article-cloud-providers-azure-networking-connectivity-public-and-private-access/private-link-path.png)
+
+*Use this as the Private Link path: DNS resolves to the private endpoint IP, the app talks to that local VNet address, and Azure carries the connection privately.*
 
 ---
 

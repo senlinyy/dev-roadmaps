@@ -95,9 +95,10 @@ That separation is useful. When a request fails, you can ask whether the packet 
 
 NSG priority is the rule order that decides which matching rule wins. Azure evaluates NSG rules in a strict, sequential order based on a priority number ranging from `100` to `65000`. Rules with lower priority numbers are processed first.
 
-![An infographic showing Azure NSG rules being evaluated by priority until the first match wins](/content-assets/articles/article-cloud-providers-azure-networking-connectivity-network-security-groups-and-application-security-groups/first-matching-rule-wins.png)
+![Azure NSG rule evaluation showing lower priority number matching first and stopping later rules](/content-assets/articles/article-cloud-providers-azure-networking-connectivity-network-security-groups-and-application-security-groups/first-matching-rule-wins.png)
 
 *NSG troubleshooting starts with priority order because the first matching rule stops the evaluation.*
+
 
 When a packet arrives at the virtual switch, the security controller walks the priority list from lowest to highest:
 
@@ -107,10 +108,6 @@ Evaluating Inbound Packet:
   ├── Priority 200: Allow TCP 1433 ── (Skipped)
   └── Priority 65000: Deny All Inbound ── (Skipped)
 ```
-
-![A pseudo-code infographic showing an Azure NSG allowing a packet at priority 100 and stopping before a broader deny rule at priority 200](/content-assets/articles/article-cloud-providers-azure-networking-connectivity-network-security-groups-and-application-security-groups/nsg-priority-pseudocode.png)
-
-*A packet is decided by the first matching NSG rule, so a lower-numbered broad rule can hide every specific rule below it.*
 
 The moment a packet matches all parameters of a rule (such as matching the destination port and source IP), the evaluation loop **stops immediately**. Azure applies that rule's access decision (Allow or Deny) and discards the rest of the list.
 
@@ -165,9 +162,10 @@ This stateful behavior significantly improves performance and simplifies configu
 
 Dual evaluation means a packet may need to pass both the subnet NSG and the NIC NSG. When you associate an NSG with a subnet and also apply an NSG to an individual network interface (NIC), Azure processes packets through a strict dual-evaluation pipeline.
 
-![An infographic showing packets checked by both subnet and network interface NSGs](/content-assets/articles/article-cloud-providers-azure-networking-connectivity-network-security-groups-and-application-security-groups/two-nsg-checkpoints.png)
+![Azure packet checked by both subnet NSG and network interface NSG before reaching a VM](/content-assets/articles/article-cloud-providers-azure-networking-connectivity-network-security-groups-and-application-security-groups/two-nsg-checkpoints.png)
 
 *A packet may pass one NSG and still be blocked by the other, so effective access is the intersection of both checkpoints.*
+
 
 This pipeline evaluates packets sequentially, and the order of evaluation depends entirely on the direction of the traffic:
 
@@ -298,10 +296,11 @@ In the next chapter, we will study **Public Entry Points**. We will compare Laye
 
 This ensures our private network interfaces remain insulated while accepting verified internet traffic.
 
-![An infographic showing packet filtering through subnet and NIC network security groups, priority rules, stateful flow, and application security groups](/content-assets/articles/article-cloud-providers-azure-networking-connectivity-network-security-groups-and-application-security-groups/nsg-packet-check.png)
 
-*Use this as the packet checklist: evaluate the subnet NSG, then the NIC NSG, remember that the first matching priority wins, and use ASGs to target roles instead of memorizing IP lists.*
 
+![Azure NSG packet checklist showing subnet NSG, NIC NSG, priorities, stateful flow, and application security groups](/content-assets/articles/article-cloud-providers-azure-networking-connectivity-network-security-groups-and-application-security-groups/nsg-packet-check.png)
+
+*Use this as the packet checklist: evaluate subnet and NIC NSGs, remember that first matching priority wins, and use ASGs to target roles instead of memorizing IP lists.*
 
 ---
 

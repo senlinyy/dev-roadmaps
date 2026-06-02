@@ -3,7 +3,7 @@ title: "Cluster Upgrades"
 description: "Plan and execute Kubernetes cluster upgrades with compatibility checks, workload drain behavior, and rollback-aware validation."
 overview: "Cluster upgrades change the platform under every workload. You will learn how to prepare devpolaris-orders-api for upgrades by checking APIs, node drain behavior, controllers, and post-upgrade evidence."
 tags: ["upgrades", "nodes", "drain", "compatibility"]
-order: 6
+order: 7
 id: article-containers-orchestration-cluster-operations-cluster-upgrades
 aliases:
   - containers-orchestration/cluster-operations/cluster-upgrades.md

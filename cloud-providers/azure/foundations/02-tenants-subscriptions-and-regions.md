@@ -38,6 +38,11 @@ aliases:
 
 A subscription is the most important billing and resource quota scope in Azure. Instead of deploying all your company services inside one shared scope (which makes it hard to see who spent what and creates massive security risks), you partition your infrastructure across dedicated subscriptions.
 
+![Production and development subscriptions separated by access, quota, budget, policy, and resource boundaries](/content-assets/articles/article-cloud-providers-azure-foundations-tenants-and-subscriptions/subscription-boundaries.png)
+
+*Subscription boundaries are operating walls: they separate access, quota, budget tracking, policy, and resource ownership.*
+
+
 At a practical level, a subscription is the Azure scope where billing records, quota limits, policy assignments, and RBAC permissions meet. Keeping production, development, and shared platform workloads in separate subscriptions gives each environment its own cost ledger, capacity pool, and permission boundary.
 
 To design a secure, cost-effective infrastructure, you must partition your workloads across dedicated subscriptions based on four operational drivers:
@@ -73,10 +78,6 @@ Azure Policy is the subscription rule system that accepts or rejects resource co
 Example: production can require private storage endpoints and deny resources outside `uksouth`, while a development subscription can allow temporary public test endpoints for short-lived experiments.
 
 These rules are applied at subscription scopes. If your production subscription must comply with strict financial auditing standards, you can apply heavy restrictions at the subscription root. If developers shared that same subscription, they would be blocked from experimenting with new services, slowing down innovation. Separate subscriptions let you enforce strict compliance on production while leaving development test environments relatively open.
-
-![An infographic comparing production and development subscription boundaries for access, quota, budget, and policy isolation](/content-assets/articles/article-cloud-providers-azure-foundations-tenants-and-subscriptions/subscription-boundaries.png)
-
-*Subscription boundaries are practical operating walls. They separate who can change production, which quota pool can be exhausted, which invoice records the spend, and which policies constrain deployments.*
 
 ## Logical Workspaces: Resource Groups
 
@@ -233,6 +234,11 @@ Every returned coordinate provides precise placement evidence:
 
 Availability Zones are physically separate datacenter facilities inside one Azure region. They exist so an application can survive the loss of one facility without leaving the region.
 
+![Azure logical zone numbers mapping to different physical sites in two subscriptions](/content-assets/articles/article-cloud-providers-azure-foundations-tenants-and-subscriptions/logical-zone-scope.png)
+
+*Zone numbers are subscription-scoped labels, so cross-subscription placement should be verified with latency and resilience evidence rather than copied strings.*
+
+
 Example: a production API can place replicas in zones `1`, `2`, and `3` in `uksouth`, so one zonal power issue does not remove all running capacity.
 
 To build a highly resilient architecture, you must understand the physical mechanisms behind Azure Availability Zones. An Availability Zone is equipped with independent power substations, industrial cooling towers, and fiber network routing paths.
@@ -271,10 +277,6 @@ Example: `sub-orders-prod` and `sub-analytics-prod` may both deploy to `zone 1`,
 This mapping is scoped to your subscription. Azure does not promise that logical zone `1` in one subscription points to the same physical datacenter as logical zone `1` in another subscription. As shown in the diagram, Zone 1 in Subscription A might point to physical datacenter facility X, while in Subscription B the string "Zone 1" maps to physical datacenter facility Y.
 
 If your platform team attempts to coordinate low-latency cross-subscription network traffic by hardcoding logical zone numbers, you will suffer unexpected latency hops because the traffic must cross physical datacenter boundaries. To bypass this, you must query physical zone mappings using the CLI or rely on private virtual network routing metrics rather than logical zone strings.
-
-![An infographic showing logical Azure zone numbers mapping to different physical datacenter sites in two different subscriptions](/content-assets/articles/article-cloud-providers-azure-foundations-tenants-and-subscriptions/logical-zone-scope.png)
-
-*Logical zone numbers are scoped to a subscription. The same label can point at a different physical building in another subscription, so cross-subscription placement decisions need measured network evidence rather than copied zone strings.*
 
 :::expand[Hardcoding Zone Numbers Across Subscriptions]{kind="pitfall"}
 Azure maps logical zone numbers (1, 2, 3) to physical datacenter buildings independently per subscription. This means logical "Zone 1" in Subscription A and logical "Zone 1" in Subscription B can map to completely different physical sites. A platform team that hosts a low-latency web application in Subscription A and its backend database in Subscription B, both hardcoded to `zone: "1"` under the assumption of physical co-location, may suffer unexpected cross-datacenter network hops, adding 2–5 ms of latency to every database query.
@@ -333,9 +335,10 @@ Operating a resilient, cost-effective cloud system requires complete control ove
 
 We have established our boundary placement, subscription partitioning, regional coordinates, and availability zone architectures. Now we are ready to identify and secure our individual resources. In the next article, we will go deep into resource identities. We will dissect the complete syntax of an Azure Resource ID, configure standard cost allocation tags, and apply control plane management locks.
 
-![A six-tile Azure placement checklist covering subscription isolation, resource group lifecycle, region fit, SKU availability, zone mapping, and recovery pairs](/content-assets/articles/article-cloud-providers-azure-foundations-tenants-and-subscriptions/placement-checklist.png)
 
-*Use this as the placement checklist: isolate production at the subscription boundary, group resources by lifecycle, choose regions by latency and available SKUs, treat zone numbers as subscription-scoped, and pair recovery targets deliberately.*
+![Azure placement checklist with subscription, resource group, region, SKU fit, zone mapping, and recovery pair](/content-assets/articles/article-cloud-providers-azure-foundations-tenants-and-subscriptions/placement-checklist.png)
+
+*Use this as the placement checklist: isolate the workload, group the lifecycle, choose a region that fits, verify SKU and zone behavior, and plan the recovery pair.*
 
 ---
 

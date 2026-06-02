@@ -48,6 +48,11 @@ Observability ensures that your team gathers the metrics, logs, and traces neede
 
 Azure Monitor is the central Azure platform for collecting, querying, evaluating, and alerting on operational telemetry. It brings resource metrics, resource logs, application traces, dashboards, and alert rules under one monitoring umbrella.
 
+![Azure observability map showing logs, metrics, traces, alerts, dashboards, correlation, and Azure Monitor](/content-assets/articles/article-cloud-providers-azure-observability-azure-observability-mental-model/azure-observability-map.png)
+
+*Observability starts by separating the signal types, then routing them into tools that answer different operational questions.*
+
+
 Example: a single production app can send App Service metrics, Azure SQL logs, Application Insights traces, and alert notifications through Azure Monitor resources.
 
 Azure Monitor functions as the central collection and evaluation platform for Azure resource metrics, logs, traces, and alerts.
@@ -117,6 +122,11 @@ Always pair resource-level monitoring with application-level telemetry, such as 
 Telemetry signals are the structured evidence your systems emit while they run. To diagnose system failures, you must gather enough evidence to reconstruct the timeline of an incident.
 The Azure Monitor telemetry model organizes this evidence into four primary signals: logs, metrics, traces, and alerts.
 Each signal represents a different data structure optimized to answer a specific operational question.
+
+![Azure signal boundary map showing logs, metrics, traces, and alerts around an application runtime](/content-assets/articles/article-cloud-providers-azure-observability-azure-observability-mental-model/signal-boundary-map.png)
+
+*Logs, metrics, traces, and alerts are different evidence shapes, so they should not be designed or queried as one thing.*
+
 
 ### 1. Logs
 
@@ -307,6 +317,11 @@ By establishing a thorough observability pathway, engineering teams can detect p
 
 The next article covers Logs and Workspaces.
 We will configure Azure Diagnostic Settings to route resource logs, provision a Log Analytics workspace, establish log retention rules, and learn to write Kusto Query Language (KQL) queries.
+
+
+![Azure telemetry question map connecting what changed, where, how bad, and who is affected to observability evidence](/content-assets/articles/article-cloud-providers-azure-observability-azure-observability-mental-model/telemetry-question-map.png)
+
+*Use this as the observability checklist: start with the question, then choose the signal that can answer it.*
 
 ---
 

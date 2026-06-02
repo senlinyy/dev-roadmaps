@@ -35,6 +35,11 @@ aliases:
 
 Azure Role-Based Access Control (Azure RBAC) is Azure's permission system for management and data actions. It decides whether a verified identity can perform a specific operation on a specific Azure scope.
 
+![Azure RBAC map showing principal, role, scope, ARM check, action, and evidence](/content-assets/articles/article-cloud-providers-azure-identity-security-azure-identity-and-security-mental-model/azure-rbac-map.png)
+
+*Azure RBAC turns a caller, operation, and scope into an allow or deny decision at request time.*
+
+
 Example: `mi-orders-api-prod` might be allowed to read secrets from `kv-orders-prod`, while the same identity is denied permission to delete the vault or resize an Azure SQL database.
 
 To construct a secure, compliant cloud architecture, you must understand the absolute boundary between authentication and authorization.
@@ -73,15 +78,16 @@ Next, it evaluates the active role assignments bound to that principal at the ta
 If a role assignment allows the requested operation, the engine forwards the request to the backend service.
 If no role assignment matches, the gateway aborts the request immediately, returning an HTTP `403 Forbidden` REST error.
 
-![Azure RBAC evaluates a principal, role, and scope binding before allowing or rejecting a request.](/content-assets/articles/article-cloud-providers-azure-identity-security-azure-identity-and-security-mental-model/rbac-access-check.png)
-
-*Treat Azure RBAC as a request-time gate: identity proves who is calling, while the role assignment proves what that caller can do at this exact scope.*
-
 ## Comparing Azure RBAC and AWS IAM Models
 
 If you are coming from an AWS background, the core security goals remain identical.
 Workloads still require a workload identity to authenticate, a policy to describe permissions, and a boundary to lock down access.
 However, AWS IAM and Azure RBAC structure these coordinates differently.
+
+![Authentication and authorization gates showing sign-in through Entra ID before Azure RBAC checks permissions](/content-assets/articles/article-cloud-providers-azure-identity-security-azure-identity-and-security-mental-model/authentication-authorization-gates.png)
+
+*Authentication proves who the caller is; authorization decides what that caller can do at the requested scope.*
+
 
 In AWS IAM, a policy document is self-contained.
 The JSON document defines both the allowed actions (such as `s3:GetObject`) and the specific resource paths those actions target (such as `arn:aws:s3:::my-bucket/*`).
@@ -133,6 +139,11 @@ To maintain least privilege, you must differentiate between four distinct princi
 ## The Object ID vs. Application ID Interface
 
 Object ID and Application ID are different identifiers for different layers of an identity. The Object ID identifies one local directory object in your tenant, while the Application ID identifies the reusable application registration template.
+
+![Object ID matters diagram showing application ID used by code and object ID used for RBAC binding](/content-assets/articles/article-cloud-providers-azure-identity-security-azure-identity-and-security-mental-model/object-id-matters.png)
+
+*The application ID identifies the app registration, while the object ID is the security principal Azure RBAC actually binds.*
+
 
 Example: RBAC role assignments need the Object ID for `mi-orders-api-prod`, because Azure must bind permission to the exact principal instance in your tenant.
 
@@ -232,6 +243,11 @@ The only true deny in Azure RBAC is an explicit Deny Assignment, which is a syst
 
 Scope is the Azure boundary where a role assignment applies. Hierarchical scope means that a permission can be assigned at a parent level and flow down to children.
 
+![Azure scope inheritance from management group to subscription, resource group, and resource](/content-assets/articles/article-cloud-providers-azure-identity-security-azure-identity-and-security-mental-model/scope-inheritance.png)
+
+*A broad role assignment grants access downward, so least privilege usually means binding at the narrowest scope that still works.*
+
+
 Example: assigning `Reader` at a subscription lets the principal read all resource groups and resources inside that subscription, while assigning `Reader` at one vault limits visibility to that vault.
 
 Azure organizes scopes into a strict, four-level nested hierarchy:
@@ -257,6 +273,11 @@ If a container app only needs to read secrets from one specific vault, assign th
 ## Role Assignments: Binding Scopes
 
 A role assignment is the binding record that makes access active. It connects one principal, one role definition, and one scope.
+
+![Azure RBAC evaluates a principal, role, and scope binding before allowing or rejecting a request](/content-assets/articles/article-cloud-providers-azure-identity-security-azure-identity-and-security-mental-model/rbac-access-check.png)
+
+*Treat Azure RBAC as a request-time gate: identity proves who is calling, while the role assignment proves what that caller can do at this scope.*
+
 
 Example: binding Object ID `5f1f64a4-0a2c-4f3c-91f4-3b9e68b9f6d1` to `Key Vault Secrets User` at `/vaults/kv-orders-prod` is what lets that workload read secrets from that vault.
 
@@ -471,9 +492,10 @@ Now we are ready to answer the runtime authentication question: how does our run
 In the next article, we will go deep into managed identities.
 We will trace system-assigned and user-assigned lifecycles, and dissect the step-by-step token flow handshake.
 
-![A five-part Azure RBAC summary showing Principal ID, Role definition, Scope inheritance, Role assignment, and ARM evaluation.](/content-assets/articles/article-cloud-providers-azure-identity-security-azure-identity-and-security-mental-model/rbac-summary.png)
 
-*Use this map as the quick checklist for debugging any Azure access question: caller, operation list, scope, binding, then ARM's final evaluation.*
+![Azure RBAC summary with principal ID, role definition, scope inheritance, role assignment, and ARM evaluation](/content-assets/articles/article-cloud-providers-azure-identity-security-azure-identity-and-security-mental-model/rbac-summary.png)
+
+*Use this as the RBAC checklist: caller, operation list, scope, binding, and ARM evaluation.*
 
 ---
 

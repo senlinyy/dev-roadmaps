@@ -246,9 +246,10 @@ Because it does not parse HTTP or terminate TLS, Azure Load Balancer is built fo
 
 A health probe is the entry service's repeated check that a backend target is ready to receive traffic. To protect users from server crashes, public entry points run continuous active health probe polling to monitor the state of backend nodes.
 
-![An infographic showing TLS termination, routing rules, health probes, and backend pool selection](/content-assets/articles/article-cloud-providers-azure-networking-connectivity-load-balancers-application-gateway-and-front-door/tls-health-path.png)
+![Azure public entry path showing TLS edge, routing rule, health probe, and backend pool selection](/content-assets/articles/article-cloud-providers-azure-networking-connectivity-load-balancers-application-gateway-and-front-door/tls-health-path.png)
 
 *A public entry service must prove the connection, choose a route, and keep unhealthy backends out of the active pool.*
+
 
 A health probe is an active polling loop. The entry service initiates short HTTP requests to a designated path (e.g. `/health` or `/ready`) at configured intervals (such as every 15 seconds):
 
@@ -269,11 +270,12 @@ When writing backend code, always expose a dedicated health endpoint that audits
 
 The entry choice starts with the kind of request, not the product menu. Decide whether the request needs global HTTP routing, regional HTTP inspection, raw TCP/UDP distribution, or private backend routing.
 
-Example: a public browser API usually starts with Front Door or Application Gateway, while a private TCP service between VM tiers may only need an internal Load Balancer.
-
-![An infographic comparing global edge entry with regional application gateway and layer 4 load balancing](/content-assets/articles/article-cloud-providers-azure-networking-connectivity-load-balancers-application-gateway-and-front-door/edge-vs-regional-entry.png)
+![Azure edge versus regional entry comparison for Front Door, Application Gateway, and Load Balancer](/content-assets/articles/article-cloud-providers-azure-networking-connectivity-load-balancers-application-gateway-and-front-door/edge-vs-regional-entry.png)
 
 *Choose the entry point by the job it performs: global HTTP edge, regional layer 7 routing, or raw layer 4 transport.*
+
+
+Example: a public browser API usually starts with Front Door or Application Gateway, while a private TCP service between VM tiers may only need an internal Load Balancer.
 
 | Need | Better starting point |
 | --- | --- |
@@ -349,10 +351,11 @@ Operating a resilient public entry boundary requires connecting hostname resolut
 
 The public entry path gets users to the application. The last networking question is how the application reaches Azure services such as SQL, Key Vault, and Storage through private paths. That is private connectivity.
 
-![An infographic comparing Azure Front Door, Application Gateway, and Load Balancer across DNS, TLS, health probes, and backend routing](/content-assets/articles/article-cloud-providers-azure-networking-connectivity-load-balancers-application-gateway-and-front-door/public-entry-chooser.png)
 
-*Use this as the public entry chooser: pick Front Door for global HTTP edge routing, Application Gateway for regional layer 7/WAF behavior, and Load Balancer for regional layer 4 traffic.*
 
+![Azure public entry chooser comparing Front Door, Application Gateway, and Load Balancer across DNS, TLS, health, and backend routing](/content-assets/articles/article-cloud-providers-azure-networking-connectivity-load-balancers-application-gateway-and-front-door/public-entry-chooser.png)
+
+*Use this as the public entry chooser: Front Door for global HTTP edge, Application Gateway for regional layer 7 behavior, and Load Balancer for regional layer 4 traffic.*
 
 ---
 

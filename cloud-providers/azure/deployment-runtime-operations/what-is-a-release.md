@@ -52,6 +52,11 @@ The change may be application code, a container image, an App Service package, a
 The user does not care which configuration file changed.
 The user cares exclusively whether the checkout workflow still functions correctly.
 
+![Azure release runtime contract showing artifact, runtime, configuration, traffic, health, and rollback](/content-assets/articles/article-cloud-providers-azure-deployment-runtime-operations-mental-model/release-runtime-contract.png)
+
+*A release is a runtime contract: artifact, configuration, traffic, health evidence, and rollback all need to agree.*
+
+
 A successful cloud release requires aligning six distinct architectural promises.
 If an outage occurs, these separate promises allow you to quickly identify whether the code changed, the runtime environment changed, the configuration changed, or only the traffic path changed:
 
@@ -275,6 +280,11 @@ Configuration and identity are the runtime inputs that tell the same artifact wh
 Configuration variables and access secrets govern how your code behaves within a chosen environment scope.
 A common release failure mode is environment leakage, where a candidate codebase running in a staging environment connects to production databases or caches due to shared configuration files.
 
+![Release path showing build artifact, runtime boundary, configuration, traffic split, health path, and release record](/content-assets/articles/article-cloud-providers-azure-deployment-runtime-operations-mental-model/artifact-config-traffic-split.png)
+
+*The same artifact can behave differently when runtime configuration, traffic, identity, or health gates differ.*
+
+
 To prevent this, Azure App Service utilizes slot-level sticky settings.
 By marking an environment setting or connection string as a slot setting, you instruct the ARM configuration layer to pin that value to its physical slot.
 During a slot swap, while the code and routing pointers are swapped, the sticky settings remain unchanged, ensuring that the staging host continues to talk to the staging database while the newly promoted production host inherits the production database connection.
@@ -325,6 +335,11 @@ A successful release requires coordinating multiple control points to transition
 Now that we have established the operational mental model of a release contract, we will explore the configuration controls.
 In the next chapter, we will explore Configuration and Secrets.
 We will examine how Azure App Configuration and Key Vault work under the hood to manage dynamic environment variables, rotate secret vaults, and enforce security policies.
+
+
+![Release health gate showing old version, new version, health check, metrics, continue, and rollback decision](/content-assets/articles/article-cloud-providers-azure-deployment-runtime-operations-mental-model/health-rollback-gate.png)
+
+*Use this as the release safety loop: watch the new runtime, compare health, and choose continue or rollback before damage spreads.*
 
 ---
 

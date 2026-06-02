@@ -3,7 +3,7 @@ title: "Production Debugging Workflow"
 description: "Follow a repeatable Kubernetes production debugging workflow from symptom capture to rollback, mitigation, and evidence."
 overview: "Production debugging is a sequence of small proofs under time pressure. This article gives you a practical workflow for devpolaris-orders-api that separates user symptoms, Kubernetes state, application logs, dependencies, and safe mitigation."
 tags: ["debugging", "incidents", "kubectl", "runbooks"]
-order: 8
+order: 9
 id: article-containers-orchestration-kubernetes-operations-production-debugging-workflow
 ---
 

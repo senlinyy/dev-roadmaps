@@ -96,9 +96,10 @@ One critical Azure-specific gotcha is **Subnet Delegation**. Some services, such
 
 For engineers transitioning from other environments, the most important subnet gotcha is the reservation of IP addresses. In standard networking, a subnet has exactly two reserved IP addresses: the network address (first address) and the broadcast address (last address).
 
-![An infographic showing the first four and last IP address in an Azure subnet reserved by the platform](/content-assets/articles/article-cloud-providers-azure-networking-connectivity-azure-networking-mental-model/azure-reserved-ips.png)
+![Azure reserved IPs diagram showing platform-reserved addresses inside a subnet](/content-assets/articles/article-cloud-providers-azure-networking-connectivity-azure-networking-mental-model/azure-reserved-ips.png)
 
 *Azure subnets do not give every address to workloads, so small CIDR ranges lose usable IPs faster than beginners expect.*
+
 
 > [!IMPORTANT]
 > **Azure reserves exactly five IP addresses** in every single subnet you create. If you provision a `/24` subnet (which theoretically has $256$ IP addresses), only **$251$ addresses** are available for your resources.
@@ -176,9 +177,10 @@ That evidence prevents a familiar waste of time: changing app settings while the
 
 A user-defined route (UDR) is a custom next-hop override that you add to a route table. UDRs are common when a team wants traffic to pass through a firewall, network virtual appliance, hub, or other inspection point.
 
-![An infographic showing a user-defined route sending traffic to a missing next hop and creating a black hole](/content-assets/articles/article-cloud-providers-azure-networking-connectivity-azure-networking-mental-model/udr-black-hole-route.png)
+![User-defined route black-hole diagram showing traffic sent to an unhealthy or missing next hop](/content-assets/articles/article-cloud-providers-azure-networking-connectivity-azure-networking-mental-model/udr-black-hole-route.png)
 
 *A user-defined route can override the system path, so a wrong next hop can silently black-hole traffic.*
+
 
 The power is useful and dangerous. A single `0.0.0.0/0` UDR can move most outbound traffic from a subnet through a new next hop. If that next hop is wrong, unhealthy, missing IP forwarding, or unable to return traffic, many unrelated app symptoms can appear at once.
 
@@ -309,10 +311,11 @@ Return to the VNet design coordinates. Operating a secure, resilient cloud netwo
 
 Topology gives packets a possible path. It does not decide whether the packets are allowed. The next article covers the Azure packet filter you will read most often: network security groups.
 
-![An infographic showing an Azure VNet with entry, app, and private endpoint subnets, route tables, longest-prefix routing, and NAT egress](/content-assets/articles/article-cloud-providers-azure-networking-connectivity-azure-networking-mental-model/vnet-routing-map.png)
 
-*Use this as the VNet mental model: carve one regional private address space into role-based subnets, attach routes where traffic leaves, and make outbound paths explicit.*
 
+![Azure VNet routing map with subnets, route table, NAT gateway, private endpoint, and outbound paths](/content-assets/articles/article-cloud-providers-azure-networking-connectivity-azure-networking-mental-model/vnet-routing-map.png)
+
+*Use this as the VNet mental model: carve one regional address space into role-based subnets, attach routes where traffic leaves, and make outbound paths explicit.*
 
 ---
 

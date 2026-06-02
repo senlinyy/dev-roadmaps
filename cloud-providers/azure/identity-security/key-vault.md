@@ -30,6 +30,11 @@ aliases:
 
 Azure Key Vault is the Azure service for keeping sensitive application values outside your compute hosts. It stores secrets, cryptographic keys, and certificates behind a dedicated HTTPS API instead of leaving them in code, images, or local configuration files.
 
+![Key Vault safety map showing secrets, keys, certificates, rotation, audit, and secure access by app workloads](/content-assets/articles/article-cloud-providers-azure-identity-security-key-vault-secrets-and-encryption-basics/key-vault-safety-map.png)
+
+*Key Vault is safest when secret storage, cryptographic keys, certificate lifecycle, access control, rotation, and audit are designed together.*
+
+
 Example: an orders API can read `db-orders-password` from `kv-orders-prod`, while an encryption job can ask the vault to decrypt data with `key-orders-ledger` without downloading the raw key.
 
 To build a secure cloud system, you must establish a dedicated, hard boundary around your sensitive materials.
@@ -91,13 +96,14 @@ A key is a cryptographic object (such as an RSA or Elliptic Curve key pair) used
 For nonexportable keys, the important anchor is that applications call the vault to perform the operation instead of downloading the raw key material.
 The fundamental systems engineering difference between a secret and a key is the operational boundary of the raw material.
 
+![Key Vault boundary comparison where secrets leave the vault into app memory while keys stay inside the vault](/content-assets/articles/article-cloud-providers-azure-identity-security-key-vault-secrets-and-encryption-basics/secret-vs-key-boundary.png)
+
+*This boundary is the practical difference between fetching a dangerous value and asking Key Vault to perform a protected operation for you.*
+
+
 Under the Secret (Read-Extract) flow, the application reads and extracts the plaintext string value out of Key Vault, performing the subsequent database login locally inside its own memory space.
 Under the Key (Remote-In-Vault) flow, the application never reads or extracts nonexportable cryptographic key material.
 The key stays inside the Key Vault protection boundary, and HSM-backed protection depends on using the Premium HSM key types or Managed HSM.
-
-![A Key Vault boundary comparison where secrets leave the vault into app memory, while keys stay inside the vault and only operation results return.](/content-assets/articles/article-cloud-providers-azure-identity-security-key-vault-secrets-and-encryption-basics/secret-vs-key-boundary.png)
-
-*This boundary is the practical difference between fetching a dangerous value and asking Key Vault to perform a protected operation for you.*
 
 ```plain
 Secret Flow: Key Vault [Secret String] ───────── HTTPS ────────> Application Memory
@@ -128,6 +134,11 @@ Key Vault can centralize certificate storage and lifecycle policy, while issuer 
 ## Vault Authorization: Access Policies vs. Azure RBAC
 
 Vault authorization is the rule system that decides which identity can read, write, or operate on vault objects. Key Vault supports two authorization models: legacy Vault Access Policies and modern Azure RBAC.
+
+![Vault access boundary showing network gate, RBAC gate, vault contents, and audit log](/content-assets/articles/article-cloud-providers-azure-identity-security-key-vault-secrets-and-encryption-basics/vault-access-boundary.png)
+
+*Vault access has more than one gate: the caller needs a reachable path and a permission model that allows the operation.*
+
 
 Example: `mi-orders-api-prod` can receive `Key Vault Secrets User` at `kv-orders-prod`, which lets it read secrets without giving it permission to delete the vault or change network settings.
 
@@ -254,6 +265,11 @@ manageDatabaseSecrets()
 
 Secret rotation is the process of replacing a sensitive value before old credentials become risky. Key Vault versioning lets the name stay stable while the value changes behind it.
 
+![Secret rotation lifecycle showing new version, app reload, old version disabled, and audit evidence](/content-assets/articles/article-cloud-providers-azure-identity-security-key-vault-secrets-and-encryption-basics/secret-rotation-lifecycle.png)
+
+*Secret rotation is a lifecycle: create the new version, move consumers, disable old access, and keep evidence of the change.*
+
+
 Example: `payments-db-password` can keep the same secret name while Version A and Version B exist during a database password cutover. New app instances read Version B, while old instances finish their existing work with Version A.
 
 To prevent downtime during credential updates, you must design a decoupled cutover path using Key Vault secret versioning.
@@ -369,7 +385,8 @@ Operating a secure, compliant cloud architecture requires centralizing all sensi
 Now that we have structured our relational databases, NoSQL document containers, operational release pipelines, workload identities, and central key vaults, we will explore VNet networking.
 In the next chapter, we will explore Submodule 3: Networking & Connectivity, starting with Virtual Networks (VNets), routing tables, and private network segmentation.
 
-![A six-part Key Vault mental model covering secrets, keys, certificates, RBAC access, version rotation, and soft delete plus purge protection.](/content-assets/articles/article-cloud-providers-azure-identity-security-key-vault-secrets-and-encryption-basics/key-vault-summary.png)
+
+![Key Vault mental model covering secrets, keys, certificates, RBAC access, version rotation, and soft delete protection](/content-assets/articles/article-cloud-providers-azure-identity-security-key-vault-secrets-and-encryption-basics/key-vault-summary.png)
 
 *Use this mental model to check both halves of the design: where sensitive material lives, and how access, rotation, and recovery are controlled.*
 
