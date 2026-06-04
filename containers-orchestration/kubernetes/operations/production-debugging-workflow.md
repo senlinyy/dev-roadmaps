@@ -22,6 +22,11 @@ id: article-containers-orchestration-kubernetes-operations-production-debugging-
 
 Production debugging starts with the user-visible symptom, not with the first object you happen to inspect. A Kubernetes cluster has many layers. If you begin by editing a Deployment because a Pod looks suspicious, you can change the system before you know what failed.
 
+![Kubernetes production debugging start map showing symptom, impact, scope, timeline, and hypothesis](/content-assets/articles/article-containers-orchestration-kubernetes-operations-production-debugging-workflow/debug-symptom-map.png)
+
+*A useful debug workflow starts by turning a vague symptom into scope, timeline, and testable hypotheses.*
+
+
 For `devpolaris-orders-api`, the symptom is: checkout requests return `503` for some users. That sentence is more useful than "Kubernetes is broken." It names the service, endpoint path, status code, and user impact. It also leaves room for several possible causes: no ready endpoints, ingress routing failure, application errors, database outage, or a bad rollout.
 
 Capture one concrete request if possible:
@@ -109,6 +114,11 @@ The old Pod is serving. The two new Pods are running but not ready. This is a ro
 ## Separate Rollout, Runtime, and Dependency Failures
 
 Failure families are buckets that connect an external symptom to the layer most likely to fix it. Production failures often look similar from the outside, so separate them by asking what changed and which layer reports the failure. For example, a new ReplicaSet with zero ready Pods points toward rollout or readiness behavior, while old and new Pods failing together points more toward a dependency, routing, or cluster condition.
+
+![Kubernetes failure domain map covering rollout, runtime, dependency, network, config, and capacity](/content-assets/articles/article-containers-orchestration-kubernetes-operations-production-debugging-workflow/failure-domain-map.png)
+
+*Separating failure domains stops debugging from becoming random command execution.*
+
 
 | Failure family | Signal | First useful command |
 |----------------|--------|----------------------|
@@ -304,6 +314,11 @@ Finally, decide which commands are safe for first responders. Read-only commands
 | `kubectl delete pod` | Medium because it destroys local evidence | Use only with a reason |
 
 A production workflow is reliable when people know what to inspect, what to record, and which changes require a decision. That structure helps junior responders contribute useful evidence without needing to guess their way through the cluster.
+
+
+![Kubernetes production debugging summary covering symptom, timeline, outside-in checks, evidence, mitigation, and rollback](/content-assets/articles/article-containers-orchestration-kubernetes-operations-production-debugging-workflow/production-debug-summary.png)
+
+*Use this checklist to make production debugging repeatable under pressure.*
 
 ---
 

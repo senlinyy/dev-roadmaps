@@ -22,6 +22,11 @@ id: article-containers-orchestration-kubernetes-workloads-rollouts-and-rollbacks
 
 A rollout is the controlled replacement of old Pods with new Pods from a changed template. A rollback is the same mechanism pointed back at an earlier template revision.
 
+![Kubernetes RollingUpdate lane showing old ReplicaSet, new ReplicaSet, ready pods, service traffic, and surge](/content-assets/articles/article-containers-orchestration-kubernetes-workloads-rollouts-and-rollbacks/rolling-update-lane.png)
+
+*A rolling update changes pods gradually while ready pods keep serving traffic.*
+
+
 Example: an update to `devpolaris-orders-api` usually means the team has built a new container image and wants production Pods to use it. Kubernetes cannot change the image inside a running container. It creates new Pods from a new template and removes old Pods when enough new Pods are ready.
 
 That process is called a rollout. A rollback tells Kubernetes to return a Deployment to an earlier Pod template revision. Both operations depend on readiness probes because Kubernetes needs a signal that a new Pod can receive traffic.
@@ -114,6 +119,11 @@ Many teams record change cause through annotations or through their deployment s
 ## Failure Mode: Rollout Stuck on Readiness
 
 A rollout stuck on readiness means the new Pods were created but Kubernetes will not count them as traffic-ready. The Deployment pauses replacement because removing more old Pods would reduce available capacity too far.
+
+![Kubernetes rollout failure path showing old version, new version, readiness failed, rollout paused, rollback, and service traffic](/content-assets/articles/article-containers-orchestration-kubernetes-workloads-rollouts-and-rollbacks/readiness-rollback-loop.png)
+
+*When readiness fails, the rollout should pause before traffic fully trusts the new version.*
+
 
 Example: the new orders API image may start the Node.js process but fail `/health/ready` because a required environment variable is missing.
 
@@ -306,6 +316,11 @@ success signal: rollout complete, dependency endpoint ok, P95 latency normal
 ```
 
 Those thresholds should match the service, but writing them down before the rollout reduces hesitation. Kubernetes gives you the mechanism. The team still needs the decision rule.
+
+
+![Kubernetes rollout summary covering strategy, ReplicaSets, readiness, history, rollback, and traffic](/content-assets/articles/article-containers-orchestration-kubernetes-workloads-rollouts-and-rollbacks/rollout-summary.png)
+
+*A safe rollout needs a strategy, readiness evidence, history, rollback path, and traffic protection.*
 
 ---
 

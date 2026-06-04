@@ -24,6 +24,11 @@ id: article-containers-orchestration-kubernetes-packaging-helm-values
 
 Helm values are YAML inputs that templates read through `.Values`. They exist because the same chart often needs to render slightly different manifests for different environments. Staging might run one replica. Production might run three. A developer namespace might use a preview image tag.
 
+![Helm values input path showing values.yaml, environment file, set flag, merge order, and template](/content-assets/articles/article-containers-orchestration-kubernetes-packaging-helm-values/helm-values-inputs.png)
+
+*Values are chart inputs, and merge order decides which input wins.*
+
+
 For `devpolaris-orders-api`, the chart should know the stable workload shape: Deployment, Service, labels, ports, probes, and resource structure. Values should provide the choices that vary: image tag, replica count, ingress host, and plain application settings.
 
 Values are not a separate deployment record. They are only useful when you render them and inspect the output. A production values file that nobody renders before release can hide the same mistakes as copied YAML.
@@ -127,6 +132,11 @@ The final rendered manifest only has one value for each field. Render it before 
 ## Designing Values That Reviewers Can Read
 
 A readable values file acts like a short release form for the chart. It should show the deployment decisions a human is making, not recreate a second Kubernetes manifest with different names. Use value names that match the decision being reviewed.
+
+![Helm values contract map showing image tag, replicas, resources, ingress, secrets reference, and feature flag](/content-assets/articles/article-containers-orchestration-kubernetes-packaging-helm-values/values-contract-map.png)
+
+*Good values expose real deployment decisions without turning every YAML field into an input.*
+
 
 ```yaml
 api:
@@ -297,6 +307,11 @@ Deployment/orders-devpolaris-orders-api
 ```
 
 If the rendered diff also changes the image tag or hostname, the values file may have included unrelated edits. Split those changes into separate pull requests when possible. Small values changes are easier to reason about and easier to roll back.
+
+
+![Helm values summary covering defaults, override, merge, required values, secret references, and render](/content-assets/articles/article-containers-orchestration-kubernetes-packaging-helm-values/helm-values-summary.png)
+
+*Use this checklist before a values file becomes an unreviewable settings dump.*
 
 ---
 

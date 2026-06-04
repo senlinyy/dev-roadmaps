@@ -83,6 +83,11 @@ A common question is why Kubernetes requires multiple API objects to run a singl
 A single Docker CLI command can run the Customer Notification Service successfully.
 In contrast, Kubernetes introduces Deployments, Pods, Services, and namespaces for the same application.
 
+![Kubernetes application object map showing Orders API connected to a Deployment, Pods, Service, ConfigMap, and PersistentVolumeClaim](/content-assets/articles/article-containers-orchestration-kubernetes-fundamentals-cluster-mental-model/application-object-map.png)
+
+*A Kubernetes application is usually several objects working together, not one object that contains everything.*
+
+
 The practical reason is that production operation is not one job.
 A Deployment owns replica management, a Pod owns the runtime wrapper, a Service owns stable traffic routing, and a Namespace owns the name boundary.
 Example: during a notification API rollout, the Deployment can replace Pods while the Service keeps the same DNS name and the Namespace keeps the production objects separate from staging.
@@ -364,6 +369,11 @@ A request path is the route one network request takes from a client process to t
 Tracing that path shows why Services, DNS, Pod IPs, node routing, and virtual interfaces are separate parts of the same system.
 Example: an internal database reporting service can call `http://notification-svc`, and Kubernetes resolves that name to one healthy notification API Pod even if the Pods have moved since the caller last made a request.
 
+![Kubernetes request path showing a client reaching a Service, ready pods, worker node capacity, and a response](/content-assets/articles/article-containers-orchestration-kubernetes-fundamentals-cluster-mental-model/request-service-pod-path.png)
+
+*A request follows a stable Service contract even while the pods behind it stay replaceable.*
+
+
 ```mermaid
 flowchart LR
     subgraph ClientPod["Client Pod Namespace"]
@@ -433,6 +443,11 @@ When you evaluate new Kubernetes features, map them back to these foundational c
 
 In the next article, we will go deeper into the control plane.
 We will explore `etcd`, `kube-apiserver`, the scheduler, and controllers, checking how they coordinate to execute these resources.
+
+
+![Six-tile Kubernetes cluster mental model summary covering nodes, pods, services, labels, capacity, and requests](/content-assets/articles/article-containers-orchestration-kubernetes-fundamentals-cluster-mental-model/cluster-mental-model-summary.png)
+
+*Keep this cluster picture in mind: nodes provide capacity, pods run work, services route requests, and labels connect the pieces.*
 
 ---
 

@@ -24,6 +24,11 @@ id: article-containers-orchestration-kubernetes-packaging-helm-releases-and-roll
 
 A Helm chart is the package source. A Helm release is an installation of that chart into a cluster namespace with a release name and values. The same chart can have many releases, such as `orders-staging` in `devpolaris-staging` and `orders-prod` in `devpolaris-prod`.
 
+![Helm release lifecycle showing install, revision 1, upgrade, revision 2, and history](/content-assets/articles/article-containers-orchestration-kubernetes-packaging-helm-releases-and-rollbacks/helm-release-lifecycle.png)
+
+*A Helm release is the installed chart plus its revision history.*
+
+
 Helm stores release history so it can show what was installed and roll back to a previous revision. That history is helpful, but it does not remove the need to inspect Kubernetes objects. Helm remembers the rendered manifests. Kubernetes still decides whether Pods become ready and Services route traffic.
 
 The running example uses the `orders-api` chart. The production release name is `orders`. The namespace is `devpolaris-prod`.
@@ -153,6 +158,11 @@ Now the next question is not "why is Helm broken?" It is "who last changed the l
 ## Failure Mode: Upgrade Succeeds but Pods Do Not Become Ready
 
 A Helm upgrade can succeed at the apply layer while the application still fails at the readiness layer. Suppose a chart upgrade applies successfully, but the new image requires an environment variable that the values file did not provide. Helm may report the release as deployed if it did not wait for readiness.
+
+![Helm upgrade readiness path showing helm upgrade, rendered YAML, API accepted, pods not ready, and rollback choice](/content-assets/articles/article-containers-orchestration-kubernetes-packaging-helm-releases-and-rollbacks/helm-upgrade-readiness.png)
+
+*A Helm upgrade can succeed at the API layer while the workload still fails readiness.*
+
 
 ```bash
 $ helm upgrade orders ./charts/orders-api -n devpolaris-prod -f environments/prod.values.yaml
@@ -300,6 +310,11 @@ $ kubectl get all -n devpolaris-prod -l app.kubernetes.io/instance=orders
 ```
 
 Use that output to confirm the release contains only the objects you intend to remove.
+
+
+![Helm release summary covering install, upgrade, history, status, rollback, and atomic behavior](/content-assets/articles/article-containers-orchestration-kubernetes-packaging-helm-releases-and-rollbacks/helm-release-summary.png)
+
+*Use this checklist to separate package installation from workload health.*
 
 ---
 

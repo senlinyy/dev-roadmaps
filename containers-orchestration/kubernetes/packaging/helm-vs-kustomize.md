@@ -24,6 +24,11 @@ id: article-containers-orchestration-kubernetes-packaging-helm-vs-kustomize
 
 Helm and Kustomize both produce Kubernetes manifests. That shared endpoint matters more than the rivalry between the tools. The cluster still receives Deployments, Services, ConfigMaps, Secrets, Ingresses, and other API objects.
 
+![Helm and Kustomize final object model showing both tools producing rendered YAML for the Kubernetes API](/content-assets/articles/article-containers-orchestration-kubernetes-packaging-helm-vs-kustomize/helm-kustomize-final-yaml.png)
+
+*Helm and Kustomize are different ways to produce the same final Kubernetes object model.*
+
+
 Helm starts from templates plus values. Kustomize starts from valid YAML plus overlays and patches. Helm also has a release lifecycle: install, upgrade, history, rollback, and uninstall. Kustomize is closer to a render and apply workflow.
 
 The running example is the same in both cases. `devpolaris-orders-api` needs a production Deployment with three replicas, image `ghcr.io/devpolaris/orders-api:2026.05.07`, a Service on port 8080, and a production hostname.
@@ -210,6 +215,11 @@ The fix is tool-specific, but the safety habit is shared: render the package out
 
 Start with ownership. If the orders team owns a few manifests and only needs staging and production differences, Kustomize is probably the simpler first choice. It keeps the source close to Kubernetes objects and makes the learning path direct.
 
+![Helm versus Kustomize decision path showing templates, overlays, release history, third-party chart, patches, and rendered output](/content-assets/articles/article-containers-orchestration-kubernetes-packaging-helm-vs-kustomize/packaging-decision-path.png)
+
+*The real decision is which tool keeps the rendered change easiest to understand.*
+
+
 If the platform team owns a standard HTTP API package used by many services, Helm may be better. It gives reuse, release history, and a clear values contract. It also lets the platform team ship chart improvements across services, such as standard labels or safer default probes.
 
 Do not choose based only on popularity. Choose based on how your team changes, reviews, releases, and diagnoses the app. The best tool for this module is the one that makes the rendered Kubernetes YAML easiest to trust.
@@ -303,6 +313,11 @@ Compare production:
 ```
 
 That small note prevents tool choice from becoming hidden team knowledge.
+
+
+![Helm versus Kustomize summary covering tool shape, inputs, render, review, and incidents](/content-assets/articles/article-containers-orchestration-kubernetes-packaging-helm-vs-kustomize/helm-kustomize-summary.png)
+
+*Use this checklist to choose the smallest tool that keeps production changes reviewable.*
 
 ---
 

@@ -23,6 +23,11 @@ A telemetry pipeline is the path operational evidence follows after an applicati
 
 At its core, a telemetry pipeline is a small processing path with an entrance, optional shaping steps, and an exit. The application sends trace spans or metrics to a receiver. The collector changes or batches the data in processors. Then an exporter sends the final payload to a backend such as a tracing system, metrics database, or vendor service.
 
+![Kubernetes telemetry collector configuration map showing receiver, processor, exporter, backend, and internal metrics](/content-assets/articles/article-containers-orchestration-kubernetes-operations-telemetry-pipelines/collector-config-map.png)
+
+*A telemetry collector is a pipeline: receivers accept signals, processors shape them, and exporters send them onward.*
+
+
 The OpenTelemetry Collector reads a configuration file that defines this pipeline using three distinct stages: receivers, processors, and exporters. Receivers open network sockets to listen for incoming data, processors shape and filter that data in memory, and exporters open outbound connections to send the final payload to another system.
 
 When deploying to Kubernetes, this configuration is stored in a ConfigMap.
@@ -133,6 +138,11 @@ The payload is strictly typed and separated into logical layers. The `Resource a
 ## Trimming Unsafe Attributes
 
 Telemetry often carries attributes that are useful for one investigation but dangerous to store everywhere. A label such as `http.status_code` has a small set of values, so it is safe for many metrics. A value such as `user.id` or `session.token` can create millions of unique values and may also expose private information.
+
+![Kubernetes telemetry attribute trimming path showing raw span, processor, safe span, exporter, and backend](/content-assets/articles/article-containers-orchestration-kubernetes-operations-telemetry-pipelines/attribute-trim-path.png)
+
+*Attribute processors keep unsafe or high-cardinality fields from reaching the backend.*
+
 
 For metrics, high-cardinality labels are especially expensive because Prometheus-style systems treat the metric name plus label set as a separate time series. If an application emits a metric tagged with a unique `user.id`, the metrics backend may need to store millions of distinct series. For traces, a `user.id` span attribute does not create Prometheus time series in this example, but it can still increase indexing cost, retention risk, and privacy exposure in the tracing backend.
 

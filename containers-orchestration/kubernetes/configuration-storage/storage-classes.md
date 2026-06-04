@@ -75,6 +75,11 @@ That table gives you more operational signal than the name alone. A class called
 
 Dynamic provisioning means the cluster creates backing storage automatically after it sees a PVC. You create a PVC that references a StorageClass, and the class's provisioner creates the backing PV.
 
+![Kubernetes dynamic provisioning path showing PVC, StorageClass, provisioner, PV, and cloud disk](/content-assets/articles/article-containers-orchestration-kubernetes-configuration-storage-storage-classes/dynamic-provisioning-path.png)
+
+*A StorageClass lets a claim trigger new storage instead of waiting for a manually prepared volume.*
+
+
 Example: `orders-api-workdir` can request `20Gi` from `standard-retain`, and the CSI provisioner can create the cloud disk and PV without the application team writing a disk ID by hand.
 
 ```yaml
@@ -136,6 +141,11 @@ That empty string means the claim should bind only to a pre-created PV with no c
 ## Volume Binding Mode and Scheduling
 
 Some storage can only attach to Pods in certain places, such as a specific zone or node group. `volumeBindingMode` is the StorageClass setting that decides whether storage is created immediately or waits until Kubernetes knows where the first Pod will run.
+
+![Kubernetes volume binding mode showing PVC wait, scheduler, node choice, zone match, and volume creation](/content-assets/articles/article-containers-orchestration-kubernetes-configuration-storage-storage-classes/volume-binding-scheduling.png)
+
+*WaitForFirstConsumer delays volume creation until scheduling knows where the pod can run.*
+
 
 `Immediate` provisions as soon as the PVC appears. `WaitForFirstConsumer` waits until a Pod uses the claim, so Kubernetes can consider where the Pod will run.
 
@@ -309,6 +319,11 @@ orders-api-workdir   Bound     pvc-f7b7fdc7-7c62   20Gi       RWO            sta
 ```
 
 That transition tells you storage provisioning is no longer the blocking layer.
+
+
+![Kubernetes StorageClass summary covering provisioner, default class, binding mode, reclaim, expansion, and class name](/content-assets/articles/article-containers-orchestration-kubernetes-configuration-storage-storage-classes/storageclass-summary.png)
+
+*Use this checklist before choosing a class for data that must survive pod replacement.*
 
 ---
 

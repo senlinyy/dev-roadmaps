@@ -24,6 +24,11 @@ id: article-containers-orchestration-kubernetes-networking-network-policies
 
 The default Kubernetes networking model allows Pods to communicate across the cluster unless something restricts them. That openness makes service discovery simple, but it is too broad for many production systems. A metrics scraper may need to call every service. A public web Pod may need to call `devpolaris-orders-api`. A random debug Pod in another namespace probably should not reach order creation endpoints.
 
+![Kubernetes NetworkPolicy boundary comparing open pod network before policy and selected allowed paths after policy](/content-assets/articles/article-containers-orchestration-kubernetes-networking-network-policies/networkpolicy-boundary.png)
+
+*NetworkPolicy turns an open pod network into explicit allowed paths for selected pods.*
+
+
 A NetworkPolicy is a Kubernetes object that describes allowed network traffic for selected Pods. Traffic here means packets, which are small chunks of data moving between network addresses and ports. A policy is label-based, namespace-aware, and enforced by the cluster network plugin.
 
 Example: a policy can allow Pods labeled `app.kubernetes.io/name=devpolaris-web` in the `web` namespace to connect to orders API Pods on TCP port `3000`, while denying a debug Pod from the `default` namespace. If the network plugin does not support NetworkPolicy, creating the object may succeed while traffic remains unrestricted.
@@ -41,6 +46,11 @@ NetworkPolicy is not application authentication. It is a network boundary. The A
 ## Select the Protected Pods First
 
 A NetworkPolicy starts by selecting the destination Pods it protects. The `podSelector` is not an allow rule by itself, it defines the set of Pods the policy applies to.
+
+![Kubernetes NetworkPolicy selector map showing podSelector, ingress, egress, namespace label, pod label, and default deny](/content-assets/articles/article-containers-orchestration-kubernetes-networking-network-policies/policy-selector-ingress-egress.png)
+
+*A policy starts by selecting the pods it protects, then it describes which traffic those pods may receive or send.*
+
 
 Example: for `devpolaris-orders-api`, the policy should select Pods with the stable application label, then add separate rules for the callers that are allowed to reach them.
 
@@ -299,6 +309,11 @@ Smoke record:
 ```
 
 That ownership line matters during incidents. It helps the team route the next investigation without turning every networking symptom into a cluster-wide mystery.
+
+
+![Kubernetes NetworkPolicy summary covering protected pods, ingress, egress, labels, default deny, and CNI support](/content-assets/articles/article-containers-orchestration-kubernetes-networking-network-policies/networkpolicy-summary.png)
+
+*Use this checklist to avoid writing a policy that protects the wrong pods or relies on unsupported enforcement.*
 
 ---
 

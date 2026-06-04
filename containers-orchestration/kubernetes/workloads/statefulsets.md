@@ -30,6 +30,11 @@ A StatefulSet is the Kubernetes workload object for that kind of application. It
 
 StatefulSets give you two stable things: ordinal names and persistent volume claims. An ordinal is the number at the end of the Pod name, and a persistent volume claim is a request for durable storage that can outlive an individual Pod.
 
+![Kubernetes StatefulSet map showing pod-0, pod-1, pod-2 with stable names, PVCs, and stable volumes](/content-assets/articles/article-containers-orchestration-kubernetes-workloads-statefulsets/statefulset-stable-identity.png)
+
+*A StatefulSet gives each replica a stable identity and volume, so replicas are not interchangeable.*
+
+
 Example: `orders-projection-0` can keep using `data-orders-projection-0` after its Pod is recreated, so the worker returns to the same local projection files instead of starting with an empty disk. Kubernetes creates `orders-projection-0` before `orders-projection-1` by default.
 
 Persistent storage is requested through `volumeClaimTemplates`. Each Pod gets its own claim based on the template. If `orders-projection-0` is recreated, Kubernetes reuses the claim for `orders-projection-0` instead of giving it a brand new empty disk.
@@ -100,6 +105,11 @@ The names are predictable. The volume claims are separate. That is the operating
 ## Headless Services and Pod DNS
 
 A headless Service is a Service without a cluster virtual IP. In Kubernetes YAML, `clusterIP: None` tells DNS to return records for the individual Pods instead of routing every caller through one stable Service address.
+
+![Kubernetes StatefulSet DNS map showing headless service, DNS names, pod-0, pod-1, pod-2, and client](/content-assets/articles/article-containers-orchestration-kubernetes-workloads-statefulsets/statefulset-headless-dns.png)
+
+*A headless service gives StatefulSet pods predictable DNS names for replica-specific access.*
+
 
 Example: a peer process can dial `orders-projection-0.orders-projection.default.svc.cluster.local` when it needs that exact member, rather than any healthy member behind a normal Service.
 
@@ -300,6 +310,11 @@ These questions keep StatefulSet work grounded in data recovery. Kubernetes can 
 That is why many teams treat StatefulSet changes as application and data changes together. The manifest, storage class, backup plan, and rollback plan all belong in the same review conversation.
 
 The controller is only one part of the stateful system.
+
+
+![Kubernetes StatefulSet summary covering stable name, stable volume, headless DNS, ordered start, ordered update, and data safety](/content-assets/articles/article-containers-orchestration-kubernetes-workloads-statefulsets/statefulset-summary.png)
+
+*Use this StatefulSet checklist when identity, ordering, and storage safety matter more than interchangeable replicas.*
 
 ---
 

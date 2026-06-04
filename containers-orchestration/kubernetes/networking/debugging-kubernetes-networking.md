@@ -24,6 +24,11 @@ id: article-containers-orchestration-kubernetes-networking-debugging-kubernetes-
 
 A Kubernetes networking debug path is a sequence of small checks from the caller to the backend process. A client request may pass through DNS, a Service, EndpointSlices, kube-proxy or a CNI data plane, NetworkPolicies, an Ingress or Gateway controller, and finally the application process. A failure message usually tells you which layer to inspect next, but only if you separate the layers.
 
+![Kubernetes network debug ladder showing symptom, DNS, Service, endpoints, pod direct test, and policy](/content-assets/articles/article-containers-orchestration-kubernetes-networking-debugging-kubernetes-networking/network-debug-ladder.png)
+
+*Network debugging gets simpler when each layer proves or eliminates one part of the path.*
+
+
 The running example is `devpolaris-web` calling `devpolaris-orders-api`. The symptom is simple: order pages show an error because the web app cannot reach the orders API. The goal is to build a reliable path of evidence.
 
 ```mermaid
@@ -79,6 +84,11 @@ The resolver file explains why short names may work in one namespace and fail in
 ## Check the Service and EndpointSlices
 
 An EndpointSlice is Kubernetes' current list of backend addresses and ports for a Service. Once DNS resolves, inspect the Service object and EndpointSlices to prove the Service has ready Pods behind it.
+
+![Kubernetes Service debug path showing Service, selector, EndpointSlice, ready pod, and test traffic](/content-assets/articles/article-containers-orchestration-kubernetes-networking-debugging-kubernetes-networking/service-endpoints-debug.png)
+
+*EndpointSlices reveal whether the Service actually has ready pod backends.*
+
 
 Example: the orders Service should select `app.kubernetes.io/name=devpolaris-orders-api`, and its EndpointSlice should list Pod addresses like `10.244.1.17:3000`.
 
@@ -303,6 +313,11 @@ Fix:
 ```
 
 The exact commands change by controller and cluster, but the habit stays the same: prove the inner path, then prove the edge path, then change the layer that failed its proof.
+
+
+![Kubernetes networking debug summary covering DNS, service ports, endpoints, pod IP, policy, and ingress edge](/content-assets/articles/article-containers-orchestration-kubernetes-networking-debugging-kubernetes-networking/network-debug-summary.png)
+
+*Use this checklist to keep network debugging ordered instead of changing several layers at once.*
 
 ---
 

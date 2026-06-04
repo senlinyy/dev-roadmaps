@@ -29,6 +29,11 @@ A service mesh adds rule-based routing on top of that endpoint list. Because a l
 
 To split traffic precisely, the mesh requires two configurations. First, it needs to know the available subsets of the target service. Second, it needs to know the exact mathematical weight to assign to each subset.
 
+![Service mesh traffic routing rules showing service, route rule, version A, version B, and traffic weights](/content-assets/articles/article-containers-orchestration-kubernetes-service-mesh-mesh-traffic/mesh-route-rules.png)
+
+*Mesh routing rules let one stable service split traffic across versioned backends.*
+
+
 A practical way to understand this is to treat the `DestinationRule` as the list of available versions, and the `VirtualService` as the route map that directs requests to those versions.
 
 Create a routing configuration that defines a `v1` and `v2` subset for the checkout service, and then routes 90 percent of traffic to `v1` and 10 percent to `v2`.
@@ -134,6 +139,11 @@ These settings are powerful because they protect callers from waiting forever, b
 ## Breaking The Circuit
 
 Beyond routing, the proxy also protects services from overwhelming each other. When a backend database or downstream service slows down, upstream services often keep sending requests. These waiting requests stack up as open network connections until the entire cluster exhausts its memory.
+
+![Service mesh circuit breaker path showing caller proxy, timeout, retry, circuit open, and protected service](/content-assets/articles/article-containers-orchestration-kubernetes-service-mesh-mesh-traffic/mesh-circuit-breaker-path.png)
+
+*Timeouts, retries, and circuit breaking are proxy decisions that protect callers and backends.*
+
 
 A circuit breaker prevents this cascading failure by monitoring active connections and instantly failing new requests when a threshold is breached.
 

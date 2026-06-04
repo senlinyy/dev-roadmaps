@@ -24,6 +24,11 @@ In a service mesh, security is enforced by giving every workload a cryptographic
 
 At its core, workload identity is the name a running workload can prove cryptographically. Instead of trusting a changing Pod IP address, the destination proxy checks a signed certificate that says which Kubernetes Service Account the caller is running under.
 
+![Service mesh workload identity path showing service account, identity certificate, sidecar proxy, and peer workload](/content-assets/articles/article-containers-orchestration-kubernetes-service-mesh-mesh-security/mesh-workload-identity.png)
+
+*Mesh identity usually starts from the workload service account and becomes a certificate the proxy can present.*
+
+
 Example: when your frontend web server tries to call the backend checkout service, the frontend's proxy presents a certificate. This certificate contains a standardized identity string, known as a SPIFFE ID, that looks like `spiffe://cluster.local/ns/default/sa/frontend`. The backend proxy reads this string, verifies the signature against the cluster's root certificate authority, and then decides whether to allow the connection.
 
 Under the hood, the mesh control plane acts as a Certificate Authority. When a new Pod starts, its injected Envoy proxy generates a private key in memory and sends a Certificate Signing Request to the control plane. The control plane validates the Pod's Kubernetes Service Account token, signs the request, and returns a short-lived certificate. This happens entirely in memory within the proxy container, meaning the private key is never written to a physical disk or sent across the network. Because the certificates are short-lived, often expiring in hours, stolen certificates become useless quickly without the underlying Kubernetes identity to renew them.
@@ -31,6 +36,11 @@ Under the hood, the mesh control plane acts as a Certificate Authority. When a n
 ## Enforcing Strict mTLS
 
 You can loosely think of strict mTLS like disabling the unencrypted HTTP port on a web server and forcing all traffic over HTTPS, except that the client must also provide a valid certificate to prove who they are. By default, Istio and many other service meshes operate in a permissive mode. Permissive mode allows a proxy to accept both plain-text traffic and encrypted mTLS traffic. This is useful when you are slowly migrating existing applications into the mesh, but it does not prevent a compromised, unmeshed Pod from calling a secure service.
+
+![Service mesh strict mTLS path showing plaintext blocked, client proxy, encrypted link, server proxy, and app](/content-assets/articles/article-containers-orchestration-kubernetes-service-mesh-mesh-security/strict-mtls-path.png)
+
+*Strict mTLS forces service-to-service traffic through authenticated encrypted proxy connections.*
+
 
 To lock down the cluster, you must require strict mTLS. You enforce this by applying a `PeerAuthentication` policy. This is a configuration object that tells the mesh proxies to reject any traffic that is not encrypted and authenticated.
 

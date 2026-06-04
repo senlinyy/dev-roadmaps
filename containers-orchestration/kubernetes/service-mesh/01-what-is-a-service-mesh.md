@@ -29,6 +29,11 @@ At its core, a service mesh is a fleet of small network proxies deployed close t
 
 A service mesh is split into two halves: the data plane and the control plane. The data plane is the fleet of proxies that actually move the packets. The control plane is the central brain that configures all of those proxies. To get started, you need to install the control plane.
 
+![Service mesh control and data plane map showing control plane, sidecars, app pods, policy, and telemetry](/content-assets/articles/article-containers-orchestration-kubernetes-service-mesh-what-is-a-service-mesh/mesh-control-data-plane.png)
+
+*A mesh separates the control plane that distributes policy from the data plane proxies that handle pod traffic.*
+
+
 With Istio, you install the control plane using the `istioctl` command-line tool. The `default` profile installs the core components needed to manage the mesh.
 
 ```bash
@@ -108,6 +113,11 @@ The output now shows `2/2` in the `READY` column. The Pod has two containers bec
 ## How the Mesh Intercepts Traffic
 
 The sidecar proxy is only useful if application traffic passes through it. If the Nginx container is still answering connections directly, the proxy cannot enforce retries, routing rules, or encryption. In Istio sidecar mode, the mesh redirects configured TCP traffic before it reaches the application.
+
+![Service mesh sidecar interception path showing app container, local proxy, outbound traffic, inbound proxy, and peer service](/content-assets/articles/article-containers-orchestration-kubernetes-service-mesh-what-is-a-service-mesh/sidecar-intercept-path.png)
+
+*The mesh changes traffic by moving it through local proxies before it leaves or enters the pod.*
+
 
 We can see exactly how it does this by inspecting the detailed configuration of the newly injected Pod.
 

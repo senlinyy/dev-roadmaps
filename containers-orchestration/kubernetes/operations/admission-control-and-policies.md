@@ -25,6 +25,11 @@ aliases:
 
 Admission control is the set of checks Kubernetes runs after it knows who made a request and before it saves the requested object. Every Kubernetes change passes through the API server first: a user runs `kubectl apply`, a GitOps controller syncs a manifest, or a CI job patches a Deployment. At that checkpoint, admission control can inspect the request, add safe defaults, or reject an unsafe shape before it becomes cluster state.
 
+![Kubernetes admission checkpoint showing request, authentication, authorization, mutation, validation, and storage](/content-assets/articles/article-containers-orchestration-kubernetes-operations-admission-control-and-policies/admission-checkpoint.png)
+
+*Admission control is the API server checkpoint between a submitted object and persisted cluster state.*
+
+
 Admission policies exist because prevention is cheaper than cleanup. It is better to reject a `devpolaris-orders-api` Deployment that runs as root than to discover after an incident that every Pod had weak defaults. It is better to require owner labels when the object is created than to spend a cost review guessing who owns a forgotten workload.
 
 Admission control fits after authentication and authorization. RBAC decides whether the caller may create a Deployment at all. Admission decides whether this particular Deployment shape is acceptable.
@@ -44,6 +49,11 @@ That ordering means policy is not a replacement for RBAC. It is a second guard t
 ## Mutating and Validating Admission
 
 Admission controllers are checks that run inside the API server request path after authentication and authorization. The practical split is between checks that change an object and checks that decide whether the final object is allowed. For example, one controller might add a standard `team=orders` label, and another might reject the Deployment if its image does not include a digest.
+
+![Kubernetes mutating and validating admission path showing incoming object, mutating hook, changed object, validating hook, and decision](/content-assets/articles/article-containers-orchestration-kubernetes-operations-admission-control-and-policies/mutating-validating-boundary.png)
+
+*Mutating admission can change the object before validating admission decides whether the final shape is allowed.*
+
 
 Mutating admission can modify an object before it is stored. Validating admission can accept or reject the final object.
 
@@ -299,6 +309,11 @@ This tradeoff should be explicit in the policy review:
 | Restricted Pod settings | `Fail` when enforced | Unsafe Pods should not start in protected namespaces |
 
 Admission policy is powerful because it turns platform expectations into automatic checks. That power deserves careful rollout, clear messages, and regular review.
+
+
+![Kubernetes admission policy summary covering API server, mutating admission, validating admission, Pod Security, policy engine, and fixable errors](/content-assets/articles/article-containers-orchestration-kubernetes-operations-admission-control-and-policies/admission-policy-summary.png)
+
+*Use this checklist to design policies developers can understand and correct.*
 
 ---
 

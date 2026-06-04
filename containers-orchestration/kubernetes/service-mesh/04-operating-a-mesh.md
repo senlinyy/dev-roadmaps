@@ -23,6 +23,11 @@ This article walks through operating a mesh from the command line. Using a stand
 
 A practical way to understand a service mesh is to look at its physical footprint. A mesh is not a centralized router; it is a fleet of small, decentralized proxies. In Istio sidecar mode, each meshed Pod gets its own proxy container, usually Envoy, injected alongside your application.
 
+![Service mesh proxy overhead map showing app container, sidecar CPU, sidecar memory, latency, and capacity budget](/content-assets/articles/article-containers-orchestration-kubernetes-service-mesh-operating-a-mesh/mesh-proxy-overhead.png)
+
+*A mesh adds proxy CPU, memory, and latency overhead that must be included in capacity planning.*
+
+
 This architecture provides high availability and keeps network hops short, but it requires memory and CPU. To see this overhead, you can use `kubectl top pods` and ask for container-level metrics instead of pod-level aggregates.
 
 ```bash
@@ -56,6 +61,11 @@ By reading the proxy log, you shift the debugging focus. You no longer need to g
 ## The Startup Race Condition
 
 One of the most common operational gotchas in a service mesh involves container lifecycle sequencing. When a pod launches, its application container and proxy container start at nearly the same time. If your application boots up quickly and immediately tries to open a network connection, it might crash before the proxy is ready.
+
+![Service mesh startup race showing app starts, proxy not ready, outbound call fails, hold app, and ready proxy](/content-assets/articles/article-containers-orchestration-kubernetes-service-mesh-operating-a-mesh/mesh-startup-race.png)
+
+*Startup ordering matters because an app can try to send traffic before its proxy is ready.*
+
 
 You can spot this race condition by looking at a newly deployed pod that is stuck in a crash loop.
 

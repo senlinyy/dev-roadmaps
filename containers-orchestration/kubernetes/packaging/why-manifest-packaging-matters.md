@@ -24,6 +24,11 @@ id: article-containers-orchestration-kubernetes-packaging-why-manifest-packaging
 
 Kubernetes work starts with plain YAML. A Deployment says which Pods should exist, a Service gives those Pods a stable network name, a ConfigMap carries plain settings, and an Ingress or Gateway decides how outside traffic reaches the app. That directness is good for learning because every field is visible.
 
+![Kubernetes manifest copy problem showing base manifest copied into dev, staging, prod, and drifting](/content-assets/articles/article-containers-orchestration-kubernetes-packaging-why-manifest-packaging-matters/yaml-copy-problem.png)
+
+*Copied YAML makes small environment differences hard to review.*
+
+
 The trouble starts when the same application runs in more than one place. `devpolaris-orders-api` needs a staging namespace, a production namespace, different replica counts, different image tags, and different hostnames. If the team copies four YAML files into two environment folders, the first release is easy. The tenth release is where small differences begin to hide.
 
 Manifest packaging is the answer to that repetition. It lets you keep one shared shape for an application and apply deliberate differences for each environment. The important promise is not shorter YAML. The promise is that reviewers can understand what will run without comparing twenty copied files by hand.
@@ -120,6 +125,11 @@ If this file is copied into every environment, a reviewer has to ask an awkward 
 ## Rendering Before Applying
 
 Rendering means asking the packaging tool to print the final Kubernetes YAML before it reaches the API server. It exists so reviewers can inspect the exact Deployment, Service, ConfigMap, or Ingress the cluster will receive.
+
+![Kubernetes manifest packaging render path showing package input, renderer, rendered YAML, review, and kubectl apply](/content-assets/articles/article-containers-orchestration-kubernetes-packaging-why-manifest-packaging-matters/render-before-apply.png)
+
+*The rendered YAML is the object Kubernetes will actually receive.*
+
 
 Example: before applying the production orders API package, render it and check the image, replicas, Service selector, and readiness probe. For Helm, that command is usually `helm template`. For Kustomize, it is `kubectl kustomize` or `kustomize build`.
 
@@ -308,6 +318,11 @@ For `devpolaris-orders-api`, migrate in this order:
 | 5 | Remove old copied manifests | Two active manifest paths create confusion |
 
 Keep the old raw manifests until the packaged output has deployed successfully in a lower environment. Then remove the old files in a separate cleanup change. That keeps rollback simple while the team gains confidence in the new source form.
+
+
+![Kubernetes manifest packaging summary covering source shape, inputs, render, diff, apply, and evidence](/content-assets/articles/article-containers-orchestration-kubernetes-packaging-why-manifest-packaging-matters/manifest-packaging-summary.png)
+
+*Use this checklist to keep packaging from hiding what will run in the cluster.*
 
 ---
 

@@ -43,6 +43,11 @@ The important mental model is that probes are signals, not monitoring dashboards
 
 Kubernetes has three probe types, and each one connects a health signal to a different action. The important beginner move is to remember the action, not just the field name.
 
+![Kubernetes probe type map covering startup, readiness, liveness, slow start, traffic gate, and restart gate](/content-assets/articles/article-containers-orchestration-kubernetes-operations-health-probes/probe-types-map.png)
+
+*Startup, readiness, and liveness probes answer different health questions.*
+
+
 Example: readiness changes traffic, liveness restarts a container, and startup delays the other checks while a slow app is still booting.
 
 | Probe | Question | Kubernetes action when it fails |
@@ -171,6 +176,11 @@ The endpoint should become successful only when startup is really complete. For 
 ## Probe Timing and Failure Thresholds
 
 Probe timing is the schedule Kubernetes uses to turn health checks into action. It controls how often kubelet asks the question, how long it waits for an answer, and how many failed answers count as a real problem. Too aggressive, and normal latency spikes cause restarts. Too loose, and broken Pods stay in traffic for too long.
+
+![Kubernetes probe timing window showing initial delay, period, timeout, failure threshold, and action](/content-assets/articles/article-containers-orchestration-kubernetes-operations-health-probes/probe-timing-window.png)
+
+*Probe timing decides how quickly Kubernetes reacts and how much temporary slowness it tolerates.*
+
 
 Example: `periodSeconds: 10` and `failureThreshold: 3` means Kubernetes needs roughly thirty seconds of failed readiness checks before removing a Pod from endpoints. Use real application behavior to choose values instead of copying a snippet.
 
@@ -302,6 +312,11 @@ That small question catches many probe mistakes before they become incidents.
 For the orders team, this question belongs in every Deployment review. It turns probe discussion from style preference into an operational decision.
 
 That is the habit that keeps probe changes tied to user traffic.
+
+
+![Kubernetes health probe summary covering startup, readiness, liveness, timing, endpoint, and failure action](/content-assets/articles/article-containers-orchestration-kubernetes-operations-health-probes/health-probes-summary.png)
+
+*Use this checklist to make health checks answer one precise question each.*
 
 ---
 

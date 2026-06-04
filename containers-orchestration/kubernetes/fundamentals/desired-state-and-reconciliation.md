@@ -27,6 +27,11 @@ At its core, Kubernetes runs by continuously comparing a request with a report.
 The request is the configuration you want, and the report is what the cluster observes on nodes right now.
 Example: you request three notification API Pods, but the report says only two are ready because one node failed.
 
+![Kubernetes reconciliation loop showing spec, status, compare, controller action, and running pods](/content-assets/articles/article-containers-orchestration-kubernetes-fundamentals-desired-state-and-reconciliation/reconciliation-loop.png)
+
+*Reconciliation is the repeated comparison between what the spec asks for and what the cluster reports.*
+
+
 Traditional scripting tools operate as one-time execution paths.
 You run an imperative script to deploy an application, it executes a sequence of SSH commands, and then it exits.
 If a server process crashes five minutes later, the script is no longer running to repair it.
@@ -369,6 +374,11 @@ If you manually delete an active Pod, you change only the current state, so the 
 The ReplicaSet controller immediately detects this gap and starts a replacement:
 Example: deleting one notification API Pod is temporary because the Deployment still asks for three replicas, while scaling the Deployment to five changes the target the controller enforces.
 
+![Kubernetes manual drift view showing a live pod edit replaced by a recreated pod from the spec](/content-assets/articles/article-containers-orchestration-kubernetes-fundamentals-desired-state-and-reconciliation/manual-drift-recreation.png)
+
+*Manual changes to live objects can disappear because controllers keep rebuilding the requested shape from the spec.*
+
+
 ```bash
 kubectl delete pod notification-api-7c8d9f-a1b2c -n notifications-prod
 ```
@@ -477,6 +487,11 @@ Rather than running manual recovery scripts, you manage workloads by maintaining
 
 In the next article, we will focus on daily operational command-line habits.
 We will explore namespaces and `kubectl` configurations, checking how to navigate and manage these API resources safely.
+
+
+![Six-tile desired state and reconciliation summary covering spec, status, controller, events, rollout, and drift](/content-assets/articles/article-containers-orchestration-kubernetes-fundamentals-desired-state-and-reconciliation/desired-state-summary.png)
+
+*Desired state becomes practical when you know where the spec lives, how status reports reality, and which controller closes the gap.*
 
 ---
 

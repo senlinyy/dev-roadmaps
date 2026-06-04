@@ -54,6 +54,11 @@ Keep the options that earn their place by improving the rendered manifest or the
 
 The rendered manifest is the final YAML that Kubernetes receives. Every chart helper, values file, and overlay patch should make that manifest clearer or easier to maintain.
 
+![Kubernetes template sprawl map showing template, values, rendered object, reviewer, and cluster](/content-assets/articles/article-containers-orchestration-kubernetes-packaging-avoiding-template-sprawl/rendered-object-anchor.png)
+
+*The rendered object is the anchor that keeps templates from becoming too clever.*
+
+
 Example: the rendered orders API Deployment should make the image, replicas, readiness probe, resources, and Secret references easy to find.
 
 ```bash
@@ -96,6 +101,11 @@ This gives reviewers a map before they open the full YAML.
 ## Limit Values to Real Decisions
 
 A values file should contain choices a service team expects to make, not every possible Kubernetes field. Real decisions are things reviewers can connect to deployment behavior.
+
+![Kubernetes values sprawl boundary showing real decisions, copied YAML, hidden helper, magic default, test render, and small surface](/content-assets/articles/article-containers-orchestration-kubernetes-packaging-avoiding-template-sprawl/values-sprawl-boundary.png)
+
+*Values should represent real deployment decisions, not every field that might someday change.*
+
 
 Example: image tag, replica count, resource requests, ingress host, and feature flags are normal choices for the orders API.
 
@@ -300,6 +310,11 @@ Evidence checked
 That note is not extra paperwork. It is a compact record of the checks a careful operator would perform anyway.
 
 When the same note becomes hard to write, the package is probably too hard to review.
+
+
+![Kubernetes template sprawl summary covering rendered YAML, small values, helpers, overlays, tests, and review path](/content-assets/articles/article-containers-orchestration-kubernetes-packaging-avoiding-template-sprawl/template-sprawl-summary.png)
+
+*Use this checklist when packaging starts hiding the production object instead of clarifying it.*
 
 ---
 

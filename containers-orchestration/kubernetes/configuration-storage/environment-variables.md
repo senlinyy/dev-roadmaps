@@ -24,6 +24,11 @@ id: article-containers-orchestration-kubernetes-configuration-storage-environmen
 
 Most application frameworks already have one simple configuration interface: environment variables. In Node.js, `process.env.PORT` and `process.env.NODE_ENV` are just strings attached to the process when it starts. Kubernetes can fill those strings from literals, ConfigMaps, Secrets, and Pod metadata.
 
+![Kubernetes environment startup contract showing pod spec, ConfigMap key, Secret key, environment, and process start](/content-assets/articles/article-containers-orchestration-kubernetes-configuration-storage-environment-variables/environment-startup-contract.png)
+
+*A container environment is built before the process starts, so the app receives those values as a startup contract.*
+
+
 Environment variables are a startup contract. They tell `devpolaris-orders-api` which port to listen on, which downstream service to call, and which behavior to enable before the first request arrives. They are easy to use because the app does not need to open a file or call the Kubernetes API.
 
 The design constraint is also the main limitation. A running process does not receive a live update when you change an environment variable source. If the Deployment changes, new Pods get new values. Existing processes keep the environment they started with.
@@ -126,6 +131,11 @@ If the application logs `http://$(ORDERS_HOST):8080`, inspect the Deployment spe
 ## Failure Mode: CreateContainerConfigError
 
 `CreateContainerConfigError` is a Pod startup status that means Kubernetes could not assemble the container configuration. For environment variables, this usually happens when a required ConfigMap, Secret, or key is missing before the container starts.
+
+![Kubernetes CreateContainerConfigError path showing missing key, pod creation, config error, no container, and fixed reference](/content-assets/articles/article-containers-orchestration-kubernetes-configuration-storage-environment-variables/env-config-error-path.png)
+
+*A bad environment reference can stop the container before the application code ever runs.*
+
 
 The useful detail is that the application has not run yet. Application logs are empty because there is no application process. The event on the Pod is the place to look first.
 
@@ -308,6 +318,11 @@ POD_NAME: Downward API field metadata.name
 ```
 
 The map is not a replacement for manifests. It is a quick orientation tool that points the reader to the right Kubernetes object before they start changing values.
+
+
+![Kubernetes environment variable summary covering literals, ConfigMaps, Secrets, envFrom, expansion, and restart](/content-assets/articles/article-containers-orchestration-kubernetes-configuration-storage-environment-variables/environment-summary.png)
+
+*Use this checklist before adding environment variables that must be stable, sensitive, or derived.*
 
 ---
 

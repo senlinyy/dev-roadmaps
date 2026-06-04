@@ -31,6 +31,11 @@ At its core, a Kubernetes cluster has two kinds of work: deciding what should ha
 The control plane is the API and coordination layer that stores requests, checks permissions, and makes placement decisions.
 Worker nodes are the physical or virtual servers that provide CPU, memory, disks, and network interfaces for Pods.
 
+![Kubernetes control plane and worker node boundary showing API server, etcd, scheduler, controllers, kubelet, runtime, and pods](/content-assets/articles/article-containers-orchestration-kubernetes-fundamentals-control-plane-and-worker-nodes/control-worker-boundary.png)
+
+*The control plane records and decides. Worker nodes do the local container-running work.*
+
+
 This structural split is critical for operational stability.
 The control plane processes API requests, validates manifests, monitors health, and schedules workloads.
 The worker nodes provide the actual CPU cores, RAM bytes, and network interfaces to run the application containers.
@@ -79,6 +84,11 @@ At its core, deploying a Pod is a chain of handoffs between control-plane compon
 A handoff means one component records or observes a small piece of work, then another component reacts to it.
 Example: the API Server stores a Deployment, the scheduler chooses a node for each Pod, and the kubelet on that node starts the containers.
 For the notification API, that means a single `kubectl apply` request becomes several separate system actions before any user traffic reaches port `3000`.
+
+![Kubernetes pod creation path showing request, API server, etcd record, scheduler, kubelet, and running pod](/content-assets/articles/article-containers-orchestration-kubernetes-fundamentals-control-plane-and-worker-nodes/request-to-running-pod.png)
+
+*A pod appears only after the request is accepted, recorded, scheduled, and acted on by a kubelet.*
+
 
 - **api-server**: Accepts the request, validates the schema, and authorizes the caller.
 - **etcd**: Persists the validated configuration in the cluster's backing database.
@@ -420,6 +430,11 @@ You can isolate failures by tracing the handoff chain from logical API validatio
 
 In the next article, we will focus on namespaces and `kubectl` configurations.
 We will explore the essential command-line tools and environments required to manage these API resources safely.
+
+
+![Six-tile Kubernetes control and worker summary covering API server, etcd, scheduler, controllers, kubelet, and runtime](/content-assets/articles/article-containers-orchestration-kubernetes-fundamentals-control-plane-and-worker-nodes/control-worker-summary.png)
+
+*Use this split to debug clusters: control-plane components decide what should happen, and worker components make it happen on nodes.*
 
 ---
 

@@ -32,6 +32,11 @@ For `devpolaris-orders-api`, the first chart will package a Deployment and a Ser
 
 A chart directory is a filesystem layout Helm understands. It contains chart metadata, default values, and templates that generate Kubernetes objects.
 
+![Helm chart directory map showing Chart.yaml, values.yaml, templates, helpers, README, and rendered YAML](/content-assets/articles/article-containers-orchestration-kubernetes-packaging-helm-charts/chart-directory-map.png)
+
+*A chart is a small package that turns templates and values into Kubernetes objects.*
+
+
 Example: the first orders API chart can have `Chart.yaml`, `values.yaml`, a Deployment template, and a Service template. Helm recognizes some names, and the `templates/` directory is where Kubernetes objects are generated.
 
 ```text
@@ -82,6 +87,11 @@ One common mistake is to bump `appVersion` and assume the Deployment image chang
 ## Templates Produce Kubernetes Objects
 
 A Helm template is Kubernetes YAML plus placeholders that Helm fills from release data and values. Helm uses Go templates, so placeholders appear inside `{{ ... }}`.
+
+![Helm render path showing chart, values, template engine, rendered YAML, and Kubernetes API](/content-assets/articles/article-containers-orchestration-kubernetes-packaging-helm-charts/helm-render-path.png)
+
+*Helm templates are only useful if the rendered YAML is clear enough to review.*
+
 
 Example: `.Values.replicaCount` can render into `spec.replicas: 3` for production and `spec.replicas: 1` for staging. The rendered output should be valid YAML after those placeholders are replaced.
 
@@ -315,6 +325,11 @@ $ helm template orders ./charts/orders-api -f environments/prod.values.yaml \
 ```
 
 If the source says the release is only an image update but the rendered output changes selectors, probes, ports, or namespaces, pause the review. Either the chart changed more than the author realized, or the pull request description is incomplete.
+
+
+![Helm chart summary covering Chart.yaml, values, templates, helpers, lint, and render](/content-assets/articles/article-containers-orchestration-kubernetes-packaging-helm-charts/helm-chart-summary.png)
+
+*Use this checklist when building a chart that teammates can safely review.*
 
 ---
 

@@ -24,6 +24,11 @@ id: article-containers-orchestration-kubernetes-configuration-storage-secrets
 
 Some configuration values are just preferences. A log level, a public service URL, or a feature flag can be reviewed in normal YAML. Other values are credentials. A database password, API token, private key, or webhook signing secret can let someone act as your service. Those values need a stricter boundary.
 
+![Kubernetes Secret boundary showing secret object, RBAC, environment value, mounted file, and pod](/content-assets/articles/article-containers-orchestration-kubernetes-configuration-storage-secrets/secret-boundary-map.png)
+
+*A Secret changes the access boundary for sensitive values, but the pod still receives them as files or environment variables.*
+
+
 A Kubernetes Secret is a namespaced API object for small pieces of sensitive data. It exists so credentials do not have to be baked into images, committed into Deployment manifests, or passed around in chat messages. The Pod can still receive the value, but the source object is labeled as sensitive and can be protected with separate RBAC rules.
 
 The running example is `devpolaris-orders-api`, which connects to PostgreSQL and signs internal webhook callbacks. The app needs `DATABASE_URL` and `WEBHOOK_SIGNING_KEY`. Both values would be dangerous in a ConfigMap because they grant access to systems outside the Pod.
@@ -204,6 +209,11 @@ Review RBAC with a concrete question: who can cause this Secret to be delivered 
 
 Secret rotation means replacing a credential before it is abused, expires, or blocks an incident response. The backing database, API provider, or signing system must accept the new value, the Kubernetes object must change, and the application Pods must use it.
 
+![Kubernetes Secret rotation path showing new value, Secret update, pod reload, rollout, and old value disabled](/content-assets/articles/article-containers-orchestration-kubernetes-configuration-storage-secrets/secret-rotation-path.png)
+
+*Secret rotation needs a planned path from new value to running pods and then to old-value removal.*
+
+
 A safe rotation for `DATABASE_URL` usually has two phases. First, create a new database user or password while the old one still works. Update the Secret and roll the Deployment. Verify new Pods connect successfully. Then revoke the old credential after traffic has moved.
 
 ```text
@@ -303,6 +313,11 @@ A final safe verification pattern is to check length or presence inside applicat
 ```
 
 Even length can be sensitive for some systems, so use it only when it helps catch malformed values and your team accepts the exposure.
+
+
+![Kubernetes Secrets summary covering sensitivity, RBAC, environment variables, file mounts, rotation, and leak checks](/content-assets/articles/article-containers-orchestration-kubernetes-configuration-storage-secrets/secrets-summary.png)
+
+*Use this checklist to keep secret values out of manifests, logs, and broad read access.*
 
 ---
 

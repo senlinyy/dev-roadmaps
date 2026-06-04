@@ -23,6 +23,11 @@ id: article-containers-orchestration-kubernetes-configuration-storage-configmaps
 
 A container image should answer one question: what software should run? It should not answer every question about where the software runs. The same `devpolaris-orders-api` image can run in a developer namespace, staging, and production, but each environment needs different feature flags, log levels, downstream URLs, and cache settings.
 
+![Kubernetes ConfigMap boundary showing container image, ConfigMap, environment value, mounted file, and running pod](/content-assets/articles/article-containers-orchestration-kubernetes-configuration-storage-configmaps/configmap-runtime-boundary.png)
+
+*A ConfigMap moves ordinary configuration outside the image so the same image can run with different settings.*
+
+
 A ConfigMap is a Kubernetes API object that stores non-secret configuration as key-value data. Non-secret means the value is safe enough to show in manifests, `kubectl describe` output, and normal review. A ConfigMap exists so you can change configuration without rebuilding the image every time an environment value changes.
 
 This fits between the Deployment and the application process. The Deployment says which image should run. The ConfigMap says which plain configuration values the Pod should receive. The kubelet, which is the node agent that starts containers, injects those values as environment variables or mounted files before the process starts.
@@ -143,6 +148,11 @@ Explicit keys make review slower but clearer. A reviewer can see that the API de
 ## How Updates Reach Running Pods
 
 A ConfigMap update changes the API object, not the memory of a process that is already running. Environment variables are captured when the container starts.
+
+![Kubernetes ConfigMap update path showing file projection, application reload, environment variable, and rollout](/content-assets/articles/article-containers-orchestration-kubernetes-configuration-storage-configmaps/configmap-update-path.png)
+
+*ConfigMap file mounts can refresh, but environment variables only change when pods restart.*
+
 
 Example: if `devpolaris-orders-api` reads `LOG_LEVEL` at startup, changing the ConfigMap from `info` to `debug` will not change existing Pods. New Pods must start before the process sees the new value.
 
@@ -322,6 +332,11 @@ REVISION  CHANGE-CAUSE
 ```
 
 The checksum does not explain the whole change, but it links the rollout to the config artifact that produced it. That is enough to connect Kubernetes state back to Git review.
+
+
+![Kubernetes ConfigMap summary covering plain config, secrets boundary, environment variables, files, reload, and review](/content-assets/articles/article-containers-orchestration-kubernetes-configuration-storage-configmaps/configmaps-summary.png)
+
+*Use this checklist to decide whether a value belongs in a ConfigMap and how the app will receive updates.*
 
 ---
 

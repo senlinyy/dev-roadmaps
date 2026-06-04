@@ -38,6 +38,11 @@ flowchart TD
 
 A resource request is the amount of CPU or memory Kubernetes should plan for before placing a Pod on a node. It is a scheduling promise, not a live usage measurement.
 
+![Kubernetes resource request scheduling map showing CPU request, memory request, scheduler, node capacity, fit, and pending pod](/content-assets/articles/article-containers-orchestration-kubernetes-workloads-resource-requests-and-limits/requests-scheduler-fit.png)
+
+*Requests are scheduling promises: the scheduler uses them to decide whether a node has room before the pod starts.*
+
+
 Example: a `250m` CPU request for each orders API Pod tells Kubernetes to place three replicas only where the cluster can account for three quarters of a CPU core. Kubernetes uses the sum of requests on a node to decide whether another Pod fits.
 
 CPU is measured in cores. `500m` means half a CPU core. Memory is measured in bytes with suffixes such as `Mi` and `Gi`. `512Mi` means 512 mebibytes.
@@ -118,6 +123,11 @@ If the values are missing in the Pod, your Deployment template did not include t
 ## CPU and Memory Behave Differently
 
 CPU is compressible, which means a process can often keep running with less CPU by running more slowly. If a container wants more CPU than its limit, it can be throttled and requests may wait longer.
+
+![Kubernetes CPU and memory limit comparison showing CPU throttling, memory OOMKilled, container, and restart](/content-assets/articles/article-containers-orchestration-kubernetes-workloads-resource-requests-and-limits/cpu-memory-limit-boundary.png)
+
+*CPU pressure is usually throttled. Memory above the limit can kill and restart the container.*
+
 
 Example: the orders API might keep serving requests during a CPU spike, but P95 latency can climb from `180ms` to `920ms` because the process is waiting for CPU time.
 
@@ -298,6 +308,11 @@ Without sidecar resources, the Pod may look cheaper than it really is. During tr
 The final habit is to change one resource assumption at a time when possible. If you increase replicas, raise memory limits, and change the image in one release, it becomes harder to explain whether latency improved because of more replicas, fewer memory kills, or code changes. Small resource changes with clear metrics teach the team faster.
 
 When you do change resources, leave a short note in the pull request about the evidence. A sentence like "memory limit raised from 512Mi to 768Mi because P99 request imports reached 610Mi in staging" is far more useful than "increase memory."
+
+
+![Kubernetes resource requests and limits summary covering requests, scheduler, node capacity, CPU limit, memory limit, and OOMKilled](/content-assets/articles/article-containers-orchestration-kubernetes-workloads-resource-requests-and-limits/resources-summary.png)
+
+*Capacity decisions become clearer when you separate scheduling requests from runtime CPU and memory limits.*
 
 ---
 

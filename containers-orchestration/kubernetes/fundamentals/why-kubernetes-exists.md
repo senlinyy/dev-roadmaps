@@ -64,6 +64,11 @@ The service is compiled into a container image that listens on port `3000`.
 It requires a connection string to query a backend database.
 It also exposes a HTTP health endpoint at `/healthz` to report its internal status.
 
+![Kubernetes operating jobs map showing one app container surrounded by restart, scheduling, networking, configuration, rollout, and observation work](/content-assets/articles/article-containers-orchestration-kubernetes-fundamentals-why-kubernetes-exists/container-operating-jobs.png)
+
+*A single container only runs the process. Kubernetes becomes useful when the team needs the surrounding operating jobs to be repeatable.*
+
+
 On a single Linux host, you might start the container with this command:
 
 ```bash
@@ -131,6 +136,11 @@ The system then coordinates node placement and container startups automatically.
 At its core, a Kubernetes cluster is a set of servers managed through one API.
 The control plane is the coordination layer that stores requests and makes decisions, while worker nodes are the servers that run the actual containers.
 The cluster exists so you can deploy workloads without manually choosing a host for every container.
+
+![Kubernetes shared runtime map showing an app manifest, the API, desired state, worker nodes, pods, and service](/content-assets/articles/article-containers-orchestration-kubernetes-fundamentals-why-kubernetes-exists/shared-runtime-map.png)
+
+*The cluster is a shared runtime because teams submit desired objects to the API and let workers run the resulting pods.*
+
 
 For the Customer Notification Service, you do not manually allocate a server for each container.
 Instead, you declare that three healthy copies of the application should run.
@@ -401,6 +411,11 @@ This declarative model guides the rest of this module.
 
 In the next article, we will build on this mental model.
 We will explore the architecture of the Kubernetes cluster in detail, checking how nodes, network plugins, and storage interfaces cooperate.
+
+
+![Six-tile Kubernetes purpose summary covering container, desired state, API, scheduler, service, and rollout](/content-assets/articles/article-containers-orchestration-kubernetes-fundamentals-why-kubernetes-exists/kubernetes-exists-summary.png)
+
+*Use this as the Kubernetes starting map: container, desired state, API, scheduling, service routing, and rollout control are the core anchors.*
 
 ---
 

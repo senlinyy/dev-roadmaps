@@ -22,6 +22,11 @@ id: article-containers-orchestration-kubernetes-operations-metrics-and-autoscali
 
 Scaling by instinct works for a demo and fails in production. If `devpolaris-orders-api` is slow, adding replicas might help, but only if the bottleneck is per-Pod CPU, concurrency, or request queueing. If the bottleneck is PostgreSQL locks, a saturated queue consumer, or an external payment API, adding more API Pods can increase pressure without improving user latency.
 
+![Kubernetes autoscaling signal loop showing metrics, HPA, replica target, new pods, and fresh metrics](/content-assets/articles/article-containers-orchestration-kubernetes-operations-metrics-and-autoscaling/autoscaling-signal-loop.png)
+
+*Autoscaling is a feedback loop: metrics drive replica changes, and new replicas change future metrics.*
+
+
 Metrics are measured facts about resource usage or application behavior. Kubernetes can expose CPU and memory usage for Pods and nodes through the resource metrics pipeline. Teams often add application metrics too, such as request rate, latency, queue depth, and error count. Autoscaling is the act of changing capacity based on one or more of those signals.
 
 The common Kubernetes object for replica autoscaling is the HorizontalPodAutoscaler, usually called HPA. Horizontal means more Pods, not bigger Pods. Vertical scaling changes CPU and memory for a Pod. Cluster scaling adds or removes nodes. Those are related decisions, but they solve different constraints.
@@ -41,6 +46,11 @@ The autoscaler is only as good as the metric you give it. A junior engineer can 
 ## Requests Make Metrics Useful
 
 A resource request is the CPU or memory amount Kubernetes uses as the planning baseline for a container. CPU autoscaling uses a percentage of requested CPU, so the request gives the HPA a denominator.
+
+![Kubernetes HPA map showing CPU request, usage metric, utilization, target, and scale decision](/content-assets/articles/article-containers-orchestration-kubernetes-operations-metrics-and-autoscaling/requests-metrics-map.png)
+
+*CPU utilization only makes sense when requests provide the baseline.*
+
 
 Example: if the orders API requests `500m` CPU and uses `250m`, it is using 50 percent of its requested CPU. Without that request, the HPA cannot calculate a CPU utilization percentage for the container.
 
@@ -305,6 +315,11 @@ devpolaris-orders-api   32%/70%   3         12        8
 If HPA owns the Deployment, it may later move the replica count back down. If GitOps owns the manifest, it may revert the manual change. Record why the manual scale happened and decide whether the steady-state HPA or manifest should change afterward.
 
 The cleanup question is direct: was this a one-time surge, or did normal traffic outgrow the old capacity model? One answer leads to no config change. The other leads to new requests, HPA targets, replica floors, or dependency limits.
+
+
+![Kubernetes metrics and autoscaling summary covering requests, metrics, target, HPA, bottleneck, and limits](/content-assets/articles/article-containers-orchestration-kubernetes-operations-metrics-and-autoscaling/metrics-autoscaling-summary.png)
+
+*Use this checklist before trusting autoscaling to fix load.*
 
 ---
 

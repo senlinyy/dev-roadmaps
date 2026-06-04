@@ -41,6 +41,11 @@ DNS does not replace Services. It gives clients a readable way to find them. The
 
 A Service DNS name is the readable address Kubernetes creates for a Service. It has predictable pieces so callers can name a Service in the same namespace, another namespace, or the whole cluster domain.
 
+![Kubernetes DNS name shape showing short name, namespace, svc, and cluster.local suffix](/content-assets/articles/article-containers-orchestration-kubernetes-networking-dns-inside-the-cluster/service-dns-shape.png)
+
+*Kubernetes service DNS names are structured coordinates, not magic aliases.*
+
+
 Example: a web Pod in the `web` namespace can call the orders Service with `devpolaris-orders-api.orders`, which includes the Service name and namespace. The fully qualified name usually looks like this:
 
 ```text
@@ -66,6 +71,11 @@ A lookup for the full Service DNS name should return the Service cluster IP for 
 ## Namespace Search Paths Explain Short Names
 
 A DNS search path is a list of suffixes the resolver tries when an application uses a short name. Inside a Pod, Kubernetes writes those search paths into `/etc/resolv.conf`.
+
+![Kubernetes DNS search path showing short service name expansion through namespace and CoreDNS](/content-assets/articles/article-containers-orchestration-kubernetes-networking-dns-inside-the-cluster/dns-search-path.png)
+
+*Short names work because the pod resolver expands them through namespace search paths.*
+
 
 Example: a Pod in the `orders` namespace can often call `http://devpolaris-orders-api`, while a Pod in the `web` namespace should use `http://devpolaris-orders-api.orders` so it reaches the Service in the intended namespace.
 
@@ -298,6 +308,11 @@ This final comparison also keeps the article practical: names and routes are use
 Use that mismatch as a pointer, not as an invitation to rewrite every layer.
 
 Small proofs compound into a reliable diagnosis.
+
+
+![Kubernetes DNS summary covering service name, namespace, search path, CoreDNS, headless services, and traffic checks](/content-assets/articles/article-containers-orchestration-kubernetes-networking-dns-inside-the-cluster/cluster-dns-summary.png)
+
+*DNS only proves name resolution. The Service and pods still have to pass traffic after the name resolves.*
 
 ---
 

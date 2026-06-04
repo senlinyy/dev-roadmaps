@@ -25,6 +25,11 @@ aliases:
 
 A single Pod can run `devpolaris-orders-api`, but it cannot express the promise you usually want from production: keep three copies running, replace failed copies, and update them in a controlled way when the image changes. A Deployment is the Kubernetes workload object that expresses that promise for stateless applications.
 
+![Kubernetes Deployment ownership map showing Deployment, ReplicaSet, desired replicas, pods, and keep-running behavior](/content-assets/articles/article-containers-orchestration-kubernetes-workloads-deployments-and-replicasets/deployment-replicaset-pods.png)
+
+*A Deployment keeps the application running by owning ReplicaSets that maintain the requested pod count.*
+
+
 Stateless means any replica can handle any request because durable state lives somewhere else, such as PostgreSQL, Redis, object storage, or an event stream. The API can keep short-lived memory caches, but an individual Pod should be replaceable. That replaceability is what lets Kubernetes recover from node failures and roll out new versions without treating one Pod as special.
 
 A Deployment does not run containers directly. It creates a ReplicaSet. The ReplicaSet creates Pods. This layering looks fussy at first, but it gives Kubernetes a clean history of revisions during updates.
@@ -120,6 +125,11 @@ ReplicaSets are important to understand, but a beginner should rarely create one
 ## Labels and Selectors Are the Contract
 
 Labels are small key-value tags on Kubernetes objects, and selectors are the matching rules that find objects with those tags. In a Deployment, the selector must match the labels in the Pod template because that is how the controller knows which Pods it owns.
+
+![Kubernetes selector and label contract showing owned pods, mismatched pod, unmanaged pod, and service target](/content-assets/articles/article-containers-orchestration-kubernetes-workloads-deployments-and-replicasets/selector-label-contract.png)
+
+*Selectors are ownership contracts. A small label mismatch can put a pod outside the controller or service path.*
+
 
 Example: if the Deployment creates Pods with `app=devpolaris-orders-api`, the Service can use the same label to send traffic only to those Pods. If those labels drift apart, Kubernetes either rejects the object or cannot manage the Pods you meant it to manage.
 
@@ -309,6 +319,11 @@ devpolaris-orders-api-7b7d4b5f9c    3         3         3       2m
 ```
 
 That output closes the loop between manifest, controller, and Pods. You are no longer hoping the Deployment worked. You have evidence that the desired revision owns the running replicas.
+
+
+![Kubernetes Deployment summary covering Deployment, ReplicaSet, pods, selector, scale, and rollout](/content-assets/articles/article-containers-orchestration-kubernetes-workloads-deployments-and-replicasets/deployment-summary.png)
+
+*A Deployment is easiest to reason about as controller, selector, pod set, scale target, and rollout history.*
 
 ---
 

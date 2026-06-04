@@ -27,6 +27,11 @@ At its core, `kubectl` is a client for a remote API, not a command that only aff
 The same command can target a local cluster, staging, or production depending on your local Kubernetes configuration.
 Example: `kubectl delete pod api-1` deletes a Pod from whichever cluster and namespace your current context selects.
 
+![kubectl context and namespace scope showing the same command pointed at dev and prod namespace objects](/content-assets/articles/article-containers-orchestration-kubernetes-fundamentals-namespaces-and-kubectl-basics/context-namespace-scope.png)
+
+*The same kubectl command can inspect different objects depending on the active context and namespace.*
+
+
 Most command-line utilities execute tasks against a single local environment by default.
 In contrast, the same Kubernetes command-line tools can inspect a local development VM, a shared staging cloud, or a high-traffic production system.
 A single simple-looking command can read or alter completely different environments based on hidden local variables.
@@ -251,6 +256,11 @@ The `get` verb provides a compact, high-level summary of your resources.
 Always start diagnostics with the highest-level workload resource.
 For our Customer Notification Service, that is the Deployment:
 Example: reading the Deployment first tells you whether the service is missing replicas before you inspect individual Pods, events, or container logs.
+
+![Kubernetes object evidence stack showing get, describe, logs, events, and json views](/content-assets/articles/article-containers-orchestration-kubernetes-fundamentals-namespaces-and-kubectl-basics/kubectl-evidence-stack.png)
+
+*kubectl is most useful when you choose the evidence layer that matches the question you are asking.*
+
 
 ```bash
 kubectl get deployment notification-api -n notifications-prod
@@ -478,6 +488,11 @@ These foundational practices ensure safe, predictable cluster operations.
 
 In the next submodule, we will focus on workloads.
 We will explore Pod architectures, resource management, and container specifications in detail, checking how to run applications reliably.
+
+
+![Six-tile kubectl basics summary covering context, namespace, get, describe, logs, and events](/content-assets/articles/article-containers-orchestration-kubernetes-fundamentals-namespaces-and-kubectl-basics/kubectl-basics-summary.png)
+
+*A reliable kubectl habit starts with context and namespace, then uses get, describe, logs, and events for separate evidence.*
 
 ---
 

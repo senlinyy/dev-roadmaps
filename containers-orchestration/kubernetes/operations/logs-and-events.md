@@ -22,6 +22,11 @@ id: article-containers-orchestration-kubernetes-operations-logs-and-events
 
 When a Kubernetes workload fails, there are usually two stories happening at the same time. The application tells one story through stdout and stderr, which become container logs. Kubernetes tells another story through object status and events, such as image pull failures, scheduling failures, probe failures, and rollout progress.
 
+![Kubernetes logs and events boundary showing object state, events, current logs, previous logs, and timeline](/content-assets/articles/article-containers-orchestration-kubernetes-operations-logs-and-events/logs-events-boundary.png)
+
+*Logs tell the application story. Events tell the Kubernetes decision story.*
+
+
 You need both stories because each one has blind spots. `devpolaris-orders-api` can log `database connection refused`, but it cannot tell you that the Pod was evicted because the node ran out of memory. Kubernetes can tell you the container restarted, but it cannot explain which line of application code crashed unless the process logged it.
 
 The running example is a Deployment in the `orders` namespace. A new image was rolled out, and the Service has fewer ready endpoints than expected. The job is to prove what changed before editing YAML.
@@ -91,6 +96,11 @@ That second log changes the direction. The issue is not the database itself. The
 ## Read Previous Container Logs
 
 Previous logs are logs from the last terminated instance of the same container. They matter when a container keeps restarting because the current run may not have reached the failing line yet.
+
+![Kubernetes previous logs path showing pod restart, previous logs, exit reason, events, and next action](/content-assets/articles/article-containers-orchestration-kubernetes-operations-logs-and-events/previous-logs-crash-path.png)
+
+*Previous logs preserve evidence from the container that crashed before the current one started.*
+
 
 Example: in `CrashLoopBackOff`, `kubectl logs --previous` can show the startup error from the run that just died. The `--previous` flag reads logs from the previous terminated container instance.
 
@@ -297,6 +307,11 @@ That copied event can save a future reviewer from asking why the team changed a 
 The same habit helps during handoff between time zones. Evidence survives better when the important line is written down while the cluster still has it.
 
 Good notes make the next responder faster without requiring them to trust memory.
+
+
+![Kubernetes logs and events summary covering object state, describe, events, logs, previous logs, and timeline](/content-assets/articles/article-containers-orchestration-kubernetes-operations-logs-and-events/logs-events-summary.png)
+
+*Use this checklist to avoid relying on one evidence source during an incident.*
 
 ---
 

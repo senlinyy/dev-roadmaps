@@ -40,6 +40,11 @@ The useful idea is role separation. The person who manages load balancers and ce
 
 Gateway API splits routing into separate Kubernetes objects for implementation, listener ownership, and application routes. You do not need all of them on day one. For HTTP routing, the first three are enough: `GatewayClass`, `Gateway`, and `HTTPRoute`.
 
+![Kubernetes Gateway API ownership map showing GatewayClass, Gateway, Listener, HTTPRoute, and Service](/content-assets/articles/article-containers-orchestration-kubernetes-networking-gateway-api/gateway-api-ownership.png)
+
+*Gateway API separates platform-owned entry points from application-owned routes.*
+
+
 Example: a platform team can own a `Gateway` for `api.devpolaris.local`, while the orders team owns an `HTTPRoute` that maps `/orders` to the orders Service.
 
 | Object | Usually owned by | What it answers |
@@ -142,6 +147,11 @@ status:
 ## Failure Mode: Route Not Allowed
 
 A route is not allowed when the Gateway sees the route but refuses the attachment. The listener is reachable, but its `allowedRoutes` rules do not permit that namespace or route shape. One common cause is a Gateway that only permits selected namespaces while the application namespace is missing the required label.
+
+![Kubernetes Gateway API status path showing HTTPRoute, ParentRef, AllowedRoutes, Accepted, and Programmed conditions](/content-assets/articles/article-containers-orchestration-kubernetes-networking-gateway-api/route-allowed-status.png)
+
+*Status conditions show whether the route was accepted before you debug the backend service.*
+
 
 ```bash
 $ kubectl -n orders get httproute devpolaris-orders-api -o yaml
@@ -299,6 +309,11 @@ Smoke record:
 ```
 
 That ownership line matters during incidents. It helps the team route the next investigation without turning every networking symptom into a cluster-wide mystery.
+
+
+![Kubernetes Gateway API summary covering GatewayClass, Gateway, Listener, HTTPRoute, status, and backend](/content-assets/articles/article-containers-orchestration-kubernetes-networking-gateway-api/gateway-api-summary.png)
+
+*Use this Gateway API checklist to separate ownership, routing permission, and backend health.*
 
 ---
 

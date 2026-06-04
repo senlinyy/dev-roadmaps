@@ -22,6 +22,11 @@ id: article-containers-orchestration-kubernetes-workloads-pods
 
 A Pod is the smallest runnable workload Kubernetes places on a node. It wraps one or more containers with the network, storage, labels, probes, and restart settings those containers need to run as one unit.
 
+![Kubernetes pod boundary showing an app container, sidecar, shared IP, shared volume, and node](/content-assets/articles/article-containers-orchestration-kubernetes-workloads-pods/pod-shared-boundary.png)
+
+*A pod is the runtime wrapper around containers that share one network identity and mounted storage.*
+
+
 For `devpolaris-orders-api`, the Pod is the thing Kubernetes actually starts on `worker-a`: one container for the HTTP API, one Pod IP, and one status record that can show `Pending`, `Running`, readiness, restarts, or failure reasons. Higher-level controllers such as Deployments usually create Pods for you, but Kubernetes still schedules the Pod, not the individual container.
 
 Most application Pods contain one main container. A Pod can also include helper containers when the helper must share the same network identity or local files as the main process. The kubelet on the chosen node asks the container runtime to start the containers inside the Pod, then reports their state back through the Kubernetes API.
@@ -111,6 +116,11 @@ This shared fate is the tradeoff. A Pod gives containers a convenient shared env
 ## Lifecycle, Restart Policy, and Readiness
 
 A Pod lifecycle is the set of steps between "Kubernetes accepted this Pod spec" and "the containers are running, ready, failed, or waiting." Kubernetes reports that lifecycle through status fields so you can see whether the problem is scheduling, image pulling, startup, or application readiness.
+
+![Kubernetes pod lifecycle showing starting, running, readiness, ready state, and service traffic](/content-assets/articles/article-containers-orchestration-kubernetes-workloads-pods/pod-readiness-gate.png)
+
+*Running is not the same as ready. The readiness gate decides when a pod should receive service traffic.*
+
 
 Example: an orders API Pod can be `Running` because its Node.js process started, while still not `Ready` because `/health/ready` returns `503` until the database connection succeeds. The scheduler chooses a node, the kubelet pulls images, containers start, probes run, and the Pod eventually becomes ready or reports why it is waiting.
 
@@ -304,6 +314,11 @@ devpolaris-orders-api   10.42.1.18:8080
 ```
 
 An empty endpoint list means the Service has no ready matching Pods. That can be a label mismatch or readiness failure. This is still Pod knowledge, but now you are using it to debug the next layer up.
+
+
+![Kubernetes pod summary covering containers, shared IP, volumes, readiness, restart behavior, and pod boundary](/content-assets/articles/article-containers-orchestration-kubernetes-workloads-pods/pod-summary.png)
+
+*Use this pod checklist to separate the container process, shared pod resources, readiness, and restart behavior.*
 
 ---
 

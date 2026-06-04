@@ -22,6 +22,11 @@ id: article-containers-orchestration-kubernetes-operations-pod-security
 
 A container is an isolated process environment, not a separate operating system kernel. It feels like a small machine while still sharing the host kernel with other containers on the node.
 
+![Kubernetes pod security boundary showing container, Linux kernel, security context, capabilities, and host risk](/content-assets/articles/article-containers-orchestration-kubernetes-operations-pod-security/pod-kernel-boundary.png)
+
+*Pod security matters because containers share the node kernel rather than getting a private operating system.*
+
+
 Linux isolation features such as namespaces, cgroups, capabilities, and seccomp create boundaries around processes. Namespaces limit what the process can see, cgroups limit resources, capabilities control privileged kernel operations, and seccomp filters system calls. Those boundaries are useful, but they are still boundaries inside one kernel.
 
 Pod security reduces what a container can do if the application is compromised. If an attacker finds a remote code execution bug in `devpolaris-orders-api`, the container should not be running as root, should not have extra Linux capabilities, should not be able to write to the root filesystem, and should not receive a Kubernetes API token unless it needs one.
@@ -43,6 +48,11 @@ The review habit is simple: every exception should have a reason tied to the wor
 ## Start With the Restricted Shape
 
 Kubernetes Pod Security Standards are named sets of Pod safety expectations: privileged, baseline, and restricted. The restricted profile is the safer target for ordinary application Pods because it blocks privileged containers and requires safer defaults around privilege escalation and seccomp.
+
+![Kubernetes restricted pod shape covering non-root, no privilege, dropped capabilities, read-only root, seccomp, and no host access](/content-assets/articles/article-containers-orchestration-kubernetes-operations-pod-security/restricted-pod-shape.png)
+
+*The restricted shape removes common escape routes before the workload reaches production.*
+
 
 Example: an ordinary orders API Pod should not use host networking, run privileged, or write freely to the image filesystem, so restricted-style settings are the right starting point.
 
@@ -306,6 +316,11 @@ devpolaris-orders-api security posture:
 ```
 
 That checklist is not a substitute for the manifest. It is the human-readable contract the manifest should satisfy. During an incident or audit, it lets the team quickly compare intended posture with the running Pod.
+
+
+![Kubernetes pod security summary covering runAsNonRoot, capabilities, privilege escalation, seccomp, host paths, and admission](/content-assets/articles/article-containers-orchestration-kubernetes-operations-pod-security/pod-security-summary.png)
+
+*Use this checklist to review a pod before it can ask for node-level power.*
 
 ---
 

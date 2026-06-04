@@ -23,6 +23,11 @@ id: article-containers-orchestration-kubernetes-configuration-storage-backup-and
 
 A backup plan fails when it protects the wrong thing. In Kubernetes, state is split across several places. The API server stores objects such as Deployments, ConfigMaps, Secrets, Services, PVCs, and RBAC rules. Persistent volumes store mounted application files. Databases and object stores often live outside the cluster. Container images live in a registry.
 
+![Kubernetes state inventory showing API objects, etcd, PVC data, database, object store, and manifests](/content-assets/articles/article-containers-orchestration-kubernetes-configuration-storage-backup-and-restore-basics/state-location-inventory.png)
+
+*A useful backup plan starts by listing where each kind of state actually lives.*
+
+
 Backup and restore basics are about mapping those locations before choosing a tool. If `devpolaris-orders-api` loses a ConfigMap, the fix is different from losing a PostgreSQL table or a PVC full of invoice work files. One restore command cannot cover every kind of state unless it knows all the systems involved.
 
 ```mermaid
@@ -177,6 +182,11 @@ Snapshots can capture storage in the middle of an application operation. If the 
 
 A restore drill is a planned practice restore. It proves that your backup can become a working service. Without drills, teams often discover missing permissions, missing encryption keys, expired registry tags, or incomplete runbooks during a real outage.
 
+![Kubernetes restore drill path showing backup, restore target, app start, data verification, and evidence record](/content-assets/articles/article-containers-orchestration-kubernetes-configuration-storage-backup-and-restore-basics/restore-drill-path.png)
+
+*A backup is only useful after a restore drill proves the service can run from it.*
+
+
 For `devpolaris-orders-api`, a safe drill can use a temporary namespace.
 
 ```bash
@@ -295,6 +305,11 @@ Business check: test order ord_restore_001 read successfully
 ```
 
 That evidence is more useful than saying "restore succeeded." It names the layers that were tested and gives the next engineer a baseline.
+
+
+![Kubernetes backup and restore summary covering inventory, manifests, etcd, PVC snapshots, external data, and restore drills](/content-assets/articles/article-containers-orchestration-kubernetes-configuration-storage-backup-and-restore-basics/backup-restore-summary.png)
+
+*Use this checklist to avoid backing up only the easy part of the system.*
 
 ---
 

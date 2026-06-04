@@ -43,6 +43,11 @@ The safe path is staged evidence, not hope.
 
 A cluster upgrade is a coordinated change across the software that accepts Kubernetes objects, schedules work, and runs Pods. It can touch the control plane that stores API objects, the nodes that run Pods, and add-ons that provide DNS, networking, storage, ingress, and metrics. Managed Kubernetes services hide some operational work, but they do not remove the responsibility to understand which layer is changing.
 
+![Kubernetes cluster upgrade layer map covering API version, control plane, node version, add-ons, workloads, and clients](/content-assets/articles/article-containers-orchestration-cluster-operations-cluster-upgrades/upgrade-layer-map.png)
+
+*A cluster upgrade changes several layers, not just the version number printed by the control plane.*
+
+
 Example: a provider may upgrade the API server first, then node pools, while your platform team separately upgrades the ingress controller or CSI storage driver.
 
 Capture the starting state:
@@ -103,6 +108,11 @@ A dry run proves the API server accepts the object shapes. Production rehearsal 
 ## Prepare Workloads for Node Drains
 
 A node drain is the planned process of moving Pods off a node so the node can be upgraded or maintained. A node is cordoned so no new Pods are scheduled there, then drained so existing Pods are evicted and recreated on other nodes.
+
+![Kubernetes node drain path showing drain node, pod eviction, rescheduling, readiness, and empty old node](/content-assets/articles/article-containers-orchestration-cluster-operations-cluster-upgrades/node-drain-movement.png)
+
+*Node upgrades depend on whether workloads can leave a node and become ready somewhere else.*
+
 
 Example: if `worker-2` drains, one orders API Pod may be evicted and a replacement should become ready on another node while the remaining replicas keep serving traffic.
 
@@ -308,6 +318,11 @@ For add-ons, create a separate checklist. Application teams often notice DNS, in
 | Metrics Server | HPA loses metrics | `kubectl top pods` and HPA conditions |
 
 The upgrade is ready to continue only when both platform add-ons and application workloads show healthy evidence.
+
+
+![Kubernetes cluster upgrade summary covering API checks, backups, control plane, node pools, pod budgets, and validation](/content-assets/articles/article-containers-orchestration-cluster-operations-cluster-upgrades/cluster-upgrade-summary.png)
+
+*Use this checklist before treating a cluster upgrade as a routine version bump.*
 
 ---
 

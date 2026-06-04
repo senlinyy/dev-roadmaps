@@ -40,6 +40,11 @@ RBAC is protective because it limits the damage from mistakes. If the release to
 
 An RBAC rule is a permission sentence for the Kubernetes API: a subject can perform a verb on a resource in a scope. Reading the YAML this way turns abstract fields into a concrete access decision.
 
+![Kubernetes RBAC request shape showing subject, verb, resource, scope, and decision](/content-assets/articles/article-containers-orchestration-kubernetes-operations-rbac/rbac-request-shape.png)
+
+*RBAC answers one API question: who wants to do which action to which resource at which scope.*
+
+
 Example: "the `orders-release` service account can update Deployments in the `orders` namespace" means subject `orders-release`, verb `update`, resource `deployments`, scope `orders`.
 
 | Word | Plain meaning | Example |
@@ -54,6 +59,11 @@ The verbs are Kubernetes API verbs, not shell commands. `kubectl rollout restart
 ## Roles and RoleBindings
 
 A Role grants permissions inside one namespace, and a RoleBinding attaches that Role to a subject. This is the usual starting point for application team permissions because it keeps access close to the namespace where the team works.
+
+![Kubernetes RoleBinding path showing Role, rules, RoleBinding, subject, and namespace](/content-assets/articles/article-containers-orchestration-kubernetes-operations-rbac/rolebinding-path.png)
+
+*A RoleBinding grants a Role to a subject inside a namespace.*
+
 
 Example: the orders release service account can patch Deployments and read Pods in `orders`, without gaining Secret reads or permissions in other namespaces.
 
@@ -307,6 +317,11 @@ roleRef:
 This still needs identity-provider hygiene outside Kubernetes, but it keeps the cluster RBAC file focused on roles and team boundaries.
 
 Finally, include one negative test in every sensitive RBAC review. Proving that an identity cannot read Secrets or delete namespaces is as important as proving it can deploy. Least privilege is a positive and negative claim: allow the work, deny the dangerous extra actions.
+
+
+![Kubernetes RBAC summary covering subject, verb, resource, namespace, RoleBinding, and auth can-i](/content-assets/articles/article-containers-orchestration-kubernetes-operations-rbac/rbac-summary.png)
+
+*Use this checklist before granting a helpful role that may be too broad.*
 
 ---
 

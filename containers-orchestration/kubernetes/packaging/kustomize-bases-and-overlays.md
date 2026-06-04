@@ -24,6 +24,11 @@ id: article-containers-orchestration-kubernetes-packaging-kustomize-bases-and-ov
 
 Kustomize is a Kubernetes configuration tool that builds final manifests from directories containing a `kustomization.yaml` file. Its main idea is simple: start with valid Kubernetes YAML, then apply named customizations such as patches, image changes, labels, namespaces, and generated ConfigMaps.
 
+![Kustomize base and overlay path showing base, patch, overlay, rendered YAML, and apply](/content-assets/articles/article-containers-orchestration-kubernetes-packaging-kustomize-bases-and-overlays/kustomize-base-overlay-map.png)
+
+*Kustomize changes YAML by layering patches over a base rather than running a template language.*
+
+
 This exists for teams that like plain manifests but dislike copying them for every environment. Instead of writing template placeholders, you keep a base that can be read as normal Kubernetes YAML and add overlays for staging, production, or preview environments.
 
 For `devpolaris-orders-api`, the base contains the Deployment and Service. The staging overlay changes the namespace and replica count. The production overlay changes the namespace, replica count, image tag, and ingress host.
@@ -160,6 +165,11 @@ Keep patches small. A patch that rewrites most of the Deployment is a copied man
 ## ConfigMap Generators and Name Updates
 
 A ConfigMap generator creates ConfigMap objects from literals or files during rendering. The generated name often includes a hash so Pods roll when the config changes.
+
+![Kustomize ConfigMap generator path showing config data, generator, hashed name, pod reference, and rollout](/content-assets/articles/article-containers-orchestration-kubernetes-packaging-kustomize-bases-and-overlays/configmap-generator-name.png)
+
+*Generated ConfigMap names can change when content changes, forcing pods to reference the new version.*
+
 
 Example: if `LOG_LEVEL` changes in the generator, Kustomize can render a new ConfigMap name and update the Deployment reference, which changes the Pod template.
 
@@ -306,6 +316,11 @@ k8s/
 If preview environments need unique hostnames and image tags, keep that logic in the delivery system or generate a small overlay for each preview. Do not make production depend on preview-specific patches.
 
 For `devpolaris-orders-api`, production should stay boring. It should reference the base, set the production namespace, set production replicas, set the production image tag, and patch production resources. If production needs many special patches, revisit the base design. The base might be missing a shared behavior that all environments now need.
+
+
+![Kustomize summary covering base, overlay, patch, generator, render, and diff](/content-assets/articles/article-containers-orchestration-kubernetes-packaging-kustomize-bases-and-overlays/kustomize-summary.png)
+
+*Use this checklist to keep overlays understandable as environments grow.*
 
 ---
 

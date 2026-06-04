@@ -22,6 +22,11 @@ id: article-containers-orchestration-kubernetes-workloads-daemonsets
 
 Most application work belongs behind a Deployment. You choose a replica count, and Kubernetes places that many Pods wherever they fit. A DaemonSet solves a different problem: run one copy of a Pod on every eligible node, or on every node that matches a rule.
 
+![Kubernetes DaemonSet coverage showing agent pods on eligible nodes and a blocked ineligible node](/content-assets/articles/article-containers-orchestration-kubernetes-workloads-daemonsets/daemonset-node-coverage.png)
+
+*A DaemonSet is for node-level work because it places one agent pod on every eligible node.*
+
+
 This is useful for node-local helpers. Log collectors, monitoring agents, storage plugins, and network plugins need to be present where the application Pods run. If `devpolaris-orders-api` lands on `worker-a`, the logging agent on `worker-a` can read node log files and ship them to the team's logging system.
 
 The count follows the nodes. Add a node and the DaemonSet creates a Pod there. Remove a node and the DaemonSet Pod disappears with it. You do not set `replicas: 3` because the cluster size determines the count.
@@ -120,6 +125,11 @@ Taints and tolerations are Kubernetes scheduling rules. A taint on a node says "
 ## Updating a DaemonSet
 
 A DaemonSet rolling update replaces node-local helper Pods across eligible nodes. It exists so a cluster-wide agent can change versions without disappearing everywhere at once.
+
+![Kubernetes DaemonSet rolling update showing old agents replaced by new agents across nodes](/content-assets/articles/article-containers-orchestration-kubernetes-workloads-daemonsets/daemonset-rolling-update.png)
+
+*DaemonSet updates should roll across nodes so node-level agents do not disappear everywhere at once.*
+
 
 Example: updating the log agent image from `2026-05-07.1` to `2026-05-07.2` should keep most nodes covered while Kubernetes replaces each agent Pod over time. The exact rollout can matter because node agents can affect every workload on the node.
 
@@ -305,6 +315,11 @@ Conditions:
 ```
 
 If the node is healthy but the agent was killed, the agent limit or workload spike is the likely path. If the node has pressure, the DaemonSet may be a symptom of a broader node capacity problem.
+
+
+![Kubernetes DaemonSet summary covering every node, agent pod, taints, tolerations, rolling update, and node logs](/content-assets/articles/article-containers-orchestration-kubernetes-workloads-daemonsets/daemonset-summary.png)
+
+*Use this DaemonSet map when the workload belongs to nodes rather than to a normal application replica pool.*
 
 ---
 

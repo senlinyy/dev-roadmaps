@@ -41,6 +41,11 @@ The mental model is simple: Kubernetes creates a small filesystem view from the 
 
 A mounted ConfigMap directory turns ConfigMap keys into files inside the container. The key name becomes the filename, and the key value becomes the file contents.
 
+![Kubernetes mounted configuration path showing ConfigMap, volume, mount path, container file, and application](/content-assets/articles/article-containers-orchestration-kubernetes-configuration-storage-mounted-config-files/config-file-mount-map.png)
+
+*Mounted config turns keys into files so applications can read configuration from disk.*
+
+
 Example: a key named `cancellation-policy.yaml` can appear inside the Pod as `/etc/devpolaris/orders/cancellation-policy.yaml` so the orders API reads it like an ordinary YAML file.
 
 ```yaml
@@ -220,6 +225,11 @@ Beginners should choose the boring path first: validate at startup, roll Pods de
 
 A directory mount replaces the view at the mount path. If your image already has files in `/app/config` and you mount a ConfigMap at `/app/config`, the process sees the ConfigMap files there, not the original image files.
 
+![Kubernetes mount hiding image files showing image directory, volume mount, covered files, visible files, and fixed path](/content-assets/articles/article-containers-orchestration-kubernetes-configuration-storage-mounted-config-files/mount-hides-image-files.png)
+
+*A volume mounted on an existing image directory hides the files that were already there.*
+
+
 The failure looks like a missing file inside the application even though the file exists in the image.
 
 ```text
@@ -311,6 +321,11 @@ volumeMounts:
 ```
 
 That split makes the filesystem contract obvious. Kubernetes-owned files stay read-only. Application-owned scratch files go somewhere disposable or durable depending on their purpose.
+
+
+![Kubernetes mounted files summary covering directory mounts, items, subPath, secret files, reload, and read-only behavior](/content-assets/articles/article-containers-orchestration-kubernetes-configuration-storage-mounted-config-files/mounted-files-summary.png)
+
+*Use this checklist when configuration belongs on disk instead of in environment variables.*
 
 ---
 

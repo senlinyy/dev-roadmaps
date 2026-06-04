@@ -22,6 +22,11 @@ id: article-containers-orchestration-kubernetes-workloads-jobs-and-cronjobs
 
 Not every container should run forever. Some work has a clear end: migrate a database, rebuild a search index, send daily invoices, delete expired carts, or backfill analytics. In Kubernetes, a Job is the workload object for finite work. A CronJob creates Jobs on a repeating schedule.
 
+![Kubernetes Job map showing pods completing, failing, retrying with backoff, and retaining history](/content-assets/articles/article-containers-orchestration-kubernetes-workloads-jobs-and-cronjobs/job-completion-backoff.png)
+
+*A Job is for finite work: it creates pods, watches completion, and retries failed attempts within limits.*
+
+
 This matters because a Deployment assumes the process should keep running. If a Deployment Pod exits successfully, Kubernetes starts it again. That is wrong for a migration that should run once and stop. A Job treats successful completion as the goal.
 
 For `devpolaris-orders-api`, the team needs two kinds of finite work. Before a release, they run a one-time migration that adds a `payment_status` column. Every night, they run a cleanup task that expires abandoned checkout sessions. The first belongs in a Job. The second belongs in a CronJob.
@@ -90,6 +95,11 @@ The tradeoff is retry safety. Retrying a read-only report is usually fine. Retry
 ## CronJobs for Scheduled Work
 
 A CronJob creates Jobs from a schedule. It is like a line in a Unix crontab, but the work runs as Kubernetes Pods and is visible through the Kubernetes API.
+
+![Kubernetes CronJob timeline showing schedule, job runs, concurrency, missed run, and history](/content-assets/articles/article-containers-orchestration-kubernetes-workloads-jobs-and-cronjobs/cronjob-schedule-concurrency.png)
+
+*A CronJob adds time to the model, so missed schedules and overlapping runs become part of the design.*
+
 
 Example: `orders-expire-checkouts` can run every day at `02:15 UTC`, create one Job for that run, and leave behind Job status and Pod logs that show whether the cleanup finished.
 
@@ -303,6 +313,11 @@ If a Job writes external effects, make the effect traceable too. For an invoice 
 That traceability also helps cleanup. When the team decides whether to delete an old Job object, the important evidence should already live in durable logs or release records. Kubernetes objects are useful for recent inspection, but they should not be the only place the team can prove a migration ran.
 
 That record is part of the work.
+
+
+![Kubernetes Jobs and CronJobs summary covering job, CronJob, completion, backoff, concurrency, and history](/content-assets/articles/article-containers-orchestration-kubernetes-workloads-jobs-and-cronjobs/jobs-cronjobs-summary.png)
+
+*Use this checklist to decide whether the work should finish once, repeat on a schedule, retry, or keep history.*
 
 ---
 

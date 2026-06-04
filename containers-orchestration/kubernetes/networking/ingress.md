@@ -23,6 +23,11 @@ id: article-containers-orchestration-kubernetes-networking-ingress
 
 A Service can expose one set of Pods, but real web traffic usually has more shape than one port. You may need `api.devpolaris.local` to reach `devpolaris-orders-api`, `/auth` to reach an identity service, and TLS certificates for browser clients. A plain ClusterIP Service cannot express those HTTP routing rules.
 
+![Kubernetes Ingress path showing client, Ingress, controller, Service, and pods](/content-assets/articles/article-containers-orchestration-kubernetes-networking-ingress/ingress-edge-path.png)
+
+*Ingress adds HTTP host, path, and TLS routing in front of a normal Service.*
+
+
 Ingress is the Kubernetes API object for HTTP and HTTPS routing into Services. It stores rules such as host, path, backend Service, and TLS secret. An Ingress controller is the running component that watches those rules and configures a proxy or load balancer to enforce them.
 
 ```mermaid
@@ -149,6 +154,11 @@ That error is not a Service problem. The backend can be healthy while the edge c
 ## Failure Mode: 502 From the Edge
 
 A `502 Bad Gateway` from an Ingress usually means the controller accepted the client request but could not get a healthy response from the backend. The route matched. The edge is alive. The next layer is the Service and Pods.
+
+![Kubernetes Ingress 502 debug path showing edge error, Ingress rule, service port, endpoints, and pod readiness](/content-assets/articles/article-containers-orchestration-kubernetes-networking-ingress/ingress-502-debug.png)
+
+*A 502 from the edge is usually a broken backend path, not proof that DNS or TLS is wrong.*
+
 
 ```bash
 $ curl -i https://api.devpolaris.local/orders/healthz
@@ -297,6 +307,11 @@ Use that mismatch as a pointer, not as an invitation to rewrite every layer.
 Small proofs compound into a reliable diagnosis.
 
 Keep the original failing URL beside every successful backend check.
+
+
+![Kubernetes Ingress summary covering IngressClass, host, path, TLS, Service, and endpoints](/content-assets/articles/article-containers-orchestration-kubernetes-networking-ingress/ingress-summary.png)
+
+*Use this checklist to find where an HTTP request stops between the edge and pods.*
 
 ---
 

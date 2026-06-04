@@ -24,6 +24,11 @@ id: article-containers-orchestration-kubernetes-networking-services
 
 Kubernetes Pods are intentionally replaceable. A Deployment can create a new Pod during a rollout, delete an old one after a node drain, or start a replacement when a health check fails. That is good for operations, but it creates a problem for callers. A Pod IP address is a temporary address for one running copy, not a contract that another service should remember.
 
+![Kubernetes Service map showing changing pods behind a selector, ready pods, stable service IP, and client](/content-assets/articles/article-containers-orchestration-kubernetes-networking-services/service-stable-name.png)
+
+*A Service gives clients a stable contract while the pods behind it are replaced.*
+
+
 A Service is the Kubernetes object that gives a changing set of Pods a stable network name and virtual address. It selects Pods by labels, publishes one virtual address and DNS name, and keeps the backend list fresh as Pods come and go.
 
 Example: if `devpolaris-web` needs to call `devpolaris-orders-api`, it should call a Service name such as `http://devpolaris-orders-api.orders.svc.cluster.local`, not a temporary Pod IP like `10.244.2.18`. Kubernetes updates the backend endpoint list behind the Service whenever Pods are created, removed, or marked unready.
@@ -105,6 +110,11 @@ That second command is the practical proof. The Service has a stable cluster IP,
 ## Selectors Are the Contract
 
 A Service selector is the rule that decides which Pods sit behind the Service. It reads labels on live Pod objects and builds the backend list from the Pods that match. For example, a selector for `app.kubernetes.io/name: devpolaris-orders-api` should find the three orders API Pods and ignore unrelated Pods in the same namespace.
+
+![Kubernetes Service selector contract showing labels, EndpointSlice, readiness, targetPort, and traffic](/content-assets/articles/article-containers-orchestration-kubernetes-networking-services/selector-endpoints-map.png)
+
+*The selector is the contract that turns matching pod labels into service backends.*
+
 
 The selector does not care which Deployment created the Pods. It only sees labels on live Pod objects. That makes labels powerful, but it also makes typo failures easy.
 
@@ -312,6 +322,11 @@ $ kubectl -n web run orders-check --rm -it --restart=Never --image=curlimages/cu
 ```
 
 Keep this verification pass short enough that engineers actually run it. It proves Deployment availability, Service publication, endpoint membership, and caller reachability without turning a concept check into a full incident drill.
+
+
+![Kubernetes Services summary covering stable name, selector, EndpointSlice, readiness, ports, and ownership](/content-assets/articles/article-containers-orchestration-kubernetes-networking-services/services-summary.png)
+
+*Use this Service checklist when a request cannot find the right pod.*
 
 ---
 

@@ -40,6 +40,11 @@ The separation matters because the application should not need to know whether t
 
 A PVC is the application's storage request, and a PV is the cluster storage object that satisfies that request. The application says, "I need 10Gi of filesystem storage that one node can write." The cluster matches that request to an available PV or asks a provisioner to create one. Once bound, the Pod uses the claim by name.
 
+![Kubernetes PV and PVC binding map showing pod, claim, storage class, persistent volume, and disk](/content-assets/articles/article-containers-orchestration-kubernetes-configuration-storage-persistent-volumes-and-claims/pv-pvc-binding-map.png)
+
+*A PVC is the pod-facing request for storage, while the PV is the cluster object representing the actual volume.*
+
+
 Example: `orders-api-workdir` can request `10Gi` with `ReadWriteOnce`, and Kubernetes can bind it to a dynamically created cloud disk represented by a PV.
 
 The PV is the supply side. It describes capacity, access modes, reclaim policy, and connection details for the real storage. In dynamic provisioning, you may never write PV YAML by hand. The provisioner creates it for you after it sees a PVC.
@@ -160,6 +165,11 @@ If you ask for `ReadWriteMany` but the cluster only has block-disk storage, the 
 ## Binding, Reclaim Policy, and Lifecycle
 
 Binding is the step where Kubernetes connects a PVC request to a PV that can satisfy it. After binding, the PVC has its own lifecycle, and the bound PV has a reclaim policy.
+
+![Kubernetes persistent volume lifecycle showing claim created, volume bound, pod use, claim deletion, and reclaim policy](/content-assets/articles/article-containers-orchestration-kubernetes-configuration-storage-persistent-volumes-and-claims/pv-lifecycle-map.png)
+
+*The reclaim policy decides what happens to the volume after the claim is deleted.*
+
 
 Example: deleting `orders-api-workdir` might delete the backing storage if the PV uses `Delete`, or keep it for manual recovery if the PV uses `Retain`. Common policies are `Delete` and `Retain`.
 
@@ -308,6 +318,11 @@ orders-api-workdir   Bound    pvc-4d8c1d2e-6f35-4b70-9cb5-93e6d0fbb14f   10Gi   
 ```
 
 The claim status proves the storage contract is healthy again. The application readiness check proves the mounted path is useful to the process.
+
+
+![Kubernetes PV and PVC summary covering PVC, PV, StorageClass, access mode, reclaim policy, and pending claims](/content-assets/articles/article-containers-orchestration-kubernetes-configuration-storage-persistent-volumes-and-claims/pv-pvc-summary.png)
+
+*Use this checklist to separate the workload request from the cluster volume and the provider disk.*
 
 ---
 

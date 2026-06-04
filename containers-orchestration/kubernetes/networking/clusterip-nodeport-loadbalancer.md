@@ -24,6 +24,11 @@ id: article-containers-orchestration-kubernetes-networking-clusterip-nodeport-lo
 
 Service types are exposure settings for the same Service API. They answer where the stable Service address should be reachable from: only inside the cluster, through every node, or through an external load balancer.
 
+![Kubernetes Service exposure shapes comparing ClusterIP, NodePort, and LoadBalancer entry paths](/content-assets/articles/article-containers-orchestration-kubernetes-networking-clusterip-nodeport-loadbalancer/service-exposure-shapes.png)
+
+*The Service type decides who the audience is: inside the cluster, through node ports, or through external infrastructure.*
+
+
 Example: the same `devpolaris-orders-api` backend can stay internal as `ClusterIP` for web Pods, become reachable on node port `31080` in a lab, or request a cloud load balancer with an external IP. The type does not change the application code in `devpolaris-orders-api`; it changes how far Kubernetes publishes the Service.
 
 `ClusterIP` is the default. It creates a cluster-internal virtual IP and DNS name. `NodePort` builds on that and opens a high port on every node. `LoadBalancer` builds on those ideas and asks the cloud provider or load balancer implementation to create an external load balancer.
@@ -152,6 +157,11 @@ The tradeoff is surface area. Wider exposure gives easier access from outside th
 ## Failure Mode: Pending External IP
 
 A pending external IP means Kubernetes accepted the `LoadBalancer` Service, but the infrastructure layer has not assigned an outside address yet. The manifest applied successfully, but the public entry point never appeared.
+
+![Kubernetes LoadBalancer pending external IP path showing Service, cloud controller, load balancer, and external IP status](/content-assets/articles/article-containers-orchestration-kubernetes-networking-clusterip-nodeport-loadbalancer/loadbalancer-pending-ip.png)
+
+*A LoadBalancer Service depends on infrastructure outside Kubernetes before the external IP appears.*
+
 
 ```bash
 $ kubectl -n orders get svc devpolaris-orders-api-public
@@ -304,6 +314,11 @@ Smoke record:
 ```
 
 That ownership line matters during incidents. It helps the team route the next investigation without turning every networking symptom into a cluster-wide mystery.
+
+
+![Kubernetes Service type summary covering ClusterIP, NodePort, LoadBalancer, audience, firewall, and evidence](/content-assets/articles/article-containers-orchestration-kubernetes-networking-clusterip-nodeport-loadbalancer/service-types-summary.png)
+
+*Use this checklist to avoid exposing more of the cluster than the caller actually needs.*
 
 ---
 
