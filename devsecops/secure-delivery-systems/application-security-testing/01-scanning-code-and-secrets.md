@@ -225,6 +225,10 @@ Fifth, distribute local git pre-push hooks within your engineering team. Share s
 
 Auditing our first-party codebase secures the code we write. In the next chapter, we will cover **Dependency and Artifact Security**, learning how to analyze third-party packages, verify Software Bills of Materials (SBOMs), and cryptographically sign completed build artifacts before deployment.
 
+![Code and secret scanning summary map](/content-assets/articles/article-devsecops-pipeline-security-sast-and-codeql/scan-code-secrets-summary.png)
+
+*This summary connects static analysis, source-to-sink tracing, data flow, secret scanning, and dismissal evidence.*
+
 ---
 
 **References**

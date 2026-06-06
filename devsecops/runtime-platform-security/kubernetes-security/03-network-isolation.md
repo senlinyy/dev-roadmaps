@@ -255,6 +255,10 @@ Fifth, audit your pod labels and policy bindings regularly. Maintain consistent 
 
 Securing API Server access, secrets delivery, pod sandbox boundaries, and network perimeters establishes a highly robust runtime environment. However, we must also programmatically block non-compliant pod definitions from ever entering the cluster database. In the next chapter, **Admission Control and Policy Engines**, we will cover the API Server admission request lifecycle, native ValidatingAdmissionPolicies with CEL expressions, and cluster-wide policy engines.
 
+![Kubernetes network isolation summary map](/content-assets/articles/article-devsecops-kubernetes-security-network-isolation/network-isolation-summary.png)
+
+*This summary shows default-deny policy, ingress, egress, DNS, CNI enforcement, and validation with test pods.*
+
 ---
 
 **References**

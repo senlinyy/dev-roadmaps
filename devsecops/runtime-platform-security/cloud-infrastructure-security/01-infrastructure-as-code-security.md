@@ -153,6 +153,10 @@ Fifth, verify your suppressions regularly during security audits. Keep a central
 
 Static IaC scanning secures the blueprints that describe our infrastructure. However, organizations also need custom, shareable rules that enforce specific, complex corporate compliance standards programmatically. In the next chapter, **Policy as Code**, we will explore how to write declarative, custom validation policies using the Open Policy Agent (OPA) engine and the Rego language.
 
+![Infrastructure as Code security summary map](/content-assets/articles/article-devsecops-cloud-infrastructure-security-iac-security-scanning/iac-security-summary.png)
+
+*This summary shows how HCL, AST scanning, plan review, policy checks, suppressions, and CI gates fit together.*
+
 ---
 
 **References**

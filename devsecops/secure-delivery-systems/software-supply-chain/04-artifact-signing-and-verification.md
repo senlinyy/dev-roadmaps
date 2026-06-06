@@ -111,3 +111,8 @@ By utilizing Sigstore, pipelines generate short-lived certificates, writing sign
 ## What's Next
 
 Securing the software supply chain through SBOMs, build provenance, and signature verification ensures that only safe, trusted code enters the runtime environment. However, the underlying platform hosting these workloads must also be hardened to contain inevitable breaches. In the next module, **Runtime Platform Security**, we will shift focus from the delivery pipeline to the infrastructure, starting with container image minimalization and exploring how to strip away the OS components that attackers rely on.
+
+![Artifact signing and verification summary map](/content-assets/articles/article-devsecops-software-supply-chain-artifact-signing-verification/signing-summary.png)
+
+*This summary follows digest, signature, certificate, transparency log, admission gate, and rejected mismatch checks.*
+

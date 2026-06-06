@@ -191,3 +191,8 @@ Third, sign container digests cryptographically using Cosign. Ensure that all si
 Fourth, adopt keyless Sigstore signing in your CI/CD pipelines. Grant your runners minimal `id-token: write` permissions, utilizing Fulcio certificates and Rekor transparency logs to sign digests without managing long-lived keys.
 
 Fifth, enforce strict deploy-time verification policies. Deploy an admission controller in your clusters to validate image signatures, OIDC issuers, and branch subjects before allowing any container to launch.
+
+![Container image trust and SBOM summary map](/content-assets/articles/article-devsecops-container-image-security-image-scanning/image-trust-summary.png)
+
+*This summary connects image layers, SBOM records, scanning, signatures, keyless identity, and deploy policy.*
+

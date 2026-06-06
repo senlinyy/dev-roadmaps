@@ -155,6 +155,10 @@ Fifth, pin upstream base images by cryptographic content digests rather than mut
 
 Building minimal, shell-less, and non-root container images isolates the filesystem from immediate command execution. However, we must still prove exactly what packages reside inside those layers, scan them for known vulnerabilities, and cryptographically sign the resulting digest. In the next chapter, **Image Trust and SBOMs**, we will cover Software Composition Analysis (SCA) for containers, Software Bills of Materials (SBOMs), and keyless container signing with Cosign.
 
+![Container image hardening summary map](/content-assets/articles/article-devsecops-container-image-security-minimal-base-images/image-hardening-summary.png)
+
+*This summary shows how minimal bases, multi-stage builds, distroless runtimes, non-root users, read-only roots, and small attack surfaces reinforce each other.*
+
 ---
 
 **References**

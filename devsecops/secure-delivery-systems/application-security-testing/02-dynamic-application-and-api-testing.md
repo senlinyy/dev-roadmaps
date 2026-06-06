@@ -104,3 +104,8 @@ Dynamic Application Security Testing addresses this gap by interacting with the 
 ## What's Next
 
 DAST crawls and API fuzzing runs generate complex vulnerability reports that require engineering review. However, not every alert represents a genuine security threat to the business. In the next article, we will examine finding triage and dismissal evidence, exploring how to aggregate security alerts using standardized formats and document auditable false-positive waivers without halting the delivery queue.
+
+![Dynamic application and API testing summary map](/content-assets/articles/article-devsecops-application-security-testing-dynamic-application-api-testing/runtime-test-summary.png)
+
+*This summary shows where runtime scanning, API schemas, fuzzing, state management, and safe targets fit.*
+

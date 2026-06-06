@@ -268,6 +268,10 @@ Fifth, configure real-time alerts for anomalous runtime signals. Set up detectio
 
 Configuring secure sandbox boundaries and eBPF runtime sensors protects our nodes from container breakouts. However, we must also restrict network communication between running containers to prevent lateral movement. In the next chapter, **Network Isolation**, we will cover configuring namespace-wide default-deny NetworkPolicies, writing label-based ingress/egress filtering rules, and verifying traffic paths using diagnostic test pods.
 
+![Pod security and runtime hardening summary map](/content-assets/articles/article-devsecops-kubernetes-security-pod-security-and-runtime-hardening/pod-hardening-summary.png)
+
+*This summary connects security contexts, non-root workloads, read-only filesystems, baseline policy, runtime monitoring, and alerts.*
+
 ---
 
 **References**

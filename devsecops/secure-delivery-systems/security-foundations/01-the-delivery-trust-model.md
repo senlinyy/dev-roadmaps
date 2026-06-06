@@ -297,6 +297,10 @@ When auditing or planning any pipeline, follow this healthy verification checkli
 
 Establishing the secure path is the first layer of defense. In the next article, we will go deeper into **Least Privilege and Secrets**, learning how to limit access permissions to the bare minimum needed for workloads to run, and how to safely store and rotate the credentials they use.
 
+![Delivery trust summary map](/content-assets/articles/article-devsecops-security-foundations-security-mental-model-delivery-systems/delivery-trust-summary.png)
+
+*This summary shows the secure delivery path from source control through build identity, artifact creation, deployment gates, and evidence.*
+
 ---
 
 **References**

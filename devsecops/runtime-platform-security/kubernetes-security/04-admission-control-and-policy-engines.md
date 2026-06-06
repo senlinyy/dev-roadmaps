@@ -197,6 +197,10 @@ Fourth, execute a tuned rollout pipeline. Deploy new policies initially in `Warn
 
 Fifth, select the right policy engine for your compliance complexity. Leverage built-in CEL for performance-critical, object-level rules, adopting Kyverno or OPA Gatekeeper when policies require mutations, generations, or multi-platform Rego alignments.
 
+![Admission control and policy engine summary map](/content-assets/articles/article-devsecops-kubernetes-security-admission-control-and-policy-engines/admission-control-summary.png)
+
+*This summary follows API requests through mutation, validation, warn or deny actions, and audit evidence.*
+
 ---
 
 **References**

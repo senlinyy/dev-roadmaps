@@ -104,3 +104,8 @@ By deploying eBPF sensors in the host kernel, organizations capture untamperable
 ## What's Next
 
 Capturing and triaging host threat signals ensures that active runtime compromises are identified immediately. Once an active security signal is verified, responders must execute systematic runbooks to safely isolate the threat. In the next article, we will examine incident response procedures, focusing on the NIST incident handling lifecycle, preservation-first containment sequences, and the value of actionable, step-by-step CLI runbooks during crisis scenarios.
+
+![Detection signals and alert triage summary map](/content-assets/articles/article-devsecops-incident-readiness-detection-signals-alert-triage/detection-triage-summary.png)
+
+*This summary connects telemetry, kernel signals, detection rules, alerts, triage, and escalation.*
+

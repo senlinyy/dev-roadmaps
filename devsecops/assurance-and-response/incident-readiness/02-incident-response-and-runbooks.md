@@ -243,6 +243,10 @@ Fifth, define explicit Stop Points and Escalation Gates in every playbook. Ensur
 
 Coordinating incident responses and playbooks protects the cluster during active crises. However, the largest security improvements occur after the incident has closed. In the final chapter, **Post-Incident Hardening**, we will cover conducting blameless post-mortems, executing the "Five Whys" root-cause methodology, codifying pipeline fixes as declarative code, and verifying mitigations continuously.
 
+![Incident response and runbooks summary map](/content-assets/articles/article-devsecops-compliance-incident-readiness-incident-response-and-runbooks/incident-response-summary.png)
+
+*This summary shows incident classification, containment, evidence preservation, runbooks, escalation, and recovery.*
+
 ---
 
 **References**

@@ -163,6 +163,10 @@ Fifth, completely disable privileged containers and block privilege escalation. 
 
 Sixth, adopt hypervisor-level workload isolation for sensitive or multi-tenant applications. Utilize runtimes like gVisor or Kata Containers to wrap processes in isolated guest kernels, completely removing the shared-kernel attack surface.
 
+![Container runtime isolation summary map](/content-assets/articles/article-devsecops-container-image-security-registry-security/runtime-isolation-summary.png)
+
+*This summary highlights namespaces, capabilities, seccomp filters, privilege controls, sandboxing, and kernel boundaries.*
+
 ---
 
 **References**

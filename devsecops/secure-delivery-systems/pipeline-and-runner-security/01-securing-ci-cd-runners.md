@@ -207,6 +207,10 @@ Fifth, commit to ephemeral runner environments. Avoid using shared, persistent s
 
 Securing the runner machine limits what scripts can do during execution. In the next chapter, we will cover **Scanning Code and Secrets**, learning how to audit our source repositories to catch hardcoded API keys and trace coding vulnerabilities (SAST) before they ever reach the builder runner.
 
+![CI/CD runner security summary map](/content-assets/articles/article-devsecops-pipeline-security-securing-cicd-runners/runner-security-summary.png)
+
+*This summary separates untrusted pull request execution, runner lifetime, token scope, pinned dependencies, and cleanup responsibilities.*
+
 ---
 
 **References**

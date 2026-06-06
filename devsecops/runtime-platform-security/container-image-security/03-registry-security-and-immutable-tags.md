@@ -101,3 +101,8 @@ By enforcing tag immutability, organizations ensure that a published version rem
 ## What's Next
 
 Securing container registries and tag boundaries protects compiled software artifacts from dynamic tampering prior to launch. However, we must also secure the host kernels and namespaces running these containers. In the next module, **Runtime Platform Security**, we will explore cloud infrastructure, starting with Kubernetes API server hardening and role-based access control perimeters.
+
+![Registry security and immutable tag summary map](/content-assets/articles/article-devsecops-container-image-security-registry-security-immutable-tags/registry-summary.png)
+
+*This summary shows how immutable tags, digests, push policy, pull tokens, network scope, and audit logs protect registries.*
+

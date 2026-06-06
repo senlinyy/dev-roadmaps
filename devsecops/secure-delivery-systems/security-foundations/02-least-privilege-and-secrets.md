@@ -238,6 +238,10 @@ When verifying your application access, ensure you maintain these practices:
 
 Restricting access and credentials secures our active operations. In the next chapter, we will cover **Ownership and Evidence**, learning how to map code ownership to named reviewers and gather tamper-proof logs to verify that our security controls are working.
 
+![Least privilege and secrets summary map](/content-assets/articles/article-devsecops-security-foundations-least-privilege/privilege-secrets-summary.png)
+
+*This summary ties least privilege to scoped tokens, workload identity, secret storage, runtime injection, and rotation.*
+
 ---
 
 **References**

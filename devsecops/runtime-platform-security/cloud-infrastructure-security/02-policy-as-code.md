@@ -177,6 +177,10 @@ Fifth, provide descriptive, actionable feedback inside your CI outputs. Ensure t
 
 Static IaC scanning and Policy as Code secure our infrastructure blueprints before provisioning. However, cloud environments are dynamic. We must still detect when manual console changes "drift" from our declared code, and secure our active network perimeters. In the next chapter, **Drift and Perimeter Security**, we will cover active posture sweeps, configuration drift scanners, and VPC perimeter boundaries.
 
+![Policy as Code summary map](/content-assets/articles/article-devsecops-cloud-infrastructure-security-policy-as-code/policy-as-code-summary.png)
+
+*This summary maps policy inputs to Rego logic, deny and warn decisions, tests, and CI enforcement.*
+
 ---
 
 **References**

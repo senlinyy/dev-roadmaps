@@ -125,3 +125,8 @@ Protecting cloud resources from compromised deployment platforms requires elimin
 ## What's Next
 
 Securing the authentication path ensures that the pipeline runner can safely receive temporary cloud credentials. However, we must also control what code is allowed to trigger those deployment pipelines in the first place. In the next article, we will examine protected branches and environment gates, exploring how to enforce code review requirements and manual approval steps before any deployment logic executes.
+
+![Pipeline token boundary summary map](/content-assets/articles/article-devsecops-pipeline-and-runner-security-permissions-token-boundaries/token-boundary-summary.png)
+
+*This summary shows why short-lived OIDC token exchange replaces static keys and keeps cloud access scoped.*
+

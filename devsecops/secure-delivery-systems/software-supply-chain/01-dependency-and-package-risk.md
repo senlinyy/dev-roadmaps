@@ -208,6 +208,10 @@ Sixth, enforce non-bypassable branch protection and environment approval gates. 
 
 This concludes the **Pipeline Security** phase of our DevSecOps roadmap. You have secured the runner sandboxes, established codebase static analysis and secret scanning, and locked down dependency and artifact integrity. In the next phase, we will move into **Container and Image Security**, exploring how to harden container runtimes and build minimal, distroless images.
 
+![Dependency and artifact security summary map](/content-assets/articles/article-devsecops-pipeline-security-dependency-scanning/supply-chain-summary.png)
+
+*This summary links dependencies, lockfiles, SBOMs, digests, signatures, and release gates into one supply-chain check.*
+
 ---
 
 **References**

@@ -136,3 +136,8 @@ The scanner fatigue problem highlights why human developers cannot manually sort
 ## What's Next
 
 Standardizing vulnerability triage keeps the development pipeline flowing while maintaining rigorous compliance checks. However, custom application code is only one component of the delivery system. In the next submodule, we will transition into the Software Supply Chain, exploring the security challenges of importing open-source packages, generating Software Bill of Materials (SBOMs), and tracking vulnerability reachability.
+
+![Finding triage and dismissal evidence summary map](/content-assets/articles/article-devsecops-application-security-testing-finding-triage-dismissal-evidence/triage-evidence-summary.png)
+
+*This summary turns scanner output into normalized findings, owner routing, severity review, dismissal records, and evidence.*
+

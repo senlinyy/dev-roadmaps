@@ -1,6 +1,6 @@
 ---
-title: "Identity and Security"
-description: "Learn who is allowed to use AWS resources, how apps get access, where secrets belong, and what evidence proves access worked."
-tags: ["IAM", "Secrets", "CloudTrail"]
+title: "AWS IAM"
+description: "Learn how people, workloads, policies, account guardrails, and evidence work together to control AWS access."
+tags: ["IAM", "Identity Center", "CloudTrail"]
 order: 2
 ---

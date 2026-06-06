@@ -243,6 +243,10 @@ Fifth, compile self-contained, cryptographically linked Evidence Packets for rel
 
 Compiling continuous compliance evidence packets proves that our routine gates and controls operate correctly. However, organizations must also prepare for unexpected security incidents that require rapid, live coordination. In the next chapter, **Incident Response and Runbooks**, we will explore how to classify security events under pressure, coordinate response roles using NIST standards, contain compromises without losing forensic evidence, and write predictable, automated runbooks with strict manual stop points.
 
+![Compliance as evidence summary map](/content-assets/articles/article-devsecops-compliance-incident-readiness-compliance-as-evidence/compliance-evidence-summary.png)
+
+*This summary shows how controls, engineering records, access reviews, log archives, evidence packets, and audit requests connect.*
+
 ---
 
 **References**

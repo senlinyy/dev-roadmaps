@@ -245,6 +245,10 @@ Fourth, write automated policy tests to prevent trust regressions. Integrate che
 
 Fifth, track all hardening actions to verified closure. Never mark a post-incident ticket closed without linking a merged pull request, a successful policy test log, or a verified runbook exercise record as audit proof.
 
+![Post-incident hardening summary map](/content-assets/articles/article-devsecops-compliance-incident-readiness-post-incident-hardening/post-incident-hardening-summary.png)
+
+*This summary turns an incident into postmortem learning, root-cause analysis, gaps, controls, policy tests, and verified closure.*
+
 ---
 
 **References**

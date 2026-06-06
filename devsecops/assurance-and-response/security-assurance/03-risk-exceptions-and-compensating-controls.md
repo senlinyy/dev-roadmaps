@@ -118,3 +118,8 @@ By isolating vulnerable services through network microsegmentation and edge filt
 ## What's Next
 
 Establishing risk exceptions and compensating controls allows organizations to safely manage unpatchable vulnerabilities while preserving their delivery pipelines. However, despite these layered defenses, active security incidents will inevitably occur. In the next submodule, **Incident Readiness**, we will shift focus to runtime threat detection, examining eBPF telemetry and alert triage to isolate active threats inside the cluster.
+
+![Risk exceptions and compensating controls summary map](/content-assets/articles/article-devsecops-security-assurance-risk-exceptions-compensating-controls/risk-exception-summary.png)
+
+*This summary keeps risk acceptance tied to owners, expiry, compensating controls, a registry, and review.*
+

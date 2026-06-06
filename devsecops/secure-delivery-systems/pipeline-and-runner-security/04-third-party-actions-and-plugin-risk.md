@@ -120,3 +120,8 @@ Understanding the execution context reveals why this protection is necessary: th
 ## What's Next
 
 Securing third-party plugins protects the build runner host from runtime exfiltration attempts. However, once the code runs safely, we must verify the security posture of the application code itself. In the next submodule, we will transition into Application Security Testing, starting with static analysis tools that intercept code vulnerabilities and hardcoded credentials before they reach deployment.
+
+![Third-party action and plugin risk summary map](/content-assets/articles/article-devsecops-pipeline-and-runner-security-third-party-actions-plugin-risk/plugin-risk-summary.png)
+
+*This summary highlights external code risk, mutable tags, SHA pinning, permission review, local forks, and review workflow.*
+

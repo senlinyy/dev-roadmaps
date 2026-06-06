@@ -242,6 +242,10 @@ To secure your ownership and evidence, ensure you verify these controls:
 
 This concludes the **Security Foundations** phase of our DevSecOps roadmap. You have established the Delivery Trust Model, applied Least Privilege to workflows and secrets, and mapped Ownership and Evidence across the release path. In the next phase, we will move into **Pipeline Security**, putting these foundations into practice to secure CI/CD runners and scan code repositories for vulnerabilities.
 
+![Security ownership and evidence summary map](/content-assets/articles/article-devsecops-security-foundations-security-ownership-in-devops/ownership-evidence-summary.png)
+
+*This summary connects accountable ownership, risky areas, CODEOWNERS routing, audit events, evidence chains, and gaps to close.*
+
 ---
 
 **References**

@@ -252,6 +252,10 @@ Fifth, protect and analyze your cloud provider's central audit logs. Forward all
 
 Securing cloud identity, static IaC scanning, OPA policy engines, and drift perimeters establishes a highly robust infrastructure security foundation. However, as organizations scale their compute workloads, they must manage these resources within structured container orchestrators. In the next submodule, **Kubernetes Security**, we will focus on the orchestrator tier, beginning with **Kubernetes Access and RBAC** to explore how to secure API server connections, configure service accounts, and write least-privilege role bindings.
 
+![Cloud IAM summary map](/content-assets/articles/article-devsecops-cloud-infrastructure-security-cloud-identity-and-access/cloud-iam-summary.png)
+
+*This summary shows IAM as principal, action, resource, condition, OIDC role, and audit trail decisions.*
+
 ---
 
 **References**

@@ -289,6 +289,10 @@ Fifth, design your applications to support dynamic credential rotation. Monitor 
 
 Securing API Server access and secret configurations establishes a secure control plane baseline. However, once an authorized pod is scheduled, we must still isolate the process execution on the physical nodes and prevent host-level breakouts. In the next chapter, **Pod Security and Runtime Hardening**, we will cover configuring pod securityContexts, dropping Linux capabilities, running shell-less containers, and auditing active containers using runtime syscall sensors.
 
+![Kubernetes RBAC and secrets summary map](/content-assets/articles/article-devsecops-kubernetes-security-rbac-and-secrets/kubernetes-access-summary.png)
+
+*This summary turns Kubernetes access into subjects, verbs, resources, bindings, secrets, and effective-permission checks.*
+
 ---
 
 **References**

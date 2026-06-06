@@ -119,3 +119,8 @@ The pipeline credential problem demonstrated how automated runners need authoriz
 ## What's Next
 
 Protected branches and environment gates ensure that only verified, approved commits enter the primary codebase. However, pipelines rely heavily on external tools and pre-packaged actions to execute these verification steps. In the next article, we will examine third-party actions and plugin risk, exploring the security challenges of importing community-maintained code and explaining how to mitigate that risk using commit hashing and local execution forks.
+
+![Protected branch and environment gate summary map](/content-assets/articles/article-devsecops-pipeline-and-runner-security-protected-branches-environment-gates/release-gate-summary.png)
+
+*This summary shows how branch rules, status checks, reviewers, environments, scoped secrets, and audit trails form a release gate.*
+

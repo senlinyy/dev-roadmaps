@@ -130,3 +130,8 @@ The SLSA framework establishes rigorous standards for build isolation, while pro
 ## What's Next
 
 Generating build provenance cryptographically verifies that a binary was compiled inside a secure, monitored environment. However, generating the signature is only half the battle; we must also verify that signature and block the execution of unsigned code. In the next article, we will examine artifact signing and verification, exploring how to use Sigstore's Cosign utility to enforce signature checks directly at the deployment gate.
+
+![Build provenance and attestations summary map](/content-assets/articles/article-devsecops-software-supply-chain-build-provenance-attestations/provenance-summary.png)
+
+*This summary traces source, builder identity, artifact output, attestation, identity binding, and verification.*
+

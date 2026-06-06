@@ -224,3 +224,8 @@ Fourth, reference security groups dynamically rather than using raw IP CIDR rang
 Fifth, ensure that all cloud API operations are fully recorded in secure, tamper-proof audit logs. Enable CloudTrail across all regions, locking down access permissions to ensure log files cannot be deleted or modified by unauthorized accounts.
 
 Sixth, integrate forensic log auditing into your incident response runbooks. Train your response teams to trace CloudTrail records immediately when drift or perimeter anomalies are discovered, mapping every out-of-band modification to a verified human identity and ticket.
+
+![Drift and perimeter security summary map](/content-assets/articles/article-devsecops-cloud-infrastructure-security-drift-and-misconfiguration-detection/drift-perimeter-summary.png)
+
+*This summary connects desired state, actual state, refresh checks, drift, perimeter controls, and audit logs.*
+
