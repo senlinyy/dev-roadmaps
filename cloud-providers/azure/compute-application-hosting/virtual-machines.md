@@ -1,7 +1,7 @@
 ---
 title: "Virtual Machines"
-description: "Use Azure Virtual Machines when the workload needs server-level control, and understand the image, size, disk, network, startup, process, patching, and log responsibilities that come with it."
-overview: "Virtual Machines are the most familiar compute shape, but they carry the most operating responsibility. This article explains what Azure provides and what the team must still own."
+description: "Use Azure Virtual Machines when a workload needs server-level control, and understand the image, size, disk, network, startup, access, patching, scale, and evidence responsibilities that come with that choice."
+overview: "Azure Virtual Machines give a team a familiar server in the cloud. This article explains what Azure provides, what the team still owns, and how to operate a VM without turning every old workload into permanent server sprawl."
 tags: ["azure", "virtual-machines", "servers", "disks", "networking"]
 order: 5
 id: article-cloud-providers-azure-compute-application-hosting-azure-virtual-machines
@@ -12,209 +12,204 @@ aliases:
 
 ## Table of Contents
 
-1. [What Is A Virtual Machine](#what-is-a-virtual-machine)
-2. [Image](#image)
-3. [VM Size](#vm-size)
-4. [Disks](#disks)
-5. [Network Interface](#network-interface)
-6. [Virtual Machine Scale Sets: Scaling the Fleet](#virtual-machine-scale-sets-scaling-the-fleet)
-7. [Virtual Machine Extensions: Automated Management](#virtual-machine-extensions-automated-management)
-8. [Startup](#startup)
-9. [Process Management](#process-management)
-10. [Patching And Logs](#patching-and-logs)
-11. [Putting It All Together](#putting-it-all-together)
-12. [What's Next](#whats-next)
+1. [The VM Map](#the-vm-map)
+2. [When A VM Is The Honest Choice](#when-a-vm-is-the-honest-choice)
+3. [The Shared Responsibility Boundary](#the-shared-responsibility-boundary)
+4. [Images And First Boot](#images-and-first-boot)
+5. [VM Sizes And Performance Limits](#vm-sizes-and-performance-limits)
+6. [Managed Disks And Temporary Storage](#managed-disks-and-temporary-storage)
+7. [Network Interfaces And Access](#network-interfaces-and-access)
+8. [Extensions, Agents, And Runtime Configuration](#extensions-agents-and-runtime-configuration)
+9. [Process Supervision And Health](#process-supervision-and-health)
+10. [Patching, Backups, And Recovery](#patching-backups-and-recovery)
+11. [Scale Sets And VM Sprawl](#scale-sets-and-vm-sprawl)
+12. [Runtime Evidence](#runtime-evidence)
+13. [Putting It All Together](#putting-it-all-together)
+14. [What's Next](#whats-next)
 
-## What Is A Virtual Machine
+## The VM Map
+<!-- section-summary: An Azure VM is easiest to understand as a server made from an image, a size, disks, a network interface, startup configuration, access rules, health checks, and an operations plan. -->
 
-An Azure Virtual Machine (VM) is Azure's server-shaped compute option: you get a full guest operating system, persistent disks, a network interface, and administrative control inside the OS. Under that familiar server contract, the guest operating system instance is executed by a physical hypervisor using software-defined virtualized hardware allocations. Azure manages the physical datacenter facilities, server blade hardware, hypervisor scheduling, and cooling infrastructure. Your team, however, retains full administrative control and operational ownership over everything inside the guest operating system boundary.
+An **Azure Virtual Machine**, or VM, is Azure's server-shaped compute option. Azure gives your team a guest operating system, virtual CPU and memory, disks, a network interface, and administrator access inside the machine. The word "virtual" means the server runs on Azure-managed physical hardware through a virtualization layer, while the operating system inside the VM behaves like a normal Linux or Windows server.
 
-![Azure VM responsibility stack separating app processes, operating system, network interface, managed disk, Azure host, and team operations](/content-assets/articles/article-cloud-providers-azure-compute-application-hosting-azure-virtual-machines/vm-responsibility-stack.png)
+We will keep one example in our hands for the whole article. The `devpolaris-orders` system has a legacy inventory worker called `vm-devpolaris-orders-legacy-01` in `rg-devpolaris-orders-prod`. This worker still needs a vendor package installed at the operating system level, a mounted data disk, a local service file, and a monitoring agent that reads host logs. The team would rather run new services on Container Apps or App Service, but this one workload still has a real server requirement.
 
-*A VM gives the team the most host control, but it also leaves operating system, patching, process, disk, and network responsibility with the team.*
+That gives us a clear structure for the article. A VM is a bundle of connected decisions. The team chooses a **VM image**, a **VM size**, **managed disks**, **temporary storage**, a **network interface**, **access paths**, **startup configuration**, **process supervision**, **patching**, **backup**, and **monitoring**. Each choice affects the next one during a real incident.
 
+| Concept | Plain meaning | Orders legacy worker example |
+|---|---|---|
+| **Image** | The boot template for the operating system and baseline software. | Ubuntu image plus the vendor package and security baseline. |
+| **Size** | The CPU, memory, disk throughput, and network capacity profile. | A general-purpose size that can run the worker and submit enough disk I/O. |
+| **Managed disk** | Durable block storage Azure attaches to the VM. | OS disk plus a mounted data disk for worker state. |
+| **Temporary storage** | Scratch space that can disappear when Azure moves or recreates the VM. | Cache files only, never the only copy of order data. |
+| **Network interface** | The VM's private IP and subnet attachment. | Private IP in the application subnet, with no public IP. |
+| **Access path** | The approved way humans administer the machine. | Azure Bastion or private VPN path, with Azure RBAC and OS-level users reviewed. |
+| **Startup path** | The sequence from image boot to working application process. | Cloud-init, disk mount, environment file, systemd service, and health check. |
+| **Operations plan** | The routine work that keeps the server safe and recoverable. | Patching, backups, logs, metrics, alerts, and restore drills. |
 
-To deploy a Virtual Machine, you declare its size, OS image, network placement, and credential parameters. The following command launches a standard database node inside a dedicated network subnet:
+This map matters because VMs feel familiar. A team can SSH into a VM, install a package, edit a file, restart a service, and get something working. That familiarity helps during migrations and vendor software work, but it can also hide responsibility. The machine may live in Azure, but the team still owns the inside of the operating system.
 
-```plain
-az vm create \
-  --resource-group rg-database-prod \
-  --name vm-db-prod \
-  --image Ubuntu2204 \
-  --size Standard_D2s_v5 \
-  --vnet-name vnet-prod \
-  --subnet snet-db \
-  --admin-username dbadmin \
-  --ssh-key-values @id_rsa.pub
+Microsoft's Azure VM overview explains the same core idea from the platform side: a VM gives you an on-demand computing resource where you choose the operating system, size, and related resources. In production language, that means the team gets a lot of control and also keeps a lot of server work.
+
+![Azure VM decision map showing server-level reasons to choose a VM and the operating responsibilities the team owns](/content-assets/articles/article-cloud-providers-azure-compute-application-hosting-azure-virtual-machines/vm-decision-map.png)
+
+*Use this as the VM decision reminder: the same server control that helps a legacy worker also brings patching, access, process health, and backup ownership.*
+
+## When A VM Is The Honest Choice
+<!-- section-summary: A VM is justified when the workload truly needs server-level control such as OS packages, local agents, custom services, mounted disks, or compatibility with software that cannot fit a managed runtime yet. -->
+
+A **server-level control requirement** is a need that sits inside the operating system or very close to it. The application might need a kernel module, a local daemon, a vendor installer, a mounted block device, a specific Windows service, a special network agent, or a runtime layout that a managed web platform cannot provide. A VM fits that kind of requirement because the team can administer the guest operating system directly.
+
+For the Orders system, the inventory worker is a good VM candidate for now. The vendor package expects a normal Linux filesystem, writes state to `/var/lib/vendor-inventory`, and ships a service definition that runs under `systemd`. The team also has to install a host-based security agent and collect logs from files under `/var/log/vendor-inventory`. Those are ordinary server operations, and a VM gives the team the control to do them.
+
+This is different from choosing a VM because the team feels comfortable with SSH. Comfort is real, and it matters during learning, but production compute choices need a workload reason. A normal HTTP API that can run as a container may fit Container Apps. A standard web app may fit App Service. An event handler may fit Functions. A VM earns its place when the software needs the operating system shape.
+
+The early decision record should name the reason in plain language. For example: "`vm-devpolaris-orders-legacy-01` stays on Azure Virtual Machines because the vendor inventory worker needs a Linux service, local package installation, a mounted data disk, and host-level monitoring. The team owns OS patching, access review, disk capacity, backups, startup scripts, and process supervision." That sentence gives future reviewers enough context to revisit the choice later.
+
+The next natural question is who owns what. Azure runs the physical platform. The team runs the guest server. That boundary is where most VM surprises come from.
+
+## The Shared Responsibility Boundary
+<!-- section-summary: Azure operates the physical host and virtualization platform, while the team owns the guest operating system, packages, users, processes, mounts, logs, and application recovery behavior. -->
+
+The **shared responsibility boundary** is the line between Azure's platform work and your team's server work. Azure owns the datacenter, physical servers, host networking, storage platform, virtualization layer, and control plane APIs. Your team owns the guest operating system, application packages, service accounts, firewall settings inside the OS, mounted filesystems, application processes, log forwarding, backup choices, and recovery steps.
+
+This boundary can feel subtle because Azure creates the VM resource for you. The portal shows a friendly resource page, and the CLI can start, stop, resize, and inspect the machine. Azure resource state and guest application health are two separate facts. Azure can report that the VM is running while the application process inside the guest OS is crashed.
+
+For the Orders worker, the production runbook needs two layers of evidence. The Azure layer answers questions like "is the VM allocated, which size is it, which subnet is it in, which disks are attached, and is the VM agent healthy?" The guest layer answers questions like "did cloud-init finish, did `/data` mount, did the vendor package load, did systemd start the worker, and are logs leaving the machine?"
+
+| Layer | Azure helps with | Team still owns |
+|---|---|---|
+| Physical platform | Host hardware, physical networking, datacenter power, platform maintenance. | Choosing region, availability design, and recovery approach. |
+| VM resource | VM lifecycle, VM size, image reference, disk attachment, NIC attachment. | Naming, tagging, sizing, access design, cost review, and change control. |
+| Guest operating system | VM agent integration and extension delivery when the agent is healthy. | Users, packages, firewall, SSH or RDP hardening, OS updates, and local config. |
+| Application process | Health extension integration if configured. | Service file, restart policy, environment variables, ports, logs, and incident response. |
+| Data on disks | Managed disk resource, durability options, snapshots, backup integration. | Filesystem, mount points, database consistency, capacity alerts, and restore testing. |
+
+This is why a VM is the most flexible compute choice in this Azure compute section and also the one with the most daily operations. After the team accepts that boundary, the first technical object to understand is the image, because every VM starts from a boot template.
+
+## Images And First Boot
+<!-- section-summary: A VM image is the boot template, and first boot turns that template into a configured server through metadata, cloud-init or custom data, disk mounts, packages, and service startup. -->
+
+A **VM image** is the template Azure uses to create the operating system disk. It contains the operating system and may include baseline packages, configuration, security settings, and company software. A marketplace Ubuntu image gives you a clean general-purpose server. A custom image can already include the vendor package, log agent, approved users, and a hardened SSH configuration.
+
+The image matters because servers drift when people configure them by hand. Imagine one engineer installs `vendor-inventory-agent` on Monday, another edits `/etc/vendor/config.yml` on Wednesday, and a third changes a systemd unit during an incident. The VM may work, but the team cannot confidently recreate it. If the machine has to be replaced in another zone or rebuilt after corruption, those hidden manual steps become downtime.
+
+A stronger pattern is to build a versioned image and keep late-binding configuration small. The image might contain Ubuntu, the vendor package, the Azure Monitor Agent dependency, and baseline hardening. First boot can then inject environment-specific values such as the resource group name, the data disk mount, the Log Analytics workspace target, and the service enablement step.
+
+Azure VMs can receive **custom data** or **user data** at provisioning time, and Linux images often use **cloud-init** to process early boot configuration. Cloud-init is a common Linux initialization system that can create files, install packages, run commands, configure users, and start services during first boot. Azure also exposes the **Instance Metadata Service**, often called IMDS, from inside the VM so software can read facts about the current VM, such as compute, network, and maintenance metadata.
+
+Here is a small cloud-init sketch for the Orders worker. The important idea is not the exact package name. The important idea is that first boot should be repeatable and reviewable.
+
+```yaml
+#cloud-config
+packages:
+  - vendor-inventory-agent
+
+write_files:
+  - path: /etc/devpolaris/orders-worker.env
+    permissions: "0640"
+    content: |
+      ORDERS_ENV=prod
+      WORKER_QUEUE=orders-inventory
+
+runcmd:
+  - mkdir -p /data/vendor-inventory
+  - systemctl enable orders-inventory.service
+  - systemctl start orders-inventory.service
 ```
 
-Executing this command tells the Azure ARM controller to register a virtual machine identity, allocate physical resources on a hypervisor blade, create a persistent managed disk, bind a virtual network interface card (NIC), and mount the OS partition.
+The first boot chain gives the operator a useful troubleshooting path. When the worker fails to start after the VM is recreated, useful first checks include boot diagnostics, cloud-init logs, extension status, disk mounts, environment files, and the systemd service. Azure's boot diagnostics feature exists exactly for the early part of that path because it collects serial log information and screenshots to help diagnose VM boot failures.
 
-:::expand[Under the Hood: VM Sizing and Host Isolation]{kind="design"}
-Azure VMs run as guest operating systems on Azure-managed physical hosts. The VM size you choose defines the virtual CPU count, memory amount, disk throughput limits, network throughput limits, and sometimes the local temporary storage available to the guest.
+![Azure VM first boot chain from image to OS disk, cloud-init, data mount, systemd service, and health evidence](/content-assets/articles/article-cloud-providers-azure-compute-application-hosting-azure-virtual-machines/vm-first-boot-chain.png)
 
-The important operational constraint is that the VM size is a hard ceiling. Attaching a faster managed disk does not help if the VM size has a lower disk throughput cap. Moving a memory-hungry process onto a VM with too little RAM causes paging or crashes no matter how healthy the Azure host is. Choosing a VM is therefore a capacity-planning decision, not only an operating system preference.
+*Use this as the startup debugging path: a recreated VM must move from image to mounted disk to supervised service before the worker can look healthy.*
 
-Azure isolates guests from each other at the virtualization layer and manages the physical host, but your team owns everything inside the guest OS. That includes users, packages, kernel settings, service supervisors, firewall rules, data mounts, and application recovery behavior.
-:::
+Once the VM can boot repeatably, the next decision is capacity. The image decides what starts. The VM size decides how much CPU, memory, disk throughput, and network throughput the machine can actually use.
 
-If you operate servers on AWS, Azure VMs are the direct equivalent of AWS EC2 instances. Both provide raw virtual guest servers in the cloud. However, they integrate differently with adjacent cloud resources. In AWS, persistent block storage commonly uses Elastic Block Store (EBS), whereas in Azure, persistent volumes use Managed Disks. Azure VMs also commonly run a guest VM Agent and can use the Instance Metadata Service (IMDS) for instance metadata and managed identity token requests.
+## VM Sizes And Performance Limits
+<!-- section-summary: A VM size is the capacity profile for CPU, memory, disk throughput, network bandwidth, and sometimes local temporary storage, so it can cap performance even when attached resources look powerful. -->
 
-Choosing a Virtual Machine is a deliberate engineering tradeoff. You accept the operational overhead of server patching, security compliance audits, backup policies, and process monitoring in exchange for the absolute runtime freedom required by specialized systems.
+A **VM size** is the capacity profile for the virtual server. It defines how many virtual CPUs the VM gets, how much memory it has, what disk throughput and IOPS limits apply, what network bandwidth range the VM can reach, and whether a local temporary disk is available. Microsoft groups sizes into families for different workload shapes, such as general purpose, compute optimized, memory optimized, storage optimized, and GPU accelerated.
 
-| Resource Provider | Operational Owner | Systems Detail |
-| --- | --- | --- |
-| Physical Hardware | Azure Fabric | Core hypervisor updates, server blade hardware, and power units |
-| Operating System OS | Your Team | Guest OS updates, security hardening, package updates, and kernels |
-| Storage Volumes | Your Team | Partition tables, file systems, disk mounts, and directory trees |
-| Process Supervision | Your Team | Keeping systemd daemons active and monitoring process restarts |
-| Logging Pipelines | Your Team | Installing log agents to forward files to centralized log workspaces |
-| Network Routing NIC | Your Team | Configuring firewalls, network interfaces, and guest routing tables |
+For the Orders worker, a small general-purpose size may be enough during normal traffic. The worker reads messages, calls the vendor package, writes small state files, and reports results. If the team later sees CPU saturation or memory pressure, a larger size may help. If the worker spends most of its time waiting on disk, the team has to look at both the managed disk and the VM size because either one can be the bottleneck.
 
-## Image
+That last point is worth slowing down on. A managed disk may advertise a high performance tier, but the VM size also has limits. If the disk can deliver more I/O than the VM size can submit, the workload still waits. From inside the guest OS, this often appears as growing disk queue depth, high latency, slow package operations, or a service that falls behind even though CPU is not busy.
 
-A VM image is the boot template for the server. It contains the operating system, default libraries, kernel version, and any preinstalled software Azure should place on the OS disk.
+Here is a practical review table for a VM size choice.
 
-Example: a custom image named `img-inventory-ubuntu-2026-05` can include Ubuntu 22.04, the inventory daemon binary, the Azure Monitor agent, and baseline security settings before any VM starts.
+| Question | Why it matters for production |
+|---|---|
+| How many vCPUs does the process need during peak work? | CPU-bound workers fall behind when the scheduler stays saturated. |
+| How much memory does the process and OS need together? | Memory pressure causes swapping, crashes, or slow garbage collection. |
+| What disk IOPS and throughput can the size submit? | A fast disk cannot help if the VM size has the lower limit. |
+| What network throughput does the size support? | Backup, log shipping, API calls, and package downloads all share network capacity. |
+| Does this size include temporary storage? | Scratch storage can be useful, but it must not hold business data. |
+| Is the size available in the target region and zone? | A design can look fine and still fail placement if the size is unavailable. |
 
-When you provision a VM, Azure uses that image to create the VM's OS disk.
+The team should choose a size from measured workload evidence rather than guesses. Start with the workload's expected CPU, memory, disk, and network needs. Watch Azure Monitor metrics after realistic traffic. Resize when evidence says the current capacity profile is wrong. Resizing may require a restart, and some sizes may not be available in every cluster or zone, so capacity changes belong in normal change planning.
 
-Relying on raw marketplace images can introduce configuration drift over time. If a developer boots a generic Ubuntu image and manually installs packages, updates libraries, and edits system files, the machine cannot be easily reproduced. If the VM's host hardware fails and the platform migrates the workload to a new node, recreating the configuration by hand creates serious recovery latency.
+Capacity leads directly into storage. The size gives the VM a performance envelope, but the disks decide where the operating system and application data live.
 
-To ensure consistency, automate the image creation path using golden-image pipelines (such as HashiCorp Packer). These pipelines compile your application binaries, install required security daemons, and configure system libraries into a custom, versioned image. You register this image in an Azure Compute Gallery, ensuring that every VM launched in your scaling group boots from the exact same pre-tested template.
+## Managed Disks And Temporary Storage
+<!-- section-summary: Managed disks provide durable block storage for VM operating systems and data, while temporary storage is scratch space that can disappear during moves, redeploys, resizes, or host recovery. -->
 
-## VM Size
+A **managed disk** is Azure-managed block storage attached to a VM. The guest operating system sees it like a normal disk device. Linux may expose it as a device such as `/dev/sdc`, and the team formats it, mounts it, and uses normal filesystem paths. Azure manages the backing storage resource, while the team owns the filesystem, mount configuration, data layout, and application consistency.
 
-A VM size is the capacity profile for the server you are renting: CPU count, memory, temporary storage, disk throughput, and network throughput. The VM Size (also referred to as the VM SKU) defines the compute, memory, local ephemeral disk space, and network bandwidth characteristics of the virtualized environment. Selecting a size is a critical step that must match the physical resource needs of your guest processes.
+The Orders worker has two common disk types. The **OS disk** holds the operating system and base files. A **data disk** holds application state under a mount such as `/data/vendor-inventory`. Keeping application data on a data disk makes replacement and recovery planning clearer because the team can reason about the OS lifecycle separately from the application data lifecycle.
 
-Azure categorizes VM sizes into specialized families designed for distinct workloads:
-* **D-Family (General Purpose)**: Balanced CPU-to-memory ratios; designed for standard web backends, small databases, and testing environments.
-* **E-Family (Memory Optimized)**: High RAM-to-core ratios; designed for in-memory databases, large cache layers, and high-volume data engines.
-* **F-Family (Compute Optimized)**: High core-to-RAM ratios; designed for CPU-bound batch processing, compilation engines, and video encoding.
+Azure managed disks come in several performance and cost tiers, including Standard HDD, Standard SSD, Premium SSD, Premium SSD v2, and Ultra Disk. A beginner can start without memorizing every SKU. The useful production question is what the workload needs: low cost, steady latency, high IOPS, high throughput, or very low latency for a demanding database-like workload.
 
-The VM Size also imposes strict, non-adjustable hardware limits on network interface card (NIC) throughput and disk input/output operations per second (IOPS). If you select a small VM size (such as `Standard_B2s`), the hypervisor limits your network bandwidth to a low rate and caps your disk IOPS. Even if you attach a high-performance SSD capable of 20,000 IOPS, the VM's virtual disk controller will throttle I/O operations to match the VM size limits, creating disk queue bottlenecks.
+The team also has to understand **temporary storage**. Many VM sizes expose local scratch space on the physical host. It can be useful for cache files, swap, build output, sorting buffers, or temporary extraction work. Treat it as disposable storage. Data on temporary storage can be lost when the VM is moved, redeployed, resized, stopped and deallocated, or recovered on another host.
 
-## Disks
+For the Orders worker, temporary storage can hold a retryable package extraction cache. Durable storage must hold the only copy of inventory state, order processing results, database files, and logs that the team needs after an incident. The easiest test is to ask what happens if the temporary path is empty after the next reboot. If the answer is "the worker rebuilds the cache," that is fine. If the answer is "we lost customer or recovery data," the design is wrong.
 
-VM disks are the storage devices the guest operating system mounts and reads through its normal filesystem path. An Azure Virtual Machine normally utilizes two distinct categories of storage: managed disks (durable, network-attached storage) and temporary local disks (ephemeral, physically attached SSDs).
+Mounting a Linux data disk also creates an operating responsibility. The disk needs a filesystem, a mount point, an `/etc/fstab` entry that survives reboot, permissions that match the service account, and capacity alerts before the partition fills. A VM can be running and still fail the application because `/data` did not mount or because the service account cannot write to the directory.
 
-```mermaid
-flowchart LR
-    OSFS["Guest OS Block I/O<br/>(/dev/sda)"] --> VController["Virtual Disk Controller"]
-    VController -- "Azure-managed block storage path" --> ManagedDisk["Azure Managed Disk"]
-```
+Here is the thread connecting storage back to startup. A rebuild from image is only useful when the startup path can attach or mount the right data disk and start the service against the expected path. That is why boot troubleshooting includes disk evidence. After storage, the next big piece is the network interface, because the worker must reach dependencies without opening the VM to unsafe access.
 
-```mermaid
-flowchart LR
-    TempFS["Temporary Mount<br/>(/dev/sdb)"] --> LocalSSD["Physical Local NVMe SSD<br/>(on Hypervisor Host Blade)"]
-```
+## Network Interfaces And Access
+<!-- section-summary: A VM network interface gives the machine a private network identity, while production access design controls whether humans and traffic reach the VM through public, private, or brokered paths. -->
 
-Managed disks represent Azure-managed block storage attached to your VM. The guest operating system sees a disk device, while Azure handles the storage account placement, redundancy option, durability, and disk resource lifecycle behind the scenes.
+A **network interface**, often shortened to NIC, is the VM's attachment to an Azure virtual network subnet. It gives the VM a private IP address, connects it to route tables and network security groups, and becomes the network identity Azure uses for packets moving in and out of the machine. The guest operating system also sees a network adapter and configures its own network stack.
 
-To fit different performance and cost requirements, Azure provides five distinct Managed Disk types:
+For the Orders worker, the clean production shape is private. The NIC sits in a subnet such as `snet-orders-app-prod`, receives a private IP such as `10.40.12.14`, and has no public IP address. The worker reaches internal APIs, storage private endpoints, package mirrors, and log collection endpoints through approved routes. Human administration goes through a controlled path such as Azure Bastion, a VPN, a private jump host, or another approved access pattern.
 
-*   **Standard HDD**: Backed by traditional magnetic hard drives, providing the lowest cost. Best for backups, archiving, or running development hosts with highly infrequent disk access.
-*   **Standard SSD**: Low-cost solid-state drives, providing balanced, consistent latency. Designed for standard web application hosts and small dev environments.
-*   **Premium SSD**: High-performance network-attached solid-state volumes, delivering low-latency block I/O. Ideal for production databases and transaction-heavy workloads.
-*   **Premium SSD v2**: Next-generation block volumes, allowing you to configure size, IOPS, and throughput independently to optimize disk costs without scaling volume sizes.
-*   **Ultra Disk**: The highest performance block tier, supporting sub-millisecond latencies and delivering up to 160,000 IOPS, designed for transaction-heavy enterprise database clusters.
+This is where beginners often mix up two different access systems. **Azure RBAC** controls who can manage the Azure VM resource through Azure APIs, such as start, stop, read metadata, attach disks, or change network settings. **Operating system access** controls who can sign in to the guest OS through SSH, RDP, or another administration method. A person may have Azure permission to view the VM resource and still lack OS login access. Another person may have an old SSH key on the machine and bypass the clean Azure review path.
 
-The exact performance and durability guarantees depend on the disk type, volume size, and SKU you configure.
+The VM access record should answer a few production questions.
 
-Temporary disks, conversely, are local temporary storage exposed by many VM sizes. On Linux VMs, this drive is typically mounted at `/mnt` or `/mnt/resource`. This storage is ephemeral. Data on the temporary disk can be lost during stop/deallocate, resize, redeploy, maintenance, or host recovery events. Never store database logs, source code, application state, or critical files on the temporary disk; restrict its use to system swap space and volatile caches.
+| Access question | Production answer to record |
+|---|---|
+| Does the VM have a public IP? | Prefer no public IP for private workers. Record any exception and owner. |
+| How do administrators connect? | Bastion, VPN, private admin subnet, or another approved path. |
+| Who can manage the Azure resource? | Azure RBAC role assignments at the narrowest useful scope. |
+| Who can sign in to the guest OS? | OS users, SSH keys, groups, RDP policy, and rotation process. |
+| Which ports are reachable? | NSG rules, guest firewall rules, and expected listening services. |
+| How are changes audited? | Azure Activity Log, OS authentication logs, and session or command logging where required. |
 
-:::expand[Writing to the Temporary Disk]{kind="pitfall"}
-Many Azure VM sizes include a temporary local disk (`/dev/sdb` or `/dev/disk/cloud/azure_resource` on Linux, `D:` on Windows). This disk is designed for temporary data. If the VM is stopped (deallocated), resized, redeployed, or moved during maintenance, data written to the temporary drive can be lost.
+Network evidence also matters during incidents. If the worker cannot reach a database, the answer may live in DNS, routes, NSGs, a private endpoint, the guest firewall, or the application config. If humans cannot connect, the answer may live in Azure RBAC, Bastion, the VM power state, the NIC, NSG rules, SSH daemon status, or OS users.
 
-This matches the behavior of AWS **EC2 Instance Store** volumes, which provide high-speed, local ephemeral block storage that is wiped clean the moment the EC2 instance is stopped, terminated, or undergoes hardware retirement.
+![Azure VM capacity and access board showing size envelope, durable managed disk, disposable temporary disk, private IP, NSG rules, and approved admin path](/content-assets/articles/article-cloud-providers-azure-compute-application-hosting-azure-virtual-machines/vm-capacity-access-board.png)
 
-Common victims of this behavior include application log directories, local session caches, SQLite databases, and cron configuration templates that developers accidentally write to `/mnt` or `D:\`. The files are perfectly readable for days, creating a false sense of security, until the next host maintenance event triggers a reboot and wipes the drive clean.
+*Use this as the capacity and access checklist: the VM size, disk choice, temporary storage, and private access path all shape production behavior.*
 
-Consider this before-and-after storage architecture:
+Networking gives the VM a place to live. Startup and agents give Azure a way to help configure and observe the guest operating system, so we can talk about extensions next.
 
-*   **Before (The Volatile Trap):** Storing active log files on the local temp disk:
-    ```bash
-    # App config targets the volatile ephemeral mount
-    LOG_DIR="/mnt/app-logs/"
-    ```
-*   **After (The Durable Pattern):** Write persistent logs to a network-attached Azure Managed Disk, or stream them off-box to a central workspace:
-    ```bash
-    # Mount durable Managed Disk partition
-    mount /dev/sdc1 /data/app-logs
-    LOG_DIR="/data/app-logs/"
-    ```
+## Extensions, Agents, And Runtime Configuration
+<!-- section-summary: The Azure VM Agent and VM extensions let Azure run configuration, monitoring, security, and utility tasks inside the guest OS, but the team still needs to design repeatable configuration and inspect extension failures. -->
 
-**Rule of thumb:** Treat the temporary local disk exactly like system RAM - it is completely volatile by design. Use it strictly for transient swap files, sorting buffers, or short-lived build artifact caches where data loss is fully expected and has zero impact on application durability.
-:::
+The **Azure VM Agent** is software inside the guest operating system that helps Azure interact with the VM. On supported images, it enables capabilities such as extension handling. A **VM extension** is a small package Azure can install or run inside the VM for configuration, monitoring, security, or utility work. Microsoft describes extensions as post-deployment configuration and automation for Azure VMs.
 
-## Network Interface
+For the Orders worker, extensions can handle work that should happen the same way across machines. The Azure Monitor Agent extension can connect the VM to monitoring. A custom script extension can run a bootstrap script that prepares a mount, writes a config file, or registers the worker. A security extension can install endpoint protection according to the organization's baseline.
 
-A Network Interface Card (NIC) is the VM's network attachment. It gives the guest operating system a private IP address inside a subnet and connects that VM to routing and security rules.
+Extensions are useful operating hooks, and they still follow normal guest OS failure modes. They run inside the guest OS through the agent path. If the VM agent is unhealthy, network access is blocked, the script URL is unreachable, the script exits with an error, or the operating system blocks execution, the extension can fail. In a real incident, the operator checks extension provisioning status and then reads the extension logs inside the VM.
 
-![Azure VM attached to OS disk, data disk, network interface, public IP, subnet, and NSG](/content-assets/articles/article-cloud-providers-azure-compute-application-hosting-azure-virtual-machines/disk-nic-attachment.png)
-
-*VM behavior is shaped by attached resources: disks hold state and the network interface controls where traffic can flow.*
-
-
-Example: `nic-inventory-prod` can place `vm-inventory-prod` in `snet-inventory` with private IP `10.30.8.12`, attach no public IP, and use an NSG rule set that only allows traffic from the application subnet.
-
-Under the hood, when packets reach the host blade's physical network adapter, the hypervisor's software-defined virtual switch inspects the VLAN headers. It routes the packets to the virtual NIC assigned to your VM, where the guest OS kernel parses the Ethernet frames. To bypass this virtual switch overhead and achieve near-line-rate network performance under high traffic, enable Accelerated Networking.
-
-### Accelerated Networking and SR-IOV Physics
-
-Under standard virtualization, when a physical network interface receives a packet, the host OS hypervisor intercepts it. The hypervisor evaluates virtual network switch rules, copies the packet buffer to the virtual machine's software network stack, and finally passes it to the guest OS. This software interception path consumes host CPU cycles and introduces network latency and jitter.
-
-Accelerated Networking eliminates this host processor overhead by implementing Single Root I/O Virtualization (SR-IOV). When enabled on a supported VM size, the physical host adapter dynamically partitions a physical PCIe network card into multiple virtual functions.
-
-Azure binds one of these physical PCIe virtual functions directly to your guest VM's virtual NIC interface. Packets bypass the hypervisor entirely. The hardware virtual function copies network packets directly from the physical cable into the guest VM's RAM memory buffers using Direct Memory Access (DMA). This cuts virtual network latency to sub-milliseconds, eliminates CPU virtualization overhead, and supports up to 30 Gbps of network throughput on large VM SKUs.
-
-## Virtual Machine Scale Sets: Scaling the Fleet
-
-A single Virtual Machine represents a single point of physical failure. If the underlying server blade hosting your VM experiences a hardware crash, your application goes offline until the Azure control plane detects the failure and redeploys the instance to a healthy node.
-
-To build a highly available and resilient service, you must run multiple identical instances of your VM behind a load balancer. Azure provides this capability through Virtual Machine Scale Sets (VMSS).
-
-A VMSS is a managed resource group that automates the deployment, lifecycle, and scaling of a group of identical VMs. Under the hood, VMSS integrates directly with Azure Load Balancer and Application Gateway. You define a scaling policy (such as increasing instance counts when the average CPU exceeds 70 percent, or decreasing instance counts during off-peak hours), and the VMSS controller automatically provisions or deprovisions VMs to match the load.
-
-When configuring a scale set, you can choose between two orchestration modes:
-
-*   **Uniform Orchestration**: Designed for large-scale, stateless workloads. The scale set uses a single VM template, allowing you to scale up to one thousand VM instances in a single group.
-*   **Flexible Orchestration**: Designed for stateful or mixed workloads. It allows you to group VMs of different sizes, OS images, and billing models (such as combining Spot and Standard instances) into a single high-availability group.
-
-By utilizing VMSS, our commerce portal's inventory service can scale dynamically across multiple Availability Zones, ensuring that a physical datacenter outage does not disrupt inventory tracking.
-
-### Scale Set Upgrade Policies
-
-When deploying updates to a Virtual Machine Scale Set (such as updating the VM image or installing custom configuration packages), you must configure how Azure rolls out these changes across your active instances to prevent service interruptions:
-
-*   **Manual Upgrade Policy**: Azure does not touch existing VMs. When you apply a new image template, active instances continue running the old version until you explicitly execute the `az vmss update-instances` command to upgrade them.
-*   **Automatic Upgrade Policy**: The scale set controller immediately updates all instances concurrently. This can cause severe service downtime because the controller shuts down and reprovisions every VM in the group at the same time.
-*   **Rolling Upgrade Policy**: The recommended pattern for high availability. Azure divides the scale set instances into virtual batches using Availability Sets or Upgrade Domains. The controller updates one batch at a time, monitors its health probe state, and only proceeds to the next batch when the upgraded instances are verified healthy.
-
-Choosing a rolling upgrade policy ensures that your storefront or catalog APIs remain active and reachable to users during platform security rollouts.
-
-## Virtual Machine Extensions: Automated Management
-
-Virtual Machine Extensions are Azure-run setup tasks inside the guest operating system. They exist so you can install agents, run bootstrap scripts, or fetch certificates without logging into every VM by hand.
-
-Example: a Custom Script Extension can run `mount-data-disk.sh` on `vm-inventory-prod` after the VM boots, while the Azure Monitor Agent extension forwards syslog and performance counters to Log Analytics.
-
-Virtual Machine Extensions are lightweight software utilities that run inside the guest OS. When you assign an extension to a VM, the Azure VM Agent downloads the extension's binary packages and executes them within the host.
-
-Common extensions include:
-
-*   **Custom Script Extension**: Downloads and runs a shell script from Azure Storage or a public URI inside the guest OS on boot. This is ideal for performing late-stage software installation and environment bootstrapping.
-*   **Azure Monitor Agent Extension**: Automatically installs the monitoring daemon and wires it to a Log Analytics workspace to capture system logs and performance metrics.
-*   **Key Vault Extension**: Periodically polls Azure Key Vault to download and update SSL certificates inside the VM's file system, avoiding manual rotation steps.
-
-### Custom Script Extension Bicep Example
-
-The following Bicep code block shows how to apply a Custom Script Extension to a Linux Virtual Machine, executing a boot script that mounts a secondary data drive and initializes a custom daemon:
+Here is a small Bicep sketch for a Custom Script Extension. It shows the relationship between the Azure resource and the in-guest command.
 
 ```bicep
-resource vmCustomScript 'Microsoft.Compute/virtualMachines/extensions@2023-09-01' = {
-  name: 'vm-inventory-prod/bootstrapScript'
-  location: 'eastus'
+resource bootstrap 'Microsoft.Compute/virtualMachines/extensions@2024-07-01' = {
+  name: 'vm-devpolaris-orders-legacy-01/bootstrap'
+  location: resourceGroup().location
   properties: {
     publisher: 'Microsoft.Azure.Extensions'
     type: 'CustomScript'
@@ -222,95 +217,170 @@ resource vmCustomScript 'Microsoft.Compute/virtualMachines/extensions@2023-09-01
     autoUpgradeMinorVersion: true
     settings: {
       fileUris: [
-        'https://raw.githubusercontent.com/devpolaris/scripts/main/bootstrap.sh'
+        'https://storage.example.invalid/bootstrap-orders-worker.sh'
       ]
-      commandToExecute: 'bash bootstrap.sh'
+      commandToExecute: 'bash bootstrap-orders-worker.sh'
     }
   }
 }
 ```
 
-By chaining Custom Script Extensions, you can transition a generic marketplace OS image into a fully configured, production-ready node without manual SSH intervention.
+In production, the script should come from a controlled artifact location, not a random personal URL. It should be idempotent, which means running it twice should leave the machine in the same intended state rather than duplicating users, remounting incorrectly, or corrupting files. That one property makes extension retries much less scary.
 
-## Startup
+Extensions connect Azure automation to the guest. The next piece is what actually keeps the application running after all setup finishes.
 
-The VM startup path represents the bridge between virtual machine creation and application process readiness. When the guest OS boots, the system must parse configuration metadata to set hostnames, wire network routing, retrieve secrets, and install runtimes.
+## Process Supervision And Health
+<!-- section-summary: The team manages the application process inside a VM through a service supervisor, restart policy, logs, metrics, and health evidence inside the guest OS. -->
 
-![Azure VM boot path from image to OS disk, VM size, network connectivity, startup script, processes, and health](/content-assets/articles/article-cloud-providers-azure-compute-application-hosting-azure-virtual-machines/vm-boot-path.png)
+**Process supervision** means a local system watches an application process and controls how it starts, stops, restarts, and reports status. On modern Linux VMs, that system is usually `systemd`. On Windows, it may be a Windows service. A VM gives your team the operating system, so the team must define how the actual application process behaves.
 
-*A VM has a startup chain, and any broken step before the app process can make the service appear down.*
+For the Orders worker, the vendor process should run as a service instead of relying on someone running a command in an SSH session. It should use a dedicated OS user, a working directory, an environment file, a restart policy, and logs. If the process crashes at 2:00 a.m., the service manager should try a controlled restart and leave useful evidence.
 
-
-To automate this provisioning flow without manual SSH commands, rely on the guest VM Agent (`waagent`) and cloud-init. During the boot sequence, the guest OS starts the VM Agent daemon. The agent can use the Instance Metadata Service (IMDS) at the private IP `169.254.169.254` to retrieve metadata such as the VM's resource group, subscription, private IP, and user-provided custom data scripts.
-
-The VM Agent parses this metadata, configures the local network interfaces, writes host files, and executes your cloud-init shell scripts. A production-ready VM should utilize these scripts to pull configuration files from private repositories, register the machine with configuration engines (like Ansible or Chef), mount persistent data disks, retrieve database secrets via managed identity tokens, and start your application processes automatically.
-
-## Process Management
-
-Once the operating system boots and the VM Agent finishes executing configuration scripts, you must ensure that your application processes are supervised and restarted automatically on failure. Because there is no managed platform to monitor process states, you must configure a local process supervisor inside the guest OS.
-
-On modern Linux distributions, the standard tool is `systemd`. You write a systemd service unit file (typically located in `/etc/systemd/system/`) that defines the process environment, specifies the working directory, maps the user privileges, and sets restart rules.
+Here is a small Linux service example.
 
 ```ini
 [Unit]
-Description=DevPolaris Checkout API Service
-After=network.target
+Description=DevPolaris Orders Inventory Worker
+After=network-online.target
+Wants=network-online.target
 
 [Service]
-Type=simple
-User=node
-WorkingDirectory=/var/www/checkout-api
-ExecStart=/usr/bin/node dist/index.js
-Restart=always
-RestartSec=5
-Environment=NODE_ENV=production
-LimitNOFILE=65536
+User=orders-worker
+Group=orders-worker
+EnvironmentFile=/etc/devpolaris/orders-worker.env
+WorkingDirectory=/opt/devpolaris/orders-worker
+ExecStart=/opt/devpolaris/orders-worker/bin/inventory-worker
+Restart=on-failure
+RestartSec=10
 
 [Install]
 WantedBy=multi-user.target
 ```
 
-Using a systemd service ensures that if your Node.js or Python application crashes due to an unhandled exception or memory exhaustion, the guest OS kernel detects the process termination and restarts the service automatically. It also integrates application logs directly with `journald`, providing a local logging system that can be queried using `journalctl`.
+The service file makes the process visible to standard operating tools. An operator can check `systemctl status orders-inventory.service`, read journal logs, confirm the environment file, and see recent restarts. That is much better than a process launched from a terminal and forgotten.
 
-## Patching And Logs
+Health needs two views. The guest OS can know whether the process is active, whether a port is listening, whether logs show errors, and whether disk usage is safe. Azure can receive metrics and logs when the team installs and configures agents. Some VM availability and patching workflows can also use application health extensions, but the team still has to define what healthy means for this workload.
 
-Virtual Machines do not become safe just because Azure manages the host. As operating system kernels, SSL/TLS libraries, runtime engines, and system daemons age, they accumulate security vulnerabilities. Your team must implement an automated patching policy, using tools such as Azure Update Manager or automatic VM guest patching where appropriate, and schedule guest OS reboots in a controlled way.
+The practical health question for the Orders worker is simple: "Can this VM prove the worker is running, processing messages, writing state safely, and shipping logs?" If the answer requires a human to log in and poke around every time, the VM is under-instrumented.
 
-Logging requires the same active ownership. Application logs written only to local files inside the VM are highly volatile. If a disk controller fails or a developer deallocates the machine, those logs are lost. Furthermore, logging into active production servers via SSH to run `tail -f` or `grep` commands is slow and creates operational security risks.
+Now we have a running service. The next responsibility is keeping the server safe over time and proving it can recover after failure.
 
-To secure your telemetry, install a centralized log collector agent (such as the Azure Monitor Agent or Fluent Bit) inside the guest OS. Configure the agent to tail your application log files and stream them in real-time to a central Log Analytics workspace. Set up host alerts to monitor CPU spikes, disk space exhaustion on persistent volumes, and memory utilization, ensuring you receive warnings before a filled OS disk crashes your databases.
+## Patching, Backups, And Recovery
+<!-- section-summary: VM operations include OS patching, application updates, disk backups, restore testing, and recovery plans because the team owns the guest server lifecycle. -->
 
-### Azure Update Manager and Guest Patching
+**Patching** means applying operating system and software updates that fix security issues, reliability bugs, and compatibility problems. Azure can help govern patching through services such as Azure Update Manager, which Microsoft describes as a unified service for managing updates across Windows and Linux machines in Azure, on-premises, and other clouds through Azure Arc. The team still has to choose maintenance windows, test updates, and handle workload-specific risk.
 
-Operating a Virtual Machine requires maintaining strict operating system security hygiene. Azure provides **Azure Update Manager** as a native SaaS compliance engine to oversee guest operating system updates at scale across both Linux and Windows fleets.
+For the Orders worker, patching should have a rhythm. Development or staging VMs receive updates first. Production updates happen during an agreed window. The team watches service health after patching. If the vendor package breaks after a kernel or library update, the team needs a rollback or rebuild plan. That plan may involve a previous image version, disk backup, or replacement VM.
 
-Azure Update Manager allows you to configure automated guest patching policies without deploying local patching servers or agent virtual machines:
+**Backup** means keeping recoverable copies of data or machine state. For VM workloads, backup planning can include managed disk snapshots, Azure Backup, application-level dumps, database-native backups, and exported configuration. The right approach depends on what the data is and how consistent it must be. A crash-consistent disk snapshot may help with some files, while a database may need application-aware backup steps.
 
-*   **Assessment Scan Loops**: The Azure guest agent runs daily background assessment checks to evaluate missing security definitions, kernel updates, and software hotfixes.
-*   **Maintenance Configurations**: You declare declarative maintenance windows, schedules, and reboot behaviors. You can link multiple VMs to a single maintenance schedule, ensuring patching executes during designated low-traffic hours.
-*   **Automatic Guest Patching**: For supported platform OS images, you can enable automatic VM guest patching. The platform automatically applies high-priority security updates on a rolling basis, schedule-free, while respecting host availability perimeters to prevent co-located VM crashes.
+For the Orders worker, the team should separate what can be rebuilt from what must be restored. The OS can usually be rebuilt from the image and first boot scripts. The vendor package should come from the image or package repository. The service file should come from source control. The data disk and any business state need backup and restore testing. Logs should stream off the machine so they survive VM replacement.
 
-Implementing automated update schedules ensures your servers remain hardened against zero-day vulnerabilities while preserving workload availability.
+Recovery needs a drill with more detail than a checkbox. A useful drill might recreate `vm-devpolaris-orders-legacy-01` from the current image in a test resource group, attach a restored copy of the data disk, run first boot configuration, start the service, and prove it can process a sample message. This reveals missing packages, broken mount scripts, stale keys, firewall assumptions, and backup consistency problems before a real outage.
+
+Once recovery is clear for one VM, the next question is whether the workload should be one machine at all. Some VM workloads need a fleet pattern, and some old VMs need retirement instead.
+
+## Scale Sets And VM Sprawl
+<!-- section-summary: Virtual Machine Scale Sets manage fleets of VM instances for repeated server-shaped workloads, while VM sprawl review keeps single machines from becoming permanent by accident. -->
+
+A **Virtual Machine Scale Set** is an Azure resource for creating and managing a group of load-balanced VM instances. The scale set uses a VM model and can increase or decrease instance count based on demand or a schedule. It is useful when a server-shaped workload needs multiple similar instances instead of one hand-managed machine.
+
+For example, imagine the Orders worker becomes stateless after the team moves state to Azure SQL or Blob Storage. At that point, the team could run several identical worker VMs from the same image behind a queue-based processing model. A scale set can help create the fleet, keep instances aligned to a model, distribute them across availability choices, and apply updates in a controlled way.
+
+Scale sets keep the server responsibility and spread it across every instance. The image must be solid because every instance comes from it. Startup must be repeatable because new instances appear automatically. Logs must leave every instance. Health checks must identify bad instances. Updates need a rollout policy so the fleet stays available during change. Capacity rules need testing so scaling events avoid surprise cost or downstream overload.
+
+The other side of this topic is **VM sprawl**. VM sprawl happens when machines remain from habit, history, or fear of touching them after the original server-level requirement has faded. A VM created for a migration can become a permanent pet server if the team never records ownership, rebuild steps, patching, cost, access, and retirement criteria.
+
+A simple VM review works well every quarter.
+
+| Review question | What a good answer sounds like |
+|---|---|
+| What OS-level control does this workload still need? | A specific package, agent, service model, disk contract, or compatibility need. |
+| Can the workload move to a managed runtime now? | Evidence from App Service, Container Apps, Functions, AKS, or vendor support. |
+| Can the VM rebuild from image and automation? | Image version, startup script, config source, and restore steps are known. |
+| Who owns patching and access review? | A named team, schedule, and escalation path. |
+| What would let us retire this VM? | Dependency removal, vendor upgrade, containerization, or data migration. |
+
+This review keeps the VM choice honest. Some VMs should stay because they are the correct shape. Some should become scale sets. Some should move to managed compute. Some should be deleted after the migration finishes.
+
+All of those decisions need evidence. That is the last major operating skill for a VM: knowing what to inspect before changing anything.
+
+## Runtime Evidence
+<!-- section-summary: VM troubleshooting starts with Azure resource evidence, then moves into guest OS evidence such as boot logs, service status, disk mounts, process logs, patch state, and access records. -->
+
+**Runtime evidence** is the set of facts an operator checks before making a change or explaining an incident. For VMs, evidence lives in two places. Azure has resource evidence: size, image, power state, provisioning state, disk attachments, NIC, private IP, public IP, NSG, identity, extension status, and instance view. The guest OS has server evidence: boot logs, users, packages, mounts, services, firewall, process logs, CPU, memory, disk usage, and patch state.
+
+The Orders worker challenge starts from a healthy habit: inspect before touching the service. This command asks Azure for basic VM shape and placement.
+
+```bash
+az vm show \
+  --resource-group rg-devpolaris-orders-prod \
+  --name vm-devpolaris-orders-legacy-01 \
+  --show-details \
+  --query "{name:name,powerState:powerState,location:location,size:hardwareProfile.vmSize,privateIps:privateIps,publicIps:publicIps}"
+```
+
+Instance view gives provisioning and guest agent status. That matters because extension failures and guest agent problems often explain why Azure automation did not reach the machine.
+
+```bash
+az vm get-instance-view \
+  --resource-group rg-devpolaris-orders-prod \
+  --name vm-devpolaris-orders-legacy-01 \
+  --query "instanceView.statuses[].displayStatus"
+```
+
+Disk and NIC checks complete the Azure side of the first pass.
+
+```bash
+az vm show \
+  --resource-group rg-devpolaris-orders-prod \
+  --name vm-devpolaris-orders-legacy-01 \
+  --query "{osDisk:storageProfile.osDisk.name,dataDisks:storageProfile.dataDisks[].name,nics:networkProfile.networkInterfaces[].id}"
+```
+
+After the Azure facts look reasonable, the operator moves inside the guest OS through the approved access path. The guest checks might include cloud-init status, boot diagnostics, disk mounts, service status, journal logs, available disk space, and recent authentication events.
+
+```bash
+cloud-init status --long
+findmnt /data
+systemctl status orders-inventory.service
+journalctl -u orders-inventory.service --since "30 minutes ago"
+df -h /data
+```
+
+This evidence path prevents random fixes. If the VM is stopped, start with the Azure power state. If the data disk is missing, start with attachment and mount evidence. If the service is failed, start with systemd and logs. If extension status is failed, inspect the extension result and logs. The point is to follow the layer where the failure appears.
+
+With all the pieces on the table, we can put the VM story back into one production flow.
 
 ## Putting It All Together
+<!-- section-summary: A production VM is a deliberate server choice with a rebuildable image, right-sized capacity, durable storage, private network access, repeatable startup, supervised processes, patching, backups, and clear evidence. -->
 
-Virtual Machines provide low-level guest OS access at the cost of high operational overhead.
+Azure Virtual Machines give a team the most familiar compute shape in Azure: a server. That is useful when the workload genuinely needs server-level control. The Orders legacy inventory worker is a good example because it needs OS packages, a mounted disk, a service supervisor, and host-level monitoring. A VM makes that possible.
 
-* **VM Size Limits**: Virtual machines run inside Azure-managed virtualization boundaries, and the VM size defines hard CPU, memory, disk, and network ceilings.
-* **Guest OS Ownership**: Azure manages the host, while your team manages users, packages, patches, services, and local security inside the guest.
-* **Managed Disks**: Managed disks provide Azure-managed durable block storage, with performance and redundancy determined by disk type, size, and SKU.
-* **Temporary Disk Volatility**: Temporary local disks are designed for disposable data, and their contents can be lost during deallocation, resize, redeploy, maintenance, or host recovery.
-* **VM Agent Provisioning**: The guest `waagent` fetches custom data scripts from link-local IMDS requests (`169.254.169.254`), orchestrating automated package installations via cloud-init.
+The cost of that control is operating responsibility. The team owns the guest operating system, packages, users, access paths, disk mounts, application service, logs, patching, backups, and restore drills. Azure owns the physical platform and gives useful resource controls, managed disks, networking, extensions, monitoring hooks, boot diagnostics, and scale-set options. The production design has to connect both sides.
 
-By managing guest operating systems, process supervisors, and storage mounts systematically, you can run highly customized workloads that require absolute runtime control.
+The healthy VM pattern looks like this: build from a versioned image, configure first boot through repeatable automation, choose a size from workload evidence, keep durable data on managed disks, treat temporary storage as disposable, avoid public administration paths, supervise the process with a service manager, stream logs off-box, patch on a schedule, test restore, and inspect Azure plus guest OS evidence before changing anything.
+
+The VM should also keep proving that it deserves to exist. If the vendor worker later becomes a container image with no special OS needs, Container Apps may become the better home. If it becomes a fleet of identical server-shaped workers, a scale set may fit. If it remains a single specialized server, keep the operations plan explicit so the machine stays understandable instead of becoming tribal knowledge.
+
+![Production Azure VM operating loop showing image, size, storage, private access, supervised service, patch and restore, plus evidence checks](/content-assets/articles/article-cloud-providers-azure-compute-application-hosting-azure-virtual-machines/vm-operating-loop.png)
+
+*Use this as the production VM loop: keep the machine rebuildable, observable, privately reachable, patched, and restorable before changing it during an incident.*
 
 ## What's Next
 
-In the next chapter, we will go up the compute abstraction ladder to explore Azure App Service (PaaS). We will separate App Service Plans from Web Apps, deploy code slots, configure scaling rules, and run secure private backend proxy connections.
+Next, look at App Service, where the compute conversation shifts from owning a full server to running web apps and APIs on a managed Azure hosting platform.
 
 ---
 
-* [Virtual Machines in Azure](https://learn.microsoft.com/en-us/azure/virtual-machines/overview) - Introduction to Azure's IaaS compute platform.
-* [Sizes for Virtual Machines](https://learn.microsoft.com/en-us/azure/virtual-machines/sizes/overview) - Technical reference for compute, memory, and storage VM SKU families.
-* [Managed Disks Overview](https://learn.microsoft.com/en-us/azure/virtual-machines/managed-disks-overview) - Architecture details of remote network-attached durable storage LUNs.
-* [Accelerated Networking SR-IOV](https://learn.microsoft.com/en-us/virtual-network/create-vm-accelerated-networking-cli) - Performance guide on Single Root I/O Virtualization.
+**References**
+
+- [Overview of virtual machines in Azure](https://learn.microsoft.com/en-us/azure/virtual-machines/overview)
+- [Sizes for virtual machines in Azure](https://learn.microsoft.com/en-us/azure/virtual-machines/sizes/overview)
+- [Overview of Azure Disk Storage](https://learn.microsoft.com/en-us/azure/virtual-machines/managed-disks-overview)
+- [Azure managed disk types](https://learn.microsoft.com/en-us/azure/virtual-machines/disks-types)
+- [Azure VM extensions and features](https://learn.microsoft.com/en-us/azure/virtual-machines/extensions/overview)
+- [Azure Instance Metadata Service for virtual machines](https://learn.microsoft.com/en-us/azure/virtual-machines/instance-metadata-service)
+- [Azure boot diagnostics](https://learn.microsoft.com/en-us/azure/virtual-machines/boot-diagnostics)
+- [Azure Update Manager overview](https://learn.microsoft.com/en-us/azure/update-manager/overview)
+- [Azure Virtual Machine Scale Sets overview](https://learn.microsoft.com/en-us/azure/virtual-machine-scale-sets/overview)

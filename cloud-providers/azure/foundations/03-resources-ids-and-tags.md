@@ -1,7 +1,7 @@
 ---
 title: "Resources, IDs, and Tags"
 description: "Identify the exact Azure resource behind an alert, deployment, cost line, or access request before changing apps, databases, vaults, networks, or policies."
-overview: "After placement comes exact resource identity. This article follows an Orders API investigation and uses names, resource IDs, resource types, tags, locks, and evidence to make Azure resources findable and safe to change."
+overview: "After placement comes exact resource identity. This article follows an Orders API investigation and uses resource names, resource IDs, provider types, tags, locks, and evidence to make Azure resources findable and safe to change."
 tags: ["azure", "resources", "resource-ids", "tags", "locks"]
 order: 3
 id: article-cloud-providers-azure-foundations-resource-groups-and-ids
@@ -19,144 +19,132 @@ aliases:
 
 ## Table of Contents
 
-1. [Anatomy of the Azure Resource ID](#anatomy-of-the-azure-resource-id)
-2. [Metadata Tagging: Standardizing Coordinates](#metadata-tagging-standardizing-coordinates)
-3. [Protecting the Control Plane: Management Locks](#protecting-the-control-plane-management-locks)
-4. [The CLI Scope: Inspecting Resources and Enforcing Locks](#the-cli-scope-inspecting-resources-and-enforcing-locks)
-5. [Under-the-Hood: How ARM Locks Intercept the REST Pipeline](#under-the-hood-how-arm-locks-intercept-the-rest-pipeline)
-6. [The Tagging Inheritance Trap](#the-tagging-inheritance-trap)
-7. [Putting It All Together](#putting-it-all-together)
-8. [What's Next](#whats-next)
+1. [The Resource Story](#the-resource-story)
+2. [Resource Names](#resource-names)
+3. [Resource IDs](#resource-ids)
+4. [Resource Providers and Types](#resource-providers-and-types)
+5. [Tags](#tags)
+6. [Locks](#locks)
+7. [Evidence Before Changes](#evidence-before-changes)
+8. [Putting It All Together](#putting-it-all-together)
+9. [What's Next](#whats-next)
 
-## Anatomy of the Azure Resource ID
+## The Resource Story
+<!-- section-summary: Azure resources become safer to operate when the team can connect a friendly name, full resource ID, provider type, tags, locks, and change evidence. -->
 
-The primary defense against resource identity mistakes is the Azure Resource ID. A resource ID is Azure's absolute URI for one deployed resource, similar in structure to an API route or filesystem path that fully qualifies where an object lives.
+In the previous Azure foundations article, the Orders team chose the home for `orders-api-prod`: the `devpolaris.com` tenant, the `sub-orders-prod` subscription, the `rg-orders-app-prod-uksouth` and `rg-orders-data-prod-uksouth` resource groups, and the `uksouth` region. That placement work answers where the workload belongs, but daily operations need one more layer. The team has to identify the exact object behind an alert, a bill, a deployment plan, or an access request.
 
-![Azure resource ID route from subscription through resource group, provider, type, and name to the exact resource](/content-assets/articles/article-cloud-providers-azure-foundations-resource-groups-and-ids/resource-id-route.png)
+An **Azure resource** is one manageable object in Azure. A resource can be a storage account, a Key Vault vault, a Container App, a database, a virtual network, a diagnostic setting, or a resource group. Azure Resource Manager, usually shortened to ARM, is the management system that accepts create, read, update, and delete requests for those objects through the Azure portal, CLI, SDKs, Bicep, Terraform, and REST APIs.
 
-*A resource ID is the exact coordinate ARM uses to route a request to the provider, type, and resource name that owns the change.*
+Here is the situation for this article. The Orders API starts failing during checkout while it tries to read one secret from Key Vault. At the same time, finance sees a new cost line for a storage account that claims to belong to Orders. Maya, the on-call engineer, needs to work out which resources are real production resources, which ones are staging, which ones are shared platform resources, and which ones need protection before anyone runs a fix.
 
+Azure gives Maya several pieces of identity evidence. A **resource name** is the human-friendly label, such as `kv-orders-prod`. A **resource ID** is the full ARM path that points to one exact object. A **resource type** tells her which Azure provider owns the API surface, such as `Microsoft.KeyVault/vaults`. **Tags** hold searchable business metadata such as service, team, environment, and cost center. **Locks** add control-plane protection against accidental deletion or broad configuration changes.
 
-Every Azure resource ID follows a strict, standardized REST API path structure:
+Those pieces work together, and each one answers a different question. The table below gives the first version of the checklist Maya will use through the rest of the article.
 
-```plain
-/subscriptions/{subId}/resourceGroups/{rgName}/providers/{providerNamespace}/{resourceType}/{resourceName}
+| Evidence | Beginner definition | Orders example |
+|---|---|---|
+| **Name** | The short label people see first | `kv-orders-prod` |
+| **Resource ID** | The full ARM path to one exact object | `/subscriptions/.../resourceGroups/rg-orders-data-prod-uksouth/providers/Microsoft.KeyVault/vaults/kv-orders-prod` |
+| **Type** | The provider family and resource kind | `Microsoft.KeyVault/vaults` |
+| **Tags** | Key-value metadata for ownership, environment, cost, and automation | `service=orders-api`, `env=prod`, `team=commerce-platform` |
+| **Lock** | A management-layer protection rule | `CanNotDelete` on `rg-orders-data-prod-uksouth` |
+
+That table is the structure for the article. First we talk about names, because that is what humans search for. Then we move into resource IDs, because the full path removes ambiguity. After that we look at providers and types, because Azure routes requests through provider namespaces. Then we use tags to make inventory and cost reports useful. Finally we add locks and a small evidence workflow so the team changes the right target.
+
+## Resource Names
+<!-- section-summary: Resource names help humans recognize Azure objects quickly, but each resource type has its own uniqueness scope, length rules, and naming limits. -->
+
+A **resource name** is the name assigned to one Azure object when the team creates it. In the Orders environment, `rg-orders-data-prod-uksouth`, `kv-orders-prod`, `stordersprodevents`, and `ca-orders-api-prod` are resource names. They are useful because humans can scan them quickly and see workload, environment, region, and sometimes resource type.
+
+Names carry the first layer of meaning. In `rg-orders-data-prod-uksouth`, `rg` hints that the object is a resource group, `orders` names the workload, `data` names the role, `prod` names the environment, and `uksouth` names the region. In a production incident, that kind of name saves time because Maya can see that the resource probably belongs to the Orders data layer before she opens the full JSON record.
+
+Names also have Azure rules behind them. Microsoft documents different naming restrictions for different resource types. Some names are unique only inside a resource group, while some public endpoint names must be globally unique across Azure because they become part of a public DNS name. Some resource types allow hyphens, some require lowercase letters and numbers, and some have short length limits that force teams to use abbreviations.
+
+That is why a naming standard needs to stay practical. A good Azure name usually includes stable facts such as resource type, workload, environment, region, and instance number. Changing business labels, temporary owners, ticket numbers, or personal names belong in tags instead. Many resource names are expensive or impossible to rename cleanly after creation, and a renamed or moved resource can also affect dashboards, scripts, logs, and Terraform state that point at it.
+
+For the Orders team, the naming pattern can look like this:
+
+| Resource | Name | Why the name helps |
+|---|---|---|
+| Resource group for app resources | `rg-orders-app-prod-uksouth` | Shows lifecycle, workload, environment, and region |
+| Resource group for data resources | `rg-orders-data-prod-uksouth` | Separates long-lived data resources from release-heavy app resources |
+| Key Vault vault | `kv-orders-prod` | Shows the service role and production environment |
+| Container App | `ca-orders-api-prod` | Shows the compute type and application name |
+| Storage account | `stordersprodevents` | Uses a compressed format because storage account names have stricter naming rules |
+
+This gives Maya a first pass during an incident. If an alert says `kv-orders-prod`, the name strongly suggests a production Key Vault for Orders. The name still needs proof, because another subscription or resource group can hold a resource with the same short name. The next layer gives that proof, and that layer is the resource ID.
+
+## Resource IDs
+<!-- section-summary: A resource ID is the full Azure Resource Manager path that identifies one exact resource across subscription, resource group, provider, type, and name. -->
+
+A **resource ID** is the full management path for one Azure object. It is the address ARM uses when a tool asks for a specific resource. A friendly name can repeat in different places, but the resource ID includes the subscription, resource group, provider namespace, resource type, and resource name, so it points at one exact target.
+
+The Orders production Key Vault has a resource ID like this:
+
+```
+/subscriptions/88888888-4444-4444-4444-121212121212/resourceGroups/rg-orders-data-prod-uksouth/providers/Microsoft.KeyVault/vaults/kv-orders-prod
 ```
 
-Let us dissect the complete anatomy of a production key vault resource ID segment-by-segment to see what stories its segments tell us:
+That path reads left to right. The subscription segment names the production Azure estate. The resource group segment names the lifecycle container. The provider segment names the Azure API family. The `vaults` segment names the resource kind inside Key Vault. The final segment names this particular vault.
 
-```plain
-/subscriptions/88888888-4444-4444-4444-121212121212/resourceGroups/rg-orders-prod-uksouth/providers/Microsoft.KeyVault/vaults/kv-orders-prod
-```
+Here is the same path split into the pieces Maya checks during the incident. Each segment narrows the target until the short name becomes one exact Azure object.
 
-Reading this path from left to right, we find critical management evidence that tells a clear story:
+| Segment | Meaning | Orders value |
+|---|---|---|
+| `/subscriptions/{subscriptionId}` | The Azure subscription that owns billing, quota, access, and provider registration | `88888888-4444-4444-4444-121212121212` |
+| `/resourceGroups/{resourceGroupName}` | The resource group that holds the resource | `rg-orders-data-prod-uksouth` |
+| `/providers/{providerNamespace}` | The resource provider namespace that serves the API | `Microsoft.KeyVault` |
+| `/{resourceType}` | The resource kind inside the provider | `vaults` |
+| `/{resourceName}` | The short name of this resource | `kv-orders-prod` |
 
-*   **`/subscriptions/88888888-4444-4444-4444-121212121212`**: This is the starting envelope. It tells ARM exactly which subscription billing container and quota pool owns the resource.
-*   **`/resourceGroups/rg-orders-prod-uksouth`**: This is the lifecycle container. It defines the logical group that manages the resource's deployment lifecycle.
-*   **`/providers/Microsoft.KeyVault`**: This is the Resource Provider namespace. It identifies the specific Azure API service team (here, the Key Vault team) responsible for handling requests to this resource.
-*   **`/vaults`**: This is the logical Resource Type registry. It tells ARM what kind of resource we are looking at under that provider's domain.
-*   **`/kv-orders-prod`**: This is the human-friendly, localized name given to the resource.
+This is the value that belongs in exact automation. A deployment script, incident record, dashboard tile, role assignment review, and deletion request should carry the resource ID when the change affects a specific resource. The short name helps a human recognize the object, while the ID tells Azure which object the human means.
 
-This path is the Azure equivalent of the AWS Amazon Resource Name (ARN). ARNs and Azure Resource IDs are styled differently, but both solve the exact same operational requirement: they locate one specific, absolute instance of a resource, eliminating all search ambiguity across global datacenters.
+Resource IDs also explain why moving a resource is a serious operation. If the Orders Key Vault moved to another resource group or subscription, one of the path segments would change. Any automation, monitoring rule, dashboard, export, or access review that stored the old ID would need an update, because the full path changed even though the friendly name might look familiar.
 
-### Resource Provider Registration: The Routing Contract
-
-Resource provider registration is the subscription-level switch that allows ARM to route deployment requests to a service namespace such as `Microsoft.KeyVault` or `Microsoft.ContainerService`. If you attempt to deploy a resource using a provider that has not been registered, ARM aborts the deployment and returns a `MissingSubscriptionRegistration` error.
-
-In a mature enterprise cloud, subscription bootstrap scripts register all required namespaces before developers deploy resources. You can query the registration state and supported API versions of a provider directly from the Azure CLI:
+The Azure CLI exposes this exact identity evidence. Maya can inspect the production resource group first, because the challenge in this topic also asks you to prove the full group ID, name, location, and tags. That proof starts with one simple `az group show` call:
 
 ```bash
-$ az provider show --namespace "Microsoft.KeyVault" --query "{registrationState:registrationState, apiVersions:apiVersions[0]}" --output json
+az group show \
+  --name "rg-orders-data-prod-uksouth" \
+  --query "{id:id,name:name,location:location,tags:tags}" \
+  --output json
 ```
 
-This returns the registration telemetry:
+The response gives the resource group ID and the tags in one place:
 
 ```json
 {
-  "apiVersions": "2023-07-01",
-  "registrationState": "Registered"
+  "id": "/subscriptions/88888888-4444-4444-4444-121212121212/resourceGroups/rg-orders-data-prod-uksouth",
+  "location": "uksouth",
+  "name": "rg-orders-data-prod-uksouth",
+  "tags": {
+    "env": "prod",
+    "service": "orders-api",
+    "team": "commerce-platform"
+  }
 }
 ```
 
-If a namespace is unregistered, you can register it with a single CLI call:
+For an individual resource, Maya can query by ID:
 
 ```bash
-$ az provider register --namespace "Microsoft.KeyVault"
+az resource show \
+  --ids "/subscriptions/88888888-4444-4444-4444-121212121212/resourceGroups/rg-orders-data-prod-uksouth/providers/Microsoft.KeyVault/vaults/kv-orders-prod" \
+  --query "{id:id,name:name,type:type,resourceGroup:resourceGroup,location:location,tags:tags}" \
+  --output json
 ```
 
-This registration step updates the subscription metadata inside the ARM engine, opening the routing path for all downstream deployments of that service family.
-
-## Metadata Tagging: Standardizing Coordinates
-
-A tag is a simple key-value pair attached to an Azure resource. Tags exist so humans, automation, cost tools, and audit reports can group resources by owner, environment, service, or data class.
-
-Example: `team=commerce-platform`, `env=prod`, and `service=orders-api` let cost reports and incident responders identify who owns a resource without guessing from its name.
-
-To keep track of spending and manage thousands of resources across a global company, you must establish a clear tagging standard.
-
-Metadata tags act as queryable labels on resource records. They give cost tools, policy reports, inventory searches, and automation scripts consistent fields for ownership, environment, service, cost center, and data classification.
-
-Under the hood, tags are stored as a metadata collection of key-value string arrays within the resource's JSON block in the ARM directory database. Because they are indexed globally, billing engines and cost management dashboards can query these strings to partition costs. For our transactional orders API application, we enforce five standard metadata tags:
-
-### 1. `team` (e.g., `commerce-platform`)
-Identifies the engineering team holding budget and support authority. If a resource behaves unexpectedly or throws alerts, this tag tells operational engineers exactly who to contact in Slack or Teams, bypassing hours of diagnostic triage.
-
-### 2. `env` (e.g., `prod`)
-Distinguishes critical production environments from developer staging noise. Monitoring systems and deployment pipelines use this tag to apply environment-specific alerts, strict access controls, and firewall policies.
-
-### 3. `service` (e.g., `orders-api`)
-Maps the resource to a specific logical microservice boundary. This allows you to view all related compute, database, and storage costs as a unified application view in cost management dashboards, rather than looking at isolated virtual machine bills.
-
-### 4. `cost-center` (e.g., `checkout-billing`)
-Allocates the resource's monthly cost directly to business finance segments. Cost Management + Billing can group and filter spend by tags, and Cost Management tag inheritance can apply parent tags to usage records for reporting when that feature is enabled. This helps finance teams automate monthly chargebacks without treating the tag as an identity or security boundary.
-
-### 5. `data-class` (e.g., `restricted-customer`)
-Defines the compliance profile of the data stored within the resource. This tag dictates automated backup rules, snapshot retention policies, and encryption keys. If the tag is marked `restricted-customer`, automated compliance checkers verify that public network ingress is completely blocked.
-
-> [!WARNING]
-> **The Metadata Leakage Hazard**: Because tag keys and values are treated as public metadata within the control plane, they are exported in plain text to shared invoicing tools, third-party cost analyzers, and monthly billing reports. You must never write passwords, API credentials, private connection strings, or customer personal data (like email addresses or phone numbers) inside tag values. Keep tag values low-cardinality, clean, and strictly operational.
-
-## Protecting the Control Plane: Management Locks
-
-An Azure management lock is a control-plane protection rule that blocks selected management operations before they reach the resource provider. It is designed for production resources where an authorized user or automation script should still be forced through an extra removal step before deleting or freezing configuration.
-
-Locks are control plane settings applied at the subscription, resource group, or individual resource scope. Azure supports two distinct lock types:
-
-*   **`CanNotDelete` (Delete Lock)**: Authorized users can read and modify the resource, but any request to delete the resource through the control plane is instantly rejected. This is the ideal lock for production environments because it allows pipelines to deploy updates and engineers to inspect configurations while blocking accidental deletion.
-*   **`ReadOnly` (Read Lock)**: Authorized users can only read resource properties. They are completely blocked from deleting the resource or making any state updates. It behaves as a control-plane write filter on the resource configuration.
-
-Management locks apply to all users, including those holding the master `Owner` role. Before an engineer can delete or modify a locked resource, they must first explicitly locate the lock, verify the operational context, and delete the lock object itself. This multi-step process adds a deliberate control-plane interruption point before destructive automation or manual commands can succeed.
-
-### The Control Plane vs. Data Plane Mismatch
-
-A major architectural gotcha is the control-plane and data-plane mismatch. A `ReadOnly` lock placed on a database resource blocks control-plane alterations, such as scaling the database instance size or modifying firewall rules. It does not turn the database engine into a read-only database. Normal SQL transactions are data-plane operations, so application inserts and updates can still succeed if the database's own permissions allow them.
-
-The confusing part is that some operations feel like data access but still depend on management-plane actions. For example, listing account keys, changing diagnostic settings, updating firewall rules, or modifying a service configuration can be blocked by a `ReadOnly` lock. To protect your systems, use `CanNotDelete` locks for most production resources, reserve `ReadOnly` locks for cases where you truly want to freeze management settings, and protect actual records with database permissions, Key Vault RBAC, storage data-plane RBAC, soft delete, versioning, and backups.
-
-## The CLI Scope: Inspecting Resources and Enforcing Locks
-
-To audit resources and protect them without using the slow Web Portal, you use the Azure CLI to query exact resource IDs and provision management locks directly from your terminal.
-
-Let us execute a terminal session to inspect our production key vault and apply a `CanNotDelete` lock:
-
-```bash
-$ az resource show --id "/subscriptions/88888888-4444-4444-4444-121212121212/resourceGroups/rg-orders-prod-uksouth/providers/Microsoft.KeyVault/vaults/kv-orders-prod"
-```
-
-This terminal command queries the ARM engine to return the absolute configuration profile of the resource:
+That output gives her the exact target:
 
 ```json
 {
-  "id": "/subscriptions/88888888-4444-4444-4444-121212121212/resourceGroups/rg-orders-prod-uksouth/providers/Microsoft.KeyVault/vaults/kv-orders-prod",
+  "id": "/subscriptions/88888888-4444-4444-4444-121212121212/resourceGroups/rg-orders-data-prod-uksouth/providers/Microsoft.KeyVault/vaults/kv-orders-prod",
   "location": "uksouth",
   "name": "kv-orders-prod",
-  "properties": {
-    "enableRbacAuthorization": true,
-    "vaultUri": "https://kv-orders-prod.vault.azure.net/"
-  },
-  "resourceGroup": "rg-orders-prod-uksouth",
+  "resourceGroup": "rg-orders-data-prod-uksouth",
   "tags": {
-    "cost-center": "checkout-billing",
+    "data-class": "restricted-customer",
     "env": "prod",
     "service": "orders-api",
     "team": "commerce-platform"
@@ -165,157 +153,253 @@ This terminal command queries the ARM engine to return the absolute configuratio
 }
 ```
 
-This returns exact resource evidence. To lock this specific resource group from accidental deletion, you run the CLI lock command:
+Now the team can prove the subscription, resource group, type, name, location, and tags. The `type` field is worth its own section, because it tells us which Azure provider owns the resource and which API shape the resource follows.
+
+## Resource Providers and Types
+<!-- section-summary: Resource providers are Azure service API families, and resource types describe the specific resource kind managed by that provider. -->
+
+A **resource provider** is an Azure service API family that ARM can route management requests to. Key Vault uses the `Microsoft.KeyVault` provider. Container Apps uses `Microsoft.App`. Storage uses `Microsoft.Storage`. Authorization resources such as role assignments and locks use `Microsoft.Authorization`.
+
+A **resource type** combines the provider namespace and the resource kind. Microsoft describes the type format as `{resource-provider}/{resource-type}`. A Key Vault vault uses `Microsoft.KeyVault/vaults`, a storage account uses `Microsoft.Storage/storageAccounts`, and a Container App uses `Microsoft.App/containerApps`.
+
+This matters during troubleshooting because the provider owns the valid API versions, locations, operations, and naming rules for its resource types. If Maya sees `Microsoft.KeyVault/vaults`, she knows she is dealing with the Key Vault management API. If she sees `Microsoft.Authorization/locks`, she is looking at a lock resource that protects another scope.
+
+Provider registration is the subscription-level switch that lets the subscription work with a provider namespace. Many providers register automatically through the portal, CLI, Bicep, or ARM templates, but some scenarios still need a manual check. When the Orders team deploys a new service family into a fresh subscription, `MissingSubscriptionRegistration` means the subscription needs the provider namespace registered before that resource type can deploy.
+
+The Azure CLI can show registration state, resource types, supported locations, and API versions:
 
 ```bash
-$ az lock create \
-    --name "PreventProdGroupDelete" \
-    --lock-type CanNotDelete \
-    --resource-group "rg-orders-prod-uksouth"
+az provider show \
+  --namespace "Microsoft.KeyVault" \
+  --query "{namespace:namespace,registrationState:registrationState,resourceTypes:resourceTypes[].resourceType}" \
+  --output json
 ```
 
-This terminal execution establishes a solid protection layer:
+A trimmed response looks like this:
 
 ```json
 {
-  "id": "/subscriptions/88888888-4444-4444-4444-121212121212/resourceGroups/rg-orders-prod-uksouth/providers/Microsoft.Authorization/locks/PreventProdGroupDelete",
-  "level": "CanNotDelete",
-  "name": "PreventProdGroupDelete",
-  "resourceGroup": "rg-orders-prod-uksouth"
+  "namespace": "Microsoft.KeyVault",
+  "registrationState": "Registered",
+  "resourceTypes": [
+    "vaults",
+    "vaults/keys",
+    "vaults/secrets",
+    "vaults/certificates"
+  ]
 }
 ```
 
-## Under-the-Hood: How ARM Locks Intercept the REST Pipeline
+If the provider needs registration, the platform team can register the namespace after confirming that the subscription should use that service family:
 
-An ARM lock is a management-layer record that tells Azure Resource Manager to block selected write or delete operations. It protects the resource configuration path, not the files, rows, or runtime data inside the service.
-
-Example: a `CanNotDelete` lock on `rg-orders-prod-uksouth` blocks `az group delete`, but it does not stop a SQL client from running a bad `DELETE FROM Orders` query inside the database.
-
-To design a secure architecture, you must understand the control plane mechanism that occurs when a delete action is executed. When you apply a lock to `rg-orders-prod-uksouth`, the lock does not write custom settings inside the compute or database hardware. Instead, the lock exists as an independent metadata object managed by the `Microsoft.Authorization` resource provider.
-
-When an operator or pipeline runs a delete command, the REST request is sent to the central Azure Resource Manager endpoint at `management.azure.com`. The incoming HTTP request payload looks like this:
-
-```plain
-DELETE /subscriptions/88888888-4444-4444-4444-121212121212/resourceGroups/rg-orders-prod-uksouth?api-version=2021-04-01 HTTP/1.1
-Host: management.azure.com
-Authorization: Bearer eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiIs...
-Accept: application/json
+```bash
+az provider register --namespace "Microsoft.KeyVault"
 ```
 
-Before ARM forwards this request to the `Microsoft.Resources` provider to delete the resource group, the ARM API Gateway intercepts the execution thread. It runs a pre-routing filter that scans the path hierarchy:
+So far, Maya can recognize the resource by name, prove the exact target by ID, and understand the provider type that owns the API. The next problem is ownership at scale. A company can have thousands of resources, and names alone make cost reports, inventories, and automation hard to trust. That is where tags come in.
 
-1.  **Hierarchy Extraction**: ARM parses the request URI and extracts all containing scopes: the target resource group, the parent subscription, and any parent management groups.
-2.  **Lock Table Query**: ARM issues an internal query to the `Microsoft.Authorization` provider database to check if any lock resources exist at any of these parent scopes. To optimize performance and prevent adding database latency to every single REST call, ARM maintains a high-speed, distributed in-memory cache of these lock mappings.
-3.  **Lock Detection**: If a lock is found (such as `PreventProdGroupDelete` at the resource group level), the evaluation loop halts immediately.
-4.  **Immediate Rejection**: ARM aborts the request at its gateway boundary and returns a `409 Conflict` HTTP status code to the client. The actual resource provider (like Key Vault or SQL Database) is never contacted, and no delete signal is ever sent to the backend datacenter blades.
+## Tags
+<!-- section-summary: Tags are key-value metadata that make resources searchable by owner, service, environment, cost, and operational purpose. -->
 
-The raw JSON payload returned by the ARM gateway to your terminal or CI/CD runner provides explicit evidence of this security interception:
+A **tag** is a key-value metadata pair attached to a subscription, resource group, or resource. Tags help humans and tools group resources by business meaning. In the Orders environment, `service=orders-api`, `env=prod`, and `team=commerce-platform` tell finance, support, security, and automation which application a resource belongs to.
+
+Tags answer questions that resource names carry poorly. A name can show a short workload and environment, but it has strict length and character rules. Tags can hold owner, cost center, data class, support contact, deployment tool, expiration date, and change policy. A good name helps someone recognize a resource, and a good tag set helps the whole organization search, report, and govern it.
+
+The Orders team uses a small standard tag set:
+
+| Tag key | Example value | Production reason |
+|---|---|---|
+| `service` | `orders-api` | Groups all resources that support the Orders API |
+| `env` | `prod` | Separates production from staging, development, and shared resources |
+| `team` | `commerce-platform` | Gives incident responders a real owner to contact |
+| `cost-center` | `checkout-billing` | Lets finance group monthly spend by business area |
+| `data-class` | `restricted-customer` | Helps compliance checks find resources that hold sensitive customer data |
+| `managed-by` | `bicep` | Shows which deployment system owns normal changes |
+
+Those tags become useful the moment Maya has to search across a subscription. A storage account named `stordersprodevents` might look like Orders production, but the tags prove whether it belongs to the production Orders API, a staging test, or a shared export process. In a larger company, the tag set is also what cost tools and inventory scripts use to build clean reports.
+
+The Azure CLI can create a tagged resource group:
+
+```bash
+az group create \
+  --name "rg-orders-app-prod-uksouth" \
+  --location "uksouth" \
+  --tags service=orders-api env=prod team=commerce-platform cost-center=checkout-billing
+```
+
+For an existing resource, a merge operation can add a tag while keeping the existing set:
+
+```bash
+az tag update \
+  --resource-id "/subscriptions/88888888-4444-4444-4444-121212121212/resourceGroups/rg-orders-data-prod-uksouth/providers/Microsoft.KeyVault/vaults/kv-orders-prod" \
+  --operation Merge \
+  --tags data-class=restricted-customer managed-by=bicep
+```
+
+Tags have important limits. Microsoft documents a maximum of 50 tag name-value pairs on each resource, resource group, and subscription. Tag names are case-insensitive for operations, while tag values are case-sensitive. Tag names also have character restrictions, and some resource types have extra tag behavior that the team needs to check during design.
+
+Tags are plain-text metadata, so secrets and personal data have no place there. A tag value can appear in cost reports, deployment history, exported templates, commands, monitoring logs, and third-party inventory tools. A tag such as `owner=orders-oncall` is useful, while a tag containing an email address, password, connection string, customer identifier, or private token creates avoidable exposure.
+
+Tag inheritance is another common beginner trap. Azure stores tags on the subscription, resource group, or resource where the tag was applied. A tag on `rg-orders-data-prod-uksouth` stays on the resource group record, and child resources need their own tags through the deployment template, pipeline, Azure Policy, or reporting configuration. Cost Management has reporting features that can inherit tags for usage attribution, but that reporting behavior is separate from the actual tag set stored on each child resource.
+
+This is why the Orders team's Bicep and Terraform modules keep common tags in one variable and pass them to every resource. That way the resource group, vault, storage account, database, private endpoint, and diagnostics all carry the same `service`, `env`, `team`, and `cost-center` values. The result is boring in the best way: every inventory query returns the same ownership story.
+
+Tags make the resources findable, while locks add the deletion protection story for a production database or vault. Once Maya knows which resources belong to the Orders data layer, the next question is how Azure can add a deliberate pause before dangerous management changes. That is where locks enter the story.
+
+## Locks
+<!-- section-summary: Azure management locks protect subscriptions, resource groups, or resources from accidental deletion or broad control-plane modification. -->
+
+An **Azure management lock** is a control-plane protection rule applied to a subscription, resource group, or resource. It affects Azure Resource Manager operations, so it protects the management path that creates, updates, moves, or deletes resources. The lock applies across users and roles, which means a person with broad permissions still has to deal with the lock before the blocked operation can succeed.
+
+Azure has two lock levels. **CanNotDelete** lets authorized users read and modify a resource, while deletion is blocked. **ReadOnly** lets authorized users read a resource, while deletion and updates through the management plane are blocked. In the Azure portal, these appear as Delete and Read-only locks, while the CLI uses `CanNotDelete` and `ReadOnly`.
+
+For most production data resources, the Orders team starts with `CanNotDelete`. A delete lock on `rg-orders-data-prod-uksouth` adds protection around the database, Key Vault, storage account, private endpoints, and other child resources in that group. A pipeline can still update configuration when it has normal permissions, but a delete attempt hits the lock and fails before the resource disappears.
+
+The team uses `ReadOnly` more carefully. A read-only lock can block operations that feel like normal administration because many actions use POST requests against `https://management.azure.com`. For example, listing storage account keys, starting or restarting some resources, changing diagnostic settings, scaling an App Service plan, and creating child management objects can be affected. That behavior is useful for a freeze window, but it can surprise an on-call engineer during an incident.
+
+Locks inherit downward from parent scopes. A lock on a resource group reaches resources inside that group, including resources added later. A stricter inherited lock can also win over a lighter lock closer to the resource. This makes a resource group lock powerful for production data groups, because the team can protect a whole set of long-lived resources with one control-plane rule.
+
+Locks protect the management plane, and the data plane has its own permissions and safety controls. A `CanNotDelete` lock on a storage account protects the storage account resource from deletion through ARM, but blob data still needs storage data-plane permissions, versioning, soft delete, lifecycle rules, and backup choices. A `ReadOnly` lock on an Azure SQL logical server protects server configuration through ARM, while SQL permissions still control what happens inside the database.
+
+The CLI can create a delete lock on the Orders data resource group:
+
+```bash
+az lock create \
+  --name "prevent-orders-data-delete" \
+  --lock-type CanNotDelete \
+  --resource-group "rg-orders-data-prod-uksouth" \
+  --notes "Production Orders data resources require review before deletion."
+```
+
+The team can list locks before a change window:
+
+```bash
+az lock list \
+  --resource-group "rg-orders-data-prod-uksouth" \
+  --query "[].{name:name,level:level,id:id,notes:notes}" \
+  --output table
+```
+
+A lock is also a resource with its own ID under `Microsoft.Authorization/locks`. Creating or deleting locks requires permissions such as `Microsoft.Authorization/locks/*`, which Owner and User Access Administrator roles include. That permission model matters because removing a lock is itself a serious control-plane action, and production teams usually route it through a reviewed change.
+
+Now Maya has the pieces: name, ID, provider type, tags, and locks. The last step is a habit that turns those pieces into safe operations. Before any change, the team collects evidence and looks for conflicts.
+
+## Evidence Before Changes
+<!-- section-summary: A safe Azure change starts by collecting subscription, resource ID, type, tags, lock state, and recent activity evidence before touching the target. -->
+
+**Evidence before changes** means the team proves the target before changing it. In Azure, the wrong target can look very close to the right target. A staging group and production group can share a workload name. Two subscriptions can contain the same short resource name. A cost report can show a tag that was copied incorrectly. A deployment output can carry an old resource ID after a move.
+
+The Orders incident gives us a concrete flow. Maya sees a checkout failure that mentions `kv-orders-prod`, and a teammate suggests updating the Key Vault firewall. Before she changes anything, she gathers a small evidence packet: active subscription, resource group, full ID, type, location, tags, locks, and recent activity. If any field disagrees with the story, the change pauses until the mismatch is explained.
+
+The first check is the active Azure CLI context:
+
+```bash
+az account show \
+  --query "{name:name,subscriptionId:id,tenantId:tenantId}" \
+  --output json
+```
+
+The output should match the production subscription the incident expects:
 
 ```json
 {
-  "error": {
-    "code": "ScopeLocked",
-    "message": "The scope '/subscriptions/88888888-4444-4444-4444-121212121212/resourceGroups/rg-orders-prod-uksouth' cannot perform this write or delete operation because of a conflict lock. Please remove the lock and try again."
+  "name": "sub-orders-prod",
+  "subscriptionId": "88888888-4444-4444-4444-121212121212",
+  "tenantId": "11111111-2222-3333-4444-555555555555"
+}
+```
+
+Then Maya lists candidate Orders resources by tags and projects only the fields that matter:
+
+```bash
+az resource list \
+  --query "[?tags.service=='orders-api' && tags.env=='prod'].{name:name,type:type,resourceGroup:resourceGroup,location:location,id:id}" \
+  --output table
+```
+
+The table gives her a clean inventory:
+
+```json
+[
+  {
+    "id": "/subscriptions/88888888-4444-4444-4444-121212121212/resourceGroups/rg-orders-data-prod-uksouth/providers/Microsoft.KeyVault/vaults/kv-orders-prod",
+    "location": "uksouth",
+    "name": "kv-orders-prod",
+    "resourceGroup": "rg-orders-data-prod-uksouth",
+    "type": "Microsoft.KeyVault/vaults"
+  },
+  {
+    "id": "/subscriptions/88888888-4444-4444-4444-121212121212/resourceGroups/rg-orders-app-prod-uksouth/providers/Microsoft.App/containerApps/ca-orders-api-prod",
+    "location": "uksouth",
+    "name": "ca-orders-api-prod",
+    "resourceGroup": "rg-orders-app-prod-uksouth",
+    "type": "Microsoft.App/containerApps"
   }
-}
+]
 ```
 
-This central interception makes lock evaluation incredibly fast and robust. The target service never receives the `DELETE` HTTP verb. Because this check is performed on the absolute URI path, any lock applied to a parent container (such as a subscription or resource group) automatically cascades down the tree. It intercepts and blocks delete requests targeting any child resource inside that container, keeping the production blast radius fully protected.
+For a larger subscription, Azure Resource Graph gives a stronger inventory query across subscriptions:
 
-## The Tagging Inheritance Trap
+```kusto
+Resources
+| where tags["service"] == "orders-api"
+| where tags["env"] == "prod"
+| project name, type, resourceGroup, location, id
+| order by resourceGroup asc, name asc
+```
 
-Tag inheritance is the expectation that labels from a parent container automatically copy to child resources. In Azure, resource group tags are useful coordinates, but they do not automatically become tags on the resources inside the group.
+The evidence packet can stay small. It needs to answer the operational questions that prevent the most common mistakes.
 
-![Azure tag inheritance trap showing resource group tags not automatically copied to child resources](/content-assets/articles/article-cloud-providers-azure-foundations-resource-groups-and-ids/tag-inheritance-trap-gpt.png)
+| Evidence field | Question it answers | Bad sign |
+|---|---|---|
+| Active subscription | Which Azure estate will receive the command? | CLI points at staging during a production incident |
+| Resource group | Which lifecycle container holds the resource? | A data resource appears in an app cleanup group |
+| Resource ID | Which exact object will the command touch? | Stored ID points to an old resource group after a move |
+| Resource type | Which provider API owns the object? | Script expects Key Vault but target type is Storage |
+| Tags | Which service, environment, and team own the object? | Name says prod while `env` tag says staging |
+| Lock state | Which management operations are intentionally blocked? | Delete request has no lock review for production data |
+| Recent activity | Who or what changed it recently? | A deployment pipeline changed tags outside the normal release |
 
-*Resource group tags are useful context, but child resources still need direct tags or an audit process will find gaps.*
+This habit keeps automation honest. A cleanup job might start with all resources tagged `env=dev`, but one resource could have `service=orders-api` and a production-looking resource ID because someone copied the wrong tag. A safe job checks multiple fields together and treats disagreement as evidence that the target needs review.
 
+This also helps access reviews. When someone asks for Contributor on a resource group, the reviewer can look at the group ID, tags, resource types, and lock state. Contributor on `rg-orders-app-prod-uksouth` means something very different from Contributor on `rg-orders-data-prod-uksouth`, even though both names contain Orders and production.
 
-Example: tagging `rg-orders-prod-uksouth` with `team=commerce-platform` does not automatically tag `kv-orders-prod` or `ca-orders-api-prod`; your deployment template or policy must apply those tags too.
-
-For engineers transitioning from AWS, this is the most common Azure metadata gotcha.
-
-In many AWS environments, tags applied to a CloudFormation stack or an Account automatically cascade and apply to every child resource provisioned under that scope.
-
-Azure resource tags do not automatically copy from a resource group to its child resources.
-
-If you apply the tag `env=prod` to `rg-orders-prod-uksouth`, the child container app (`app-orders-prod`) and key vault (`kv-orders-prod`) inside that group will remain untagged as resources unless your deployment or policy applies the tag to them. Cost Management has a separate tag inheritance feature for usage reporting, but that does not change the resource object's own tag set.
-
-Under the hood, ARM treats every single resource as an isolated REST API object with its own distinct properties block. A parent resource group is a metadata container; it does not cascade its tags to child properties during deployment.
-
-If your finance team runs a billing report grouped by the tag key `env`, the resources inside the group will compile thousands of dollars under an "un-grouped" or "blank" category, blinding managers to the true cost driver.
-
-To avoid this, construct your deployment pipelines (such as Bicep templates or GitHub Actions scripts) to explicitly apply the tag metadata block to both the parent resource group and every individual child resource defined in your templates. You can also deploy an Azure Policy rule that denies untagged deployments or uses a modify effect to copy resource group tags to child resources at creation time. For billing reports, enable Cost Management tag inheritance only when you understand that it changes reporting attribution, not the tags stored on the resource itself.
-
-:::expand[The Idiomatic Bicep Tag Propagation Pattern]{kind="pattern"}
-Unlike AWS CloudFormation, where stack-level tags can propagate to supported nested resources, Azure Resource Manager (ARM) does not automatically copy a resource group's tags to child resources. If you tag a Resource Group, the child resources inside it remain untagged unless your template, deployment pipeline, Azure Policy, or reporting configuration handles the propagation deliberately.
-
-To solve this systematically, Azure practitioners use the **Bicep Tag Propagation Pattern**. Instead of copy-pasting tag blocks onto every resource - which leads to tag drift when new resources are added - you declare a single master tags object at the top of your Bicep file and pass it dynamically to every child resource.
-
-Here is the before and after comparison:
-
-*   **Before (Copy-Paste Drifting Pattern):**
-    ```bicep
-    resource sqlServer 'Microsoft.Sql/servers@2021-11-01' = {
-      name: 'sql-orders-prod'
-      tags: { env: 'prod', team: 'commerce' }
-    }
-    resource kv 'Microsoft.KeyVault/vaults@2021-11-01' = {
-      name: 'kv-orders-prod'
-      tags: { env: 'production', team: 'commerce-team' } // Mismatched tag values
-    }
-    ```
-
-*   **After (Idiomatic Bicep Propagation Pattern):**
-    ```bicep
-    var defaultTags = {
-      env: 'prod'
-      team: 'commerce-platform'
-      service: 'orders-api'
-      costCenter: 'checkout-billing'
-    }
-
-    resource sqlServer 'Microsoft.Sql/servers@2021-11-01' = {
-      name: 'sql-orders-prod'
-      tags: defaultTags
-    }
-    ```
-
-To enforce compliance for resources deployed outside of Bicep (such as manual portal creations), you can pair this pattern with Azure Policy:
-
-| Tagging Approach | Enforcement Mechanism | Tradeoff / Strength |
-| :--- | :--- | :--- |
-| **Bicep `var` Propagation** | Client-side definition passed to each resource | **High consistency**, easily updated in one location; relies on developer compliance. |
-| **Azure Policy `append`** | Automatically adds missing tags to resources during deploy | **Soft enforcement**; can mask developer omissions in source code repositories. |
-| **Azure Policy `deny`** | Blocks deployments if required tags are missing | **Hard enforcement**; ensures 100% compliance but breaks non-compliant pipelines. |
-
-**Rule of thumb:** Define your master tagging dictionary once at the root Bicep deployment and propagate it as a variable parameter to all downstream modules. Combine this with an Azure Policy `deny` guardrail to guarantee no untagged resource is ever deployed in production.
-:::
+By this point, Maya can prove the target before she changes anything. The final section ties the whole flow together from alert to safe action.
 
 ## Putting It All Together
+<!-- section-summary: The Orders team combines names, IDs, types, tags, locks, and evidence into one repeatable resource review before production changes. -->
 
-Operating a secure, transparent cloud hierarchy requires transitioning from friendly human names to absolute resource identifiers:
+The Orders API alert starts with a friendly name: `kv-orders-prod`. Maya uses that name to find the likely resource, but she treats the name as the beginning of the investigation. The resource ID proves the exact subscription and resource group. The type proves that the object is a Key Vault vault. The tags prove that it belongs to `orders-api`, `prod`, and `commerce-platform`.
 
-*   **Validate the Resource ID**: Rely on the complete `/subscriptions/.../resourceGroups/...` absolute URI path to identify targets; never execute scripts against friendly names.
-*   **Tag Every Child Block**: Apply standard allocation tags (`team`, `env`, `service`) directly to individual resources, bypassing the Azure tagging inheritance limitation.
-*   **Cable Delete Protection**: Enforce `CanNotDelete` locks on all production resource groups to block accidental human or automated deletions.
-*   **Isolate Read Locks**: Avoid placing `ReadOnly` locks on active database or compute resources where runtime data-plane updates can trigger connection crashes.
-*   **Audit before Execution**: Require incident responders to run `az resource show` in the shell to confirm active tenant and subscription paths before altering credentials.
+The resource group tells her the lifecycle boundary. `rg-orders-data-prod-uksouth` holds long-lived data resources, so changes need more care than a normal app redeploy. The lock list shows a `CanNotDelete` lock, which means deletion has a deliberate guardrail. The activity log and deployment outputs can then show which pipeline or person changed the vault configuration recently.
+
+That sequence gives the team a repeatable production review:
+
+| Step | What the team checks | Why it matters |
+|---|---|---|
+| 1 | Resource name | Humans find the likely resource quickly |
+| 2 | Resource ID | Azure receives one exact target |
+| 3 | Resource type | The team knows which provider API and rules apply |
+| 4 | Tags | Ownership, environment, service, and cost story line up |
+| 5 | Locks | Destructive management operations have a deliberate pause |
+| 6 | Evidence packet | The change request contains proof instead of a guess |
+
+This is the foundation for safer Azure operations. Names make resources readable. IDs make resources exact. Provider types explain the API family. Tags make resources searchable and reportable. Locks add protection around important management operations. Evidence before changes turns all of that into a habit the team can use during incidents, deployments, access reviews, and cost cleanup.
 
 ## What's Next
 
-We have established our resource identifiers, metadata tags, tagging flow behaviors, and management locks. Now we are ready to map our application jobs to physical Azure services. In the next article, we will construct the complete core services map, choosing the first Azure service families to inspect for public ingress, container runtime, persistent storage, secrets management, and observability.
+The Orders team can now find and verify exact Azure resources before touching them. The next foundation article zooms back out to the Azure service map: traffic entry, compute, state, identity, telemetry, and release paths.
 
-
-![Azure resource safety checklist with exact ID, provider, tags, delete lock, read lock, and audit first](/content-assets/articles/article-cloud-providers-azure-foundations-resource-groups-and-ids/resource-safety-checklist.png)
-
-*Use this as the resource safety checklist: identify the exact ID, know the provider, tag the resource itself, choose locks carefully, and audit before changing it.*
+That service map helps connect a production symptom to the right Azure service family. Once you can identify the exact resource, the next useful skill is knowing which service block owns the behavior you are debugging.
 
 ---
 
 **References**
 
-* [Azure Resource ID Syntax and Structures](https://learn.microsoft.com/en-us/azure/azure-resource-manager/management/resource-group-overview) - Path format standards for Resource Providers.
-* [Lock Resources to Protect Infrastructure](https://learn.microsoft.com/en-us/azure/azure-resource-manager/management/lock-resources) - Management lock types and inheritance behavior.
-* [Tagging Azure Resources and Hierarchies](https://learn.microsoft.com/en-us/azure/azure-resource-manager/management/tag-resources) - Best practices for cost allocation metadata.
-* [Control Plane and Data Plane REST Operations](https://learn.microsoft.com/en-us/azure/azure-resource-manager/management/control-plane-and-data-plane) - Technical architecture of ARM interception loops.
+- [Define your naming convention](https://learn.microsoft.com/en-us/azure/cloud-adoption-framework/ready/azure-best-practices/resource-naming) - Microsoft guidance on naming components, name permanence, resource name scope, and example Azure naming patterns.
+- [Naming rules and restrictions for Azure resources](https://learn.microsoft.com/en-us/azure/azure-resource-manager/management/resource-name-rules) - Resource-specific length, character, and uniqueness rules for Azure resource names.
+- [Azure resource providers and types](https://learn.microsoft.com/en-us/azure/azure-resource-manager/management/resource-providers-and-types) - Official explanation of provider namespaces, resource types, registration state, API versions, and supported locations.
+- [Move Azure resources to a new resource group or subscription](https://learn.microsoft.com/en-us/azure/azure-resource-manager/management/move-resource-group-and-subscription) - Documents the standard resource ID format and the fact that moving a resource changes the ID path.
+- [Use tags to organize your Azure resources and management hierarchy](https://learn.microsoft.com/en-us/azure/azure-resource-manager/management/tag-resources) - Tag limits, case behavior, inheritance behavior, sensitive-data warning, and tag management guidance.
+- [Lock your Azure resources to protect your infrastructure](https://learn.microsoft.com/en-us/azure/azure-resource-manager/management/lock-resources) - Lock levels, inheritance, control-plane scope, CLI commands, and data-plane considerations.
+- [Azure Resource Graph sample queries by category](https://learn.microsoft.com/en-us/azure/governance/resource-graph/samples/samples-by-category) - Official query examples for resource inventory and projection patterns.

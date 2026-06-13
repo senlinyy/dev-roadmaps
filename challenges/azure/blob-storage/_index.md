@@ -4,6 +4,6 @@ description: "Practice Blob Storage choices for durable generated files, private
 articleId: article-cloud-providers-azure-storage-databases-storage-accounts-blob-storage
 articleSlug: blob-storage
 difficulty: medium
-order: 25
+order: 24
 tags: ["azure", "blob-storage", "storage-account", "lifecycle", "files"]
 ---

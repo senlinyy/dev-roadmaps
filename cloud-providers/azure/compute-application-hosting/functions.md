@@ -1,7 +1,7 @@
 ---
 title: "Functions"
-description: "Use Azure Functions when the runtime should start from an event, with clear triggers, invocations, bindings, timeouts, retries, and hosting-plan tradeoffs."
-overview: "Functions are event-started units of work with their own runtime shape. This article explains the trigger model, the function app boundary, and the operational details that still matter in a serverless runtime."
+description: "Build Azure Functions around event-shaped work, clear triggers, retry-safe handlers, hosting plans, app boundaries, identity, storage, and operational evidence."
+overview: "Azure Functions runs small handlers after an event arrives. This article follows one Orders system from a checkout event to a receipt function, then explains triggers, invocations, bindings, retries, hosting plans, and the function app boundary."
 tags: ["azure", "functions", "serverless", "events", "triggers"]
 order: 4
 id: article-cloud-providers-azure-compute-application-hosting-azure-functions-event-driven-work
@@ -12,311 +12,318 @@ aliases:
 
 ## Table of Contents
 
-1. [What Is Functions](#what-is-functions)
-2. [Serverless Event Handler Code Example](#serverless-event-handler-code-example)
-3. [Events: Asynchronous Triggers](#events-asynchronous-triggers)
-4. [Triggers: Declarative Routing](#triggers-declarative-routing)
-5. [Invocations: Ephemeral Execution](#invocations-ephemeral-execution)
-6. [Bindings: Eliminating Boilerplate](#bindings-eliminating-boilerplate)
-7. [Timeout, Retries, and Poison Queues](#timeout-retries-and-poison-queues)
-8. [Hosting Plans and Billable Compute](#hosting-plans-and-billable-compute)
-9. [Function App: Configuration Boundaries](#function-app-configuration-boundaries)
-10. [When A Service Is Simpler](#when-a-service-is-simpler)
-11. [Putting It All Together](#putting-it-all-together)
-12. [What's Next](#whats-next)
+1. [Azure Functions](#azure-functions)
+2. [The Work It Fits](#the-work-it-fits)
+3. [Events](#events)
+4. [Triggers](#triggers)
+5. [Invocations and Handlers](#invocations-and-handlers)
+6. [Function App](#function-app)
+7. [Bindings](#bindings)
+8. [Timeout and Retries](#timeout-and-retries)
+9. [Hosting Plans](#hosting-plans)
+10. [Identity, Secrets, and Storage](#identity-secrets-and-storage)
+11. [Monitoring and Operations](#monitoring-and-operations)
+12. [When A Service Is Simpler](#when-a-service-is-simpler)
+13. [Putting It All Together](#putting-it-all-together)
+14. [What's Next](#whats-next)
 
-## What Is Functions
+## Azure Functions
+<!-- section-summary: Azure Functions runs small event-driven handlers while Azure manages the host process, scaling layer, and much of the runtime infrastructure. -->
 
-Azure Functions is Azure's event-handler runtime: you deploy a small code handler and configure what event should start it. It is an event-driven serverless compute service that executes isolated code handlers in response to platform events. Instead of keeping an HTTP listener active indefinitely, a function app remains idle until a configured trigger (such as a queue message, a database change, a blob upload, or a timer tick) invokes your code.
+Let's start with the full picture. The Orders application has a public API that receives checkout requests. That API writes the order into a database, confirms the purchase to the customer, and then publishes a small message that says a receipt needs to be sent. The receipt work can happen a few seconds later, away from the main checkout request. That small receipt worker is the kind of job Azure Functions was built to run.
 
-To implement a serverless function, you define its trigger, connection strings, and execution script. The following JavaScript code declares a function that is invoked when a new media asset is uploaded to a storage account, extracting metadata and writing the output:
+**Azure Functions** is Azure's serverless compute service for event-driven handlers. A function is a small piece of code that runs after something starts it. That starter can be an HTTP request, a queue message, a timer, a blob upload, a Service Bus message, an Event Grid event, or another supported trigger. Azure runs the host, starts workers, passes the event data into your handler, records the invocation, and scales the runtime according to the hosting plan.
+
+**Serverless** means Azure operates the server layer that hosts the code. Your team still owns the handler code, dependencies, configuration, identity, storage choices, retry behavior, logging, and downstream limits. That split matters because many production incidents in Functions come from the parts the team still owns: a queue message that retries forever, a database that runs out of connections, an app setting that points to the wrong account, or a handler that takes too long for its plan.
+
+Here are the basic words we will use through the article:
+
+| Concept | Plain meaning | Orders example |
+| --- | --- | --- |
+| **Event** | A fact or request that says work is waiting | `order.receipt.requested` |
+| **Trigger** | The rule that starts one function from one event source | A Queue Storage trigger watches `orders-receipts` |
+| **Invocation** | One execution attempt of the handler | One receipt message starts one run |
+| **Binding** | A configured connection that passes data in or writes data out | A queue output binding writes a follow-up message |
+| **Function app** | The Azure resource that hosts one or more functions | `func-devpolaris-orders-jobs-prod` |
+| **Hosting plan** | The compute and billing shape for the function app | Flex Consumption, Premium, Dedicated, or another option |
+
+![Azure Functions event flow showing the Orders checkout API publishing a queue event, a trigger starting a function invocation, and the handler sending email plus an audit record](/content-assets/articles/article-cloud-providers-azure-compute-application-hosting-azure-functions-event-driven-work/event-flow.png)
+
+*The important production shape is the handoff: the checkout API finishes the user-facing work, then the queue event gives the function a separate retryable job with its own evidence.*
+
+So the first question is practical. What kind of work belongs in a function, and what kind of work belongs in a service that stays running?
+
+## The Work It Fits
+<!-- section-summary: Azure Functions fits bounded event work, especially background jobs, scheduled jobs, queue processors, webhooks, and file or stream reactions. -->
+
+**Event-shaped work** is work that has a clear starting signal, a small unit of processing, and a clean finish. The handler receives the input, performs one bounded job, writes evidence of what happened, and returns. In the Orders system, sending a receipt fits this shape. The checkout API can publish a receipt message after the order commits. The receipt handler can load the order, check whether the receipt has already been sent, call the email provider, and record the result.
+
+That shape appears all over production systems. A thumbnail generator starts when a product image lands in Blob Storage. A nightly cleanup starts from a timer. A fraud signal processor starts from an Event Hubs stream. A webhook handler starts from an HTTPS call from a payment provider. A document enrichment job starts from a Service Bus message. Each job has a reason to start, a clear payload, and a finish line.
+
+Functions also helps teams keep slow side effects away from the user-facing path. A checkout API usually spends its response time on the checkout itself, while email, PDF generation, analytics calls, search index updates, and partner notifications move behind events. The user gets a response from the main API, and the background workers handle the follow-up jobs with their own retries and logs.
+
+A useful first filter is the shape of the code. Functions fits jobs with a clear event, limited runtime, small local state, and repeatable retry behavior. A normal web service fits code with many routes, shared middleware, large in-memory caches, long-lived connections, and constant traffic. We will come back to that service boundary later. First, let's name the thing that starts the work: the event.
+
+## Events
+<!-- section-summary: An event is the input that explains why the function runs, and its payload carries enough stable information for safe retry and audit. -->
+
+An **event** is a signal that something happened or that some work is waiting. In Azure Functions, the event usually arrives through an Azure service or a web request. A queue message, a Service Bus message, a timer tick, a blob-created notification, and an HTTP request can all become event inputs for a function.
+
+The event payload matters because the handler may run later, on another worker, after the original request has already finished. A receipt event works best with stable information such as `orderId`, `eventId`, `requestedAt`, and maybe `correlationId`. The payload can stay small, because the handler can load the full order from the database. The event still needs enough information to identify the job, connect logs back to the original checkout, and protect against duplicates.
+
+Here is a simple event for the Orders receipt worker:
+
+```json
+{
+  "eventId": "evt_2026_06_11_000184",
+  "type": "order.receipt.requested",
+  "orderId": "ord_8147",
+  "customerId": "cus_2041",
+  "correlationId": "checkout_7f23",
+  "requestedAt": "2026-06-11T09:14:22Z"
+}
+```
+
+The most important field is usually the duplicate-detection key. In this example, `eventId` identifies the event, and `orderId` identifies the business record. A retry-safe handler can store one of those values in a table with a unique constraint before it sends the email. If the same message arrives again, the handler can see that the work already happened and finish without sending a second receipt.
+
+This is where event work feels different from ordinary request code. A user clicking "Place order" expects one checkout response. The background receipt handler may see the same event more than once because queues and event systems usually favor at-least-once delivery. At-least-once delivery means the platform aims to deliver the message, and duplicate delivery can happen after timeouts, crashes, or failed acknowledgments. The handler protects the business side effect by treating the event as repeatable.
+
+Once the event exists, Azure Functions needs a rule that connects that event source to your code. That rule is the trigger.
+
+## Triggers
+<!-- section-summary: A trigger connects one event source to one function, and the trigger choice controls the input shape, scale signal, retry behavior, and failure path. -->
+
+A **trigger** is the configured connection that starts a function. Microsoft describes triggers as the thing that causes a function to run, and each function has exactly one trigger. The trigger also decides the input shape that the handler receives. A queue trigger passes a queue message. An HTTP trigger passes an HTTP request. A timer trigger passes schedule metadata.
+
+Trigger choice carries more weight than the word "routing" suggests. It decides how work waits, how Azure sees backlog, how failures retry, and what an operator checks during an incident. The Orders system might have several event jobs, and each one deserves a trigger that matches why the work starts.
+
+| Workload | Good trigger fit | Why it fits |
+| --- | --- | --- |
+| Public payment provider callback | **HTTP trigger** | The provider calls a URL and expects an HTTP response. |
+| Receipt email after checkout | **Queue Storage trigger** or **Service Bus trigger** | The work can wait in a queue and retry after transient failures. |
+| Enterprise order workflow message | **Service Bus trigger** | Service Bus adds topics, subscriptions, dead-letter queues, sessions, and richer messaging features. |
+| Product image processing | **Blob trigger** or **Event Grid trigger** | The work starts when storage changes. Event Grid-backed blob triggers fit low-latency event handling. |
+| Nightly cleanup | **Timer trigger** | The work starts from a schedule rather than a user action. |
+| Telemetry stream enrichment | **Event Hubs trigger** | The work processes high-volume event streams in batches. |
+
+![Azure Functions trigger chooser showing HTTP, Queue, Service Bus, Blob/Event Grid, and Timer triggers around the question of what starts the work](/content-assets/articles/article-cloud-providers-azure-compute-application-hosting-azure-functions-event-driven-work/trigger-choice.png)
+
+*The trigger is more than the entry point. It decides the input shape, the scale signal, and the failure path an operator will follow during an incident.*
+
+An HTTP trigger has a direct user or system waiting for a response. If the function throws an error, the caller sees a failed HTTP response or times out. A queue trigger has a different shape. The caller usually finished earlier, and the message waits in a queue until a worker handles it. If the handler fails, the queue system can make the message visible again for another attempt.
+
+That difference is why trigger boundaries matter. The checkout API can publish one queue message after the database commit. The receipt function can focus only on receipts. The thumbnail function can focus only on images. The refund reconciliation function can focus only on finance events. Separate triggers create separate retry paths, permissions, logs, and scaling behavior.
+
+The trigger starts the function. The actual run of the function has its own name: an invocation.
+
+## Invocations and Handlers
+<!-- section-summary: An invocation is one execution attempt, so handler code stays stateless, bounded, idempotent, and explicit about the side effect it owns. -->
+
+An **invocation** is one execution attempt of a function handler. If one receipt message starts the handler once, that is one invocation. If the handler throws and Azure retries the same message, the retry is another invocation. This matters for logs, billing, timeouts, metrics, and duplicate protection.
+
+A **handler** is the function code that runs during the invocation. Handler code treats local memory and local disk as temporary. Azure can run multiple workers, recycle a process, scale to new instances, or place the next event on another worker. Durable business state belongs in a database, queue, blob container, or another external store. The handler can cache small clients or configuration for performance, while orders, payments, and receipt state stay in durable systems.
+
+Here is a small Node.js v4 shape for the receipt worker:
 
 ```javascript
 const { app } = require('@azure/functions');
+const { email, orders, receipts } = require('./clients');
 
-app.storageBlob('process-video', {
-  path: 'uploads/{name}',
-  connection: 'AzureWebJobsStorage',
-  handler: async (blob, context) => {
-    context.log(`Processing blob: ${context.triggerMetadata.name}`);
-    const metadata = await extractVideoMetadata(blob);
-    return metadata;
+app.storageQueue('sendOrderReceipt', {
+  queueName: 'orders-receipts',
+  connection: 'OrdersStorage',
+  handler: async (message, context) => {
+    const { orderId, eventId, correlationId } = message;
+
+    const claimed = await receipts.claim(eventId, orderId);
+    if (!claimed) {
+      context.log(`receipt already handled ${eventId}`);
+      return;
+    }
+
+    const order = await orders.get(orderId);
+    await email.sendReceipt(order.email, order);
+    await receipts.markSent(eventId, correlationId);
   }
 });
 ```
 
-This compact, comment-free function registers directly with the Azure platform's background scale engines.
+The example has three production ideas inside it. First, the handler receives a queue message rather than a full web request. Second, `receipts.claim` needs to be atomic, usually backed by a database unique constraint or transactional write. Third, the handler logs enough information to connect the receipt attempt to the original checkout.
 
-:::expand[Under the Hood: Scale Controller Polling and Cold-Starts]{kind="design"}
-An event-driven function runtime runs on an elastic serverless fabric managed by a dedicated platform daemon called the Scale Controller. The Scale Controller runs independently of your application code, operating as a background observer of your event sources.
+In real code, `orders`, `email`, and `receipts` are small client modules. The function handler stays focused on orchestration: read the event, claim the work, load the record, perform the side effect, and write the result. That shape keeps retries understandable because the same event can arrive again and the handler has a clear duplicate check at the front.
 
-The Scale Controller operates via a monitoring loop, querying metric endpoints across your Azure resources. When a queue trigger is configured, it queries the queue depth and backlog. If the queue is empty, active compute workers stay at zero. When new messages arrive, the controller allocates VM worker instances, mounts your application payload, and starts the WebJobs SDK runtime.
+The handler lives inside an Azure resource that gives it settings, identity, deployment, and a host runtime. That resource is the function app.
 
-When scaling from zero, the platform experiences cold-start latency. The exact steps depend on the hosting plan and deployment model, but the pattern is consistent: the platform allocates a worker, prepares the app package or container image, starts the Functions host, starts the language worker process such as Node.js, Python, or .NET, and then routes the event payload to your handler.
-:::
+## Function App
+<!-- section-summary: A function app is the Azure resource boundary for deployment, runtime settings, identity, hosting plan, app settings, and operational inspection. -->
 
-If you run serverless functions on AWS, Azure Functions is the direct equivalent of AWS Lambda. Both execute isolated code blocks in response to platform triggers and support dynamic micro-billing scaling. However, they approach trigger-driven configurations differently. In AWS, triggers are attached externally through services such as API Gateway, EventBridge, or SQS, whereas Azure Functions utilizes the WebJobs SDK, compiling triggers and input/output data bindings directly into your handler's execution signature.
+A **function app** is the Azure resource that hosts your functions. It is the management and deployment boundary. Functions in the same function app share important things: runtime stack, app settings, host configuration, deployment package, managed identity, networking configuration, and hosting plan. In practice, operators inspect the function app first when a production function behaves strangely.
 
-Every invocation is treated as an independent execution unit. The platform allocates resources, monitors execution duration, logs exceptions, and manages retries at the individual invocation level.
+This boundary shapes security and ownership. If the receipt function and the refund-payout function live in the same function app with one system-assigned managed identity, they share that identity. If the receipt function only needs to read orders and send email, while the refund function needs finance permissions, separate function apps may give the team a cleaner permission boundary. A shared app works well for functions that deploy together, scale together, and need the same runtime access.
 
-| Primitive Name | Functional Role inside Azure Functions |
-| --- | --- |
-| Event | A state change inside Azure or an external system (such as a new blob upload or database change) |
-| Trigger | The configured rule that binds your code handler directly to a specific event source |
-| Invocation | A single, isolated execution of your code handler triggered by a single event payload |
-| Input Binding | A declarative data connection that fetches external data and injects it into your handler |
-| Output Binding | A declarative data connection that automatically writes execution results to a downstream service |
-| Function App | The logical hosting unit grouping related functions, environment settings, and managed identities |
-| Hosting Plan | The infrastructure model (Flex Consumption, Consumption, Premium) defining limits and network integration |
+The function app also owns configuration. **App settings** are environment variables that the Functions host and your code read at runtime. `FUNCTIONS_WORKER_RUNTIME` tells Azure which language worker to use. `FUNCTIONS_EXTENSION_VERSION` pins the Functions runtime line. `AzureWebJobsStorage` points the host at its required storage account or identity-based storage connection. Custom settings such as `OrdersStorage__accountName` or `EmailProvider__endpoint` give your code environment-specific values.
 
-## Events: Asynchronous Triggers
+During an incident, an operator might start with these Azure CLI commands:
 
-An event is a durable work notification that tells a handler something changed and work should run. In an asynchronous architecture, events are typically captured as payloads (like JSON messages) inside messaging systems, changes in database documents, or new files written to storage accounts.
+```bash
+az functionapp show --name func-devpolaris-orders-jobs-prod --resource-group rg-devpolaris-orders-prod
+az functionapp config appsettings list --name func-devpolaris-orders-jobs-prod --resource-group rg-devpolaris-orders-prod
+az functionapp function list --function-app-name func-devpolaris-orders-jobs-prod --resource-group rg-devpolaris-orders-prod
+```
 
-![Azure Functions event flow from source to trigger, invocation, bindings, and target service](/content-assets/articles/article-cloud-providers-azure-compute-application-hosting-azure-functions-event-driven-work/functions-event-flow.png)
+Those commands answer ordinary but important questions. Is the app running? Which plan hosts it? Which runtime does it use? Which settings point at queues and storage accounts? Which functions exist? Are any functions disabled? Before changing code, a production operator needs that resource evidence.
 
-*A function run starts with an event source and trigger, then bindings connect the short-lived invocation to surrounding services.*
+Now that we have the function app boundary, we can talk about another Functions feature that often surprises people: bindings.
 
+## Bindings
+<!-- section-summary: Bindings connect function parameters and return values to external services, while SDK clients remain useful when code needs tighter error handling or explicit control. -->
 
-Designing event-shaped workloads requires separating the physical transport of the event from your application's state management. An event should be designed as an immutable, self-contained record that contains all the metadata required to process the request. For example, a queue event indicating a new order checkout should contain the immutable order ID, customer identifier, and timestamp.
+A **binding** is a declarative connection between a function and another resource. A trigger is a special input binding because it starts the function. Other input bindings can pass data into the handler. Output bindings can write data out after the handler runs. Microsoft documents this as a way to connect functions to services without hardcoding every client call in your handler.
 
-A critical systems constraint of event processing is that you must guarantee your application logic is idempotent. In distributed cloud systems, messaging platforms operate on an "at-least-once" delivery contract, meaning that network disruptions, worker recycles, or duplicate retries can cause the same event payload to be delivered to your function multiple times. If your receipt-sending function processes the same order message twice and does not check database state before sending, it will send duplicate emails to the customer. To prevent this, check an idempotency key (such as the order ID) against a fast storage cache or database index before executing any side effects.
+For example, an HTTP-triggered function can use an output binding to write a message to a queue. A timer-triggered function can use an input binding to read a blob. A queue-triggered function can use an output binding to write another queue message. The binding configuration names the target resource, the connection setting, and the parameter or return value the handler uses.
 
-## Triggers: Declarative Routing
+Bindings can make small handlers very clean:
 
-A trigger is the runtime binding between one event source and one function handler. Each function must have exactly one trigger defined in its configuration. The trigger configuration dictates the format of the incoming event payload and specifies how the runtime intercepts the work.
-
-| Target Workload | Correct Trigger | Systems Rationale |
+| Binding type | What it can do | Orders example |
 | --- | --- | --- |
-| Public Webhook Endpoint | HTTP Trigger | Receives a synchronous HTTP POST request, terminating TLS at the platform edge gateway. |
-| Message Queue Worker | Queue Trigger | Pulls messages from an Azure Queue; utilizes exponential polling backoffs under empty state. |
-| Service Bus Message | Service Bus Trigger | Integrates with Service Bus queues or topics; supports AMQP protocol streaming and peek-lock modes. |
-| Nightly Data Purge | Timer Trigger | Uses a CRON schedule managed by the platform's background timer controller. |
-| Blob File Processor | Blob Trigger | Monitors storage containers; Event Grid-based blob triggers are often preferred for high-scale or event-driven blob processing. |
+| **Trigger binding** | Starts the function | A queue message starts `sendOrderReceipt` |
+| **Input binding** | Reads data and passes it into the handler | A blob input reads a template file |
+| **Output binding** | Writes handler output to another service | A queue output writes `receipt.audit.requested` |
 
-The choice of trigger alters the failure path of your invocation. When an HTTP trigger fails, the runtime returns a failure response (such as `500 Internal Server Error`) to the client. When a queue trigger fails, the runtime releases the message lock, placing the message back on the queue to be retried by the WebJobs SDK. If the message fails repeatedly, the SDK automatically routes the payload to a designated poison or dead-letter queue (DLQ) after a configured number of retries, preventing a bad payload from blocking your active processing loop.
+Bindings still use real network calls, authentication, DNS, service limits, and firewall paths behind the scenes. A private SQL database can still reject the connection. A storage account firewall can still block the request. A managed identity can still lack the right role assignment. The binding removes some plumbing code, while the underlying resource rules remain in force.
 
-## Invocations: Ephemeral Execution
+There is also a practical error-handling choice. Output bindings are convenient, and Microsoft calls out that remote service errors from output bindings sit outside the same direct handling path an SDK client gives your code. If the handler needs to catch a specific provider error, retry a certain status code, write a custom audit record, or participate in a transaction, an explicit SDK client can be the clearer choice.
 
-An invocation is one execution attempt of a function handler for one event payload. Invocations are designed to be ephemeral, isolated, and stateless. When the runtime executes your code, it injects the event payload and a context object containing a unique invocation ID, correlation tracing tokens, and logging hooks.
+Bindings help connect the handler to the world around it. The next production question is what happens when that world is slow, unavailable, or sends the same work twice.
 
-Because invocations are stateless, you must never store application state in local virtual machine memory. Worker instances can scale out dynamically, allocate your process to different physical host blades, or terminate active workers when idle. Storing a customer's shopping cart in a local in-memory array will result in data loss when subsequent requests route to different instances. All persistent state must reside in external, highly available databases or storage queues.
+## Timeout and Retries
+<!-- section-summary: Timeouts stop long executions, retries repeat failed work, and idempotency keeps repeated invocations from duplicating business side effects. -->
 
-Furthermore, invocation monitoring is key to debugging. When an application exception occurs, the platform correlates all log entries, execution durations, memory spikes, and dependencies to that specific invocation ID. You can query these logs in Application Insights to reconstruct the exact execution trace of a failing transaction.
+A **timeout** is the maximum time a function execution can run before the host stops it. The exact default and maximum depend on the hosting plan. Microsoft documents a 5 minute default and 10 minute maximum for the legacy Consumption plan. Flex Consumption, Premium, Dedicated, and Container Apps hosting have different defaults and maximum behavior. HTTP-triggered functions also face an important response limit: Azure Load Balancer has a 230 second idle timeout for HTTP responses, so long HTTP work needs an async pattern even on plans that allow longer function execution.
 
-## Bindings: Eliminating Boilerplate
+Timeouts change more than billing. They change business behavior. If the receipt handler sends an email and then times out before it records success, the queue message may return for another attempt. The next invocation may send the same email again unless the handler has already claimed the event in a durable store.
 
-Bindings are declarative data connections that handle the boilerplate plumbing of reading from and writing to external resources. Instead of writing custom code to establish database connections, initialize clients, authenticate, and manage connection pools, you configure input and output bindings in your function's metadata.
+A **retry** is another attempt after a failure. Azure Functions has two broad retry paths. Some trigger extensions have their own built-in retry behavior, and some trigger types support runtime retry policies. Queue Storage triggers have a very concrete behavior: if a queue-triggered function fails, Azure Functions retries the message up to five times including the first attempt, and then moves the message to a queue named `<originalqueuename>-poison`.
 
-![Azure Function trigger and bindings around a handler with input and output bindings](/content-assets/articles/article-cloud-providers-azure-compute-application-hosting-azure-functions-event-driven-work/trigger-binding-map.png)
+That poison queue is a safety valve. It keeps one bad message from blocking the active queue forever. It also gives the team a place to inspect the payload, understand the failure, fix bad data, or replay the message intentionally. In the Orders system, a receipt message might land in the poison queue because the order ID points to a deleted test order, the email template is missing, or the provider rejects a malformed address.
 
-*Triggers start the function, while bindings connect the handler to inputs and outputs without writing every plumbing call by hand.*
+**Idempotency** is the code design that makes retries safe. An idempotent handler can receive the same input more than once and avoid repeating the dangerous side effect. For receipts, the handler can insert `eventId` into a `receipt_attempts` table with a unique constraint before sending. If the insert succeeds, this invocation owns the work. If the insert fails because the ID already exists, another attempt already handled or claimed it, so the function can return success.
 
+| Failure | Retry behavior to expect | Safer handler design |
+| --- | --- | --- |
+| Email provider returns a temporary error | The queue message can retry | Claim the event, log the provider error, and let retry continue |
+| Function times out after sending email | The same event can appear again | Store the idempotency record before the side effect |
+| Payload has invalid order data | Retries repeat the same bad input | Validate early and route poison messages to review |
+| Database throttles under load | More instances can make pressure worse | Limit concurrency and protect downstream connection pools |
 
-Input bindings automatically fetch data based on the incoming event payload and inject it directly as an argument into your code handler. For example, a queue trigger containing a customer ID can be paired with a Cosmos DB input binding that automatically queries the database and passes the customer document to your function. Output bindings work in reverse, automatically writing whatever object your function returns back to the configured storage, queue, or database.
+![Retry-safe Azure Function diagram showing a queue message claiming an idempotency key before sending a receipt, while a duplicate retry is skipped and poison queue evidence is kept](/content-assets/articles/article-cloud-providers-azure-compute-application-hosting-azure-functions-event-driven-work/retry-safe-function.png)
 
-While bindings simplify code, they do not bypass network or security boundaries. Under the hood, bindings compile into standard SDK clients that must still resolve DNS, complete TCP handshakes, negotiate TLS, authenticate using managed identities, and respect firewall rules. If a private virtual network blocks outbound ports to your database, the input binding will throw connection timeouts before your function's business logic ever executes.
+*Retries are useful only when the handler can recognize repeated work. The durable claim happens before the side effect, so a duplicate message turns into a safe skip instead of a duplicate receipt.*
 
-## Timeout, Retries, and Poison Queues
+This is the point where hosting plan choice starts to matter. The plan controls scale, cold starts, networking, costs, and some timeout behavior.
 
-Every serverless execution environment imposes runtime timeouts to protect the platform from runaway infinite loops or resource starvation. On the classic Consumption plan, Azure Functions uses a 5-minute default execution timeout and allows a maximum of 10 minutes. Other hosting plans, including Flex Consumption, Premium, and Dedicated, have different timeout behavior and scaling tradeoffs. If your function exceeds its configured or plan-supported limit, the host runtime stops the execution and releases the worker.
+## Hosting Plans
+<!-- section-summary: The hosting plan decides scale behavior, cold-start options, network features, timeout limits, memory size, and cost shape. -->
 
-![Retry-safe Azure Function handler using idempotency around repeated invocations](/content-assets/articles/article-cloud-providers-azure-compute-application-hosting-azure-functions-event-driven-work/retry-safe-handler.png)
+A **hosting plan** is the compute and billing model for a function app. It decides how Azure allocates workers, how the app scales, how cold starts behave, whether virtual network integration is available, how billing appears, and which limits apply. The same handler code can behave very differently on different plans.
 
-*Retries are useful only when the handler can safely receive the same event more than once.*
+As of June 11, 2026, Microsoft documents **Flex Consumption** as the recommended serverless hosting plan for new dynamic-scale function apps. Flex Consumption keeps serverless pay-for-use behavior while adding fast scale-out, configurable instance memory, virtual network integration, per-function scaling, and optional always-ready instances to reduce cold starts.
 
+Here is the practical map:
 
-To prevent timeout failures, split long-running tasks into small, independent units of work that can execute concurrently. For example, instead of running a single function that processes a batch of 10,000 files, write a generator function that reads the batch and writes 10,000 individual messages to a queue. You can then write a queue-triggered function that processes one file per invocation, allowing the platform to scale out across dozens of workers to process the files concurrently.
+| Plan | Good fit | Production tradeoff |
+| --- | --- | --- |
+| **Flex Consumption** | New serverless apps with variable traffic, private networking needs, and fast scale-out requirements | Strong default for new apps, but feature support and regional availability still need checking |
+| **Premium** | High-value handlers that need warm instances, virtual network access, larger compute, or near-continuous activity | Baseline cost exists because at least some capacity stays warm |
+| **Dedicated** | Functions that share an App Service plan with web apps or need predictable manual scaling | Billing follows the App Service plan rather than pure event usage |
+| **Container Apps** | Containerized functions that need custom images or to run beside containerized microservices | The team owns the function container image shape |
+| **Consumption** | Existing Windows Consumption apps or older simple event apps | Microsoft marks this as legacy for new serverless function apps |
 
-Retry policies must be configured with equal care. You can define retry rules (such as fixed intervals or exponential backoff) at the function or queue trigger level. However, retrying a payment capture API or a stateful transaction without verifying transaction state can result in duplicate database entries. Ensure that retries are only applied to safe, idempotent operations, and route persistently failing messages to a dead-letter queue for manual audit.
+The Orders receipt worker gives us a concrete choice. If it only sends a few emails per hour and talks to public services, serverless billing matters more than warm capacity. If it talks to Azure SQL through private networking and may receive sudden bursts after a marketing campaign, Flex Consumption fits better. A payment authorization webhook with strict latency expectations and near-continuous traffic may fit Premium. If the team already pays for a steady App Service plan and the function has predictable internal traffic, Dedicated can be acceptable.
 
-:::expand[Retry-Triggered Duplicate Execution]{kind="pitfall"}
-A severe serverless hazard is assuming that a Function runs exactly once. Under the hood, distributed messaging platforms operate on an **at-least-once delivery** contract. If your Function times out, crashes due to memory pressure, or experiences a network drop *after* executing an external API side-effect but *before* writing a success checkpoint to the queue, the message can become visible again and be processed a second time.
+The scale controller also changes how operators think about downstream systems. In dynamic plans, Azure can add more function host instances based on incoming events. That helps clear queue backlogs, and it can also increase pressure on a database, email provider, or third-party API. A healthy design treats scale as part of the contract: concurrency settings, queue length, downstream connection limits, and retry delay all belong in the same conversation.
 
-This matches the exact behavior of **AWS Lambda** when integrated with **Amazon SQS**. If a Lambda handler times out while calling an external API, SQS moves the message back to the active queue after the visibility timeout expires, triggering duplicate executions and downstream double-billing unless the handler enforces idempotency.
+The plan gives the code compute. The function app still needs identity, settings, and storage to run safely.
 
-For critical side-effects like credit card charges or database increments, you must enforce this idempotency workflow sequence:
+## Identity, Secrets, and Storage
+<!-- section-summary: Production function apps need managed identity, least-privilege access, safe app settings, and a carefully protected storage account used by the Functions host. -->
 
-```plain
-Event Received ──> Check state store for ID (Order_123)
-                    ├── Found ──> Return success (Skip duplicate)
-                    └── Not Found ──> Execute Charge ──> Write ID to state store (Atomic)
-```
+**Managed identity** gives a function app an identity in Microsoft Entra ID so it can request tokens for Azure resources. This lets the function access services such as Storage, Key Vault, Service Bus, Azure SQL, or Application Insights without shipping static passwords in code. The identity still needs Azure RBAC or service-specific permissions at the right scope.
 
-Analyze your trigger's retry characteristics to assess risk:
+In the Orders system, the receipt function might use a managed identity named through the function app resource. That identity can receive permission to read from the orders database, read templates from a storage container, and send messages to an audit queue. Narrow runtime permissions fit the job better than broad owner permissions on the subscription. Functions makes the runtime identity convenient, and Azure RBAC still decides what that identity can do.
 
-| Trigger Type | Default Retry / Delivery Behavior | Idempotency Requirement |
-| :--- | :--- | :--- |
-| **HTTP Trigger** | **None** (Client must retry on timeout/5xx) | **High** (Clients frequently retry when gateway times out) |
-| **Service Bus Queue** | **At-Least-Once** (Retries based on Max Delivery Count) | **Critical** (Failure to checkpoint automatically triggers re-delivery) |
-| **Event Hubs** | **At-Least-Once** (Retries based on checkpoint pointer) | **Critical** (Batch failures retry the entire partition block) |
+**App settings** carry runtime configuration. Some settings belong to the platform, such as `FUNCTIONS_WORKER_RUNTIME`. Some settings belong to the app, such as queue names, API endpoints, feature flags, and identity-based connection settings. Dangerous values such as API keys usually live in Key Vault where possible, with the function app receiving access through managed identity or Key Vault references.
 
-**Rule of thumb:** Any Function that writes data, invokes external APIs, or triggers financial transactions must be built as an idempotent operation. Never rely on the cloud infrastructure to guarantee exactly-once delivery; always design your code to expect and handle duplicate events safely.
-:::
+Every function app also depends on a **storage account** for host operations. Azure Functions uses storage for runtime state such as trigger management, logging support, function keys, and other service-related data. That storage account is a runtime dependency. Microsoft warns that deleting the main storage account can stop the function app and remove function code files in some hosting paths.
 
-## Hosting Plans and Billable Compute
+Storage security deserves real attention. Access to the function storage account can expose important host data and keys. A production team usually gives each important function app its own storage account, keeps it in the same region, limits who can list keys, monitors storage access, and avoids lifecycle rules that delete the host's required blobs. Durable Functions and Event Hubs-heavy apps especially benefit from careful storage separation because they can create many storage transactions.
 
-A Functions hosting plan is the pricing and worker-capacity model for your handlers. It decides whether Azure starts workers only when events arrive, keeps workers warm, attaches them to a VNet, or runs them on a fixed App Service Plan.
+Once identity and storage are in place, the last day-to-day question is visibility. Event work happens in the background, so the system needs evidence.
 
-Example: a receipt email handler that runs a few times per hour can use Consumption billing, while a payment webhook that must reach a private SQL endpoint with low cold-start latency may fit Flex Consumption or Premium.
+## Monitoring and Operations
+<!-- section-summary: Function operations depend on invocation logs, Application Insights traces, correlation IDs, queue evidence, retry counts, and disabled-function or app-setting checks. -->
 
-To operate Azure Functions successfully in production, you must match your application's network and latency requirements to the correct hosting plan. Azure provides four main plans, each distributing compute allocation and network integration differently:
+**Application Insights** is the main monitoring home for many Azure Functions apps. It collects request data, dependency calls, exceptions, traces, performance details, and invocation evidence. The important beginner point is simple: the checkout API may already have returned success while the receipt function fails in the background. Without logs and traces, the user-facing request looks fine and the business side effect silently breaks.
 
-### 1. Classic Consumption Plan (Dynamic Serverless)
+Each invocation leaves a trail that an operator can follow. The receipt handler logs `eventId`, `orderId`, `correlationId`, provider response, and final status. The correlation ID connects the original checkout request to the background receipt attempt. When a customer says the receipt never arrived, the operator can search by order ID or correlation ID rather than guessing which worker saw the message.
 
-The Classic Consumption plan is the pay-per-execution option. Azure starts worker capacity when events arrive and scales it down when no work is waiting.
+Production debugging usually checks several layers:
 
-Example: a nightly CSV import function can wake up on a blob upload, process the file, and stop billing after the invocation finishes.
+| Check | What it tells you |
+| --- | --- |
+| Function app state | Whether the host resource is running and on the expected plan |
+| App settings | Whether runtime, queue, storage, and provider settings match the environment |
+| Function list | Which handlers exist and whether any are disabled |
+| Invocation failures | Which handler failed, how often, and with which exception |
+| Queue depth and poison queue | Whether work is backing up or failing permanently |
+| Dependency failures | Whether Azure SQL, Storage, Service Bus, or an external provider caused the failure |
+| Scale and concurrency | Whether Azure added workers faster than downstream systems could handle |
 
-*   **Elastic Scaling**: The Scale Controller adds worker instances dynamically based on incoming event loads, scaling all the way down to zero when idle.
-*   **Micro-Billing**: You pay strictly for execution duration (measured in Gigabyte-seconds) and the total number of invocations. If the function does not run, you pay absolutely zero.
-*   **Limitations**: Exposes strict cold-start latency steps, caps execution durations at 10 minutes, and lacks native Virtual Network integration, meaning your functions cannot call databases protected by private endpoints.
+This operational view also explains why small functions need good names. `sendOrderReceipt`, `rebuildProductSearchIndex`, and `expireAbandonedCarts` are much easier to debug than generic names like `queueProcessor1`. The name tells the operator which business side effect the handler owns.
 
-### 2. Flex Consumption Plan (Modern Enterprise Standard)
-
-The Flex Consumption plan is the newer serverless option for production workloads that still need private networking and tighter concurrency control. It keeps scale-to-zero economics while giving more control over how workers are placed and how many requests each worker handles.
-
-Example: an order processor can scale from a Service Bus backlog while still reaching Azure SQL through a private subnet.
-
-*   **Fast Scale Out**: Combines the elastic, scale-to-zero micro-billing model of the Consumption plan with faster container-based worker allocations.
-*   **Virtual Network Subnet Injection**: Provides native, high-speed regional Virtual Network integration. Your function workers are injected directly into a private subnet, allowing secure database access without paying dedicated host premiums.
-*   **Concurrency Controls**: Exposes manual settings to configure maximum concurrency per instance, letting you limit the number of parallel activations a single worker handles to prevent downstream database connection exhaustion.
-
-### 3. Premium Plan (Elastic Warm Host)
-
-The Premium plan keeps at least some worker capacity warm before events arrive. It is for handlers where waiting for a new worker to boot would hurt users or downstream systems.
-
-Example: a fraud-check webhook can stay on a pre-warmed worker so payment authorization does not wait for a cold start.
-
-*   **Pre-Warmed Instances**: The platform maintains at least one active, pre-warmed host VM running continuously, bypassing the packaging and worker boot latencies.
-*   **Long-Running Tasks**: Increases the maximum execution timeout limit to 30 minutes, with support for unlimited durations on specific configurations.
-*   **Continuous Charge**: Unlike Consumption plans, you pay a continuous hourly rate for the pre-warmed instances, regardless of whether any functions are actively running.
-
-### 4. Dedicated Plan (App Service Isolation)
-
-The Dedicated plan runs functions on an App Service Plan you already pay for by the hour. It is useful when predictable capacity matters more than automatic serverless scaling.
-
-Example: an internal reporting function can share `asp-backoffice-prod` with a back-office Web App when both workloads have steady, known traffic.
-
-*   **Resource Sharing**: Your functions share the physical VM worker instances of your ASP with other web applications, ensuring predictable costs.
-*   **Predictable Billing**: You pay a flat, continuous rate for the App Service Plan capacity.
-*   **No Serverless Scale**: The platform cannot scale out worker VM count dynamically beyond the ASP limits, trading serverless elasticity for total cost predictability.
-
-## Function App: Configuration Boundaries
-
-The Function App is the logical deployment and management container for your individual functions. All functions hosted within the same Function App share the same App Settings, connection strings, deployment zip package, runtime stack version, and system-assigned managed identity.
-
-```mermaid
-flowchart LR
-    Queue["Service Bus Queue<br/>(Backlog Messages)"] <-- "polls backlog" --> ScaleController["Scale Controller Daemon"]
-    ScaleController -- "provisions workers" --> DynamicWorkers["Dynamic Serverless Workers"]
-```
-
-```mermaid
-flowchart TD
-    subgraph WorkerVM["Dynamic Serverless Host Instance"]
-        Handler["Queue Handler Code"]
-    end
-    subgraph Platform["Azure Platform Services"]
-        CodeStorage["Storage Account<br/>(Code ZIP Mount)"]
-        Identity["Entra ID Principal"]
-    end
-    Handler -- "mounts payload" --> CodeStorage
-    Handler -- "requests token" --> Identity
-```
-
-### Declaring Function Infrastructure with Bicep
-
-Function infrastructure has three core Azure resources: a Function App, a hosting plan, and a storage account used by the runtime. To deploy a serverless Function App using Infrastructure as Code, you declare the hosting plan, storage account, and function container resources in Bicep. The storage account is a physical dependency required by the function runtime to manage state checkpoints, lease allocations, and keys.
-
-```bicep
-resource storageAccount 'Microsoft.Storage/storageAccounts@2022-09-01' = {
-  name: 'stordersappprocessor'
-  location: resourceGroup().location
-  sku: {
-    name: 'Standard_LRS'
-  }
-  kind: 'StorageV2'
-  properties: {
-    supportsHttpsTrafficOnly: true
-    defaultToOAuthAuthentication: true
-  }
-}
-
-resource hostingPlan 'Microsoft.Web/serverfarms@2022-03-01' = {
-  name: 'plan-orders-serverless'
-  location: resourceGroup().location
-  sku: {
-    name: 'Y1'
-    tier: 'Dynamic'
-  }
-  properties: {}
-}
-
-resource functionApp 'Microsoft.Web/sites@2022-03-01' = {
-  name: 'func-orders-processor'
-  location: resourceGroup().location
-  kind: 'functionapp'
-  properties: {
-    serverFarmId: hostingPlan.id
-    siteConfig: {
-      appSettings: [
-        {
-          name: 'AzureWebJobsStorage'
-          value: 'DefaultEndpointsProtocol=https;AccountName=${storageAccount.name};AccountKey=${storageAccount.listKeys().keys[0].value};EndpointSuffix=${environment().suffixes.storage}'
-        }
-        {
-          name: 'FUNCTIONS_EXTENSION_VERSION'
-          value: '~4'
-        }
-        {
-          name: 'FUNCTIONS_WORKER_RUNTIME'
-          value: 'node'
-        }
-        {
-          name: 'WEBSITE_NODE_DEFAULT_VERSION'
-          value: '~18'
-        }
-      ]
-    }
-  }
-}
-```
-
-This Bicep configuration provides a production-ready, comment-free setup demonstrating how these resources connect in the control plane.
-
-Flex Consumption represents the modern production standard. It operates on a container-based serverless host that supports fast, elastic horizontal scaling based on event concurrency metrics. Crucially, Flex Consumption provides native virtual network integration, allowing your functions to access private backend databases securely without paying the premium costs of dedicated host environments.
-
-Classic Consumption plans scale dynamically and can be cost-effective for simple event workloads, but they have stricter timeout and networking constraints than newer or dedicated options. Premium plans provide pre-warmed instances and virtual network integration, but they incur steady baseline costs. Dedicated plans run your function apps on standard App Service Plan virtual machines, which trades dynamic serverless scaling for predictable resource isolation.
+Functions has a clear boundary too. Some backend work belongs in a service.
 
 ## When A Service Is Simpler
+<!-- section-summary: A normal service can be the simpler home for large APIs, shared routing, long-lived processes, heavy in-memory state, and steady connection-heavy workloads. -->
 
-Azure Functions is not a universal host for all backend code. Sometimes, a traditional web application hosted on App Service or Container Apps is structurally simpler and more performant.
+Azure Functions works best when the job has a clear event and a bounded piece of work. A service such as App Service, Container Apps, or AKS can fit better when the code behaves like a full application. A large REST API with many routes, shared authentication middleware, streaming responses, stable connection pools, and steady traffic usually wants a continuously running process.
 
-If your service consists of a large, synchronous REST API with dozens of endpoints, shared routing middleware, global database connection pools, and steady traffic patterns, do not split it into dozens of separate HTTP-triggered functions. The overhead of cold starts, connection pooling management across serverless workers, and distributed trace logging will complicate operations. A continuous container or web app process keeps connection pools warm and provides predictable latency.
+Imagine the Orders API itself. It handles checkout, carts, customer sessions, product lookups, payment authorization, pricing rules, and route-level authorization. Splitting that API into dozens of HTTP-triggered functions can scatter one cohesive service across many handlers. The team may then fight shared middleware, distributed routing, duplicated validation, cold starts, and confusing traces.
 
-The warning signs of serverless architectural abuse include:
-* Creating complex networks of functions that call other functions via synchronous HTTP requests, which creates cascading latency chains and increases call failure rates.
-* Splitting a single cohesive domain service into tiny, scattered handlers that are difficult to debug, deploy, and version control.
-* Running long-lived background loops that poll for work, which runs counter to the event-driven trigger contract.
+Functions can still live beside that API. The API stays on App Service or Container Apps. The receipt sender, image processor, abandoned-cart timer, search index updater, and audit event writer can live in Functions. That mix gives each part a runtime that matches its work shape. The main service handles interactive request flow, and the functions handle event jobs around it.
 
-Utilize Functions when you have a clear, isolated event trigger, a defined unit of work, and an execution pattern that benefits from elastic scaling to zero.
+The simplest rule is to follow the work. If the code behaves like one small reaction to one event, Functions is a strong candidate. If the code behaves like a product service with many routes and shared stateful behavior, a service host will usually be calmer to operate.
 
 ## Putting It All Together
+<!-- section-summary: A production Functions design connects event payloads, trigger choice, idempotent handlers, app boundaries, hosting plans, identity, storage, and monitoring into one operating story. -->
 
-Azure Functions shifts the compute paradigm to an event-triggered, FaaS model.
+Let's put the Orders receipt flow back together. The checkout API commits the order, then publishes a message to `orders-receipts`. That message contains `eventId`, `orderId`, and `correlationId`. A Queue Storage trigger on `sendOrderReceipt` starts one invocation for the message.
 
-* **Scale Controller Daemon**: Background platform daemons continuously poll event metrics (like queue depths or message age) to coordinate compute allocations without running application code.
-* **Flex Consumption Standard**: The Flex Consumption plan provides fast serverless scaling and native virtual network subnet injection, representing the standard for secure cloud-native serverless backends.
-* **State and Cold Starts**: All functions must be stateless, and developers must design around at-least-once delivery duplicates (using idempotency keys) and cold-start physical latency steps.
-* **Declarative Data Bindings**: Uses input and output bindings to secure database and storage connections without writing SDK boilerplate or connection string pool configurations.
-* **Four Hosting Tiers**: Comprises Consumption, Flex Consumption, Premium, and Dedicated Plans, matching serverless elastic requirements to cost and network designs.
+The handler claims the event ID in a durable store before sending the email. If a retry brings the same message back, the unique claim tells the handler that the side effect already happened or that another invocation owns it. The function app carries the runtime settings, managed identity, queue connection, storage dependency, and hosting plan. Application Insights records the invocation, dependency calls, exception details, and correlation fields.
 
-By structuring your applications as decoupled event handlers, you can build systems that scale instantly under load and cost zero when idle.
+The team chooses the hosting plan from production needs. Flex Consumption fits many new event workers, especially when the app needs dynamic scale and private networking. Premium fits warm, high-value handlers. Dedicated fits predictable App Service plan sharing. The plan, trigger, and concurrency settings stay connected to downstream limits so scaling the function stays within database and provider capacity.
+
+That is the whole operating story. Azure Functions is small code, and the production design includes the event, trigger, invocation, idempotency guard, function app boundary, hosting plan, identity, storage account, and evidence trail.
+
+![Azure Functions operating checklist with six tiles for Event, Trigger, Handler, Plan, Identity, and Evidence](/content-assets/articles/article-cloud-providers-azure-compute-application-hosting-azure-functions-event-driven-work/functions-operating-checklist.png)
+
+*Use this checklist before designing or debugging a function: event payload, trigger behavior, handler boundaries, hosting plan, runtime identity, and the evidence trail all work together.*
+
+## What's Next
+
+Functions gives us a clean home for event-shaped work around an application. The next step up is a shared platform for many containers, teams, policies, services, and deployment shapes. That is where Azure Kubernetes Service enters the roadmap. In the next article, we will look at AKS, pods, services, ingress, node pools, cluster ownership, and the reasons a team might want Kubernetes instead of a simpler managed runtime.
 
 ---
 
-* [Azure Functions Documentation](https://learn.microsoft.com/en-us/azure/azure-functions/functions-overview) - Official guide to Azure serverless compute.
-* [Flex Consumption Hosting Plan](https://learn.microsoft.com/en-us/azure/azure-functions/flex-consumption-how-it-works) - Systems details on the Flex Consumption runtime and scaling.
-* [Triggers and Bindings Concepts](https://learn.microsoft.com/en-us/azure/azure-functions/functions-triggers-bindings) - Technical review of WebJobs SDK data bindings.
-* [Idempotent Event Processing](https://learn.microsoft.com/en-us/azure/azure-functions/functions-idempotent) - Architecture guide on handling duplicate event deliveries safely.
+**References**
+
+- [Azure Functions overview](https://learn.microsoft.com/en-us/azure/azure-functions/functions-overview) - Official overview of Azure Functions scenarios, development lifecycle, and hosting options.
+- [Azure Functions triggers and bindings](https://learn.microsoft.com/en-us/azure/azure-functions/functions-triggers-bindings) - Official explanation of triggers, input bindings, output bindings, and supported binding types.
+- [Azure Functions hosting options](https://learn.microsoft.com/en-us/azure/azure-functions/functions-scale) - Official comparison of Flex Consumption, Premium, Dedicated, Container Apps, and Consumption hosting.
+- [Azure Functions Flex Consumption plan hosting](https://learn.microsoft.com/en-us/azure/azure-functions/flex-consumption-plan) - Official details on Flex Consumption scaling, always-ready instances, networking, and instance behavior.
+- [Azure Functions error handling and retries](https://learn.microsoft.com/en-us/azure/azure-functions/functions-bindings-error-pages) - Official guidance on retry sources, error handling, output binding caveats, and idempotency.
+- [Designing Azure Functions for identical input](https://learn.microsoft.com/en-us/azure/azure-functions/functions-idempotent) - Official guidance for idempotent function design.
+- [Azure Queue Storage trigger for Azure Functions](https://learn.microsoft.com/en-us/azure/azure-functions/functions-bindings-storage-queue-trigger) - Official queue trigger behavior, poison message handling, polling, and concurrency details.
+- [Azure Functions best practices](https://learn.microsoft.com/en-us/azure/azure-functions/functions-best-practices) - Official plan selection, storage settings, cold-start, and availability guidance.
+- [Storage considerations for Azure Functions](https://learn.microsoft.com/en-us/azure/azure-functions/storage-considerations) - Official requirements and security considerations for the storage account used by function apps.
+- [Create a function app without default storage secrets in its definition](https://learn.microsoft.com/en-us/azure/azure-functions/functions-identity-based-connections-tutorial) - Official tutorial for identity-based connections and reducing stored secrets.
