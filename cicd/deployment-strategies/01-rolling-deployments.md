@@ -11,188 +11,233 @@ aliases:
 
 ## Table of Contents
 
-1. [The Problem](#the-problem)
-2. [The Wave-Based Replacement Model](#the-wave-based-replacement-model)
-3. [Resource Allocation Buffers: Minimum and Maximum healthy Percents](#resource-allocation-buffers-minimum-and-maximum-healthy-percents)
-4. [Readiness Probes and Target Health Verification](#readiness-probes-and-target-health-verification)
-5. [Pipeline Automation and the Circuit Breaker](#pipeline-automation-and-the-circuit-breaker)
+1. [The Release Problem](#the-release-problem)
+2. [The Rolling Deployment Shape](#the-rolling-deployment-shape)
+3. [Capacity During the Rollout](#capacity-during-the-rollout)
+4. [Readiness Before Traffic](#readiness-before-traffic)
+5. [Automation and Stop Rules](#automation-and-stop-rules)
 6. [Putting It All Together](#putting-it-all-together)
 7. [What's Next](#whats-next)
 
-## The Problem
+## The Release Problem
+<!-- section-summary: A rolling deployment protects the service by replacing a small part of the fleet at a time. -->
 
-Executing software releases in production requires balancing speed with system stability. When organizations do not use structured, progressive deployment patterns, they face recurring outage vectors:
+Imagine we run the checkout API for an online store. Ten application containers serve traffic behind a load balancer. Version `2026.06.13.1` works well, and we want to ship version `2026.06.13.2` with a new discount calculation. The risky move would be stopping all ten old containers, starting ten new containers, and hoping the new version becomes healthy before users notice.
 
-* **The Monolithic Capacity Crash**: A development team hosts an e-commerce API across ten server instances. During a midnight release, their deployment pipeline stops all ten active instances simultaneously to boot the new version. For two full minutes, the application is completely offline. Thousands of customer checkout requests fail instantly, and the system logs are flooded with gateway connection timeout errors.
-* **The Boot-Stage Traffic Inundation**: A platform team updates a containerized backend. The container orchestrator reports that the new container process has started, and immediately redirects live production traffic to it. However, the application requires thirty seconds to load configuration files and establish database connections. The incoming user requests hit the uninitialized container and fail immediately, causing a massive spike in error rates before the application is ready.
-* **The Silent Startup Failure**: An operator triggers a release containing a typo in a database environment variable. The orchestrator boots the new containers, stops the old ones, and finishes the deployment. Minutes later, the operator realizes that all the new containers are caught in an endless crash loop because they cannot connect to the database, leaving the entire production system down.
+That style creates a very simple failure. During the gap, the load balancer has no healthy targets. Every checkout request waits, retries, or fails. Even if the gap lasts one minute, that one minute can create failed payments, support tickets, and a very loud incident channel.
 
-These failures show that production upgrades must occur gradually, verifying the health of new instances before old ones are retired.
+A **rolling deployment** means the platform replaces the running service in small waves. It starts a few new tasks or pods, waits until they pass health checks, sends traffic to them, and then removes a few old ones. The key idea is **overlap**. Old version and new version run together during the rollout so the service keeps enough healthy capacity for users.
 
-![Deployment strategy map comparing rolling waves, blue-green switch, and canary traffic split](/content-assets/articles/article-cicd-deployment-strategies-rolling-deployments-and-rollbacks/deployment-strategy-map.png)
+This article follows one release all the way through. We will use Kubernetes and Amazon ECS examples because both show the same release idea with slightly different names. Kubernetes talks about Deployments, ReplicaSets, pods, `maxSurge`, and `maxUnavailable`. ECS talks about services, tasks, `maximumPercent`, `minimumHealthyPercent`, target group health, and deployment circuit breakers. Different words, same practical concern: keep healthy capacity while replacing code.
 
-*Deployment strategies are traffic and capacity control patterns: rolling changes capacity in waves, blue-green switches between full environments, and canary sends a measured slice to the new version.*
+The first thing to understand is the shape of the rollout. Once that shape makes sense, the capacity numbers and readiness checks become much easier to place.
 
-## The Wave-Based Replacement Model
+![Rolling deployment wave replacement showing old version containers, new version containers, health checks, and traffic staying on](/content-assets/articles/article-cicd-deployment-strategies-rolling-deployments-and-rollbacks/rolling-wave-replacement.png)
 
-A **Rolling Deployment** solves the monolithic capacity crash by replacing old application instances with new ones gradually in controlled, sequential waves.
+*A rolling deployment keeps the old version serving traffic while the new version joins in small healthy waves.*
 
-Rather than stopping all running servers at once, the orchestrator divides the release process into small, manageable steps. It boots a small fraction of the new version (the target revision), waits for those new instances to pass system health checks, routes traffic to them, and only then shuts down an equivalent number of old instances. This wave-based cycle repeats until 100% of the active workload is running the new code.
+## The Rolling Deployment Shape
+<!-- section-summary: The platform creates new instances, proves they are healthy, and then removes old instances in repeated waves. -->
 
-```mermaid
-flowchart TD
-    Start["Healthy Production<br/>(4 old tasks active)"] --> Wave1["Wave 1: Start 2 new tasks<br/>(Verify health)"]
-    Wave1 --> Active1["Active Pool:<br/>(4 old tasks + 2 new tasks)"]
-    Active1 --> Drain1["Drain 2 old tasks"]
-    Drain1 --> Wave2["Wave 2: Start remaining 2 new tasks<br/>(Verify health)"]
-    Wave2 --> Active2["Active Pool:<br/>(2 old tasks + 4 new tasks)"]
-    Active2 --> Drain2["Drain remaining 2 old tasks"]
-    Drain2 --> Finish["Stable Production<br/>(4 new tasks active)"]
-```
+A **deployment instance** is one running copy of the application. In Kubernetes, that copy is usually a pod. In ECS, that copy is usually a task. If the checkout service runs ten copies, the rollout controller has ten old instances to replace.
 
-The fundamental benefit of this model is **Blast Radius Limitation**. If the new version carries a catastrophic startup bug, the failure is restricted to the first wave of containers. The orchestrator stops the rollout immediately, leaving the remaining old, healthy containers fully active and capable of serving the vast majority of user requests.
+In a rolling deployment, the platform follows a loop:
 
-## Resource Allocation Buffers: Minimum and Maximum healthy Percents
+1. Start a small number of new instances from the new image.
+2. Wait for those instances to become healthy.
+3. Add them to traffic.
+4. Remove a matching number of old instances.
+5. Repeat until every active instance runs the new version.
 
-To execute rolling updates safely, container orchestrators (such as Amazon ECS or Kubernetes) require administrators to define explicit **Resource Allocation Buffers**. These buffers govern how many containers can be added or terminated during the rollout.
-
-These parameters are defined using two percentage metrics:
-
-* **Minimum Healthy Percent**: The lower limit of active, healthy capacity that must remain running and serving traffic at any second during the deployment.
-* **Maximum Percent**: The upper limit of resources that the orchestrator is allowed to provision during the upgrade window.
-
-### Common Buffer Topologies
-
-#### 1. The 100 / 200 Configuration (Standard Blue-Green-like Buffer)
-
-Setting the `minimumHealthyPercent` to 100% and `maximumPercent` to 200% provides the highest level of safety. For a service with four desired tasks, the orchestrator boots four new tasks *before* terminating a single old one.
-
-The active task pool temporarily swells to eight running tasks. Once the four new tasks pass health checks, the orchestrator drains and terminates the four old tasks, returning the service to its desired count of four. This configuration guarantees that production capacity never dips below 100% of the desired level, but it requires that your cluster has enough spare host memory and CPU capacity to double the workload temporarily.
-
-#### 2. The 50 / 150 Configuration (Resource-Constrained Buffer)
-
-Setting the `minimumHealthyPercent` to 50% and `maximumPercent` to 150% is used when cluster resources are constrained. For a service with four desired tasks, the orchestrator first terminates two old tasks (reducing active capacity to 50%), then boots two new tasks.
-
-Once those two new tasks are healthy, it terminates the remaining two old tasks and boots the final two new tasks. While this configuration fits within tighter memory budgets, it temporarily reduces active production capacity by half during the replacement window, exposing the service to potential overload if traffic spikes.
-
-### Capacity Allocation Comparison
-
-| Topology | Min Healthy % | Max % | Spare Capacity Needed | Traffic Capacity During Rollout |
-| :--- | :--- | :--- | :--- | :--- |
-| **Conservative (100/200)** | 100% | 200% | Double desired resources | Guaranteed 100% |
-| **Balanced (75/100)** | 75% | 100% | No extra resources | Dips to 75% (sequential replace) |
-| **Resource-Constrained (50/150)** | 50% | 150% | 50% extra resources | Dips to 50% (risky for high load) |
-
-## Readiness Probes and Target Health Verification
-
-To prevent booting uninitialized containers into production (the boot-stage traffic inundation problem), the orchestrator must use explicit **Readiness Probes**.
-
-A readiness probe is an automated check that queries a specific endpoint within the container filesystem or network path to confirm that the application is fully ready to accept user requests. It differs fundamentally from a liveness probe, which merely checks if the process is running.
-
-### Structuring a Readiness Endpoint
-
-A robust Node.js backend exposes a dedicated, lightweight `/readyz` route. Rather than simply returning an HTTP status code 200 immediately, the endpoint executes vital connection checks under the hood:
-
-```javascript
-app.get('/readyz', async (req, res) => {
-    try {
-        await database.ping();
-        await redisCache.ping();
-        await messageQueue.checkConnection();
-        res.status(200).json({ status: 'READY' });
-    } catch (err) {
-        res.status(503).json({ status: 'UNHEALTHY', error: err.message });
-    }
-});
-```
-
-For JVM-based Spring Boot services, the equivalent path is managed by the Actuator framework: `/actuator/health/readiness`.
-
-### The Load Balancer Target Group State Loop
-
-When a new container starts, it is registered with the Application Load Balancer (ALB) target group. The load balancer walks through a strict lifecycle before routing user requests to the target:
-
-1. **Initial**: The container has been registered but is not yet checked. No traffic is routed.
-2. **Checking**: The load balancer sends HTTP requests to the configured `/readyz` endpoint at a defined interval (e.g. every 5 seconds).
-3. **Healthy**: The target successfully returns HTTP 200 for a consecutive number of checks (e.g. 3 times). The load balancer begins routing production traffic to it.
-4. **Draining**: The orchestrator is replacing this target. The load balancer stops sending new requests, allowing active in-flight requests to finish processing (connection draining) before terminating the container.
-
-This loop guarantees that an application that boots but fails to initialize its database connection stays quarantined in the `initial` state, protecting users from encountering silent API failures.
-
-## Pipeline Automation and the Circuit Breaker
-
-Automating rolling rollouts inside a CI/CD pipeline ensures that deployments are repeatable and governed by strict feedback loops. 
-
-A production deployment pipeline must not simply trigger the upgrade and exit. It must actively watch the rollout progress and respond to failures.
-
-### The Deployment Circuit Breaker
-
-Amazon ECS and Kubernetes support **Deployment Circuit Breakers**. A circuit breaker monitors the active tasks during the rollout. If the new tasks repeatedly fail their readiness probes and crash (e.g., due to a missing environment variable or bad database configuration), the circuit breaker automatically halts the deployment and reverts the service to the previous working task definition.
-
-Let's look at a complete, clean GitHub Actions deployment workflow YAML that automates an ECS rolling update, watches its progress, and relies on the native circuit breaker for safety:
+Here is a small Kubernetes Deployment for the checkout API:
 
 ```yaml
-name: Production Deployment
-
-on:
-  push:
-    branches:
-      - main
-
-jobs:
-  deploy:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
-
-      - name: Configure AWS Credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: us-east-1
-
-      - name: Register New Task Definition
-        id: task-def
-        uses: aws-actions/amazon-ecs-render-task-definition@v1
-        with:
-          task-definition: task-definition.json
-          container-name: orders-api
-          image: 123.dkr.ecr.us-east-1.amazonaws.com/orders-api:${{ github.sha }}
-
-      - name: Deploy Amazon ECS Task
-        uses: aws-actions/amazon-ecs-deploy-task-definition@v2
-        with:
-          task-definition: ${{ steps.task-def.outputs.task-definition }}
-          service: orders-api-prod
-          cluster: production-cluster
-          wait-for-service-stability: true
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: checkout-api
+spec:
+  replicas: 10
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 2
+      maxUnavailable: 1
+  selector:
+    matchLabels:
+      app: checkout-api
+  template:
+    metadata:
+      labels:
+        app: checkout-api
+        version: "2026.06.13.2"
+    spec:
+      containers:
+        - name: checkout-api
+          image: registry.example.com/checkout-api:2026.06.13.2
+          ports:
+            - containerPort: 8080
 ```
 
-Setting `wait-for-service-stability: true` is the critical safety valve. It forces the GitHub Actions runner to block, polling the ECS API and monitoring task health. If the circuit breaker fires because the new tasks are caught in a crash loop, the step fails, alerting the engineering team instantly while the active production pool continues running the old, stable code.
+The `replicas: 10` line says the service wants ten running pods. The `RollingUpdate` strategy tells Kubernetes to move toward the new pod template gradually. The `maxSurge: 2` value lets Kubernetes run up to two extra pods above the desired count during the rollout. The `maxUnavailable: 1` value lets at most one desired pod be unavailable during the rollout.
+
+The same idea appears in ECS with different field names. An ECS service can use a rolling update deployment type and set `minimumHealthyPercent` and `maximumPercent`. For a service with ten desired tasks, `minimumHealthyPercent: 90` means ECS should keep at least nine healthy tasks during the deployment. `maximumPercent: 120` means ECS can run up to twelve tasks while it starts the replacement version.
+
+Those numbers are the next thing we need to talk about because the rolling shape only works when the service has enough room to run old and new versions at the same time.
+
+## Capacity During the Rollout
+<!-- section-summary: Rolling deployments need a capacity buffer so new instances can start before old instances disappear. -->
+
+**Capacity** means the compute room the service has available: CPU, memory, node slots, task slots, database connections, and load balancer target slots. A rolling deployment consumes extra capacity for a short time because old and new instances overlap.
+
+Let's stay with the checkout API. Ten old containers are already serving traffic. The rollout starts two new containers. For a few minutes, the cluster needs room for twelve containers. If the cluster has only enough CPU and memory for exactly ten, the new containers may sit pending. The rollout can stall because the platform has no room to create the healthy replacement instances it needs.
+
+That is why teams choose rollout numbers together with infrastructure capacity. Here is a simple planning table for ten replicas:
+
+| Setting | What it allows | Highest running count | Lowest healthy target |
+|---|---|---:|---:|
+| `maxSurge: 1`, `maxUnavailable: 0` | Slow and cautious | 11 | 10 |
+| `maxSurge: 2`, `maxUnavailable: 1` | Common balanced rollout | 12 | 9 |
+| `maxSurge: 5`, `maxUnavailable: 2` | Faster rollout with more burst capacity | 15 | 8 |
+
+The first option protects user capacity strongly but moves slowly. The second option gives the platform a little room to move without draining too much live traffic capacity. The third option finishes faster, but the cluster and database must handle more simultaneous new containers and a lower healthy floor.
+
+In real production, platform teams usually connect this to autoscaling. If a Kubernetes cluster runs close to full, the cluster autoscaler may need time to add nodes before the new pods can schedule. If ECS runs on EC2 capacity providers, the Auto Scaling group may need room to launch more instances. If ECS runs on Fargate, the compute capacity feels simpler, but the application can still hit database connection limits, outbound NAT limits, or load balancer health check delays.
+
+A practical rollout checklist usually includes these questions:
+
+| Check | Why it matters |
+|---|---|
+| Can the cluster run the desired surge count? | The new version needs room before old instances drain. |
+| Can the database handle overlap? | Twelve app instances may open more connections than ten. |
+| Can the load balancer register targets quickly enough? | New instances need traffic only after health checks pass. |
+| Can autoscaling react before the rollout times out? | Scheduling delays can look like release failures. |
+
+![Rolling deployment capacity buffer showing desired count, surge capacity, minimum healthy floor, database connections, and load balancer targets](/content-assets/articles/article-cicd-deployment-strategies-rolling-deployments-and-rollbacks/rolling-capacity-buffer.png)
+
+*The rollout needs temporary room for old and new containers, plus enough database and load balancer capacity to carry the overlap.*
+
+Capacity keeps the service alive during the wave. Readiness answers the next question: whether the new version can safely receive user traffic.
+
+## Readiness Before Traffic
+<!-- section-summary: Readiness checks tell the platform when a new instance can receive real user requests. -->
+
+**Readiness** means the application can handle real traffic now. A process can be running while the app still warms caches, opens database pools, loads configuration, runs migrations, or waits for a downstream dependency. The platform needs a signal that means "this copy can answer user requests."
+
+In Kubernetes, a **readiness probe** checks each pod. When the readiness probe fails, Kubernetes removes that pod from Service endpoints and keeps normal traffic away from it. A **startup probe** gives slow-starting containers extra time before the platform treats the startup as failed. A **liveness probe** answers a different question: whether the container should restart because it got stuck.
+
+Here is a useful probe setup for the checkout API:
+
+```yaml
+readinessProbe:
+  httpGet:
+    path: /ready
+    port: 8080
+  initialDelaySeconds: 10
+  periodSeconds: 5
+  failureThreshold: 3
+startupProbe:
+  httpGet:
+    path: /startup
+    port: 8080
+  periodSeconds: 5
+  failureThreshold: 24
+livenessProbe:
+  httpGet:
+    path: /live
+    port: 8080
+  periodSeconds: 10
+  failureThreshold: 3
+```
+
+The `/startup` endpoint should become healthy after the application finishes slow boot work. The `/ready` endpoint should check things the app needs for requests, like configuration loaded, database pool created, and required dependencies reachable. The `/live` endpoint should stay simple, because a liveness failure restarts the container. A liveness check that depends on a flaky downstream service can create restart loops during an unrelated outage.
+
+In ECS behind an Application Load Balancer, target group health checks play a similar role. The load balancer calls a path like `/ready` and sends traffic only to targets that pass the health check. ECS also has container health checks and deployment health behavior. The important production rule stays the same: the new task should join traffic only after the application has finished the work needed to serve requests.
+
+Good readiness checks also protect rollback. If version `2026.06.13.2` starts but fails to connect to the payment database, the new containers fail readiness. The platform keeps traffic on the old containers and the release stops before customers hit the bad version. This is much calmer than discovering the problem after half the fleet has already changed.
+
+Now we have the rollout loop, enough capacity, and readiness gates. The final piece is automation that watches the rollout and stops it when the signals go bad.
+
+## Automation and Stop Rules
+<!-- section-summary: A rollout needs automatic stop rules so the pipeline can halt before a bad version spreads. -->
+
+A **stop rule** is a clear condition that tells the deployment system to pause, fail, or roll back. People often notice a bad rollout too late because they wait for customer reports or stare at a dashboard without an agreed threshold. Automation should watch the same signals every time.
+
+For Kubernetes, the basic command flow looks like this:
+
+```bash
+kubectl set image deployment/checkout-api \
+  checkout-api=registry.example.com/checkout-api:2026.06.13.2
+
+kubectl rollout status deployment/checkout-api --timeout=5m
+```
+
+The `rollout status` command waits for the Deployment to complete. If it times out, the pipeline should fail the release job. A rollback command can move back to the previous revision:
+
+```bash
+kubectl rollout undo deployment/checkout-api
+```
+
+That command only helps when the old version can still run against the current environment. Database changes, queue formats, feature flags, and configuration changes can make a rollback unsafe. We will spend a full article on that problem later in this module.
+
+For ECS, teams often enable the **deployment circuit breaker**. The circuit breaker detects failed service deployments and can automatically roll back to the last completed deployment. Teams commonly pair it with CloudWatch alarms for error rate, latency, task failures, and target health. The pipeline watches the ECS deployment status and treats a failed deployment as a blocked release.
+
+Here is a simple pipeline shape:
+
+```yaml
+deploy_checkout:
+  stage: deploy
+  script:
+    - ./scripts/render-task-definition.sh "$IMAGE_DIGEST"
+    - ./scripts/deploy-ecs-service.sh checkout-api "$IMAGE_DIGEST"
+    - ./scripts/wait-for-ecs-stability.sh checkout-api 900
+    - ./scripts/smoke-test.sh https://checkout.example.com/ready
+```
+
+The practical detail is that the pipeline deploys by **image digest** or another immutable version, then waits for service stability, then runs a smoke test. A smoke test is a small verification request that proves the most important user path still works. For checkout, that might be creating a test cart, calculating totals, and hitting a payment-provider sandbox route.
+
+The stop rules should be written before the release starts. A useful first set looks like this:
+
+| Signal | Stop when |
+|---|---|
+| New instance readiness | New pods or tasks fail readiness for more than 5 minutes. |
+| HTTP 5xx rate | Error rate doubles against the previous 30-minute baseline. |
+| p95 latency | p95 latency stays above the service objective for 10 minutes. |
+| Target health | Load balancer healthy targets fall below the capacity floor. |
+| Business check | Synthetic checkout fails twice from two regions. |
+
+This is where rolling deployments start to feel like release engineering instead of "restart the service and hope." The system has a plan, a capacity budget, readiness checks, and an automatic reason to stop.
 
 ## Putting It All Together
+<!-- section-summary: A safe rolling deployment combines overlap, health checks, capacity planning, and a rehearsed rollback path. -->
 
-Applying the wave-based rolling replacement model, strict healthy percent configurations, and automated readiness probes solves our initial deployment vulnerabilities:
+Let's replay the checkout API release from start to finish.
 
-* **Monolithic Capacity Crashes**: Setting a 100/200 buffer ensures that the orchestrator boots new containers first before stopping old ones, maintaining 100% active capacity throughout the release window and eliminating downtime.
-* **Boot-Stage Traffic Inundations**: Exposing a detailed `/readyz` endpoint and gating targets in `initial` state prevents the load balancer from routing traffic to containers that are not fully initialized.
-* **Silent Startup Failures**: Configuring the deployment circuit breaker and setting `wait-for-service-stability: true` ensures that bad releases are caught, halted, and automatically reverted to the previous healthy task definition, keeping production stable without manual intervention.
+The team builds one image for version `2026.06.13.2` and pushes it to the registry. The deployment updates the service from that immutable image. Kubernetes or ECS starts a small wave of new instances while the old version continues to serve users.
+
+The platform waits for each new instance to pass readiness. The load balancer sends traffic only after the new instance becomes healthy. The rollout controller keeps at least the configured healthy count available. If the cluster needs twelve containers during the release, the team has already planned enough CPU, memory, database connections, and load balancer capacity for that short overlap.
+
+The pipeline watches rollout status, target health, error rate, latency, and a checkout smoke test. If the new version fails startup, readiness, or user-facing checks, the pipeline stops the release and uses the platform rollback mechanism while the old version can still carry traffic.
+
+Rolling deployments work well for normal service updates because they are simple and built into common platforms. They also have one big tradeoff: old and new versions run side by side during the rollout. That means APIs, database schemas, message formats, and feature flags must support mixed versions for a short time.
+
+![Rolling release checklist showing readiness, error rate, latency, smoke checkout, promotion, and rollback path](/content-assets/articles/article-cicd-deployment-strategies-rolling-deployments-and-rollbacks/rolling-release-checklist.png)
+
+*A safe rolling release combines capacity, readiness, monitoring, smoke tests, and a rollback path before the first wave starts.*
+
+Some releases need stronger isolation than that. If old and new versions should never serve production traffic at the same time, the next pattern gives each version a full environment.
 
 ## What's Next
+<!-- section-summary: Blue-green deployments trade extra environment cost for stronger version isolation and faster traffic switching. -->
 
-While rolling deployments are highly efficient and require minimal resource overhead, they run old and new code concurrently under the same load balancer. For database-heavy architectures, this version mixing can corrupt database state if the two versions cannot share the same schema. To eliminate version mixing entirely, we must decouple environments. Let's move to **Blue-Green Deployments** to learn how to clone identical production environments and switch 100% of user traffic instantly at the router level.
-
-![Rolling deployment summary showing waves, capacity buffers, readiness, target health, automation, and circuit breaker](/content-assets/articles/article-cicd-deployment-strategies-rolling-deployments-and-rollbacks/rolling-deployment-summary.png)
-
-*Use this as the rolling-deployment checklist: replace capacity in waves, preserve minimum healthy capacity, understand surge limits, gate on readiness, watch target health, and let the circuit breaker stop bad rollouts.*
+The next article covers **blue-green deployments**. We will keep the same checkout API scenario, but now the new release gets its own full environment. That changes the release question from "How do we replace instances wave by wave?" to "How do we switch traffic between two complete environments safely?"
 
 ---
 
 **References**
 
-* [Amazon ECS Service Deployment Configurations](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/deployment-types.html) - Official specification on setting minimum and maximum healthy percents for rolling updates.
-* [Kubernetes Documentation: Rolling Update Strategy](https://kubernetes.io/docs/concepts/workloads/controllers/deployment/#rolling-update-deployment) - Technical reference for configuring maxSurge and maxUnavailable parameters.
-* [Amazon ECS Deployment Circuit Breaker](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/deployment-circuit-breaker.html) - Architectural guide on automated rollbacks, threshold limits, and stability checks.
-* [Elastic Load Balancing Target Health States](https://docs.aws.amazon.com/elasticloadbalancing/latest/application/target-group-health-checks.html) - Documentation on target lifecycles, initial states, and readiness checking.
+- [Kubernetes Deployments](https://kubernetes.io/docs/concepts/workloads/controllers/deployment/) - Documents Deployment rolling updates, rollout status, rollback commands, and `maxSurge` / `maxUnavailable`.
+- [Kubernetes liveness, readiness, and startup probes](https://kubernetes.io/docs/concepts/workloads/pods/probes/) - Explains probe types and how readiness controls whether a pod receives traffic.
+- [Amazon ECS rolling deployments](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/deployment-type-ecs.html) - Documents ECS rolling update behavior, minimum healthy percent, and maximum percent.
+- [Amazon ECS deployment circuit breaker](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/deployment-circuit-breaker.html) - Explains how ECS detects failed deployments and can roll back.
+- [Application Load Balancer target group health checks](https://docs.aws.amazon.com/elasticloadbalancing/latest/application/target-group-health-checks.html) - Documents health check paths, thresholds, and target health behavior.

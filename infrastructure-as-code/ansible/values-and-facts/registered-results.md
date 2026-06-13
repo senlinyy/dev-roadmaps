@@ -12,213 +12,262 @@ aliases:
 
 ## Table of Contents
 
-1. [Dynamic Observation in Host Executions](#dynamic-observation-in-host-executions)
-2. [The Registered Variables Preview](#the-registered-variables-preview)
-3. [Anatomy of a Task Return Object](#anatomy-of-a-task-return-object)
-4. [Conditional Branching: Making Decisions from Observations](#conditional-branching-making-decisions-from-observations)
-5. [Task Overrides: changed_when and failed_when](#task-overrides-changed_when-and-failed_when)
-6. [Under the Hood: Standard Out Pipe Redirection and JSON Deserialization](#under-the-hood-standard-out-pipe-redirection-and-json-deserialization)
-7. [Defensive Conditional Coding: Managing Skipped and Missing Keys](#defensive-conditional-coding-managing-skipped-and-missing-keys)
+1. [Task Output as Data](#task-output-as-data)
+2. [The Shape of a Registered Result](#the-shape-of-a-registered-result)
+3. [Validation Before Service Changes](#validation-before-service-changes)
+4. [Branching from Health Checks](#branching-from-health-checks)
+5. [changed_when and failed_when](#changed_when-and-failed_when)
+6. [Skipped Tasks, Missing Fields, and Loops](#skipped-tasks-missing-fields-and-loops)
+7. [Verification, Failure Reading, and Rollback](#verification-failure-reading-and-rollback)
 8. [Putting It All Together](#putting-it-all-together)
 9. [What's Next](#whats-next)
+10. [References](#references)
 
-## Dynamic Observation in Host Executions
+## Task Output as Data
+<!-- section-summary: A registered result saves one task's output as a variable that later tasks can use for the same host. -->
 
-A registered result is task output stored as a variable so later tasks can branch on command status, stdout, or structured module return data.
+A **registered result** is the structured output from a task saved into a variable. It gives later tasks evidence from the current run. That evidence might be a return code, standard output, standard error, HTTP status, file metadata, a changed flag, or module-specific data.
 
-In system automation, registering task results is the practice of capturing the output dictionary returned by a task and saving it as a variable for that host during the playbook run. Instead of treating every task as a blind fire-and-forget command, registering results allows the playbook to observe the state of a host during the run. This in-memory capture provides a feedback loop, allowing subsequent tasks to parse the saved metadata and make logical, adaptive decisions based on what the host just reported.
+In the orders platform, this is how the playbook becomes careful. It can render a config, validate the config, restart the API only after the config is safe, and call the health endpoint after the restart. Each host keeps its own result, so `orders-web-01` can continue while `orders-web-02` fails validation.
 
-To see why capturing task outcomes is an essential practice, consider our scenario. You are managing an application update on a backend server where each step depends on the one before it. A configuration syntax check must pass before the web server is reloaded; the database port must be accepting connections before the application starts; and a systemd service file must exist on disk before the service module attempts to enable it.
+The key idea is that registered data belongs to the host that produced it. If a command runs on two web servers, each web server gets its own copy of the registered variable. Later `when` conditions read the value for the current host.
 
-Each step in a deployment pipeline depends on the one before it. A failed package installation means the service binary does not exist; a missing service binary means the port check always fails; a failed port check produces a false health verdict. Running each task blindly without capturing and inspecting its output breaks this dependency chain silently, so the playbook can report success while the application is actually in a broken intermediate state.
+## The Shape of a Registered Result
+<!-- section-summary: Registered variables usually contain common status fields plus module-specific fields. -->
 
-Ansible solves this by using the `register` keyword. By saving the JSON output of one task into a variable, you can inspect command return codes, standard error channels, file metadata, and HTTP statuses. This allows your playbooks to act as smart, adaptive pipelines that observe your hosts, evaluate variables, bypass errors, and protect your system uptime.
-
-## The Registered Variables Preview
-
-Here is an early, comment-free YAML playbook preview demonstrating how to register the outcome of a configuration syntax check and use the saved metadata to conditionally trigger a service reload:
+The `register` keyword gives a name to the result from a task. A command task usually returns fields such as `rc`, `stdout`, `stderr`, `changed`, `failed`, `cmd`, `start`, and `end`. A URI task may return `status`, `content`, `json`, and headers. A template task may return file paths, checksums, and change status.
 
 ```yaml
-- name: Verify and deploy web configuration updates
-  hosts: web_servers
-  become: true
-  tasks:
-    - name: Validate Nginx virtual host configuration syntax
-      ansible.builtin.command: nginx -t
-      register: nginx_syntax_check
-      changed_when: false
-      failed_when: nginx_syntax_check.rc not in [0, 1]
-
-    - name: Reload Nginx service when syntax is correct
-      ansible.builtin.service:
-        name: nginx
-        state: reloaded
-      when: nginx_syntax_check.rc == 0
-
-    - name: Log syntax validation failure details
-      ansible.builtin.debug:
-        msg: "Nginx syntax check failed with error: {{ nginx_syntax_check.stderr }}"
-      when: nginx_syntax_check.rc != 0
+- name: Check orders API version
+  ansible.builtin.command: orders-api --version
+  register: orders_api_version
+  changed_when: false
 ```
 
-## Anatomy of a Task Return Object
-
-A task return object is the structured data Ansible gets back after one task runs on one host. It is usually a dictionary with keys that describe whether the task changed anything, failed, and what output the module produced.
-
-Example: a registered command result named `nginx_syntax_check` can contain `rc: 0`, `stdout`, `stderr`, and `changed: false`. When you use the `register` keyword, you save that dictionary into a variable of your choice.
-
-The specific keys populated in this dictionary depend entirely on the module you call. Many modules return common fields such as `changed` and `failed`, while command-like modules add process-output fields:
-
-- **`changed`**: A boolean flag (`true` or `false`) indicating whether the module made modifications to the system.
-- **`failed`**: A boolean flag indicating whether the task encountered a fatal error and aborted execution on the host.
-- **`rc`**: The return code of a command or shell task. An exit code of `0` usually indicates success, while other values represent command-specific outcomes.
-- **`stdout`**: The raw text output written by a command-like task to the standard output channel.
-- **`stderr`**: The raw error text written by a command-like task to the standard error channel.
-- **`stdout_lines` / `stderr_lines`**: Convenient lists of strings, where each item represents a single line of stdout or stderr output.
-
-For example, when you run `ansible.builtin.stat` to check a file's properties, the registered dictionary holds a nested `stat` sub-dictionary containing keys like `exists`, `owner`, `mode`, and `size`. Understanding the anatomy of these return objects allows you to write highly precise conditional expressions.
-
-## Conditional Branching: Making Decisions from Observations
-
-Registered results let later tasks make decisions from what a host just reported. The most common pattern is saving one task's output and reading it in a later `when` condition.
-
-Example: run `stat` on `/etc/systemd/system/postgresql.service`, save the result as `postgres_unit_file`, and only start PostgreSQL when `postgres_unit_file.stat.exists` is true.
-
-Consider our database cluster scenario, where you must verify if a PostgreSQL database systemd service unit file is present before attempting to configure its startup behaviors:
+During development, a debug task can show the structure. The team should use this on safe data first so the result shape is clear.
 
 ```yaml
-- name: Audit systemd database service file
-  ansible.builtin.stat:
-    path: /etc/systemd/system/postgresql.service
-  register: postgres_unit_file
+- name: Show orders API version result
+  ansible.builtin.debug:
+    var: orders_api_version
+  tags:
+    - debug-results
+```
 
-- name: Keep database running and enabled
+The result is structured data, even when the terminal output looks like plain text. A later task can read `orders_api_version.rc` or `orders_api_version.stdout`. That is much safer than guessing from the playbook output after the fact.
+
+Debug output needs discipline. Registered results can include secrets, tokens, request bodies, headers, command arguments, or file content. Use debug tasks for safe values, guard them with tags, and use `no_log: true` for tasks that may expose sensitive data.
+
+| Field | Common source | How teams use it |
+|---|---|---|
+| `changed` | Most modules | Decide whether a handler or report should treat the task as a real change. |
+| `failed` | Most modules | Branch in rescue logic or stop with a clearer message. |
+| `rc` | `command` and `shell` | Read a documented return code. |
+| `stdout` / `stderr` | `command` and `shell` | Inspect safe command output during troubleshooting. |
+| `status` | `uri` | Check HTTP health and API responses. |
+| `json` | API modules or `uri` | Read machine-friendly response data. |
+| `skipped` | Conditional tasks | Avoid reading fields from tasks that did not run. |
+| `results` | Looping tasks | Walk per-item results from a loop. |
+
+## Validation Before Service Changes
+<!-- section-summary: Registered validation results let the playbook stop before a bad config turns into a bad service restart. -->
+
+One common production use is validation. The orders API has a command that checks a config file and returns `0` when the config is valid. The playbook can register that result and make later tasks depend on it.
+
+```yaml
+- name: Render orders API config with built-in validation
+  ansible.builtin.template:
+    src: orders-api.yml.j2
+    dest: /etc/orders-api/config.yml
+    owner: root
+    group: orders
+    mode: "0640"
+    backup: true
+    validate: "orders-api --check-config %s"
+  register: rendered_orders_config
+  notify: Restart orders API
+```
+
+The `validate` option tells the template module to test a temporary rendered file before replacing the destination. The registered result still tells later tasks whether the template changed the host. This is a strong pattern because the service file is checked before Ansible writes it into place.
+
+Sometimes validation is a separate tool call after several files are present. In that case, register the command result and make the status explicit so the recap stays honest.
+
+```yaml
+- name: Validate complete orders API configuration
+  ansible.builtin.command: orders-api --check-config /etc/orders-api/config.yml
+  register: orders_config_check
+  changed_when: false
+  failed_when: orders_config_check.rc != 0
+```
+
+The command only reads state, so `changed_when: false` keeps the recap quiet. The `failed_when` rule says any nonzero return code fails the host. If the command has documented nonzero codes that are acceptable, the playbook can express that explicitly.
+
+Registered validation results can also control follow-up tasks. A post-render health check may only be useful after the config changed, so a readable fact can hold that decision.
+
+```yaml
+- name: Record that orders config changed during this run
+  ansible.builtin.set_fact:
+    orders_config_changed_this_run: "{{ rendered_orders_config.changed | default(false) }}"
+```
+
+That fact gives later tasks a readable condition. It also keeps the implementation detail of the template result in one place.
+
+## Branching from Health Checks
+<!-- section-summary: Health check results let a playbook wait, retry, fail, or continue based on service evidence. -->
+
+A registered HTTP result is useful after a service restart. The playbook can call a local health endpoint and wait until the service reports ready. The `uri` module returns fields such as `status` and optionally `content`.
+
+```yaml
+- name: Check orders API health after config change
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ orders_api_listen_port }}/health"
+    return_content: true
+  register: orders_health
+  changed_when: false
+  retries: 6
+  delay: 5
+  until: orders_health.status == 200
+  when: orders_config_changed_this_run | default(false) | bool
+```
+
+This task reads the service and retries for up to 30 seconds. It reports `ok` when the health endpoint returns HTTP 200. It fails the host if the service never becomes healthy. The `when` condition keeps the health check tied to the change that made it relevant.
+
+A follow-up task can print a safe summary when the health check fails. Be careful with full response bodies because they can contain environment details or customer data. A short status message is often enough for the playbook output.
+
+```yaml
+- name: Show orders API health status during debugging
+  ansible.builtin.debug:
+    msg: "orders API returned status {{ orders_health.status | default('unknown') }}"
+  when:
+    - orders_health is defined
+    - orders_debug_output | default(false) | bool
+```
+
+This pattern makes the playbook act like a cautious operator. It changes a file, restarts only when needed, waits for the service, and records the result in the output.
+
+## changed_when and failed_when
+<!-- section-summary: Custom changed and failed rules translate tool-specific output into truthful Ansible status. -->
+
+Registered results become most useful when paired with `changed_when` and `failed_when`. These keywords let the playbook define what change or failure means for tools that Ansible has no built-in understanding of.
+
+For example, suppose `ordersctl routing apply` prints `updated` when it changes the live routing table and `already current` when no update was needed. The playbook can translate that tool-specific output into Ansible status.
+
+```yaml
+- name: Apply orders routing policy
+  ansible.builtin.command: ordersctl routing apply /etc/orders-api/routing.yml
+  register: routing_apply
+  changed_when: "'updated' in routing_apply.stdout"
+  failed_when: routing_apply.rc != 0
+```
+
+Now the recap shows `changed` only when the routing policy changed. This matters because a routing change may trigger a smoke test, a notification, or a rollback checkpoint.
+
+Some tools use special return codes. Suppose `ordersctl drift check` returns `0` when there is no drift, `3` when drift exists, and any other code for execution failure. The playbook can treat drift as a failed deployment gate while still reporting the check itself as read-only.
+
+```yaml
+- name: Check orders policy drift
+  ansible.builtin.command: ordersctl drift check --format json
+  register: drift_check
+  changed_when: false
+  failed_when: drift_check.rc not in [0]
+```
+
+If the team wants to collect drift output without failing immediately, it can allow code `3` and branch later. That keeps the collection step separate from the decision step.
+
+```yaml
+- name: Check orders policy drift for reporting
+  ansible.builtin.command: ordersctl drift check --format json
+  register: drift_check
+  changed_when: false
+  failed_when: drift_check.rc not in [0, 3]
+
+- name: Stop when orders policy drift exists
+  ansible.builtin.fail:
+    msg: "orders policy drift exists; review drift_check output"
+  when: drift_check.rc == 3
+```
+
+These rules should match the tool's documented behavior. If a playbook treats a vague string as proof, a future CLI wording change can break the logic. Stable return codes and machine-readable output are better production signals.
+
+## Skipped Tasks, Missing Fields, and Loops
+<!-- section-summary: Registered variables need defensive checks when tasks skip, branch by host, or run in loops. -->
+
+Registered variables can exist even when a task skipped. The result may contain skip metadata instead of the fields you expected from a normal command or module run. Later tasks should check that a result exists and ran normally before reading deep fields.
+
+```yaml
+- name: Reload only after validation ran and passed
   ansible.builtin.service:
-    name: postgresql
-    state: started
-    enabled: true
-  when: postgres_unit_file.stat.exists
+    name: orders-api
+    state: reloaded
+  when:
+    - orders_config_check is defined
+    - not orders_config_check.skipped | default(false)
+    - orders_config_check.rc == 0
 ```
 
-In this pipeline, the first task runs the `stat` module to inspect the host. The second task reads `postgres_unit_file.stat.exists` in its `when` conditional block. If the file is missing, the second task is skipped cleanly, preventing a fatal crash on hosts where the database software has not yet been deployed.
+This matters in mixed fleets. A Debian-only task can register a result on Debian hosts and skip on Red Hat hosts. A later task that blindly reads `orders_config_check.rc` can fail on hosts where the validation branch skipped.
 
-This dynamic branching ensures that your playbooks stay resilient. Each host evaluates the registered variable for itself in isolation, allowing individual cluster nodes to bypass or execute tasks based on their own system status.
-
-## Task Overrides: changed_when and failed_when
-
-`changed_when` and `failed_when` are task-level rules that override Ansible's default status judgment. They exist because command exit codes do not always mean what Ansible's generic defaults assume.
-
-Example: `pg_isready` with exit code `0` is a successful health check, not a system change, so `changed_when: false` keeps it from triggering handlers. By default, Ansible applies simple rules to command and shell tasks: exit code `0` becomes `changed`, and a non-zero exit code becomes `failed`.
-
-Often, these simple default assumptions are incorrect and will mislead your automation. You correct these assumptions by using `changed_when` and `failed_when` overrides:
-
-### 1. Bypassing False Changes
-If you run a read-only command to check system health or query a configuration port, the command does not make writes. To prevent it from falsely reporting changes (which would trigger downstream handlers and restart services on every run), you override the change status:
+Loops add another shape. When a task with `loop` registers a result, the registered variable usually contains a `results` list with one result per loop item. The playbook can inspect that list later.
 
 ```yaml
-- name: Check local database connection health
-  ansible.builtin.command: pg_isready -h localhost
-  register: db_check
-  changed_when: false
+- name: Check required orders API paths
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  loop:
+    - /etc/orders-api/config.yml
+    - /etc/orders-api/routing.yml
+  register: required_order_paths
+
+- name: Fail when a required orders API path is missing
+  ansible.builtin.fail:
+    msg: "Missing required orders API path {{ item.item }}"
+  loop: "{{ required_order_paths.results }}"
+  when: not item.stat.exists
 ```
 
-### 2. Defining Custom Success Boundaries
-Sometimes, a non-zero exit code represents a valid, expected observation rather than a system crash. For example, a search tool returns `0` if a string is found, and `1` if the string is missing. Both are valid results. You override the failure criteria to allow both outcomes:
+The `item.item` expression looks strange at first. The outer `item` is the current loop result in the second task. The inner `item` is the original path from the first loop. Debugging the registered result once in staging makes this shape much easier to understand.
 
-```yaml
-- name: Check for database maintenance flag file
-  ansible.builtin.command: test -f /var/lib/db_maintenance.flag
-  register: maintenance_check
-  changed_when: false
-  failed_when: maintenance_check.rc not in [0, 1]
+## Verification, Failure Reading, and Rollback
+<!-- section-summary: Registered-result workflows should be tested on a canary so validation, health checks, and rollback behavior are proven before a wide run. -->
+
+Registered-result logic should be tested with both success and failure paths. A canary host can prove that validation passes, handlers run only after change, health checks retry, and bad results stop the host with a useful message.
+
+```bash
+ansible-playbook -i inventories/staging/hosts.yml site.yml --limit orders-web-01.staging.example.com --check --diff
+ansible-playbook -i inventories/staging/hosts.yml site.yml --limit orders-web-01.staging.example.com
 ```
 
-This override instructs Ansible to only fail the task if the exit code is something completely unexpected (like `127` for a missing binary), keeping your playbooks highly stable.
+During failure reading, start with the registered task. If `orders_config_check.rc` is nonzero, inspect `stdout` and `stderr` from that task. If `orders_health.status` returns another status, inspect service logs and the rendered config. If a task fails because a field is undefined, check whether the task that registered the variable skipped for that host.
 
-## Under the Hood: Standard Out Pipe Redirection and JSON Deserialization
+Rollback should use the same evidence path. If a new config fails validation before the template writes it, the host usually needs no file rollback. If a config writes successfully and the health check fails after restart, restore the previous release value or repository version and rerun against the affected host. The rollback run should include the same validation and health checks.
 
-Standard output redirection is how the remote module captures text from a command, and JSON deserialization is how the control node turns the returned JSON string back into a dictionary. This is why `stdout`, `stderr`, and `rc` can become normal fields in a registered variable.
-
-Example: when `nginx -t` runs on the remote host, the module captures the command's output and exit code, packages them as JSON, and the control node stores them as `nginx_syntax_check.stdout`, `nginx_syntax_check.stderr`, and `nginx_syntax_check.rc`.
-
-When you run a command task, the remote Python module runs the requested program directly and captures its output:
-
-1. **Subprocess Spawning**: The remote Python runner launches the requested program. The `shell` module goes through a shell; the `command` module does not.
-2. **File Descriptor Redirection**: The script redirects the standard output (`stdout`) and standard error (`stderr`) file descriptors of the child process into in-memory pipelines managed by the parent Python process.
-3. **Buffer Capture**: The script reads the raw byte streams from the pipes, unifies them, and decodes the bytes into structured text strings, splitting lines into lists in memory.
-4. **JSON Packaging**: It packages the strings, return code, and module status fields into a structured JSON string.
-5. **JSON Deserialization**: The bootstrap script writes this JSON string directly to the open SSH socket channel. The control node receives the byte stream, parses the JSON string, and deserializes it into a native Python dictionary in the active host's memory namespace.
-
-```mermaid
-flowchart TD
-    subgraph ManagedNode["Managed Server Node"]
-        Popen["1. Launch command process<br/>(nginx -t)"] -->|2. Redirect stdout/stderr| Pipes["In-Memory Python Pipes"]
-        Pipes -->|3. Capture Buffers| Bootstrapper["Module Runner"]
-        Bootstrapper -->|4. JSON Package| NetPipe["SSH Network socket stdout"]
-    end
-
-    subgraph ControlNode["Control Node (Laptop)"]
-        NetPipe -->|5. Transfer over Network| SSHClient["SSH Connection Manager"]
-        SSHClient -->|6. JSON Deserialization| MemoryMap[("Host memory Namespace Dictionary<br/>(nginx_syntax_check.rc = 0)")]
-    end
+```bash
+ansible-playbook -i inventories/prod/hosts.yml site.yml --limit orders-web-01.example.com -e orders_api_release=2026.06.12
 ```
 
-This process redirection makes command output available for downstream task logic in a predictable structure.
-
-## Defensive Conditional Coding: Managing Skipped and Missing Keys
-
-Defensive registered-result checks mean confirming a variable exists and contains the expected nested keys before reading them. Registered variables are created during the run, so skipped tasks and failed branches can leave smaller result objects than your later task expects.
-
-Example: if a `stat` task is skipped, `my_variable.stat.exists` may not exist. Checking `my_variable is defined` and `my_variable is not skipped` prevents the next task from crashing on a missing key.
-
-A common operational error occurs when a task that registers a variable is skipped because of a previous conditional block:
-- If task 1 is skipped, the variable is still registered in memory, but it contains a minimal dictionary containing only `{ "skipped": true }`.
-- If task 2 blindly attempts to read a nested key (such as `when: my_variable.stat.exists`), the run will crash immediately with an `Undefined variable` error because the `stat` sub-dictionary was never created.
-
-You prevent these compilation crashes by using defensive coding patterns:
-
-### 1. Checking the skipped State
-Always verify that the parent task successfully executed before querying nested keys in downstream tasks:
-
-```yaml
-when:
-  - my_variable is defined
-  - my_variable is not skipped
-  - my_variable.stat.exists
-```
-
-### 2. Using the get() Method
-Use the Python `get()` dictionary query to safely query nested keys with fallbacks, preventing undefined key failures in your templates and conditionals:
-
-```yaml
-when: my_variable.get("stat", {}).get("exists")
-```
-
-Writing defensive conditionals helps your playbooks execute safely across diverse hosts, skipping downstream tasks cleanly instead of crashing the run.
+For sensitive tasks, avoid dumping whole registered results in production logs. Use targeted debug messages that print safe fields, or rely on controller artifacts with controlled access. The registered result is powerful because it contains detail, and that same detail can become a secret leak if printed carelessly.
 
 ## Putting It All Together
+<!-- section-summary: Registered results let Ansible make host-by-host decisions from evidence collected during the current run. -->
 
-We started by looking at how blind configuration executions without registered outcomes can lead to service crashes, database startup failures, and aborted playbook runs.
+The orders platform playbook now uses registered results as live evidence. Template output tells the playbook whether config changed. Validation results decide whether the host can continue. Health check results prove that the service came back. Custom status rules keep read-only checks from polluting the change count.
 
-Ansible solves these problems by providing a robust, in-memory variable capture engine:
-- **In-Memory Capture**: We use the `register` keyword to capture task output dictionaries, providing during-run feedback loops.
-- **Anatomy of Outputs**: We parse module return fields such as `changed`, `failed`, and command-specific fields like `rc`, `stdout`, and `stderr`.
-- **Dynamic Branching**: We write defensive `when` conditionals to bind subsequent tasks to registered outcomes, managing execution scopes cleanly.
-- **Task Overrides**: We leverage `changed_when` and `failed_when` to bypass false changes and define precise success boundaries.
-- **Under-the-Hood Redirection**: The control plane redirects remote subprocess streams through secure pipes, transfers them as JSON packages over SSH, and deserializes them into Python dictionaries in host memory.
-- **Defensive Design**: We check the skipped state and use `get()` fallbacks to protect playbooks from crashing when tasks are bypassed.
+This makes the playbook safer and easier to read. It pauses after commands that report bad evidence, restarts services for clear reasons, and keeps command status truthful. It uses structured output to make a clear decision for each host.
 
-Following these practices ensures that your playbooks function as intelligent, adaptive, and safe configuration pipelines.
+The next group moves into files and services. Registered results will show up again there because file changes, handlers, validation commands, and service health checks are a normal part of production automation.
 
 ## What's Next
 
-Now that you master registered task results, in-memory variable capturing, stdout redirection, and defensive conditionals, the next article will explore **Files and Templates**. We will look at how Ansible copies files, dynamically renders Jinja2 templates, compares file content, and executes safer file writes.
+The next article covers files and templates. It builds on everything here: variables feed templates, templates report changes, handlers react to those changes, and registered results help validate the service after the file lands.
 
 ---
 
 **References**
 
-- [Conditionals: Registering Variables](https://docs.ansible.com/ansible/latest/playbook_guide/playbooks_conditionals.html#registering-variables) - Official reference guide for capturing and evaluating task outputs.
-- [Error Handling in Playbooks](https://docs.ansible.com/ansible/latest/playbook_guide/playbooks_error_handling.html) - Documentation for defining changed and failed variables.
-- [Python Subprocess Documentation](https://docs.python.org/3/library/subprocess.html) - The standard Python subprocess management specification used by Ansible modules to redirect execution streams.
-- [Ansible Built-in Stat Module Reference](https://docs.ansible.com/ansible/latest/collections/ansible/builtin/stat_module.html) - Guide to using stat to capture file system properties.
+- [Conditionals](https://docs.ansible.com/projects/ansible/latest/playbook_guide/playbooks_conditionals.html) - Official guide to registered variables in conditions, result fields, and conditional branching.
+- [Return Values](https://docs.ansible.com/projects/ansible/latest/reference_appendices/common_return_values.html) - Official reference for common result fields such as `changed`, `failed`, `rc`, `stdout`, `stderr`, `skipped`, and `results`.
+- [Error handling in playbooks](https://docs.ansible.com/projects/ansible/latest/playbook_guide/playbooks_error_handling.html) - Official guidance for `failed_when`, `changed_when`, ignored failures, rescue blocks, and handler behavior after failures.
+- [ansible.builtin.template](https://docs.ansible.com/projects/ansible/latest/collections/ansible/builtin/template_module.html) - Official module reference for template rendering, backups, validation, file modes, and return data.
+- [ansible.builtin.uri](https://docs.ansible.com/projects/ansible/latest/collections/ansible/builtin/uri_module.html) - Official module reference for HTTP requests, status codes, response content, and API checks.
+- [ansible.builtin.set_fact](https://docs.ansible.com/projects/ansible/latest/collections/ansible/builtin/set_fact_module.html) - Official module reference for creating host variables during a playbook run.
+- [ansible.builtin.debug](https://docs.ansible.com/projects/ansible/latest/collections/ansible/builtin/debug_module.html) - Official module reference for showing variables and messages during troubleshooting.

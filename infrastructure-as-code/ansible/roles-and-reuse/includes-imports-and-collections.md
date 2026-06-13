@@ -9,302 +9,243 @@ id: article-infrastructure-as-code-ansible-includes-imports-collections
 
 ## Table of Contents
 
-1. [The Challenge of Multi-Platform Infrastructure](#the-challenge-of-multi-platform-infrastructure)
-2. [Imports versus Includes at a Glance](#imports-versus-includes-at-a-glance)
-3. [Parse-Time Loading: Static Imports](#parse-time-loading-static-imports)
-4. [Runtime Loading: Dynamic Includes](#runtime-loading-dynamic-includes)
-5. [Roles as Reuse: Importing versus Including Roles](#roles-as-reuse-importing-versus-including-roles)
-6. [The Impact on Playbook Features](#the-impact-on-playbook-features)
-7. [Static Analysis and Linting Safeguards](#static-analysis-and-linting-safeguards)
-8. [Collections and Fully Qualified Names](#collections-and-fully-qualified-names)
-9. [Under the Hood: Module Name Resolution](#under-the-hood-module-name-resolution)
-10. [Choosing the Right Timing](#choosing-the-right-timing)
-11. [Putting It All Together](#putting-it-all-together)
-12. [What's Next](#whats-next)
+1. [Reuse Also Has Timing](#reuse-also-has-timing)
+2. [Static Imports](#static-imports)
+3. [Dynamic Includes](#dynamic-includes)
+4. [Tags, Loops, and Task Listing](#tags-loops-and-task-listing)
+5. [Roles in Static or Dynamic Form](#roles-in-static-or-dynamic-form)
+6. [Collections as Versioned Packages](#collections-as-versioned-packages)
+7. [Verification and CI](#verification-and-ci)
+8. [Upgrade and Rollback Safety](#upgrade-and-rollback-safety)
+9. [Putting It All Together](#putting-it-all-together)
+10. [What's Next](#whats-next)
+11. [References](#references)
 
-## The Challenge of Multi-Platform Infrastructure
+## Reuse Also Has Timing
+<!-- section-summary: Imports are loaded before execution, while includes are chosen during execution. -->
 
-Ansible reuse timing decides whether task files are loaded at parse time with imports or at runtime with includes.
+Roles give service automation a home. The next question is timing: should Ansible load the reused content while it parses the playbook, or should it decide during the run after it knows facts, variables, loop items, and earlier task results?
 
-In any corporate enterprise, the production server fleet is rarely homogeneous. A single infrastructure pipeline might deploy to some machines running Debian-based operating systems, other machines running Red Hat Enterprise Linux, and perhaps serverless cloud containers.
+Ansible has two reuse families for that choice. **Imports** are static. Ansible preprocesses imported tasks, roles, or playbooks before normal task execution. **Includes** are dynamic. Ansible reaches an include as a task during execution and then loads the selected tasks, variables, or role.
 
-When configuring a system service, such as a monitoring agent, administrators encounter platform-specific differences. Debian systems use the `apt` package manager and store service configuration files in `/etc/default/`; Red Hat systems use the `dnf` package manager and store the same configuration variables in `/etc/sysconfig/`.
+Here is the timing in plain order:
 
-If developers try to write a single, monolithic playbook that handles all platforms inline using continuous conditional tasks, the playbook becomes unreadable. A task list with dozens of `when: ansible_facts['os_family'] == 'Debian'` statements scattered throughout introduces cognitive load.
+1. Parse the playbook.
+2. Expand imports.
+3. List static tasks.
+4. Start the run.
+5. Reach the include task.
+6. Load dynamic content for that host.
 
-To solve this, Ansible provides reuse mechanisms that split large task files into smaller, platform-specific subfiles. However, when organizing this reused content, developers must choose between static imports and dynamic includes. This choice determines whether Ansible loads the task structure early, while parsing the playbook, or waits until execution reaches the include task.
+That timing affects what operators can see before the run. Static content is easier to list ahead of time. Dynamic content is more flexible because the current host, loop item, or earlier result can choose the file or role.
 
-## Imports versus Includes at a Glance
+The orders platform now has a reusable `orders_api` role, plus a few smaller task files for operating-system setup and service checks. Some of that content should always be part of the playbook. Some content depends on each host. That is where imports and includes start to matter.
 
-The following playbook shows how both static imports and dynamic includes are invoked within the same task list to manage system configuration tasks:
+## Static Imports
+<!-- section-summary: Static imports make reused content visible to Ansible before the run starts. -->
 
-```yaml
-- name: Configure enterprise system agents
-  hosts: all
-  become: true
-  tasks:
-    - name: Statically compile baseline system packages
-      ansible.builtin.import_tasks: baseline_packages.yml
+A **static import** loads reused content while Ansible builds the playbook. Common tools are `ansible.builtin.import_tasks`, `ansible.builtin.import_role`, and `import_playbook`. Static imports fit content that forms part of the fixed playbook shape.
 
-    - name: Dynamically include operating system tasks
-      ansible.builtin.include_tasks: "agent_{{ ansible_facts['os_family'] | lower }}.yml"
-```
-
-The baseline tasks file (`baseline_packages.yml`) contains generic system utilities:
+For the orders web fleet, every host needs the common package setup and the same core role:
 
 ```yaml
-- name: Install common system diagnostics
-  ansible.builtin.apt:
-    name: ["curl", "htop", "sysstat"]
-    state: present
+- name: Import common Linux baseline tasks
+  ansible.builtin.import_tasks: common-linux-baseline.yml
+
+- name: Import orders API role
+  ansible.builtin.import_role:
+    name: orders_api
 ```
 
-The platform-specific tasks file (`agent_debian.yml`) contains Debian package setup:
+The advantage is visibility. `ansible-playbook --list-tasks` can show imported tasks because Ansible already expanded them. Syntax checks and tag listing also have more information before the run touches a host.
+
+Static imports work well for predictable structure. If every orders web host always needs the same baseline, the import tells reviewers exactly what belongs to the play. Conditions on imports apply across imported content, so the condition should describe a broad, structural choice instead of a tiny runtime branch.
+
+## Dynamic Includes
+<!-- section-summary: Dynamic includes let the current host, loop item, or runtime result choose reused content. -->
+
+A **dynamic include** loads reused content when the playbook reaches that include task during execution. Common tools are `ansible.builtin.include_tasks`, `ansible.builtin.include_role`, and `include_vars`. Dynamic includes fit choices that depend on host facts, loop items, or earlier task results.
+
+The orders fleet has both Ubuntu and Red Hat family hosts during a migration. Package names and service helpers differ by OS family, so the playbook can choose a task file per host. The file names stay plain so operators can inspect every possible branch:
 
 ```yaml
-- name: Install Debian monitoring packages
-  ansible.builtin.apt:
-    name: ["monitoring-agent-deb"]
-    state: present
+- name: Include OS-specific package tasks
+  ansible.builtin.include_tasks: "packages-{{ ansible_facts.os_family | lower }}.yml"
 ```
 
-## Parse-Time Loading: Static Imports
+An Ubuntu host can include `packages-debian.yml`, while a Rocky Linux host can include `packages-redhat.yml`. The selected file depends on facts gathered for that host, so a dynamic include fits the job.
 
-Static imports load reusable tasks before the play starts running on hosts. Ansible reads the referenced file during playbook parsing and expands the import line into the real tasks from that file.
-
-Example: `import_tasks: baseline_packages.yml` is a good fit when every host should always run the same baseline package tasks. Before normal task execution reaches the managed hosts, Ansible reads the imported YAML file, parses its contents, and inserts those tasks into the compiled task list.
-
-This is why static imports are visible to playbook inspection commands. The imported tasks are known early enough for Ansible to list them and apply task-level keywords to the expanded tasks.
-
-Because this compilation happens early, static imports carry several technical constraints. You cannot use variables that are registered during runtime task execution to define the name of the imported file. The filename must be static or derived from variables known at compile time, such as playbook vars or inventory variables. If you apply a conditional `when` statement or a tag to an `import_tasks` block, the control plane duplicates that condition and applies it to every task compiled from the imported file, so every child task inherits the parent constraint. Because Ansible parses the tasks early, missing files and YAML syntax problems are usually caught before those tasks execute, though module-specific failures can still depend on runtime data and target state.
-
-Static imports are highly predictable. They provide a stable, unchanging execution blueprint that is fully transparent to static analysis tools.
-
-```mermaid
-graph TD
-    subgraph CompilePhase ["Compile Phase (Before Run)"]
-        Playbook["Playbook (import_tasks)"]
-        Parser["YAML Parser & Compiler"]
-        SubTasks["baseline_packages.yml"]
-        FullGraph["Fully Compiled Task Tree"]
-    end
-
-    subgraph ExecutionPhase ["Execution Phase (During Run)"]
-        TargetNodes["Managed Hosts"]
-    end
-
-    Playbook --> Parser
-    SubTasks --> Parser
-    Parser -->|Statically Merged| FullGraph
-    FullGraph -->|Executed on Target| TargetNodes
-```
-
-## Runtime Loading: Dynamic Includes
-
-Dynamic includes load reusable tasks during the run, when the include task is reached for a host. This lets Ansible choose a task file from facts or earlier task results.
-
-Example: `include_tasks: "agent_{{ ansible_facts['os_family'] | lower }}.yml"` can load `agent_debian.yml` on Ubuntu and `agent_redhat.yml` on Rocky Linux. In contrast to static imports, Ansible places the include task into the execution queue, then loads the referenced file when that task is reached.
-
-When execution reaches the include task for a host, Ansible evaluates the task parameters in that host's context. If the include task passes its conditional `when` guards, the control plane reads the file, parses its YAML structure, and adds the included tasks to that host's execution path.
-
-This allows different target hosts to load different files or skip inclusion entirely based on facts, registered variables, or other runtime conditions.
-
-This deferral enables advanced runtime flexibility. You can use variables gathered from the target host (such as `ansible_facts`) or registered from previous tasks to dynamically generate the filename of the included file, so a single include statement can load different task files on different hosts in the same run. If a conditional check on the `include_tasks` statement evaluates to false, the target file is never read from the control node filesystem at all, which is highly efficient when some files contain modules installed only on specific target platforms. Because the included tasks are parsed in-memory when the include is reached, the system can adapt its execution structure based on the success or failure of preceding tasks.
-
-The trade-off for this flexibility is a loss of early visibility. Because the control plane does not know which tasks exist inside the included file until it reaches the include statement during execution, static validation tools and playbook inspection flags cannot view the included tasks before the run begins.
-
-```mermaid
-graph TD
-    subgraph CompilePhase ["Compile Phase (Before Run)"]
-        Playbook["Playbook (include_tasks)"]
-        MinimalGraph["Minimal Execution Graph"]
-    end
-
-    subgraph ExecutionPhase ["Execution Phase (During Run)"]
-        Worker["Execution Engine"]
-        HostFact["OS Family Fact Scan"]
-        LoadInclude["Loads agent_debian.yml"]
-        FinalTasks["Injected Tasks Executed"]
-    end
-
-    Playbook --> MinimalGraph
-    MinimalGraph --> Worker
-    Worker --> HostFact
-    HostFact -->|Debian Detected| LoadInclude
-    LoadInclude --> FinalTasks
-```
-
-## Roles as Reuse: Importing versus Including Roles
-
-Roles can also be loaded early or late. Importing a role makes its structure visible while Ansible parses the playbook, while including a role lets the run decide whether to load it for a specific host.
-
-Example: a universal `security_baseline` role can be imported for every host, while a `database_config` role can be included only after a check confirms that PostgreSQL is present.
-
-### Static Role Imports
-
-Using `ansible.builtin.import_role` loads the target role statically. Ansible exposes the role's tasks, defaults, vars, and handlers early enough that the imported role behaves much like a role listed under the play's `roles:` section.
-
-Static role imports are predictable and easier to inspect with list commands. However, you cannot use runtime host facts to determine which role to import.
-
-### Dynamic Role Includes
-
-Using `ansible.builtin.include_role` defers the loading of the role until the execution engine reaches that task during the live run. This allows you to conditionally execute different roles on different hosts depending on runtime criteria.
-
-For example, you might include a database configuration role only if a port scan task reveals that a database service is active on the target machine:
+Dynamic includes are also useful with loops. If the platform team wants to run the same validation role for several local service endpoints, `include_role` can run once per loop item with a clear loop variable.
 
 ```yaml
-- name: Include database configuration role if service is present
+- name: Run endpoint checks for local orders services
   ansible.builtin.include_role:
-    name: database_config
-  when: database_port_detected | default(false)
+    name: service_endpoint_check
+  loop:
+    - name: orders-api
+      url: http://127.0.0.1:8080/ready
+    - name: nginx
+      url: http://127.0.0.1/nginx-health
+  loop_control:
+    loop_var: endpoint_check
 ```
 
-When a role is dynamically included, its tasks are loaded when the include task runs. By default, `include_role` does not expose the role's `defaults` and `vars` to the rest of the play; set `public: true` only when later tasks intentionally need those values.
+## Tags, Loops, and Task Listing
+<!-- section-summary: The timing choice changes what operators can list, tag, loop over, and start from. -->
 
-## The Impact on Playbook Features
+The import/include choice shows up in everyday commands. Static imports are expanded before execution, so `--list-tasks` and `--list-tags` can show the imported work. Dynamic includes appear first as include tasks, and the inner tasks become known when the include runs.
 
-The import/include choice changes what Ansible can see before the run starts. Features like task listing, tags, loops, and handler notification all depend on whether the child tasks exist during parsing or appear later during execution.
+```bash
+ansible-playbook -i inventories/staging orders-web.yml --list-tasks
+ansible-playbook -i inventories/staging orders-web.yml --list-tags
+```
 
-Example: `--list-tasks` can show tasks from `import_tasks` because they are already expanded, but it can only show the parent `include_tasks` line because the inner file has not been loaded yet.
+That matters during review. If `common-linux-baseline.yml` is imported, an operator can list the exact tasks before the run. If `packages-{{ ansible_facts.os_family | lower }}.yml` is included, the operator should inspect the possible files and understand which fact chooses them.
 
-### Playbook Inspection Flags
+Loops are another major difference. Includes can run in loops because the include itself is a task. Imports are expanded during parsing, so they are a poor fit for per-item runtime work. When you need one role execution per generated item, `include_role` usually fits the job.
 
-Playbook inspection flags are read-only commands that show what Ansible can see before execution. `--list-tasks` lists known task names, and `--list-tags` lists known tags without modifying any managed systems.
-
-If the playbook uses `import_tasks` or `import_role`, the compilation engine expands the import files, and the command-line output lists every task contained within those files.
-
-If the playbook uses `include_tasks` or `include_role`, the output lists the include task itself. The tasks located inside the included file are not visible in that early listing because Ansible has not reached the include and loaded the file.
-
-### Tag Resolution
-
-Tags are labels attached to tasks so a run can select a smaller slice of a playbook. They are useful for maintenance runs like `--tags restart_services` or `--tags certificates`.
-
-When a tag is applied to a static `import_tasks` statement, the compilation engine applies that tag to every task extracted from the imported file. The tasks are fully indexed, and passing the tag on the command line will execute only those specific tasks.
-
-When a tag is applied to a dynamic `include_tasks` statement, the tag is only bound to the include task itself. If you pass that tag on the command line, Ansible executes the include task, opens the file, and then runs only the tasks inside the included file that also match the active tag selection.
-
-Furthermore, if you apply a tag to a task *inside* an included file, but do not tag the parent `include_tasks` statement, running the playbook with that tag can skip the include task itself. If you want tag inheritance for dynamic includes, use the `apply` keyword or wrap the include in a tagged block.
-
-### Loop Boundaries
-
-The `loop` parameter repeats one task for each item in a list. It works with dynamic includes because the include task is a real runtime task, but it cannot wrap a static import that has already been expanded during parsing.
-
-You cannot apply a loop to an `import_tasks` statement. Static imports are expanded before task execution, so loops belong on dynamic includes instead.
-
-You can apply a loop to an `include_tasks` statement. When the loop runs, the engine executes the include task once for each item in the list, dynamically parsing and executing the target file repeatedly with the corresponding item bound to the loop context.
-
-### Handler Resolution and Notification
-
-Handler resolution is the process of matching a `notify` name to a handler task. The timing difference matters because Ansible can only notify handler names it knows about.
-
-When you use `import_tasks` inside the playbook's `handlers` section, Ansible loads the handler tasks early. Each task inside the imported file is registered as an active handler in the handler namespace. Any task in the main playbook can notify these individual tasks directly by their name.
-
-When you use `include_tasks` inside the `handlers` section, the individual tasks inside the included file are not registered in the handler namespace at startup. Because the file has not yet been opened or parsed, the execution engine does not know the names of the inner tasks. Consequently, standard tasks cannot notify the inner tasks by name; they can only notify the parent `include_tasks` task itself, which will dynamically load and execute the subfile when the handler runs.
-
-## Static Analysis and Linting Safeguards
-
-Static analysis means checking playbook files before running them against hosts. `ansible-lint` is a common tool that reads Ansible code and reports risky patterns, deprecated modules, missing names, or weak file permissions.
-
-Example: a pull request can run `ansible-lint` to catch a file task with mode `0777` before the playbook ever reaches production. In enterprise engineering organizations, infrastructure code is often put through these automated quality gates before it is merged.
-
-Using static imports (`import_tasks`) gives static analysis tools better visibility. Because the files are loaded early, `ansible-lint` can usually trace module calls, privilege escalation parameters, and file permission declarations more easily.
-
-Dynamic includes (`include_tasks`) present a challenge for static code analyzers. When the filename of an included file is generated dynamically using runtime host facts, such as `"agent_{{ ansible_facts['os_family'] | lower }}.yml"`, the linting tool cannot predict which files will be opened at runtime. As a result, it cannot validate the tasks inside those files during the pull request validation check. To maintain robust quality gates, developers using dynamic includes must supply explicit linter hints or configure the CI pipeline to run syntax checks against all task files in isolation.
-
-## Collections and Fully Qualified Names
-
-A collection is an installable package of Ansible modules and plugins. A Fully Qualified Collection Name (FQCN) is the complete dotted name of a module inside one collection.
-
-Example: `ansible.builtin.template` points to Ansible's built-in template module, while a short name like `template` depends on the active collection search path. As you split playbooks into modular files, using FQCNs keeps module references reliable.
-
-Ansible distributes its modules inside structured packages called collections. For example, the core modules ship in the `ansible.builtin` collection, while community-supported utilities ship in namespaces like `community.general`.
-
-Using the FQCN, such as `ansible.builtin.template` instead of simply `template`, eliminates a category of ambiguity that grows larger as a project installs more collections. If a third-party collection defines a module named `copy` that behaves differently from the standard file copier, the FQCN tells Ansible exactly which module to load, preventing silent behavior changes. It also makes it straightforward to navigate directly to the correct official module documentation, and developers reviewing the code immediately understand the module's origin without needing to trace the active collection search path.
-
-A modular project should also list its external collection requirements inside a `collections/requirements.yml` file, specifying precise versions to prevent breaking changes in production when a new control node is provisioned.
+Tags also need deliberate design with dynamic includes. A tag on the include controls whether the include task runs. The tasks inside the included file need matching tags, or the include should use `apply` to pass tags to inner tasks.
 
 ```yaml
-# collections/requirements.yml
+- name: Include orders health checks with health tags
+  ansible.builtin.include_tasks:
+    file: health-checks.yml
+    apply:
+      tags:
+        - orders_health
+  tags:
+    - orders_health
+```
+
+This pattern helps emergency commands behave as expected:
+
+```bash
+ansible-playbook -i inventories/production orders-web.yml --tags orders_health --limit orders-web-prod-01
+```
+
+## Roles in Static or Dynamic Form
+<!-- section-summary: Play-level roles and import_role fit fixed structure, while include_role fits runtime choices. -->
+
+Roles can be used three common ways. A play-level `roles` list adds the role as part of the fixed play structure. `import_role` brings a role into a task list statically. `include_role` loads and executes a role dynamically during the run.
+
+For the normal orders web deployment, a play-level role is straightforward:
+
+```yaml
+- name: Configure orders web servers
+  hosts: orders_web
+  become: true
+  serial: 1
+  roles:
+    - role: orders_api
+```
+
+For a fixed task-list location, `import_role` keeps the role visible early:
+
+```yaml
+- name: Import the orders API role after preflight checks
+  ansible.builtin.import_role:
+    name: orders_api
+```
+
+For runtime choices, `include_role` gives more flexibility. A canary play might include a rollback role only after a health check result indicates a failed deployment on that host.
+
+```yaml
+- name: Include rollback role for failed canary host
+  ansible.builtin.include_role:
+    name: orders_api_rollback
+  when: canary_health.status is defined and canary_health.status != 200
+```
+
+The practical question is: **should this role be part of the fixed play structure, or should the current host decide during execution?** Fixed structure points to play-level roles or `import_role`. Runtime decisions, loops, and host-specific selection point to `include_role`.
+
+## Collections as Versioned Packages
+<!-- section-summary: Collections package roles, modules, plugins, and docs under a namespace so teams can share tested automation. -->
+
+A **collection** is Ansible's package format for roles, modules, plugins, playbooks, documentation, and tests. Collections live under a namespace and name, such as `community.general` or an internal collection like `devpolaris.platform`. They let teams share automation with versions instead of copying role directories between repositories.
+
+The orders platform might use community modules for system helpers and an internal collection for company service roles:
+
+```yaml
 collections:
   - name: community.general
-    version: ">=8.0.0,<9.0.0"
-  - name: ansible.posix
-    version: "1.5.4"
+    version: "==11.4.0"
+  - name: devpolaris.platform
+    version: "==2.3.1"
 ```
 
-## Under the Hood: Module Name Resolution
+Install them in CI and on automation runners before running playbooks:
 
-Module name resolution is the lookup process Ansible uses to turn a short module name into the actual plugin code to run. Short names require a search path; FQCNs point directly to the module.
-
-Example: `copy` might be checked against configured collections in order, but `ansible.builtin.copy` skips that ambiguity and loads the built-in copier.
-
-If a playbook uses short, unqualified module names, such as `template` or `copy`, the loader is forced to run a multi-step search path resolution loop. At the play level, developers can define a `collections` keyword that establishes a search priority list, similar to the `$PATH` environment variable in Unix operating systems.
-
-```yaml
-- name: Apply systems changes
-  hosts: all
-  collections:
-    - community.general
-    - ansible.builtin
-  tasks:
-    - name: Run a generic package task
-      apt:
-        name: htop
+```bash
+ansible-galaxy collection install -r collections/requirements.yml
+ansible-galaxy collection list
 ```
 
-When resolving the `apt` name, the execution engine must decide which collection provides that short name:
-1. It checks if `community.general.apt` exists.
-2. If not found, it checks if `ansible.builtin.apt` exists.
-3. If still not found, it queries other installed collection namespaces in order of priority.
+Version pinning matters because a collection can change module behavior, role defaults, or plugin code. Production automation should run with a reviewed dependency set. A collection upgrade should look like any other infrastructure change: update the version, run syntax checks and staging tests, review diffs, then promote.
 
-The main risk is not a benchmark-level delay; it is ambiguity. By referencing the FQCN directly, you make the module source explicit and avoid surprises when a project installs more collections later.
+## Verification and CI
+<!-- section-summary: Reuse choices should be verified with syntax checks, task listing, tag listing, staging runs, and pinned dependencies. -->
 
-## Choosing the Right Timing
+Verification starts with installing the same collection versions that production will use. CI should install from `collections/requirements.yml`, run syntax checks, and list tasks for playbooks where static imports should be visible.
 
-Choosing the right timing means deciding whether Ansible should know the reusable tasks before the run starts or wait until host-specific data is available. Use the mechanism that matches the information needed to choose the file or role.
+```bash
+ansible-galaxy collection install -r collections/requirements.yml
+ansible-playbook -i inventories/staging orders-web.yml --syntax-check
+ansible-playbook -i inventories/staging orders-web.yml --list-tasks
+ansible-playbook -i inventories/staging orders-web.yml --list-tags
+```
 
-Example: a fixed `baseline_packages.yml` file should be imported, while `agent_{{ ansible_facts['os_family'] | lower }}.yml` should be included because the file name depends on gathered facts.
+For dynamic includes, CI should also check the files that facts or variables can select. If the playbook includes `packages-{{ ansible_facts.os_family | lower }}.yml`, reviewers should see `packages-debian.yml` and `packages-redhat.yml` in the same change when the include logic changes.
 
-Use `import_tasks` or `import_role` when:
-- The task list represents a stable, unchanging series of steps that always executes on every host.
-- You want to see all tasks listed when running audit commands like `--list-tasks`.
-- You want to apply tags to specific tasks inside the subfile and run them independently.
-- You want earlier syntax and structure feedback before the imported tasks execute.
+Run staging with the same tags and limits operators will use in production:
 
-Use `include_tasks` or `include_role` when:
-- The task file to load depends on runtime facts, such as the operating system or processor architecture of the managed host.
-- The name of the file to load is computed dynamically from variables registered during earlier tasks.
-- You need to execute the task list repeatedly using a `loop` statement.
-- You are configuring complex, conditional error-recovery handlers that should only be parsed if an active failure occurs.
+```bash
+ansible-playbook -i inventories/staging orders-web.yml --limit orders-web-stg-01 --check --diff
+ansible-playbook -i inventories/staging orders-web.yml --tags orders_health --limit orders-web-stg-01
+```
 
-By matching the reuse mechanism to the timing requirements of the playbook, you keep your infrastructure codebase both flexible and highly predictable.
+This catches two common problems early. A dynamic include may select a missing file for one OS family. A tag-limited run may execute the include task and leave out the inner work when tags are missing from the included tasks.
+
+## Upgrade and Rollback Safety
+<!-- section-summary: Reused content can affect many playbooks, so upgrades need pinning, staging, and a clear revert path. -->
+
+Reusable content has a wider blast radius than a one-off task. A role used by ten playbooks can change ten workflows. A collection upgrade can change modules and plugins across the whole automation repository. That power is useful, and it deserves a careful release path.
+
+For internal roles, review role changes with the playbooks that call them. For collections, pin exact versions in requirements, commit the requirement change, and run staging before production. Keep the previous requirement version in Git so rollback is a normal revert.
+
+```bash
+git diff collections/requirements.yml
+ansible-galaxy collection install -r collections/requirements.yml --force
+ansible-playbook -i inventories/staging orders-web.yml --limit orders-web-stg-01 --check --diff
+```
+
+If an upgraded collection or shared role breaks production, revert the requirements or role commit, reinstall dependencies, and rerun the playbook through the same production limit. That gives you a clean path back to the last reviewed dependency set.
+
+```bash
+git revert <collection-or-role-upgrade-commit>
+ansible-galaxy collection install -r collections/requirements.yml --force
+ansible-playbook -i inventories/production orders-web.yml --limit orders-web-prod-01 --diff
+```
 
 ## Putting It All Together
+<!-- section-summary: Reusable Ansible content uses imports for fixed structure, includes for runtime choices, roles for service boundaries, and collections for sharing. -->
 
-Organizing multi-platform server configurations requires separating generic system orchestration from platform-specific tasks. Ansible facilitates this modular architecture by allowing playbooks to import or include external task files.
+The orders automation now has several reuse layers. The `orders_api` role packages service setup. Static imports bring fixed baseline tasks into the playbook early so operators can list them. Dynamic includes choose OS-specific task files from host facts. Collections provide versioned shared modules and roles for the team.
 
-The key to successful reuse is understanding the timing:
+The operator workflow matches those choices. CI installs pinned collections, runs syntax checks, lists tasks and tags, and tests staging. Production runs use limits and serial batches. If a reused dependency causes trouble, Git rollback and dependency reinstall bring the playbook back to the previous reviewed state.
 
-| Feature | Static Imports (`import_tasks`) | Dynamic Includes (`include_tasks`) |
-| :--- | :--- | :--- |
-| **Parsing Time** | Parse time, before normal task execution | Runtime, when the include task is reached |
-| **Filename Variable** | Static or known early | Runtime variables or facts can be used |
-| **Tag Inheritance** | Inherited by child tasks | Not inherited by default; use `apply` or a block when needed |
-| **Loop Support** | Unsupported | Supported |
-| **Inspection (`--list`)** | Visible in task listings | The include is visible; inner tasks are loaded later |
-| **Validation** | Parsed earlier on the control plane | Parsed when the include is reached |
-| **Handler Notification** | Individual imported tasks can be notified | Only the parent include task can be notified |
+Reusable Ansible content needs three habits: make the common path clear to read, make runtime choices explicit, and keep shared dependencies versioned. With those habits in place, a small playbook can support a growing fleet without hiding its behavior.
 
-By choosing static imports for stable system structures and dynamic includes for platform-specific variations, you build an automation framework that is easier to audit, validate, and adapt across different host environments.
+## What's Next
+
+The next group covers secrets and safety. Reusable automation eventually needs passwords, tokens, private keys, and certificates. The next article starts with Ansible Vault and explains where encrypted values become plain text during a run.
 
 ---
 
 **References**
 
-- [Reusing Ansible Artifacts](https://docs.ansible.com/ansible/latest/playbook_guide/playbooks_reuse.html) - Official guide covering the full reuse model, including when to use imports, includes, and roles.
-- [Statically Importing Tasks](https://docs.ansible.com/ansible/latest/collections/ansible/builtin/import_tasks_module.html) - Module reference for `import_tasks`, including parameter options and parse-time behavior.
-- [Dynamically Including Tasks](https://docs.ansible.com/ansible/latest/collections/ansible/builtin/include_tasks_module.html) - Module reference for `include_tasks`, covering runtime loading, loops, and conditional inclusion.
-- [Statically Importing Roles](https://docs.ansible.com/ansible/latest/collections/ansible/builtin/import_role_module.html) - Module reference for `import_role` and how static role loading differs from the `roles:` key.
-- [Dynamically Including Roles](https://docs.ansible.com/ansible/latest/collections/ansible/builtin/include_role_module.html) - Module reference for `include_role`, including the `public` parameter for exposing role variables.
-- [Ansible Collections Guide](https://docs.ansible.com/ansible/latest/collections_guide/index.html) - Covers installing, requiring, and using collections, including the `requirements.yml` format.
-- [Tags in Playbooks](https://docs.ansible.com/projects/ansible/latest/playbook_guide/playbooks_tags.html) - Explains tag inheritance differences between static imports and dynamic includes.
+- [Reusing Ansible artifacts](https://docs.ansible.com/projects/ansible/latest/playbook_guide/playbooks_reuse.html) - Official guide for imports, includes, reusable files, roles, and handler reuse behavior.
+- [Roles](https://docs.ansible.com/projects/ansible/latest/playbook_guide/playbooks_reuse_roles.html) - Official guide for play-level roles, `include_role`, `import_role`, and role argument validation.
+- [ansible.builtin.include_role](https://docs.ansible.com/projects/ansible/latest/collections/ansible/builtin/include_role_module.html) - Official module documentation for dynamically loading and executing roles.
+- [ansible.builtin.import_role](https://docs.ansible.com/projects/ansible/latest/collections/ansible/builtin/import_role_module.html) - Official module documentation for statically importing roles.
+- [Using Ansible collections](https://docs.ansible.com/projects/ansible/latest/collections_guide/index.html) - Official guide for collection structure and usage.
+- [Ansible Galaxy user guide](https://docs.ansible.com/projects/ansible/latest/galaxy/user_guide.html) - Official guide for installing roles and collections from requirements files.

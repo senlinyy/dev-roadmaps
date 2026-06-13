@@ -12,188 +12,219 @@ aliases:
 
 ## Table of Contents
 
-1. [The Feedback Loop of Playbook Execution](#the-feedback-loop-of-playbook-execution)
-2. [The Playbook Output Stream and Code Preview](#the-playbook-output-stream-and-code-preview)
-3. [Decoding the Status Stream](#decoding-the-status-stream)
-4. [Isolating Failures: Unreachable vs. Failed](#isolating-failures-unreachable-vs-failed)
-5. [Execution Branching: Skipped, Rescued, and Ignored](#execution-branching-skipped-rescued-and-ignored)
-6. [Under the Hood: Standard Out Capture and JSON Parsing](#under-the-hood-standard-out-capture-and-json-parsing)
-7. [The Play Recap: Auditing Fleet Health](#the-play-recap-auditing-fleet-health)
+1. [Output Is Deployment Evidence](#output-is-deployment-evidence)
+2. [Status Words in Task Output](#status-words-in-task-output)
+3. [Failed and Unreachable Mean Different Repairs](#failed-and-unreachable-mean-different-repairs)
+4. [Registered Results, Verbosity, and Diffs](#registered-results-verbosity-and-diffs)
+5. [Reading the Play Recap](#reading-the-play-recap)
+6. [A Production Debugging Walkthrough](#a-production-debugging-walkthrough)
+7. [Rollback, Audit, and Safety](#rollback-audit-and-safety)
 8. [Putting It All Together](#putting-it-all-together)
 9. [What's Next](#whats-next)
+10. [References](#references)
 
-## The Feedback Loop of Playbook Execution
+## Output Is Deployment Evidence
+<!-- section-summary: Ansible output records which tasks ran on which hosts and what each host reported back. -->
 
-Ansible run output is per-host execution evidence showing which tasks changed, failed, skipped, or could not connect.
+Ansible output is the evidence trail for a run. It tells you which play started, which task ran, which host reported a result, which host changed, and which host failed or became unreachable. A beginner can read it as a conversation between the control node and every managed host.
 
-Ansible's command-line output is a structured audit trail that provides real-time feedback during a playbook execution. Because Ansible manages fleets of servers rather than a single local machine, the terminal output does not present a single success or failure status. Instead, it breaks down the execution timeline by play, task, and host, providing detailed proof of exactly how each remote system responded. Reading this output allows you to diagnose connection drops, identify configuration errors, and confirm that your infrastructure has settled into a safe, predictable state.
+Keep the orders platform in mind. A production deploy targets two web hosts, `orders-web-01` and `orders-web-02`. The playbook renders an API config, validates it, restarts the service through a handler, and checks the health endpoint. One host may change, the other may already be current, and a third host in a larger fleet may fail before Ansible can connect.
 
-To understand why analyzing this feedback loop is critical, consider our scenario. You are executing a configuration update across a three-node database and application cluster containing `db-node-01`, `app-node-01`, and `app-node-02`. The playbook installs a security library, modifies a cluster config file, and reloads the service.
+Readable output depends on practical playbook habits. Clear task names make the log readable. Idempotent tasks make `changed` meaningful. Validation tasks with `changed_when: false` keep read-only checks quiet. With those habits in place, the output becomes a practical deployment record.
 
-If you treat the output as a simple binary pass-or-fail, you might miss that the security library task succeeded on two nodes but silently failed on the third due to a broken system repository, leaving that host vulnerable. A task that continuously applies modifications on every run hides behind a wall of green status lines, giving no indication that storage is being worn down by unnecessary writes.
+## Status Words in Task Output
+<!-- section-summary: Each task result uses a small set of status words that point to a specific host-level outcome. -->
 
-A professional operations workflow relies on this status stream. By looking at the colors, codes, and recap summaries that Ansible outputs, you can instantly see which hosts already matched your desired state, which ones required active modifications, which ones connection failures blocked, and which tasks triggered error-handling paths.
+Ansible prints a status word for each task and host. These words are short and they carry a lot of operational meaning.
 
-## The Playbook Output Stream and Code Preview
-
-Here is an early, comment-free console output preview of a playbook run against our three-node cluster. This output demonstrates a mixed run where different hosts produce different results:
-
-```plain
-PLAY [Standardize application and database cluster] ****************************
-
-TASK [Gathering Facts] *********************************************************
-ok: [db-node-01]
-ok: [app-node-01]
-ok: [app-node-02]
-
-TASK [Install cluster security library] ****************************************
-ok: [db-node-01]
-changed: [app-node-01]
-fatal: [app-node-02]: FAILED! => {"changed": false, "msg": "No package matching 'sec-lib' found"}
-
-TASK [Configure cluster settings] **********************************************
-changed: [db-node-01]
-changed: [app-node-01]
-
-RUNNING HANDLER [Reload application service] ***********************************
-changed: [app-node-01]
-
-PLAY RECAP *********************************************************************
-db-node-01                 : ok=3    changed=1    unreachable=0    failed=0    skipped=0
-app-node-01                : ok=3    changed=3    unreachable=0    failed=0    skipped=0
-app-node-02                : ok=1    changed=0    unreachable=0    failed=1    skipped=2
-```
-
-## Decoding the Status Stream
-
-As Ansible executes each task, it prints a status line for each active host in the play. The status is the direct output of the state-aware module comparing your playbook parameters with the actual remote system.
-
-The two most common successful statuses are `ok` and `changed`:
-
-### 1. The `ok` Status
-An `ok` status indicates that Ansible connected to the host, ran the module's state check, and determined that the target system parameter already matched your desired state. The module may still inspect the system, read files, or query service state, but it did not apply a modification. In a healthy, settled environment, most state-management tasks should output `ok`, which tells you that no system drift was corrected during that run.
-
-### 2. The `changed` Status
-A `changed` status indicates that the host did not match your playbook parameters. The module executed system writes (such as creating directories, writing configuration text, or installing packages) to align the host. A `changed` status is completely healthy during an initial run, but if the same task continues to report `changed` on every run, the task is likely poorly designed and lacks proper state-aware guards.
-
-Understanding these two indicators helps you analyze what is happening under the hood. If a configuration template task outputs `changed`, it will automatically trigger any downstream notifications, queueing service restarts. If it outputs `ok`, the notifications are skipped, keeping your application services stable.
-
-## Isolating Failures: Unreachable vs. Failed
-
-When a task encounters an error during a playbook execution, Ansible marks the host status as `fatal` and outputs one of two distinct failure states: `UNREACHABLE` or `FAILED`. Distinguishing between these two conditions is the fastest way to isolate operational problems:
-
-```plain
-  fatal: [host-01]: UNREACHABLE!
-  |____________________________|
-                 |
-        Transport-Layer Error
-  (SSH, Keys, DNS, VPN)
-
-  fatal: [host-01]: FAILED!
-  |_________________________|
-                |
-       Execution-Layer Error
-  (Permissions, Missing Files, Typos)
-```
-
-### 1. Transport-Layer Failures (UNREACHABLE)
-The `UNREACHABLE` status always originates before the module runs. Ansible failed to establish the transport channel. The most common cause is a DNS resolution failure, where the inventory hostname does not resolve to a reachable address. The next most common is an SSH handshake rejection, where the host key does not match the known_hosts record or the server is simply unreachable on port 22. Private key mismatches produce the same UNREACHABLE status because the authentication layer rejects the connection before the channel opens.
-
-### 2. Execution-Layer Failures (FAILED)
-A `FAILED` status indicates that the connection was successful, but the module encountered an error while attempting to inspect or modify the host. The task may have tried to copy a configuration file into a directory that does not exist on the host. The package manager may have returned an error because the requested package name was misspelled or absent from system repositories. A module that writes to a protected directory will fail with a permission error if privilege escalation (`become: true`) was omitted from the play. In each of these cases the network channel opened cleanly; the problem is in the task parameters or the host's runtime environment.
-
-A fourth class of FAILED errors originates in the module bootstrap itself. If the remote Python interpreter required by a Python-based module is missing or not discovered correctly, the module payload cannot initialize even after the connection succeeds.
-
-When a host encounters either failure state, Ansible drops it from the active run pool for the remainder of the play by default. Error-handling features such as `ignore_errors`, `ignore_unreachable`, `rescue`, and `clear_host_errors` can alter that flow, so always read the task message before assuming what happened next.
-
-## Execution Branching: Skipped, Rescued, and Ignored
-
-Execution branching means a task's path changes because a condition, error handler, or override changed what Ansible should do next. These statuses matter because a run can finish without every task actually running.
-
-Example: a task that installs `apt` packages on Debian hosts should be `skipped` on a Red Hat host when its `when` condition checks `ansible_os_family`. A failed configuration task can be `rescued` if a recovery block restores the previous file, while `ignored` means the task failed but the playbook was told to keep going.
-
-| Status | Meaning |
+| Status | Meaning during an orders deploy |
 |---|---|
-| `skipped` | Task did not run because a `when` condition evaluated to false |
-| `rescued` | Task failed but a `rescue` block in the same play handled the error |
-| `ignored` | Task failed but `ignore_errors: true` allowed execution to continue |
+| `ok` | The task completed with no reported change for that host. |
+| `changed` | The task completed and reported that it moved the host state. |
+| `skipping` | A condition, tag, or check-mode rule skipped the task for that host. |
+| `failed` | Ansible reached the host, and the module or command reported failure. |
+| `unreachable` | The connection path to the host failed. |
+| `rescued` | A task failed inside a block, and a rescue section handled it. |
+| `ignored` | A task failed, and the play continued because the task allowed that failure. |
 
-## Under the Hood: Standard Out Capture and JSON Parsing
+Here is a small slice of output from the orders API play. One host changes and the other host stays current.
 
-Standard output is the text stream a process writes back to the program that launched it. Ansible modules return structured JSON through that stream, and the control node turns that data into the status lines you see in the terminal.
+```
+TASK [Render orders API configuration] ***************************************
+changed: [orders-web-01.example.com]
+ok: [orders-web-02.example.com]
 
-Example: a remote command module can return `{"rc": 0, "stdout": "active", "changed": false}` over SSH. The callback plugin then renders that dictionary as an `ok` result for the specific host instead of showing raw JSON.
-
-When you run a playbook, the Ansible execution engine on your control node forks a separate worker process for each targeted managed host (up to the limit set by your concurrency settings, commonly defaulting to 5 forks).
-
-Here is the step-by-step systems depth of how output is processed:
-
-1. **Module Result Creation**: The remote module payload performs the work and returns a structured result object. Command-like modules include fields such as `stdout`, `stderr`, and `rc`; other modules return fields specific to their domain.
-2. **Pipe Communication**: The remote bootstrap script writes this JSON string directly to the open SSH network pipe.
-3. **Control Node Capture**: The control node worker process reads the bytes from the local control socket file, parsing the JSON string into an in-memory Python dictionary.
-4. **Callback Plugin Dispatch**: The execution engine takes this dictionary and passes it to the **Callback Plugin Manager**. Callback plugins are modular Python scripts that control the user interface.
-5. **Formatted Rendering**: The default callback plugin reads the JSON fields (such as `rc`, `stdout`, `stderr`, and `msg`), translates them into human-readable terminal lines, applies ANSI color escape codes (green for ok, yellow for changed, red for failed, and cyan for skipped), and outputs the lines to your local stdout stream.
-
-```mermaid
-flowchart LR
-    subgraph Managed["Managed Server"]
-        ZIP["Module Payload"] -->|1. Return Result Object| JSONPipe["JSON Output Stream"]
-    end
-
-    subgraph Control["Control Node (Your Machine)"]
-        SSHConn["SSH Network Socket"] -->|2. Receive Bytes| Worker["Forked Worker Process"]
-        Worker -->|3. JSON Parse to Dict| Engine["Execution Engine"]
-        Engine -->|4. Dispatch Result| CallbackManager["Callback Plugin Manager"]
-        CallbackManager -->|5. ANSI Colors| Terminal["Your Terminal Stdout"]
-    end
-
-    JSONPipe -->|SFTP/SSH Pipe| SSHConn
+RUNNING HANDLER [Restart orders API] *****************************************
+changed: [orders-web-01.example.com]
 ```
 
-This process is why Ansible can keep output readable even when tasks run across multiple worker forks. Callback plugins group the result data by task and host so you can read the run as a structured status stream instead of raw interleaved SSH output.
+This says the rendered config differed on `orders-web-01`, so Ansible wrote the file there and notified the handler. The same template already matched `orders-web-02`, so that host stayed quiet for this task. The handler ran for the host that needed it.
 
-## The Play Recap: Auditing Fleet Health
+Now compare that to this validation task. It still ran, and it reports a read-only result.
 
-The Play Recap is the final per-host scorecard for a run. It tells you how many tasks succeeded, changed the host, failed, skipped, or never reached the host because the connection failed.
+```
+TASK [Validate orders API configuration] *************************************
+ok: [orders-web-01.example.com]
+ok: [orders-web-02.example.com]
+```
 
-Example: if `app-node-02` ends with `ok=1 changed=0 unreachable=0 failed=1 skipped=2`, that host did not complete the same work as the others. You should treat it as partially configured until the failed task is fixed and the playbook is rerun successfully.
+The validation command may have executed on both hosts. `changed_when: false` kept it from counting as a change. That is the right signal for a read-only check because it tells the operator that validation passed without pretending the machine moved.
 
-Here is a quick reference table showing the meaning and diagnostic focus of each Play Recap column:
+## Failed and Unreachable Mean Different Repairs
+<!-- section-summary: A failed task reached the host, while an unreachable host failed before useful task execution could happen. -->
 
-| Recap Column | System Meaning | Operational Audit Focus |
-| :--- | :--- | :--- |
-| **`ok`** | Successful tasks that made no modifications. | Measures target environment compliance and stability. |
-| **`changed`** | Successful tasks that modified host states. | Indicates active environment updates; should be 0 on a rerun. |
-| **`unreachable`** | Connection failures. | Highlights network, DNS, SSH, or credential bugs. |
-| **`failed`** | Task errors that aborted execution on the host. | Identifies parameter mismatches, directory typos, or permission bugs. |
-| **`skipped`** | Tasks bypassed by conditional statements. | Validates OS-specific or environment-specific branching logic. |
-| **`rescued`** | Failed tasks successfully resolved by rescue blocks. | Confirms automated recovery pipelines are active. |
-| **`ignored`** | Failed tasks bypassed by ignore overrides. | Highlights accepted risks; audit regularly to prevent stale errors. |
+The most important output split is `failed` versus `unreachable`. A **failed** task reached the managed host and then the module or command returned a failure. An **unreachable** host failed before Ansible had a usable connection to the host.
 
-When you analyze a recap block after a deployment, any host with a non-zero value in `failed` or `unreachable` requires immediate attention. Even if a server shows sixteen successful `ok` tasks, a single failure indicates that the machine aborted its execution, leaving it in an incomplete, drifting state.
+For example, this is a task failure. The host was reachable, so the failed task is the evidence.
+
+```
+TASK [Validate orders API configuration] *************************************
+fatal: [orders-web-01.example.com]: FAILED! => {"changed": false, "cmd": "orders-api --check-config /etc/orders-api/config.yml", "rc": 1}
+```
+
+The host was reachable. Ansible ran the validation command. The command returned a failing result. The next step is to read the command output, inspect the rendered config, and fix the value or template that produced invalid application configuration.
+
+This is a reachability failure. The host missed the play before useful task work could happen.
+
+```
+TASK [Gathering Facts] *******************************************************
+fatal: [orders-web-02.example.com]: UNREACHABLE! => {"changed": false, "msg": "Failed to connect to the host via ssh"}
+```
+
+The connection path is the first suspect here. The operator should check DNS, inventory hostnames, SSH keys, bastion access, host keys, network ACLs, and the remote user. Ansible removed the host from active execution for the run, so later tasks left it untouched.
+
+This distinction matters during incident calls. If `orders-web-02` is unreachable, the team should keep that host out of the completed-deploy count. If `orders-web-01` failed validation, the team should inspect the application config path and the variables that produced it.
+
+## Registered Results, Verbosity, and Diffs
+<!-- section-summary: Registered variables and verbosity give deeper evidence, while diff output needs care around secrets. -->
+
+A task can save its result with `register`. The saved result belongs to the current host and can include fields such as `changed`, `failed`, `rc`, `stdout`, `stderr`, `status`, `content`, and module-specific data. Later tasks can branch from that result.
+
+The shape depends on the module, but a few fields appear often:
+
+| Field | What it usually means |
+|---|---|
+| `changed` | Whether the task reported a state change. |
+| `failed` | Whether the task result is a failure. |
+| `rc` | Return code from command-like modules. |
+| `stdout` / `stderr` | Text printed by a command. |
+| `status` | HTTP status from modules such as `uri`. |
+| `skipped` | Whether a condition, tag, or check-mode rule skipped the task. |
+| `results` | Per-item results when a task runs in a loop. |
+
+When a later task checks this data, use fields with a stable contract. HTTP status codes, documented return codes, and JSON fields usually age better than a sentence printed for humans.
+
+```yaml
+- name: Check orders API health
+  ansible.builtin.uri:
+    url: http://127.0.0.1:8080/health
+    return_content: true
+  register: orders_health
+  changed_when: false
+
+- name: Stop when orders API health check fails
+  ansible.builtin.fail:
+    msg: "orders API health check returned {{ orders_health.status }}"
+  when: orders_health.status != 200
+```
+
+During development, a debug task can show the shape of a registered result. This is useful when you need to know whether a module returns `status`, `json`, `stdout`, or another field. It should be removed or guarded before normal production use if the result can contain secrets.
+
+```yaml
+- name: Show orders API health result during troubleshooting
+  ansible.builtin.debug:
+    var: orders_health
+  when: orders_debug_output | default(false)
+```
+
+Verbosity flags can show more detail from the command line. A normal run keeps output compact. A troubleshooting run can add `-v` or `-vv` to expose more execution detail. Higher verbosity can include sensitive module arguments, connection detail, or command output, so CI logs and controller job output should be treated as records that may need retention controls.
+
+```bash
+ansible-playbook -i inventories/prod/hosts.yml site.yml --limit orders-web-01.example.com -vv
+```
+
+Diff mode adds another kind of evidence. For template and file work, `--diff` can show before-and-after content. That is excellent for reviewing a candidate config on a canary host. It can also reveal secrets if the file contains credentials, so tasks that handle sensitive files should use `diff: false` or `no_log: true` where appropriate.
+
+Check mode can change the result story. A task that normally registers a value might skip in check mode if the module cannot predict safely, and a later task may not have the data it expects. A preview that shows skipped registered data should lower confidence for that branch. The canary apply then becomes the evidence that proves the branch for real.
+
+## Reading the Play Recap
+<!-- section-summary: The recap condenses the whole run into per-host counters that show participation, change, failure, and skips. -->
+
+At the end of a playbook run, Ansible prints a **play recap**. The recap gives a fast per-host summary while the task output carries the detailed evidence. It is the first place many operators look after a deploy finishes.
+
+```
+PLAY RECAP *******************************************************************
+orders-web-01.example.com : ok=18 changed=3 unreachable=0 failed=0 skipped=4 rescued=0 ignored=0
+orders-web-02.example.com : ok=17 changed=0 unreachable=0 failed=0 skipped=4 rescued=0 ignored=0
+orders-web-03.example.com : ok=0  changed=0 unreachable=1 failed=0 skipped=0 rescued=0 ignored=0
+```
+
+This recap tells three different stories. `orders-web-01` received changes and completed successfully. `orders-web-02` participated and already matched the desired state. `orders-web-03` missed the run because reachability failed.
+
+The counters should match the team's intent. During a canary release, one changed host may be expected. During a second idempotency run, `changed=0` is usually the expected result. During a production-wide deploy, `unreachable=1` means one host missed the change and needs a separate decision: repair and rerun, remove from service, or document why it was excluded.
+
+The `ansible-playbook` command returns a nonzero exit code when the run has failures or unreachable hosts. That behavior lets CI jobs and controller workflows stop a pipeline instead of hiding a bad deploy behind a green result.
+
+## A Production Debugging Walkthrough
+<!-- section-summary: A useful debugging path starts from the failed host and task, then follows the layer that produced that status. -->
+
+Suppose the orders API deploy shows this sequence. The order of the two tasks gives enough information to choose the next step.
+
+```
+TASK [Render orders API configuration] ***************************************
+changed: [orders-web-01.example.com]
+changed: [orders-web-02.example.com]
+
+TASK [Validate orders API configuration] *************************************
+ok: [orders-web-01.example.com]
+fatal: [orders-web-02.example.com]: FAILED! => {"changed": false, "rc": 1}
+```
+
+The first task changed both hosts, so both received a new config file. The second task says one host passed validation and one host failed validation. The failure happened after the file write and before the handler restart. That means `orders-web-02` may now have a new config file on disk while the service still runs the previous process.
+
+A careful follow-up gathers evidence from that host. The operator can rerun the validation task with more verbosity, inspect the rendered config, or run a targeted command task. The rollback path should use the same playbook with the previous known-good variables or repository version.
+
+```bash
+ansible-playbook -i inventories/prod/hosts.yml site.yml --limit orders-web-02.example.com --start-at-task "Validate orders API configuration" -vv
+ansible-playbook -i inventories/prod/hosts.yml site.yml --limit orders-web-02.example.com -e orders_api_release=2026.06.12
+```
+
+Handler behavior also matters in this situation. By default, a later task failure can prevent an earlier notified handler from running for that host. Ansible supports `--force-handlers` and `force_handlers` when the team decides that already-notified handlers must run even after later failures. That setting should be a deliberate operational choice because restarting into a bad config can make the incident worse.
+
+## Rollback, Audit, and Safety
+<!-- section-summary: Playbook output should help the team decide whether to widen, pause, repair, or roll back a change. -->
+
+Output reading should lead to a decision. If the canary changed the expected tasks and health checks passed, the team can widen the run. If the canary changed unexpected tasks, the team should pause and inspect the diff. If a task failed after writing a file, the team should decide whether to roll back the file, repair the value, or keep the host out of service.
+
+For audit, keep the command line, inventory, Git commit, extra variables, and output together. In a controller, that record may live as a job run. In a CLI workflow, teams often store the pipeline log and release metadata. The important part is being able to answer what ran, who triggered it, which hosts changed, and which hosts failed or skipped.
+
+Secrets deserve special handling. Verbose logs, debug tasks, and diff output can persist in CI artifacts or controller history. Sensitive values should use Ansible Vault or another secret source, and tasks that might print secrets should use `no_log: true` or avoid debug output.
+
+A safe production log should prove the run without printing private data. It can show the commit, inventory, selected hosts, task names, changed counts, health-check status, and rollback target. It should avoid raw secret values, full private config diffs, and debug dumps of registered results from secret-bearing tasks.
+
+Rollback should follow the same audited path as rollout. If the bad change was a template or variable edit, revert the repository change and run the playbook against the affected host first. If the bad change was a release input, restore the previous release value and run a canary command. The recap from the rollback run becomes the evidence that the host returned to the desired state.
 
 ## Putting It All Together
+<!-- section-summary: Reading output well turns playbook runs into a practical record of host state, change, failure, and follow-up work. -->
 
-We started by looking at how a mixed cluster playbook run produces per-host execution details, and why flattening this feedback loop into a simple pass-or-fail can hide critical failures on individual servers.
+The orders platform deploy now has readable output. Task names explain the work. `ok` means the host already matched or the read-only check passed. `changed` means the host moved. `failed` means a task reached the host and failed there. `unreachable` means the connection layer needs attention before playbook logic can matter.
 
-Ansible answers this by providing a highly structured, color-coded status stream and recap dashboard:
-- **State-Aware Statuses**: Terminal lines use `ok` to indicate compliance and `changed` to highlight system writes, driving downstream handlers.
-- **Clear Failure Isolation**: The output separates transport-layer socket errors (`UNREACHABLE`) from task parameter errors (`FAILED`), allowing you to isolate network bugs from config bugs instantly.
-- **Branching Capture**: The stream logs skipped conditionals, block rescues, and ignored errors, giving you complete visibility into task flow.
-- **Process Redirection**: Under the hood, the control plane forks worker processes, captures remote JSON return blocks over SSH pipes, and uses callback plugins to render clean terminal output.
-- **The Play Recap**: A final per-host dashboard summarizes the health of your entire fleet, pointing you directly to the hosts that require remediation.
+Registered results and verbosity give deeper evidence during debugging. Diff mode helps review file changes, with care around secrets. The recap gives the final per-host story and helps CI or controller workflows make a pass-or-fail decision.
 
-Mastering this feedback loop allows you to read your playbook runs as precise evidence of system status, keeping your deployments safe and compliant.
+The next group turns from output to input. Variables let one playbook use different values for staging, production, hosts, roles, and release events.
 
 ## What's Next
 
-Now that you have completed Theme 1 and master the foundations of playbooks, tasks, modules, idempotency, and run outputs, the next theme will move into **Inventory, Connections, & Variables**. We will start by exploring Inventories, showing you how Ansible organizes host catalogs, handles static and dynamic host mappings, and resolves DNS names to active network addresses.
+The next article starts the values and facts section with variables. It uses the same orders platform to show where values live, how templates consume them, and how runtime overrides fit into a real deployment.
 
 ---
 
 **References**
 
-- [Ansible Playbook Execution and Output](https://docs.ansible.com/ansible/latest/playbook_guide/playbooks_intro.html#playbook-execution) - Official reference for execution flow and terminal stdout logs.
-- [Developing Ansible Callback Plugins](https://docs.ansible.com/ansible/latest/plugins/callback.html) - Documentation on how callback scripts process JSON structures and control stdout formatting.
-- [ANSI Escape Codes Specification](https://www.ecma-international.org/publications-and-standards/standards/ecma-48/) - The ECMA standard for colorizing and formatting terminal character streams.
-- [Ansible Error Handling: Defining Failures and Overrides](https://docs.ansible.com/ansible/latest/playbook_guide/playbooks_error_handling.html) - Official reference for failed_when, changed_when, and block-rescue structures.
+- [Ansible playbooks](https://docs.ansible.com/projects/ansible/latest/playbook_guide/playbooks_intro.html) - Official description of playbook output, task execution, summaries, failures, and unreachable counts.
+- [Return Values](https://docs.ansible.com/projects/ansible/latest/reference_appendices/common_return_values.html) - Official reference for common registered result fields such as `changed`, `failed`, `rc`, `stdout`, `stderr`, and `skipped`.
+- [Error handling in playbooks](https://docs.ansible.com/projects/ansible/latest/playbook_guide/playbooks_error_handling.html) - Official guidance for failures, unreachable hosts, handlers after failure, `failed_when`, `changed_when`, and rescue behavior.
+- [Conditionals](https://docs.ansible.com/projects/ansible/latest/playbook_guide/playbooks_conditionals.html) - Official examples for conditions based on facts, variables, and registered variables.
+- [Validating tasks: check mode and diff mode](https://docs.ansible.com/projects/ansible/latest/playbook_guide/playbooks_checkmode.html) - Official details for check mode, diff mode, and sensitive diff handling.
+- [ansible.builtin.debug](https://docs.ansible.com/projects/ansible/latest/collections/ansible/builtin/debug_module.html) - Official module reference for printing variables during troubleshooting.
+- [ansible-playbook](https://docs.ansible.com/projects/ansible/latest/cli/ansible-playbook.html) - Official CLI reference for verbosity, limits, `--start-at-task`, check mode, diff mode, and execution behavior.

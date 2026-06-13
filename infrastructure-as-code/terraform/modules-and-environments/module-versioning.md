@@ -1,7 +1,7 @@
 ---
 title: "Module Versioning"
-description: "Pin Terraform modules to specific versions so that your infrastructure does not change unexpectedly when module authors release updates."
-overview: "When you use a module from the Terraform Registry or a Git repository, you need to decide which version of that module to use and what happens when new versions come out. This article covers how module versioning works, how to set version constraints, and how to safely upgrade modules over time."
+description: "Pin Terraform modules to specific versions so shared infrastructure updates happen through review."
+overview: "Shared Terraform modules are dependencies. This article explains where modules come from, how Registry versions and Git refs work, what `.terraform.lock.hcl` actually locks, and how teams upgrade modules through review."
 tags: ["modules", "versioning", "registry", "semver", "terraform"]
 order: 3
 id: article-iac-terraform-modules-versioning
@@ -13,7 +13,7 @@ id: article-iac-terraform-modules-versioning
 2. [Where Modules Come From](#where-modules-come-from)
 3. [The version Argument](#the-version-argument)
 4. [Version Constraint Syntax](#version-constraint-syntax)
-5. [What the .terraform.lock.hcl File Does Not Lock](#what-the-terraformlockhcl-file-does-not-lock)
+5. [What the .terraform.lock.hcl File Actually Locks](#what-the-terraformlockhcl-file-actually-locks)
 6. [Upgrading a Module Version](#upgrading-a-module-version)
 7. [Pinning Modules to Git References](#pinning-modules-to-git-references)
 8. [The Upgrade Workflow in Practice](#the-upgrade-workflow-in-practice)
@@ -22,217 +22,230 @@ id: article-iac-terraform-modules-versioning
 11. [What's Next](#whats-next)
 
 ## Why Module Versioning Matters
+<!-- section-summary: Module versioning keeps reusable infrastructure code on a schedule the caller can review and choose. -->
 
-Module versioning is dependency control for reusable Terraform modules, pinning callers to a reviewed module release or Git reference.
+**Module versioning** is dependency control for Terraform modules. When a root configuration calls reusable module code from a Registry or Git repository, that module becomes part of the production change path. A version pin tells Terraform which release or reference the team has reviewed.
 
-Suppose you are using a community Terraform module to create a VPC. Today the module creates the VPC the way you expect. Six months from now, the module author publishes a new version that changes the default value of an attribute, maybe they change the default tenancy from `default` to `dedicated`. If your configuration has no version constraint, the next time anyone on your team runs `terraform init`, they download the new version. The next `terraform plan` shows a change to the tenancy attribute. If someone applies that plan without reading it carefully, the VPC tenancy changes. That can have unexpected cost implications.
+Think about the Orders production VPC. The team calls a shared network module that creates subnets, route tables, endpoints, and flow logs. Today the module creates exactly the network shape the team expects. Three months later, the module maintainers publish a new release that changes a default route table behavior and adds a new endpoint by default.
 
-This is the core problem with unversioned dependencies: other people's changes affect your infrastructure on a schedule you do not control. The solution is the same one used in application development: pin your dependencies to specific versions and update them deliberately, one at a time, after reviewing what changed.
+If the production root configuration always downloads the newest module release, a normal `terraform init` can bring in that new code before the team has reviewed it. The next plan may show route and endpoint changes from the dependency rather than the root module diff. Review becomes harder because the real infrastructure change lives outside the pull request.
 
-Module versioning lets you say: "I want version 3.2.0 of this VPC module. Tell me when I try to use anything newer." Changes only happen when you decide to upgrade, and you review the module's changelog before doing so.
+Versioning fixes that workflow. The root configuration says which module release it accepts. The team upgrades deliberately, reads the changelog, runs a plan, and promotes the change through environments. Shared modules still improve over time, but production only moves when the service team chooses to move.
 
 ## Where Modules Come From
+<!-- section-summary: Module source type decides how Terraform downloads the module and which versioning controls are available. -->
 
-A module source is the place Terraform gets reusable module code from. The source can be the Terraform Registry, a Git repository, a private registry, or a local directory. Example: `terraform-aws-modules/vpc/aws` comes from the public Registry, while `./modules/network` comes from the current repository.
+A **module source** is the location Terraform reads module code from. Local modules come from the filesystem. Registry modules come from the public Terraform Registry, HCP Terraform private registries, Terraform Enterprise private registries, or compatible private registry services. Git modules come from version control repositories.
 
-Terraform modules can come from several sources, and the versioning options depend on which source you use.
+![Terraform module sources flow from local paths, registries, and Git refs into a root module call.](/content-assets/articles/article-iac-terraform-modules-versioning/module-source-decision.png)
 
-![Module sources and version constraints decide which reusable module code Terraform downloads for a root call.](/content-assets/articles/article-iac-terraform-modules-versioning/module-source-version-flow.png)
+*The source type controls the pinning method: local files follow the repository, Registry modules use `version`, and Git modules use `ref`.*
 
-**The Terraform Registry** is the default public source for community modules. You reference a Registry module with a three-part path: `namespace/module_name/provider`. A widely used community AWS VPC module is `terraform-aws-modules/vpc/aws`. Registry modules support version constraints using the `version` argument. In Azure, Microsoft also publishes Azure Verified Modules, which are Microsoft-aligned reusable modules with documented quality and support expectations.
+Local modules look like this:
 
-**Git repositories** are a common source for internal modules that your organization writes and maintains. You reference a Git module using the full repository URL or an abbreviated GitHub format. You can pin to a specific commit hash, branch name, or Git tag using the `ref` query parameter.
+```hcl
+module "artifact_bucket" {
+  source = "../../modules/private-bucket"
 
-**Local paths** (starting with `./` or `../`) reference modules in the same repository or filesystem. Local path modules do not support versioning because the module changes whenever the local file changes. This is usually the right approach for modules you manage alongside the configuration that calls them.
+  bucket_name = "dp-orders-artifacts-prod"
+  environment = "prod"
+}
+```
 
-**Private Registries** work identically to the public Terraform Registry from the caller's perspective. HashiCorp's HCP Terraform platform and other enterprise tools support private registries where you can publish internal modules with the same versioning semantics as the public registry.
+Local paths work well when the module and the root configuration live in the same repository and ship together. The version is the Git commit of the repository itself. If a pull request changes both `envs/prod` and `modules/private-bucket`, reviewers see the caller and the module change in one diff.
 
-## The version Argument
-
-The `version` argument pins a Registry module call to an allowed release. It is the module equivalent of choosing a package version in application code. Example: `version = "5.1.2"` means Terraform should download exactly release `5.1.2` of that Registry module.
-
-For Registry modules, you add a `version` argument to the module block:
+Registry modules use a source address with namespace, module name, and provider. They support the `version` argument, which is the cleanest versioning experience for reusable modules that many roots consume.
 
 ```hcl
 module "vpc" {
   source  = "terraform-aws-modules/vpc/aws"
-  version = "5.1.2"
+  version = "5.21.0"
 
-  name = "main-vpc"
-  cidr = "10.0.0.0/16"
-
-  azs             = ["us-east-1a", "us-east-1b", "us-east-1c"]
-  private_subnets = ["10.0.1.0/24", "10.0.2.0/24", "10.0.3.0/24"]
-  public_subnets  = ["10.0.4.0/24", "10.0.5.0/24", "10.0.6.0/24"]
+  name = "orders-prod"
+  cidr = "10.20.0.0/16"
 }
 ```
 
-`version = "5.1.2"` pins this module call to exactly version 5.1.2. When you run `terraform init`, Terraform downloads that specific version and stores it in the `.terraform/modules/` directory. Everyone on your team who runs `terraform init` gets the same version.
-
-If you do not include the `version` argument at all, Terraform downloads the latest available version. This is almost never what you want in a production configuration. The first time you run it, you get version 5.1.2. A year later, when a colleague sets up a fresh workspace, they might get version 6.0.0. If 6.0.0 has breaking changes, the configuration breaks for them. Always specify a version.
-
-## Version Constraint Syntax
-
-A version constraint is a rule for which module releases are acceptable. Exact pins give maximum stability, while ranges allow selected updates. Example: `"~> 5.1.2"` allows `5.1.x` patch releases but blocks `5.2.0` and `6.0.0`.
-
-Pinning to an exact version (`"5.1.2"`) is the most conservative approach but requires you to manually update the version number any time you want the latest bug fixes. Terraform's version constraint syntax lets you express more flexible rules.
-
-**Exact version**: `"5.1.2"`, only use this exact version.
-
-**Minimum version**: `">= 5.1.2"`, use 5.1.2 or anything newer. This is rarely what you want for modules because it has no upper bound.
-
-**Version range**: `">= 5.1.2, < 6.0.0"`, use any version from 5.1.2 up to (but not including) 6.0.0.
-
-**Pessimistic constraint**: `"~> 5.1"`, use any version in the 5.x series, but do not jump to 6.x. This is equivalent to `">= 5.1, < 6.0"`.
-
-**Pessimistic constraint on patch**: `"~> 5.1.2"`, use 5.1.2 or any 5.1.x patch release, but do not move to 5.2.0. This is equivalent to `">= 5.1.2, < 5.2.0"`.
-
-The pessimistic constraint operator `~>` is particularly useful because it aligns with semantic versioning (semver). Under semver, a major version change (5 to 6) may have breaking changes. A minor version change (5.1 to 5.2) adds new features but should not break existing ones. A patch change (5.1.2 to 5.1.3) only fixes bugs.
-
-Using `~> 5.1` allows the module to receive minor version improvements and bug fixes automatically, while protecting you from major version breaking changes. Using `~> 5.1.2` is more conservative, you only get patch-level bug fixes automatically, and you explicitly upgrade to each minor version.
-
-In practice, the most common patterns in production configurations are:
-- Exact pins (`"5.1.2"`) for configurations that should only change when someone explicitly decides to upgrade.
-- Pessimistic patch constraints (`"~> 6.1.2"`) for configurations that want automatic bug fixes but not feature changes.
-
-Avoid open-ended constraints like `">= 6.0"` in production. The day a major breaking version is released, the next `terraform init` from a fresh workspace could download it and break things.
-
-## What the .terraform.lock.hcl File Does Not Lock
-
-`.terraform.lock.hcl` locks provider selections, not Registry module selections. Module versions still need to be pinned in each `module` block or Git `ref`. Example: committing `.terraform.lock.hcl` can lock `hashicorp/aws`, but it will not pin `terraform-aws-modules/vpc/aws` unless the module block has a `version`.
-
-When you run `terraform init`, Terraform resolves provider version constraints and writes the exact provider versions and checksums to `.terraform.lock.hcl`. This file is a provider dependency lock file. It does not lock Registry module versions.
-
-Here is the kind of provider entry the lock file contains:
+Git modules use a repository URL and optional subdirectory. They pin through a `ref` query parameter, which can point at a tag, branch, or commit hash.
 
 ```hcl
-# This file is maintained automatically by "terraform init".
-# Manual edits may be lost in future updates.
+module "network" {
+  source = "git::https://github.com/devpolaris/terraform-modules.git//network?ref=v2.4.1"
 
+  environment = "prod"
+  cidr_block  = "10.20.0.0/16"
+}
+```
+
+Those source choices are operational choices. A local module favors fast same-repo changes. A private Registry favors discovery, documentation, version constraints, and repeatable releases. A Git source can work well for internal modules, especially when the team already has a strong tag and release process.
+
+## The version Argument
+<!-- section-summary: Registry module calls use the version argument to select the release Terraform may install. -->
+
+The **`version` argument** selects an allowed release for a Registry module. It belongs inside the `module` block and only works for modules installed through a Registry protocol. Terraform reads the source and version during `terraform init`, then downloads a matching module package.
+
+```hcl
+module "vpc" {
+  source  = "terraform-aws-modules/vpc/aws"
+  version = "5.21.0"
+
+  name = "orders-prod"
+  cidr = "10.20.0.0/16"
+
+  azs             = ["eu-west-2a", "eu-west-2b", "eu-west-2c"]
+  private_subnets = ["10.20.10.0/24", "10.20.11.0/24", "10.20.12.0/24"]
+  public_subnets  = ["10.20.20.0/24", "10.20.21.0/24", "10.20.22.0/24"]
+}
+```
+
+With `version = "5.21.0"`, the production root asks for that exact module release. Another engineer setting up a fresh checkout receives the same module release when they run `terraform init`. CI receives the same module release too. That consistency is exactly what production infrastructure needs.
+
+A Registry module call without a `version` argument gives Terraform permission to select the newest available release that satisfies the source. That may feel convenient during a demo, but it weakens review in long-lived infrastructure. The same root configuration can install different module code at different times.
+
+For production, the habit is simple: **every remote Registry module call should have a version constraint**. The version line turns a floating dependency into a reviewable dependency.
+
+## Version Constraint Syntax
+<!-- section-summary: Version constraints choose between strict stability and controlled automatic patch or minor updates. -->
+
+A **version constraint** is a rule that describes which releases Terraform may install. The right rule depends on the team's appetite for automatic updates. Some teams want exact pins for maximum repeatability. Other teams allow patch updates while blocking larger jumps.
+
+Here are the common patterns:
+
+| Constraint | Meaning | Production use |
+|---|---|---|
+| `"5.21.0"` | Exactly version 5.21.0 | Strong repeatability, every update is explicit |
+| `">= 5.21.0, < 6.0.0"` | Any 5.x release from 5.21.0 upward | Allows minor and patch updates inside one major line |
+| `"~> 5.21"` | 5.21 or newer, up to but excluding 6.0 | Allows minor releases in the 5.x line |
+| `"~> 5.21.0"` | 5.21 patch releases only | Allows patch fixes while blocking 5.22 and 6.0 |
+
+The `~>` operator is called the **pessimistic constraint operator**. It gives Terraform a lower bound and a calculated upper bound. Teams often use `"~> 5.21.0"` when they want patch releases automatically but want a human review for each minor release.
+
+Semantic versioning helps explain the tradeoff. A major version change, such as 5 to 6, may include breaking changes. A minor version change, such as 5.21 to 5.22, can add behavior or new defaults. A patch change, such as 5.21.0 to 5.21.1, usually carries bug fixes. Real modules sometimes vary in how strictly they follow semver, so the plan and changelog still matter.
+
+Open-ended constraints such as `">= 5.21.0"` create avoidable risk in production because the next major version also satisfies the rule. A future fresh `terraform init` could install a release with breaking behavior. A bounded constraint gives the team a guardrail.
+
+## What the .terraform.lock.hcl File Actually Locks
+<!-- section-summary: The dependency lock file records provider selections, while module versions still need explicit pins. -->
+
+The `.terraform.lock.hcl` file is a provider dependency lock file. It records selected provider versions and checksums so future Terraform runs can install the same provider packages by default. Teams should commit it because provider upgrades are real infrastructure dependency changes.
+
+The lock file pins provider selections. Terraform's official dependency lock documentation states that the lock file currently tracks only providers, and Terraform selects the newest remote module version that matches the module version constraint. That means the module block still needs its own exact version or bounded version constraint.
+
+Here is a simplified lock entry:
+
+```hcl
 provider "registry.terraform.io/hashicorp/aws" {
   version     = "6.46.0"
   constraints = "~> 6.0"
   hashes = [
-    "h1:abc123...",
+    "h1:example",
   ]
 }
 ```
 
-Notice that the example is a `provider` entry, not a `module` entry. Registry module versions are controlled by the `version` argument in the `module` block. Git module versions are controlled by the `ref` query parameter. Local module versions are controlled by the files in your repository.
+The entry talks about `hashicorp/aws`, which is a provider plugin. Module packages such as `terraform-aws-modules/vpc/aws` need their own version pins in module blocks or Git refs. A complete production dependency story usually has both pieces: provider selections committed in `.terraform.lock.hcl` and module versions pinned in source configuration.
 
-The important thing is still to commit `.terraform.lock.hcl` to version control for provider consistency. Just do not rely on it to pin modules. Pin modules explicitly in the module source configuration.
+This distinction prevents a common false sense of safety. A reviewer may see `.terraform.lock.hcl` in version control and assume all Terraform dependencies are locked. The module source still controls module code selection, so the review should check both places.
 
 ## Upgrading a Module Version
+<!-- section-summary: A module upgrade should move through changelog review, init, plan, non-production verification, and production approval. -->
 
-A module upgrade changes reusable infrastructure code that your root configuration depends on. Treat it like changing your own Terraform code because it can alter resources, defaults, and internal behavior. Example: upgrade the VPC module in staging first, read the plan, then promote the same version change to production after verification.
+A **module upgrade** changes reusable infrastructure code under a root configuration. Treat it with the same care as changing your own `.tf` files because the module can add resources, change defaults, rename internal resources, or alter lifecycle behavior.
 
-When a new version of a module is released, upgrading is a deliberate, reviewable process.
+![A safe Terraform module upgrade follows changelog review, one version change, init upgrade, plan review, test apply, and production approval.](/content-assets/articles/article-iac-terraform-modules-versioning/module-upgrade-review-loop.png)
 
-![A safe module upgrade moves through changelog review, plan diff, tests, and approval before apply.](/content-assets/articles/article-iac-terraform-modules-versioning/upgrade-review-path.png)
+*A controlled upgrade keeps the dependency change small enough for reviewers to understand and rollback if needed.*
 
-First, check the module's changelog or release notes for the new version. Most well-maintained modules publish changelogs that describe what changed, which attributes were renamed, which defaults changed, and whether any breaking changes are included.
+The Orders team upgrades one module at a time. If the VPC module moves from `5.21.0` to `5.22.0`, the pull request changes only that module version and any required caller inputs. The reviewer can read the module changelog, compare the plan, and connect every proposed infrastructure change to that one dependency update.
 
-Second, update the version constraint in your module block:
+The command sequence usually looks like this in a staging root:
 
-```hcl
-module "vpc" {
-  source  = "terraform-aws-modules/vpc/aws"
-  version = "5.2.0"  # previously 5.1.2
-  ...
-}
+```shell
+terraform init -upgrade
+terraform plan -out=tfplan
+terraform apply tfplan
 ```
 
-Third, run `terraform init -upgrade` to download the new version. The `-upgrade` flag tells Terraform to re-evaluate all version constraints and download the newest matching version, ignoring the cached versions in `.terraform/modules/`. Without `-upgrade`, `terraform init` reuses whatever is already in `.terraform/modules/` if the existing version still satisfies the constraints.
+The `-upgrade` flag tells Terraform to re-evaluate version constraints and install newer matching provider or module packages instead of reusing cached selections. The saved plan file gives the team one reviewed artifact for the apply. In CI, many teams split this into pull request plan evidence and a protected apply job after approval.
 
-Fourth, run `terraform plan` and review the output carefully. A module version change can produce a plan with many more changes than you expected, the module might now tag resources differently, use different resource types internally, or have new default values for attributes you did not explicitly set.
-
-Fifth, apply the plan if it looks correct. If the plan shows unexpected changes that concern you, roll back the version constraint and investigate before proceeding.
-
-Never upgrade multiple modules at the same time. Upgrading one module at a time means that if a problem appears, you know exactly which module caused it. Upgrading five modules at once and then seeing an unexpected resource replacement in the plan leaves you guessing which module introduced the change.
+If the plan shows an unexpected replacement or deletion, the team backs out the version change and investigates before applying. A module upgrade is easy to revert in Git when the pull request changes one dependency at a time. It becomes much harder when five module upgrades, a provider upgrade, and several root configuration changes land together.
 
 ## Pinning Modules to Git References
+<!-- section-summary: Git module sources use refs, and protected tags or commit hashes are safer pins than moving branches. -->
 
-A Git reference is the exact Git target Terraform should download for a module. Tags and commit hashes are stable choices; branches move over time. Example: `?ref=v2.3.1` pins a module to a release tag, while `?ref=main` can change whenever someone merges to main.
-
-For modules stored in Git repositories, versioning works differently. Instead of a version number, you pin to a Git reference: a tag, a branch name, or a specific commit hash.
+A **Git ref** tells Terraform which Git target to download for a module source. The `ref` query parameter can point at a branch, tag, or commit hash. The source can also include a subdirectory after a double slash when one repository contains several modules.
 
 ```hcl
 module "network" {
-  source = "git::https://github.com/myorg/terraform-modules.git//network?ref=v2.3.1"
+  source = "git::https://github.com/devpolaris/terraform-modules.git//network?ref=v2.4.1"
 
-  region     = var.region
-  cidr_block = var.cidr_block
+  environment = "prod"
+  cidr_block  = "10.20.0.0/16"
 }
 ```
 
-The `?ref=v2.3.1` at the end pins to the Git tag `v2.3.1`. When the module author pushes a new version, they create a new tag. You update the `ref` parameter to upgrade.
+Release tags such as `v2.4.1` are readable and fit the same release workflow teams already use for application libraries. The tag should be protected in the Git hosting platform so nobody can move it after release. A movable tag breaks the promise that the same ref always means the same code.
 
-Git branches are not stable version pins, the content at `?ref=main` changes every time someone commits to main. Release tags are usually a better human-readable choice than branches, but a Git tag is only as stable as the repository's protections and team process. Git allows tags to be moved or replaced unless your hosting platform and permissions prevent that. If you need the strongest pin, use a commit hash.
+Commit hashes give the strongest pin because they identify one exact commit. They are less friendly for humans to read, but they are excellent when a regulated environment needs a precise source revision. A pull request can still include a link to the release notes or tag that corresponds to the commit.
 
-A commit hash (`?ref=abc1234567890...`) is the most stable reference possible. A commit hash identifies a specific state of the code. Some teams use commit hashes for the highest level of stability, at the cost of making it less obvious which version they are running. A protected tag like `v2.3.1` is easier for humans to read, but it depends on tag protection and release discipline.
-
-The double slash in the URL (`//network`) separates the repository URL from the subdirectory within the repository. If your modules are organized as separate top-level directories in one repository, `terraform-modules.git//network`, `terraform-modules.git//database`, `terraform-modules.git//compute`, you reference each module by pointing to its subdirectory.
+Branch refs such as `?ref=main` change as commits land. They can be acceptable for local experiments or short-lived development roots. Production roots usually need tags or commit hashes because reviewers need a stable target.
 
 ## The Upgrade Workflow in Practice
+<!-- section-summary: The safest upgrade workflow changes one module dependency, reads evidence, and promotes the same version through environments. -->
 
-A safe upgrade workflow makes the module change visible, testable, and reversible. The key idea is to change one module version at a time and let the plan show exactly what that module changed. Example: update only the network module, run `terraform init -upgrade`, review the staging plan, and avoid mixing the change with a database module upgrade.
+The Orders team's workflow is deliberately plain because plain workflows survive busy weeks. A module upgrade starts in development or staging first. The pull request changes one module version or Git ref and includes a link to the upstream release notes.
 
-Here is the full workflow a team should follow when upgrading a module:
+The review checklist has a few questions:
 
-```
-1. Check the module's releases page or changelog for what changed in the new version.
-2. Update the version constraint in the module block in your configuration.
-3. Run `terraform init -upgrade` to download the new version.
-4. Run `terraform plan` and read the full output carefully.
-5. If the plan looks correct, apply it in a non-production environment first.
-6. Verify everything works correctly in the non-production environment.
-7. Apply the same change in production.
-8. Commit the updated module version constraint. Also commit `.terraform.lock.hcl` if the upgrade changed provider selections or checksums.
-```
+| Review question | Why it matters |
+|---|---|
+| Which module changed? | Keeps the blast radius clear |
+| Which version did it move from and to? | Makes rollback obvious |
+| What does the changelog say? | Shows expected behavior changes |
+| What does the plan change? | Shows real infrastructure impact |
+| Did non-production apply and verification pass? | Proves the change in a safer environment |
+| Did provider selections change too? | Catches `.terraform.lock.hcl` changes caused by init |
 
-The non-production-first approach is important. A module upgrade is a change to your infrastructure. Like any other infrastructure change, it should be tested before it reaches production. Even if the module changelog says "no breaking changes," the plan might reveal that the module now creates a resource that conflicts with something in your account, or removes a tag that your monitoring system depends on.
+After staging passes, the team promotes the same module version to production. They keep production on the exact dependency that staging already tested. That discipline gives the staging result real meaning.
+
+Rollback is also a dependency workflow. If the new module release causes trouble, the team restores the previous version or Git ref, runs `terraform init -upgrade`, and reads the rollback plan. Sometimes rollback means changing code back. Sometimes the new module changed infrastructure in a way that needs a forward fix. The plan decides which path is safe.
 
 ## When to Trust a Module and When to Write Your Own
+<!-- section-summary: A module is worth adopting when its assumptions, maintenance, testing, and release process match the team's infrastructure standards. -->
 
-Trusting a module means trusting someone else's Terraform code to create and change your infrastructure. Use a public module when its assumptions match your needs and its maintenance quality is clear. Example: a standard VPC module may be worth adopting, while a module that conflicts with your organization's tagging and network rules is usually better written internally.
+Using a public or shared module means trusting someone else's Terraform code to change your infrastructure. That can be a good trade when the module handles a common pattern well. It can become expensive when the module's assumptions fight the team's naming, security, tagging, or network rules.
 
-Public modules on the Terraform Registry vary widely in quality and stability. Before adopting a module, evaluate it on a few dimensions.
+Before adopting a module, the platform team reviews maintenance signals. Recent releases, clear changelogs, issue activity, examples, tests, and documented upgrade notes all matter. A module used by many teams can carry years of edge-case knowledge, and the team still checks whether its assumptions fit the organization.
 
-**Maintenance**: Is the module actively maintained? Does it have recent commits and a responsive issue tracker? A module that has not been updated in two years might not support recent AWS features or Terraform versions.
+The team also checks the interface. A good module exposes the knobs your service actually needs and gives safe defaults for common behavior. A module that requires a fork on day one is already a custom module with extra steps. Maintaining the fork can cost more than writing a focused internal module.
 
-**Popularity**: How many downloads and stars does it have? A module used by tens of thousands of teams has been stress-tested across many environments and configurations.
+Public modules fit best for standard building blocks such as VPCs, managed databases, Kubernetes clusters, or storage buckets when the team's requirements match the module's supported patterns. Internal modules fit better for organization-specific rules: custom tagging, strict network topology, compliance controls, observability conventions, account vending, and identity boundaries.
 
-**Test coverage**: Does the module have automated tests? The best public modules run automated tests that verify the module works correctly across multiple scenarios.
-
-**Customizability**: Does the module expose enough input variables for your use case? If you have to fork the module to make it fit your needs, you are better off writing your own from the start.
-
-For simple, well-understood resources, creating a VPC with standard settings, creating an S3 bucket with standard encryption, a well-maintained community module is often better than writing your own. The community has already handled the edge cases and compatibility issues.
-
-For resources with complex, organization-specific requirements, custom tagging schemes, non-standard network layouts, proprietary compliance controls, writing your own module gives you full control and avoids fighting against a community module's assumptions.
-
-The guideline is: use a community module when it fits your use case well, fork nothing, write your own when the requirements are genuinely organization-specific.
+The practical question is: **does this module make the reviewed path simpler?** If the answer is yes, pin it and upgrade it deliberately. If the module hides too much or forces too many exceptions, a small internal module may give the team a cleaner contract.
 
 ## Putting It All Together
+<!-- section-summary: Stable module dependencies come from explicit pins, provider locks, small upgrade pull requests, and plan-based promotion. -->
 
-Module versioning keeps your infrastructure stable. When you pin a module to a specific version, updates to that module do not affect your infrastructure until you explicitly decide to upgrade. When you do upgrade, you follow a deliberate process: check the changelog, run `terraform init -upgrade`, review the plan, test in a non-production environment, then apply to production.
+Module versioning gives shared Terraform code a reviewable lifecycle. Local modules follow the repository commit. Registry modules use the `version` argument. Git modules use `ref`. Provider selections belong in `.terraform.lock.hcl`, while module selections belong in each module source configuration.
 
-The version constraint syntax gives you flexibility in how tightly you pin. Exact pins give the strongest stability guarantee. Pessimistic constraints allow automatic patch-level fixes while protecting against major breaking changes.
+![Terraform module versioning summary with source types, pinning methods, lock file scope, and upgrade workflow.](/content-assets/articles/article-iac-terraform-modules-versioning/versioning-summary-map.png)
 
-The `.terraform.lock.hcl` file, committed to version control, ensures every member of your team and every run of your CI/CD pipeline uses the same provider versions. Module versions are pinned separately in `module` blocks or Git `ref` values, so a stable Terraform dependency story needs both: provider locks and explicit module version pins.
+*A complete module dependency workflow pins module code, locks providers, and upgrades one reviewed dependency at a time.*
+
+The Orders team treats a module upgrade like any other production infrastructure change. They review release notes, update one dependency, run `terraform init -upgrade`, inspect the plan, test outside production, and then promote the same version with approval. That workflow keeps shared module improvements moving without letting unreviewed dependency changes surprise production.
+
+The main rule is worth repeating: **module code is infrastructure code, even when it lives in another repository**. Pin it, review it, test it, and upgrade it with evidence.
 
 ## What's Next
 
-You now know how to call modules, wire their inputs and outputs, and keep them pinned to specific versions. The next article covers how to design modules that are genuinely reusable, how to decide what should be a variable, how to make modules composable, and what makes the difference between a module that works for one team and one that works for many.
-
-
-![Module versioning summary: pin versions, choose sources carefully, review upgrades, and lock providers separately.](/content-assets/articles/article-iac-terraform-modules-versioning/module-versioning-summary.png)
+The next article looks at module design: how to keep modules focused, how to avoid hidden dependencies, how outputs become the public interface, and why flatter module composition usually gives teams a better review experience.
 
 ---
 
 **References**
 
-- [Module Sources (HashiCorp Documentation)](https://developer.hashicorp.com/terraform/language/modules/sources), Complete reference for all supported module sources including Registry, Git, and local paths.
-- [Version Constraints (HashiCorp Documentation)](https://developer.hashicorp.com/terraform/language/expressions/version-constraints), Full reference for the version constraint syntax including the pessimistic constraint operator.
-- [Dependency Lock File (HashiCorp Documentation)](https://developer.hashicorp.com/terraform/language/files/dependency-lock), Official reference for what `.terraform.lock.hcl` records for providers.
-- [Terraform Registry: Modules](https://registry.terraform.io/browse/modules), Browse publicly available Terraform modules across all providers.
-- [Azure Verified Modules](https://azure.github.io/Azure-Verified-Modules/), Microsoft-backed catalog and guidance for Azure Verified Modules.
+- [Module Sources (HashiCorp Documentation)](https://developer.hashicorp.com/terraform/language/modules/configuration), Details on local paths, Registry sources, Git sources, subdirectories, and source installation.
+- [Module Block Reference (HashiCorp Documentation)](https://developer.hashicorp.com/terraform/language/block/module), Reference for the `source` and `version` arguments and module installation behavior.
+- [Version Constraints (HashiCorp Documentation)](https://developer.hashicorp.com/terraform/language/expressions/version-constraints), Full reference for exact, range, and pessimistic version constraints.
+- [Dependency Lock File (HashiCorp Documentation)](https://developer.hashicorp.com/terraform/language/files/dependency-lock), Official explanation that `.terraform.lock.hcl` currently tracks provider dependencies while module pins live in module source configuration.
+- [Terraform Registry: Modules](https://registry.terraform.io/browse/modules), Public Registry catalog for Terraform modules.

@@ -127,13 +127,9 @@ To understand how `create_before_destroy` alters the lifecycle of a resource, yo
 
 Before executing any action, Terraform Core performs a topological sort on this graph using algorithms such as Kahn's algorithm or depth-first search traversal. This sorting establishes a strict linear ordering of execution nodes. By mapping dependencies as directed edges, the orchestrator determines which resources can be built concurrently and which must wait for parent resources to settle. If node B depends on node A, an edge is drawn from A to B, ensuring that the creation of A is fully complete before the engine initiates the creation of B.
 
-```mermaid
-flowchart TD
-    subgraph DBC["Destroy-Before-Create (Default Plan)"]
-        D1["1. Destroy Old Web Proxy"] --> C2["2. Create New Web Proxy"]
-        C2 --> U3["3. Update Downstream Dependencies"]
-    end
-```
+![Terraform's default replacement order destroys first, while create_before_destroy overlaps old and new objects when provider constraints allow it.](/content-assets/articles/article-iac-terraform-config-meta-arguments/create-before-destroy-order.png)
+
+*The lifecycle setting changes replacement order, but overlapping old and new objects still needs unique provider-level names.*
 
 ### The Mechanics of Reversing Dependency Edges
 
@@ -142,14 +138,6 @@ Reversing dependency edges means changing the order of the create and destroy st
 By default, when you modify an attribute of a resource that cannot be updated in place, such as changing the subnet association of a virtual machine or another provider-marked replacement attribute, the cloud provider requires the existing resource to be destroyed before a new one can be created. In the DAG, Terraform models this using a Destroy-Before-Create sequence. It splits the resource node into two distinct operations: a destroy node and a create node. The engine inserts a dependency edge directing that the create node must wait until the destroy node has successfully completed.
 
 If downstream resources depend on this resource, Terraform may need to update or replace those relationships as part of the same plan. During the destroy-first window, the service can experience downtime because the old resource is gone and the replacement is not yet active. When you set create_before_destroy = true, you instruct Terraform to create the replacement before destroying the old object. This removes the Terraform destroy-before-create gap, but it does not automatically prove application health or move live traffic safely.
-
-```mermaid
-flowchart TD
-    subgraph CBD["Create-Before-Destroy (Expanded Graph)"]
-        C1["1. Create New Web Proxy (with Name Suffix)"] --> U2["2. Update Downstream References"]
-        U2 --> D3["3. Destroy Old Web Proxy"]
-    end
-```
 
 ### Dynamic Subgraph Expansion and Topological Ordering
 

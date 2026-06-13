@@ -1,7 +1,7 @@
 ---
 title: "Securing the Pipeline"
-description: "Learn how to shift security left, scan for hardcoded credentials, block vulnerable dependencies, and prove image provenance."
-overview: "Modern software delivery requires automated security guardrails. This article details the shift-left methodology, secret detection, SAST/DAST/SCA tooling, Software Bill of Materials (SBOMs), and container image signing."
+description: "Learn how CI/CD security gates catch leaked secrets, risky code, vulnerable dependencies, unsafe images, and untrusted artifacts before release."
+overview: "A secure pipeline checks the code, dependencies, container image, credentials, and artifact identity before software reaches production. This article follows one service through those checks and shows how teams make the gates useful instead of noisy."
 tags: ["security", "devsecops", "secrets", "provenance", "scanning"]
 order: 4
 id: article-cicd-fundamentals-securing-the-pipeline
@@ -13,252 +13,355 @@ aliases:
 
 ## Table of Contents
 
-1. [The Friction of Late-Stage Security Audits](#the-friction-of-late-stage-security-audits)
-2. [The Shift-Left Mental Model](#the-shift-left-mental-model)
-3. [The Software Supply Chain Analogy](#the-software-supply-chain-analogy)
-4. [The Threat of Leaked Credentials in Git History](#the-threat-of-leaked-credentials-in-git-history)
-5. [Automated Secret Scanning at the Webhook Gate](#automated-secret-scanning-at-the-webhook-gate)
-6. [Incident Recovery: Rotations and History Rewriting](#incident-recovery-rotations-and-history-rewriting)
-7. [The Verification Triad: SAST, DAST, and SCA](#the-verification-triad-sast-dast-and-sca)
-8. [Container Layer Scanning: Eliminating OS Vulnerabilities](#container-layer-scanning-eliminating-os-vulnerabilities)
-9. [Software Bill of Materials: The Digital Ingredients List](#software-bill-of-materials-the-digital-ingredients-list)
-10. [Cryptographic Signature Checks and Provenance](#cryptographic-signature-checks-and-provenance)
-11. [Operational Realities: Managing False Positives and Pipeline Speed](#operational-realities-managing-false-positives-and-pipeline-speed)
+1. [Security Belongs Inside Delivery](#security-belongs-inside-delivery)
+2. [What The Pipeline Protects](#what-the-pipeline-protects)
+3. [Secrets In Source Control](#secrets-in-source-control)
+4. [Secret Scanning And Short-Lived Credentials](#secret-scanning-and-short-lived-credentials)
+5. [Static Code Scanning](#static-code-scanning)
+6. [Dependency And License Checks](#dependency-and-license-checks)
+7. [Container Image Scanning](#container-image-scanning)
+8. [Software Bills Of Materials](#software-bills-of-materials)
+9. [Signatures And Provenance](#signatures-and-provenance)
+10. [Pipeline Permissions And Runner Boundaries](#pipeline-permissions-and-runner-boundaries)
+11. [Triage Without Freezing Delivery](#triage-without-freezing-delivery)
 12. [Putting It All Together](#putting-it-all-together)
-13. [What's Next](#whats-next)
 
-## The Friction of Late-Stage Security Audits
+## Security Belongs Inside Delivery
+<!-- section-summary: A secure pipeline turns security checks into normal release steps, so risky changes fail before production. -->
 
-Historically, security auditing was the final step in the software development lifecycle. Development teams spent months writing code, building features, and packaging applications. Then, a week before the official launch date, a separate security team executed a manual audit. They inevitably uncovered critical vulnerabilities, hardcoded passwords, and outdated third-party libraries. 
+A **CI/CD pipeline** is the automated path that turns a code change into something running for users. It usually checks out the source code, installs dependencies, runs tests, builds an artifact, stores that artifact, and deploys it to an environment. When the previous article talked about continuous delivery, the important idea was repeatability: the same release process should run the same way every time.
 
-Because remediating these flaws required developers to rewrite core application logic at the last minute, releases were delayed by months. This late-stage friction created an adversarial relationship between developers (who were incentivized to ship features quickly) and the security team (who were forced to act as gatekeepers).
+**Pipeline security** adds guardrails to that same path. The guardrails check whether the change carries leaked credentials, unsafe code patterns, vulnerable dependencies, risky container packages, and untrusted release artifacts. A secure pipeline treats those checks like unit tests. If a check finds a real release-blocking problem, the change stops before it becomes a production incident.
 
-In a modern CI/CD environment, where organizations deploy changes multiple times a day, manual audits are physically impossible. If you push code containing a vulnerability, it will be active in production within minutes. 
+We will follow one service through the article. Imagine a team building `payflow-api`, a small payments API for an online store. The service is written in Node.js, built into a container image, pushed to a registry, and deployed to Kubernetes after a pull request merges into `main`. This is a normal production setup, and it gives us a clear way to connect each security concept to the previous one.
 
-To solve this, security must be integrated directly into the automated delivery pipeline. Security failures must be treated exactly like compile errors or broken unit tests, blocking the rollout before code can merge.
+The secure path has several gates. The diagram below shows the order we will use as the service moves from pull request to production.
 
-## The Shift-Left Mental Model
+![Pipeline security gate chain showing code change, secrets, code scan, dependencies, image scan, SBOM, signature, deploy gate, and blocked risk](/content-assets/articles/article-cicd-fundamentals-securing-the-pipeline/security-gate-chain.png)
 
-Imagine a timeline of software delivery. On the far left, a developer is typing code on their laptop. In the middle, the CI/CD pipeline runs. On the far right, the application is running in production.
+*A secure delivery path places the cheapest checks early, then verifies the built artifact before the deploy gate opens.*
 
-For decades, security checks lived exclusively on the far right. The core philosophy of DevSecOps (Development, Security, and Operations) is to **Shift Left**, moving security verification as far left on that timeline as possible.
+Notice the order. We start with the secrets and source code because those checks can run as soon as someone opens a pull request. Then we move into dependencies because the application imports other people's code. After that, we inspect the container image because the release artifact includes operating system packages and build layers. Finally, we prove which workflow created the artifact before the deployment system accepts it.
 
-```mermaid
-flowchart TD
-    Write["1. Write Code"] --> PR["2. Pull Request"]
-    PR --> Scan["3. Run Scans"]
-    Scan --> Check{"4. All Pass?"}
-    Check -- "No" --> Block["5. PR Blocked<br/>(Fix local code)"]
-    Check -- "Yes" --> Allow["6. PR Approved<br/>(Safe to merge)"]
+## What The Pipeline Protects
+<!-- section-summary: The pipeline protects more than application code because a release also includes dependencies, images, credentials, runners, and artifacts. -->
+
+A **software supply chain** is every input and process that helps produce your running software. Source code is one part of it, but the full chain also includes package manager downloads, base container images, build scripts, GitHub Actions or Jenkins plugins, deployment credentials, build runners, artifact registries, and the final image digest that production pulls.
+
+For `payflow-api`, the team writes the route handlers and business logic. The service also depends on packages such as an HTTP framework, a payment provider SDK, a logging library, and a JSON parser. The container image starts from a Node base image that already contains Linux packages. The pipeline itself uses reusable actions for checkout, login, testing, image builds, and deployment.
+
+That means a clean application file can still produce a risky release. A dependency can contain a known vulnerability. A base image can include an outdated OpenSSL package. A build job can receive a cloud credential that reaches more resources than the deployment needs. A third-party action can change behavior after the team updates it. A compromised artifact can reach production if the deploy step trusts a tag like `latest` instead of a verified digest.
+
+Security in the pipeline works because each check answers a different question. **Secret scanning** asks whether the change exposed credentials. **Static code scanning** asks whether the code contains dangerous patterns. **Software composition analysis** asks whether dependencies introduce known risk. **Image scanning** asks whether the built container contains vulnerable packages or misconfigurations. **SBOMs** record what went into the build. **Signatures and provenance** prove which workflow produced the artifact.
+
+The first risk to handle is also the one that creates the fastest incident: a secret committed to source control. It deserves to come early because one leaked key can turn a simple pull request into an incident response.
+
+## Secrets In Source Control
+<!-- section-summary: A leaked secret gives someone else a working credential, so teams rotate it first and clean the repository second. -->
+
+A **secret** is a value that proves identity or grants access. API keys, database passwords, private keys, cloud access tokens, webhook signing keys, package registry tokens, and OAuth client secrets all count. If someone copies a secret, they can often use it from another machine until the owner revokes or rotates it.
+
+In the `payflow-api` team, a developer might test payment webhooks locally and paste a provider key directly into a config file during debugging. The code may look harmless during a rushed review because it sits beside normal configuration values. The dangerous part is that Git stores the value in the commit, and the value can remain in history after the team removes the visible line from the newest version.
+
+```js
+export const paymentConfig = {
+  provider: "stripe",
+  apiKey: "[redacted-example-live-key]",
+  webhookSecret: "[redacted-example-webhook-secret]"
+};
 ```
 
-The economics of security are simple: the earlier you detect a vulnerability, the cheaper it is to remediate.
+The recovery order matters. **Rotate the leaked credential first.** Rotation means creating a new credential, updating the real system to use the new value, and revoking the old value. Cleaning Git history has value, especially for public repositories and broad exposure, but the leaked value may already exist in clones, logs, screenshots, package caches, or attack tooling. The old credential should lose power before the team spends time rewriting commits.
 
-If a developer writes a hardcoded database password on their laptop and a local pre-commit hook catches it instantly, the remediation takes two seconds. 
+After rotation, the team investigates where the secret appeared. They check the repository, CI logs, container layers, deployment manifests, and application configuration. A secret can leak through a failed build log as easily as through source code. Build tools sometimes print environment variables during debug mode, and a single `echo $PAYMENT_API_KEY` in a shell script can turn a protected secret into plain text in a job log.
 
-If that password passes review, merges into the mainline, and is scraped from a public repository by an attacker, the remediation requires a massive, company-wide incident response. The team must rotate credentials, audit access logs, rebuild databases, and notify customers. 
+This is why secret handling needs two layers. The first layer prevents secrets from entering source control. The second layer reduces the number of long-lived secrets the pipeline needs in the first place.
 
-By shifting left, the CI pipeline acts as a programmatic security gate that catches flaws before they can be committed to the mainline.
+## Secret Scanning And Short-Lived Credentials
+<!-- section-summary: Secret scanning blocks exposed credentials, while OIDC and narrow job tokens reduce how many permanent secrets exist in CI. -->
 
-## The Software Supply Chain Analogy
+**Secret scanning** searches code, commits, pull requests, and sometimes push events for strings that look like credentials. Platforms such as GitHub can recognize many provider token formats, and teams can add custom patterns for internal keys. A custom pattern helps when a company has tokens like `payflow_live_...` that only its own systems understand.
 
-Before examining the security tools, we must understand the concept of a **Software Supply Chain**.
+**Push protection** moves secret scanning to the moment someone pushes code. That timing matters because it catches the leak before the bad commit lands in the remote repository. For a private company repository, this saves a lot of cleanup work. For a public repository, it can prevent a race where automated scanners on the internet find the token seconds after the push.
 
-Think of software development like running a commercial kitchen. You are the head chef, and you write the custom recipes (your source code). 
+Secret scanning still has limits, so it works best with better credential design. A scanner can miss a secret if the value has an unusual format. It can also flag test fixtures or fake examples. Teams handle this by keeping fake values obviously fake, adding custom patterns for real internal secrets, and requiring a short reason when someone bypasses a secret alert.
 
-However, you do not bake your own bread, grow your own vegetables, or farm your own beef. You purchase these ingredients from third-party suppliers, bring them into your kitchen, and assemble them into dishes.
+The bigger improvement is using **short-lived credentials** for deployment. In GitHub Actions, **OpenID Connect**, usually shortened to **OIDC**, lets a workflow ask a cloud provider for a temporary token during a job. The workflow proves facts such as repository, branch, workflow, commit, and environment. The cloud provider checks those facts against a **trust policy**, which is a rule that says which workflow identities may receive a cloud role, and then issues a token that expires automatically.
 
-If a supplier sells you contaminated meat, it does not matter how clean your kitchen is or how perfectly you cook the dish. Your customers will get sick, and your restaurant will be held responsible.
+For `payflow-api`, this means the deployment job can request cloud access only when the workflow runs from `main` and targets the `production` environment. The repository no longer needs to store a permanent cloud access key as a CI secret. The credential exists for the job, and then it expires.
 
-In modern engineering, those ingredients are third-party open-source libraries (such as npm packages or Python modules) and base operating system images (such as Alpine Linux or Ubuntu). 
+```yaml
+name: release
 
-Modern applications are often 90% third-party dependencies and only 10% custom code. If an attacker injects a backdoor into a popular utility library, and your CI pipeline downloads that library during a build, your supply chain is poisoned. The attacker gains full execution rights inside your production containers. 
+on:
+  push:
+    branches:
+      - main
 
-DevSecOps is the process of programmatically inspecting every ingredient at the loading dock before allowing it into the kitchen.
+permissions:
+  contents: read
+  id-token: write
 
-## The Threat of Leaked Credentials in Git History
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+      - name: Request cloud credentials through OIDC
+        run: ./scripts/cloud-login-with-oidc.sh
+      - name: Deploy payflow-api
+        run: ./scripts/deploy.sh
+```
 
-The most common, high-severity security mistake a developer can make is committing a secret credential to source control.
+The important detail in that workflow is the `permissions` block. `contents: read` lets the job read the repository, and `id-token: write` lets the job request an OIDC token. Other permissions stay unavailable unless the workflow asks for them. In production, the cloud trust policy should also check the repository name, branch, environment, and **audience**, which is the intended receiver of the token. For example, an AWS role can require a token meant for AWS, from the `acme/payflow-api` repository, on the `main` branch, through the `production` environment, so a random workflow cannot borrow the production role.
 
-An engineer writes a backend module that uploads files to an AWS S3 bucket. To verify the integration locally, they generate a highly privileged AWS access key and hardcode it directly into the connection settings:
+The pipeline has reduced credential leaks and removed a permanent deployment key. The next check looks inside the application code itself, because a safe credential path still needs safe application behavior.
 
-```javascript
-const s3 = new AWS.S3({
-  accessKeyId: 'AKIAIOSFODNN7EXAMPLE',
-  secretAccessKey: 'wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY'
+## Static Code Scanning
+<!-- section-summary: Static code scanning reads source code before the app runs and points reviewers toward dangerous patterns. -->
+
+**Static application security testing**, often shortened to **SAST**, analyzes source code without running the application. A SAST tool builds a picture of how data moves through the program and looks for patterns such as SQL injection, command injection, unsafe deserialization, hardcoded secrets, path traversal, and missing authorization checks.
+
+In `payflow-api`, imagine a pull request that adds an admin endpoint for refunding orders. The code reads an `orderId` from the request and builds a SQL string by concatenating user input. Unit tests might pass because the happy path works. A static scanner can still flag the dangerous data flow: request input reaches a database query without parameterization.
+
+```js
+app.post("/admin/refunds", async (req, res) => {
+  const query = "select * from payments where order_id = '" + req.body.orderId + "'";
+  const payment = await db.query(query);
+
+  res.json({ payment });
 });
 ```
 
-The tests pass on their laptop. The developer commits the changes, runs `git push`, and sends the branch to a shared repository.
+The safer version uses a parameterized query. Parameterization means the SQL engine receives the query shape and the value separately, so user input stays data instead of becoming executable SQL. A scanner can recognize that change and close the alert after the fix lands.
 
-If that repository is public, automated crawler bots will scrap the credential within seconds of it landing on the server. The attackers will use the key to programmatically spin up hundreds of high-compute virtual machines globally to mine cryptocurrency, incurring massive bills within hours.
+```js
+app.post("/admin/refunds", async (req, res) => {
+  const payment = await db.query(
+    "select * from payments where order_id = $1",
+    [req.body.orderId]
+  );
 
-If the pipeline includes automated security scanning, this credential leak is blocked before it can reach the remote repository.
-
-## Automated Secret Scanning at the Webhook Gate
-
-To prevent credential leaks, pipelines implement automated **Secret Scanning** (using open-source tools such as GitLeaks or TruffleHog) as a required status gate.
-
-These scanners run regular expressions and Shannon entropy algorithms against every line of code in the commit. They look for high-randomness strings that match known signatures for AWS keys, database connection strings, Stripe keys, and OIDC tokens.
-
-If you attempt to commit the hardcoded AWS key, the scanner blocks the build:
-
-```text
-> gitleaks detect --source . -v
-
-Finding:     accessKeyId: 'AKIAIOSFODNN7EXAMPLE'
-Secret:      AKIAIOSFODNN7EXAMPLE
-RuleID:      aws-access-token
-Entropy:     4.2
-File:        src/upload.js
-Line:        2
-
-ERR: 1 leaks found!
-Error: Process completed with exit code 1.
+  res.json({ payment });
+});
 ```
 
-Because the scanner exited with a non-zero exit code, the pull request status check fails, and the version control host blocks the merge. The code cannot join the mainline, and the secret remains safe on the developer's local machine.
-
-## Incident Recovery: Rotations and History Rewriting
-
-If a secret is successfully pushed to a remote repository, how do you recover?
-
-A common mistake is to delete the credential from the file, create a new commit (such as "removed API key"), and push again. **This does nothing to protect the credential.** 
-
-Git is a version control system; its entire purpose is to preserve history. An attacker can simply inspect the commit logs, view the diff of the previous commit, and extract the deleted key.
-
-If a credential is pushed to a remote repository, you must execute two steps immediately:
-* **Rotate the Secret**: Go to the provider console (such as AWS) and immediately revoke the key, treating it as fully compromised. Generate a new key.
-* **Rewrite Git History**: Use an isolation tool (such as `git filter-repo`) to forcefully scrub the secret from every commit in the repository's history, and force-push the updated history back to the server.
-
-Because rewriting history disrupts the entire engineering team, automated secret scanning in the CI pipeline is a vital preventative gate.
-
-## The Verification Triad: SAST, DAST, and SCA
-
-To secure our custom code and imported dependencies, a mature pipeline implements three complementary scanning technologies:
-
-* **SCA (Software Composition Analysis)**:
-  * Purpose: Scans package manifests (`package-lock.json`, `Gemfile.lock`) to audit third-party dependencies against public vulnerability databases.
-  * Speed: Fast (seconds).
-  * Execution Gate: Runs early in the CI build.
-  * Example Tools: Snyk, Dependabot.
-* **SAST (Static Application Security Testing)**:
-  * Purpose: Scans raw source code for bad programming practices (such as SQL injections or buffer overflows) without executing the code.
-  * Speed: Medium (minutes).
-  * Execution Gate: Runs early in the CI build.
-  * Example Tools: Semgrep, SonarQube.
-* **DAST (Dynamic Application Security Testing)**:
-  * Purpose: Attacks a running instance of the application from the outside, attempting to inject payloads into active endpoints like a real hacker.
-  * Speed: Slow (hours).
-  * Execution Gate: Runs late in the pipeline against a staging environment.
-  * Example Tools: OWASP ZAP, Burp Suite.
-
-By combining this triad, the pipeline verifies the code you wrote (SAST), the code you imported (SCA), and the final running application (DAST).
-
-## Container Layer Scanning: Eliminating OS Vulnerabilities
-
-Auditing application dependencies is only half the battle. When you package your code into a Docker image, you import an underlying operating system layer. If any OS packages inside that image contain vulnerabilities, attackers can exploit them to compromise the container.
-
-To prevent this, the CD pipeline executes a **Container Layer Scanner** (such as Trivy) the moment the Docker image is compiled:
+On GitHub, CodeQL can run as a code scanning workflow and upload alerts to the repository. Other SAST tools can also upload results through SARIF, which is a standard format for static analysis results. The practical pattern is to start with a standard ruleset, block new high-confidence critical findings, and keep a separate cleanup plan for older alerts.
 
 ```yaml
+name: code-security
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
     steps:
-      - name: Build Docker Image
-        run: docker build -t orders-api:${{ github.sha }} .
-        
-      - name: Execute Trivy Vulnerability Audit
-        uses: aquasecurity/trivy-action@master
+      - uses: actions/checkout@v4
+      - uses: github/codeql-action/init@v3
         with:
-          image-ref: 'orders-api:${{ github.sha }}'
-          format: 'table'
-          exit-code: '1'
-          severity: 'CRITICAL,HIGH'
+          languages: javascript-typescript
+      - uses: github/codeql-action/analyze@v3
 ```
 
-Trivy downloads the latest global CVE (Common Vulnerabilities and Exposures) database, unpacks the compiled Docker image layers, and audits every binary and OS library inside the container. 
+SAST works best when developers can understand the alert quickly. A useful alert points to the source line, explains the data flow, and names the fix pattern. A vague alert that says "security issue found" will get ignored because the developer cannot connect it to a real behavior in the app.
 
-If it uncovers a `CRITICAL` vulnerability (such as a flaw in `openssl` or `glibc`), the scanner exits with code 1. The pipeline immediately discards the image and blocks the rollout until the developer updates the base image to a secure version.
+Static scanning covers the code the team writes. The next risk comes from code the team imports, and that imported code often changes through small lock file updates.
 
-## Software Bill of Materials: The Digital Ingredients List
+## Dependency And License Checks
+<!-- section-summary: Dependency checks catch vulnerable or disallowed packages before a pull request changes the application inventory. -->
 
-In late 2021, the security industry faced a massive crisis with the discovery of a critical remote code execution vulnerability inside `log4j` (a common Java logging library). Because `log4j` was deeply nested inside thousands of third-party packages, organizations spent weeks manually scanning their servers, unable to prove if they were vulnerable.
+**Software composition analysis**, usually shortened to **SCA**, inspects third-party packages and compares them with vulnerability advisories, package metadata, and sometimes license rules. For a Node service, it reads files such as `package.json` and `package-lock.json`. For Python it reads files such as `requirements.txt`, `pyproject.toml`, or lock files. The exact files change by ecosystem, but the idea stays the same.
 
-This crisis accelerated the adoption of the **SBOM (Software Bill of Materials)**. An SBOM is a standardized, machine-readable JSON catalog that lists every library, transitive dependency, and OS package present inside a compiled software artifact.
+This matters because modern services carry a lot of imported code. `payflow-api` may have a small source tree, but its dependency graph can include hundreds of direct and transitive packages. A **direct dependency** is one the team chooses, like an HTTP framework. A **transitive dependency** is pulled in by another package, like a tiny utility used by a logging library.
 
-In a secure pipeline, generating the SBOM is an automated build step:
+A dependency review gate looks at what a pull request changes. If the team updates a payment SDK and the lock file brings in a vulnerable transitive package, the pipeline can fail the check before the merge. This gives the developer a specific choice: upgrade to a patched version, choose a different package, or document a time-limited exception if the vulnerability does not affect the service.
 
-```mermaid
-flowchart TD
-    Code["Source Code"] --> Build["Docker Build"]
-    Build --> Image["1. Container Image"]
-    Build --> SBOM["2. SBOM JSON"]
-    Image --> Push["Push to Registry"]
-    SBOM --> Push
+```yaml
+name: dependency-review
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/dependency-review-action@v4
+        with:
+          fail-on-severity: high
+          deny-licenses: GPL-3.0, AGPL-3.0
 ```
 
-By generating and storing the SBOM alongside the container image, security teams can query a centralized vulnerability database to instantly locate which active production workloads are running a newly disclosed CVE, without needing to manually inspect running servers.
+License checks belong in the same conversation. A package can be technically safe and still conflict with a company's license policy. The pipeline can warn or block when a pull request introduces a license that legal and engineering have already agreed to avoid. The goal is early visibility, because removing a package from a small pull request is much easier than replacing it after several teams depend on it.
 
-## Cryptographic Signature Checks and Provenance
+Third-party CI actions and plugins deserve similar care. A workflow step such as `uses: some-owner/some-action@v1` downloads code into the runner and executes it during the job. Teams usually start with version tags for readability, then mature toward pinning important actions by full commit SHA and updating them through a review process. That way, the build does not silently execute new action code just because a tag moved or a maintainer account was compromised.
 
-Even if your registry is secure, how does your production cluster know that a container image has actually been built and validated by your trusted CI pipeline? What if an attacker compromises the registry and overrides an active image tag with a malicious container?
+Dependency checks tell us about package manifests and lock files. Once the pipeline builds a container image, the release contains another layer of software: operating system packages and image metadata.
 
-To prevent this, pipelines implement **Cryptographic Image Signing** (using Sigstore Cosign).
+## Container Image Scanning
+<!-- section-summary: Image scanning checks the built artifact, including operating system packages, language packages, secrets, and image configuration. -->
 
-The validation pathway operates in five steps:
+A **container image** is a packaged filesystem plus metadata used to start containers. It contains the application code, runtime, package manager files, operating system libraries, user settings, exposed ports, and every file copied during the build. The image becomes the thing production actually runs, so it needs its own security gate.
 
-First, the CI runner compiles the container image and pushes it to the registry.
+For `payflow-api`, the Dockerfile might start from a Node base image. That base image brings Linux packages with it. The application may also copy compiled assets, install production dependencies, and set runtime environment variables. A source scan can miss issues that only appear after those build steps complete.
 
-Second, the runner generates a cryptographic signature of the image's unique SHA-256 digest using a secure private key or short-lived OIDC pipeline credentials.
+**Image scanning** inspects the final image for known vulnerabilities, misconfigurations, embedded secrets, and sometimes license data. A scanner such as Trivy can read the image layers and report vulnerable OS packages and language dependencies. The report usually includes the package name, installed version, vulnerability identifier, severity, and fixed version when one exists.
 
-Third, the runner pushes the signature and the build provenance metadata to the registry alongside the image.
+```bash
+trivy image \
+  --severity HIGH,CRITICAL \
+  --exit-code 1 \
+  --ignore-unfixed \
+  ghcr.io/acme/payflow-api:${GITHUB_SHA}
+```
 
-Fourth, when the orchestrator (such as Kubernetes) attempts to pull and run the container image in production, an admission controller intercepts the request.
+That command fails the job when the image contains high or critical vulnerabilities that have a fix available. The `--ignore-unfixed` choice keeps the first rollout from getting stuck on vulnerabilities the team cannot patch yet, but it should come with a separate review process. Some teams still track unfixed critical vulnerabilities in a dashboard so they can react as soon as an upstream fix appears.
 
-Fifth, the admission controller verifies the signature using the public key. If the signature is missing or the image digest has been altered, the controller blocks the container from starting.
+Good image hygiene reduces the number of findings before scanning even runs. Multi-stage builds keep compilers and build tools out of the final image. Supported base images receive security updates. A non-root container user reduces the impact of a process escape or file write bug. Copying only the files the service needs avoids accidentally packaging `.env`, test fixtures, local caches, or SSH keys.
 
-This ensures **Provenance**—absolute mathematical proof that only container images verified by your security pipeline are allowed to execute in production.
+At this point the pipeline knows the source code, dependencies, and image look acceptable for release. The next question is more basic: what exactly did this release contain?
 
-## Operational Realities: Managing False Positives and Pipeline Speed
+## Software Bills Of Materials
+<!-- section-summary: An SBOM records the components inside a release so teams can search, audit, and respond quickly. -->
 
-While automated security gates are powerful, they introduce a major operational challenge: **False Positives**. A false positive occurs when a scanner flags a mock test key or an unused OS binary as a critical threat, breaking the pipeline.
+A **Software Bill of Materials**, usually shortened to **SBOM**, is a machine-readable inventory of software components and their relationships. For an application release, it can list package names, versions, package URLs, licenses, hashes, and dependency relationships. Common SBOM formats include CycloneDX and SPDX.
 
-If scanners fail builds constantly due to false positives, developers experience alert fatigue. They start viewing security as an obstacle, and search for bypasses.
+Think about a new vulnerability in a popular compression library. Without an SBOM, the security team has to search repositories, package manifests, containers, and deployment records to find affected services. With SBOMs stored beside releases, the team can ask a sharper question: which deployed artifacts include this component and version?
 
-To manage this, platform teams must actively tune their scanners:
-* **Ignore Configurations**: Maintain ignore files (such as `.trivyignore` or `.gitleaksignore`) to explicitly bypass verified mock data or accepted risks.
-* **Progressive Rollouts**: Do not enable every scanner on day one. Start with high-value, low-friction gates (secret scanning and SCA), silence the noise, and then progressively introduce container scanning and image signing as team maturity grows.
+For `payflow-api`, the SBOM should be generated from the built artifact. The final image is what production runs, so the SBOM should include both application packages and image packages. Teams often attach the SBOM to the release, store it in an artifact registry, or link it through an **attestation**. An attestation is a signed statement about an artifact, such as "this image was built by this workflow" or "this SBOM belongs to this image digest."
 
-A senior engineer treats security tools as living systems, ensuring that when the build does break, the signal is accurate, actionable, and trusted by the team.
+```bash
+syft ghcr.io/acme/payflow-api:${GITHUB_SHA} \
+  -o cyclonedx-json=payflow-api.sbom.cdx.json
+```
+
+An SBOM gives the team visibility. The security value appears when the organization uses it for vulnerability response, procurement review, license review, and release evidence. A stale SBOM from yesterday's build cannot answer questions about today's image, so SBOM generation belongs inside the release pipeline.
+
+Now we have a record of what the artifact contains. The next step proves who built it and which process created it, because inventory and identity answer different release questions.
+
+## Signatures And Provenance
+<!-- section-summary: Signatures prove artifact integrity, and provenance explains which trusted build process created the artifact. -->
+
+An **artifact signature** is a cryptographic proof attached to a release artifact such as a container image, binary, package, or archive. The signature lets a verifier check that the artifact matches what the signer approved. If someone changes the artifact after signing, verification fails because the digest no longer matches.
+
+**Provenance** is information about how an artifact was built. It can include the repository, workflow file, commit SHA, build trigger, build environment, and builder identity. SLSA, pronounced "salsa", defines supply chain security levels and a provenance format that helps consumers understand the build process behind an artifact.
+
+For `payflow-api`, the production deploy gate should care about more than the image tag. A tag such as `prod` can move. A digest such as `sha256:...` names exact content. A signature proves the expected identity signed that content. Provenance shows that the image came from the approved release workflow on the expected repository and branch.
+
+GitHub artifact attestations and Sigstore-based tools such as Cosign support this style of release evidence. A common flow is: build the image, push it by digest, generate an attestation that links the digest to the workflow, and verify that attestation before deployment. The deploy system can then enforce policy such as "only images built by `acme/payflow-api/.github/workflows/release.yml` from `refs/heads/main` can run in production."
+
+```bash
+cosign verify \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate-identity-regexp "https://github.com/acme/payflow-api/.github/workflows/release.yml@refs/heads/main" \
+  ghcr.io/acme/payflow-api@sha256:exampledigest
+```
+
+This is the difference between trusting a registry tag and trusting a release process. A registry tag says where the image was stored. A verified signature and provenance record say which identity signed it and which build path produced it. Production should care about the build path because compromised build credentials, manual uploads, and unreviewed scripts can all produce artifacts that look normal at first glance.
+
+![Provenance verification showing image digest, SBOM, signature, build provenance, trusted workflow, main branch, verifier, and production gate](/content-assets/articles/article-cicd-fundamentals-securing-the-pipeline/provenance-verification.png)
+
+*Provenance verification checks the artifact digest, inventory, signature, and build path before production trusts the release.*
+
+That brings us to the pipeline runtime itself. A signed artifact still carries risk if the workflow that signed it had too much permission, so the job environment needs the same care as the artifact.
+
+## Pipeline Permissions And Runner Boundaries
+<!-- section-summary: Secure pipelines give each job only the token, secret, runner, and environment access it needs. -->
+
+A **runner** is the machine or container that executes pipeline jobs. A GitHub-hosted runner starts fresh for a job and disappears after it finishes. A self-hosted runner is managed by your organization, which means it can reach private networks and special tools, but it also needs isolation, patching, and cleanup.
+
+Every job should receive the smallest useful set of permissions. In GitHub Actions, the `GITHUB_TOKEN` can read repository contents, create releases, write pull request comments, upload security events, and perform other repository operations depending on how permissions are configured. A test job usually needs read access. A deploy job might need OIDC token access. A release job might need package write access. Giving every job write-all access turns a small script injection into a repository takeover path.
+
+```yaml
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - run: npm ci
+      - run: npm test
+
+  publish:
+    runs-on: ubuntu-latest
+    needs: test
+    environment: production
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - run: ./scripts/build-and-publish.sh
+```
+
+Notice how the test job has no package write permission and no OIDC token permission. If a malicious dependency tries to publish a package during `npm test`, the token does not have that power. The publish job gets stronger permissions, but it runs after tests and targets the protected `production` environment.
+
+Protected environments add another useful boundary. A deployment environment can require reviewers, restrict which branches can deploy, and keep environment secrets away from untrusted jobs. For pull requests from forks, deployment secrets should stay unavailable because the code in the pull request has not earned that trust yet.
+
+Self-hosted runners need extra care because they often sit near production networks. A self-hosted runner that handles untrusted pull request code should have no path to production credentials or internal services. Many teams separate runner pools by trust level: public pull request validation on disposable runners, internal build jobs on controlled runners, and production deployment on a tightly restricted runner group.
+
+At this point the pipeline has many gates. The final skill is operating those gates so developers fix real problems instead of fighting the system.
+
+## Triage Without Freezing Delivery
+<!-- section-summary: Useful security gates block clear release risk, route lower-risk findings into queues, and keep exceptions visible. -->
+
+A security gate needs a policy that developers can understand. A simple starting policy might block leaked secrets, critical SAST alerts with high confidence, high or critical dependency vulnerabilities with a fix available, critical image vulnerabilities with a fix available, unsigned production artifacts, and deployments from untrusted branches. The exact thresholds should match the product risk, but the team needs a written rule before the first noisy week.
+
+Older findings need a different path from new findings. If a repository already has 300 medium SAST alerts, blocking every pull request will trap developers in old debt. A better rollout starts by blocking new critical findings while the team creates a backlog for existing issues. The gate then becomes a ratchet: new code cannot make the security position worse, and the team pays down the old issues in planned batches.
+
+Exceptions should expire. Sometimes a vulnerable package has no patched version, or a scanner reports a false positive in generated code, or a production hotfix must move before a full refactor. An exception record should name the finding, owner, reason, compensating control, and expiration date. Permanent exceptions become invisible risk, so they need review.
+
+Pipeline speed also matters. Secret scanning, dependency review, and core SAST checks belong in the pull request path because they give fast feedback. Deep DAST scans, broad container scans, and full repository analysis can run nightly or before release if they take longer. **Dynamic application security testing**, or **DAST**, tests a running application from the outside, so it often needs a deployed test environment and more time than a normal pull request job.
+
+The operating rhythm should feel normal after a while. Developers see a clear failure, fix the source line or package version, and rerun the job. Security engineers watch trends, tune noisy rules, and review exceptions. Release managers gain evidence that the artifact passed the checks the company promised to run.
 
 ## Putting It All Together
+<!-- section-summary: A secure pipeline checks identity, code, dependencies, images, inventory, and provenance before deployment. -->
 
-Securing the pipeline transforms security from an adversarial, late-stage manual audit into a continuous, automated engineering gate. By shifting security left, scanning commits for credentials, implementing the SAST/DAST/SCA triad, auditing container layers for CVEs, generating SBOMs, and cryptographically signing images, organizations build a resilient, non-repudiable chain of custody for every release.
+Let's put `payflow-api` through the full path. A developer opens a pull request that changes refund handling. Secret scanning checks the diff and push data for exposed tokens. Code scanning looks for unsafe data flow in the new handler. Dependency review checks whether the lock file added vulnerable packages or disallowed licenses. Unit tests and integration tests still run because security gates complement normal quality gates.
 
-When configuring and auditing your pipeline security, ensure you enforce these five core practices:
+After the pull request merges, the release workflow builds a container image. The image scanner checks the final image for vulnerable OS packages, language packages, secrets, and misconfigurations. The pipeline generates an SBOM from the image and stores it with the release artifacts. Then the workflow signs or attests to the image digest, using the workflow identity rather than a permanent signing secret sitting in the repository.
 
-First, shift security left. Catch vulnerabilities at the earliest stage of the delivery timeline, resolving secrets and dependency flaws before code can merge.
+The production deployment gate verifies the evidence. It checks that the image digest has the expected signature, that provenance points to the approved release workflow, that the workflow ran from `main`, and that the deployment job used the production environment. The deploy job receives only the token and cloud permissions it needs through OIDC, and those credentials expire after the job.
 
-Second, block leaked credentials programmatically. Enforce secret scanning at the webhook gate, and never attempt to delete a leaked key without performing a complete rotation and history rewrite.
+![Secure pipeline summary showing pull request checks, merge, build image, image scan, SBOM, attest, verify, and production](/content-assets/articles/article-cicd-fundamentals-securing-the-pipeline/secure-pipeline-summary.png)
 
-Third, implement the scanning triad. Use SCA to check the code you imported, SAST to check the code you wrote, and DAST to attack the running system.
+*A secure pipeline checks the pull request early, attaches evidence to the built image, and verifies that evidence before production.*
 
-Fourth, audit your container layers. Run Trivy scans on all compiled images, and block deployments if critical OS vulnerabilities are detected.
+The result is a delivery system that can explain itself. If someone asks what code shipped, the artifact digest answers. If someone asks what packages shipped, the SBOM answers. If someone asks who built it, provenance answers. If someone asks how risky findings were handled, the pipeline logs and exception records answer.
 
-Fifth, enforce image provenance. Generate SBOMs on every build, and cryptographically sign container digests using Cosign to guarantee that only trusted artifacts execute in production.
-
-## What's Next
-
-We have completed the **CI/CD Fundamentals** module, establishing the core mental models for integration, runner execution, immutable promotions, and shift-left perimeters. In the next submodule, **GitHub Actions**, we will translate these fundamentals into concrete enterprise workflows. We will write advanced YAML pipeline files, handle complex triggering events, build reusable custom actions, configure secure environments, and lock down runner permissions.
-
-![Pipeline security summary showing shift-left scanning, secret protection, dependencies, image layers, SBOM, and provenance](/content-assets/articles/article-cicd-fundamentals-securing-the-pipeline/pipeline-security-summary.png)
-
-*Use this as the pipeline-security checklist: move checks earlier, catch leaked secrets, rotate compromised credentials, scan code and dependencies, inspect image layers, and verify provenance.*
+This is the main idea behind securing the pipeline. Security becomes part of the release path instead of a separate meeting after the release path has already done its work. The checks run every time, close to the change, with enough evidence for developers to fix real problems and enough control to keep risky artifacts out of production.
 
 ---
 
 **References**
 
-- [Sigstore Cosign Documentation](https://docs.sigstore.dev/cosign/overview/) - Open-source standard for cryptographically signing container manifests and artifacts.
-- [OWASP Dependency-Check and SCA Standards](https://owasp.org/www-project-dependency-check/) - Guidelines on identifying publicly disclosed vulnerabilities within application dependencies.
-- [CISA Software Bill of Materials (SBOM) Resources](https://www.cisa.gov/sbom) - Cybersecurity and Infrastructure Security Agency standards for software supply-chain transparency.
-- [GitHub Actions Security Hardening Guide](https://docs.github.com/en/actions/security-hardening-your-workflows/security-hardening-for-github-actions) - Best practices for protecting secrets, workflows, and runner environments.
+- [GitHub secret scanning](https://docs.github.com/en/code-security/concepts/secret-security/secret-scanning) - Explains secret scanning, supported repository coverage, and push protection concepts.
+- [GitHub OpenID Connect](https://docs.github.com/en/actions/concepts/security/openid-connect) - Describes short-lived cloud tokens for GitHub Actions workflows and the claims cloud providers can validate.
+- [GitHub workflow permissions](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#permissions) - Documents how workflows and jobs control the permissions granted to `GITHUB_TOKEN`.
+- [GitHub code scanning](https://docs.github.com/en/code-security/concepts/code-scanning/code-scanning) - Explains code scanning, CodeQL, SARIF uploads, and pull request security feedback.
+- [GitHub dependency review](https://docs.github.com/en/code-security/concepts/supply-chain-security/dependency-review) - Documents dependency review, dependency diffs, vulnerability data, and enforcement through pull request checks.
+- [Trivy container image scanning](https://trivy.dev/docs/latest/target/container_image/) - Documents scanning container image files and metadata for vulnerabilities, misconfigurations, secrets, and licenses.
+- [CycloneDX SBOM capability](https://cyclonedx.org/capabilities/sbom/) - Defines SBOM use cases for component inventory, dependency relationships, vulnerability management, and license visibility.
+- [SLSA provenance](https://slsa.dev/spec/v1.0/provenance) - Defines provenance as an attestation that links build artifacts to a build platform and build definition.
+- [GitHub artifact attestations](https://docs.github.com/en/actions/concepts/security/artifact-attestations) - Explains signed provenance, artifact verification, SBOM association, and Sigstore-backed attestations.
+- [Sigstore Cosign container signing](https://docs.sigstore.dev/cosign/signing/signing_with_containers/) - Documents signing, verifying, and attesting container images with Cosign.
+- [OWASP Top 10 CI/CD Security Risks](https://owasp.org/www-project-top-10-ci-cd-security-risks/) - Lists common CI/CD risks including poisoned pipeline execution, weak credential hygiene, dependency chain abuse, and improper artifact integrity validation.
+- [NIST Secure Software Development Framework](https://csrc.nist.gov/pubs/sp/800/218/final) - Provides secure software development practices for reducing software vulnerability risk.

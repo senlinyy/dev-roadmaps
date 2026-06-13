@@ -11,184 +11,243 @@ aliases:
 
 ## Table of Contents
 
-1. [The Problem](#the-problem)
-2. [The Build Once, Run Everywhere Golden Rule](#the-build-once-run-everywhere-golden-rule)
-3. [Managing Stateless Artifacts with Runtime Injection](#managing-stateless-artifacts-with-runtime-injection)
-4. [Designing Progressive Promotion Pipelines](#designing-progressive-promotion-pipelines)
-5. [Artifact Registry Promotion Paths](#artifact-registry-promotion-paths)
-6. [Putting It All Together](#putting-it-all-together)
-7. [What's Next](#whats-next)
+1. [Why Promotion Exists](#why-promotion-exists)
+2. [Build Once, Promote the Same Artifact](#build-once-promote-the-same-artifact)
+3. [Runtime Configuration](#runtime-configuration)
+4. [Quality Gates](#quality-gates)
+5. [Registry Promotion](#registry-promotion)
+6. [Provenance and Traceability](#provenance-and-traceability)
+7. [Putting It All Together](#putting-it-all-together)
+8. [What's Next](#whats-next)
 
-## The Problem
+## Why Promotion Exists
+<!-- section-summary: Environment promotion moves one proven artifact through checks instead of rebuilding different artifacts for each environment. -->
 
-Managing software configurations and deployments across multiple staging environments exposes platform teams to severe environmental drifts. When organizations do not enforce strict progressive promotion constraints, they hit critical operational failures:
+The earlier articles focused on how production traffic moves during a release. Rolling replaces instances gradually. Blue-green switches between environments. Canary sends a small slice of traffic to the new version. Before any of that happens, the team needs to answer a quieter question: what exactly are we deploying?
 
-* **The Separate-Compilation Drift Crash**: A developer compiles their application from source code on their local laptop and deploys it to a staging server, where all tests pass. To deploy to production, they execute the compilation command a second time on the production build machine. However, the production compiler uses a slightly different version of a helper library dependency. The resulting binary contains an incompatible dependency drift, crashing the production site at startup.
-* **The Hardcoded Staging Credentials Trap**: A team builds a compiled Java application. To simplify local tests, they hardcode the staging database connection strings and passwords directly inside the compiled binary payload. When the release is promoted to production, the application attempts to write to the staging database, leaking production user checkout records to staging tables.
-* **The Unrestricted Automatic Release**: A developer merges a experimental bugfix into the default repository branch on Friday afternoon. The CI/CD pipeline instantly builds and automatically deploys the unreviewed code directly to production. The experimental patch breaks the application's login system, triggering an emergency weekend outage that could have been blocked by progressive quality gates.
+Imagine the checkout API passes tests in staging. The staging pipeline built image `checkout-api:staging-7421` from commit `8f3a12`. Later, the production pipeline builds again from the same branch and creates `checkout-api:prod-7421`. The names look related, but they came from two separate builds. The production build might pull a newer base image, a different package version, or a changed build argument. A release can fail even though "the same code" passed staging.
 
-These failures show that binaries must be compiled exactly once, kept completely stateless, and promoted through strict, gated environments.
+**Environment promotion** means the team builds one artifact, proves it in lower environments, and then promotes that exact artifact through staging, approval, and production. An artifact is the thing the runtime will execute: a container image, binary, package, serverless bundle, or static site bundle. Promotion moves trust and deployment intent forward while the compiled output stays the same.
 
-## The Build Once, Run Everywhere Golden Rule
+This gives the release story a stable object. When someone asks what is running in production, the answer can be a digest, commit SHA, build run, provenance record, and deployment history. That makes rollback, audit, debugging, and compliance much cleaner.
 
-The fundamental rule of modern release engineering is: **Build Once, Run Everywhere**. 
+The first rule is simple to say and very important in practice: build once, then promote the same artifact.
 
-Under this rule, compiling code is strictly restricted to the very first phase of the CI/CD pipeline (the Continuous Integration stage). The compiler packages the source code, libraries, and assets into a single, immutable artifact (such as a compiled binary or Docker container image). This specific artifact is assigned a unique, immutable identifier (typically the Git commit SHA or a cryptographically secure image digest).
+## Build Once, Promote the Same Artifact
+<!-- section-summary: The same immutable artifact should move across environments so staging evidence applies to production. -->
 
-Once this immutable artifact is built, it is pushed to a central **Artifact Registry** (such as AWS ECR, Docker Hub, or JFrog Artifactory). 
+**Build once, promote the same artifact** means the pipeline compiles and packages the application one time, then uses that exact output in each environment. For a containerized checkout API, the artifact should be addressed by an image digest such as `sha256:8f3a...`, rather than only by a mutable tag like `latest` or `prod`.
 
-```mermaid
-flowchart TD
-    Commit["Git Commit (SHA: 8f3a12)"] --> Build["Build Phase<br/>(Compile once)"]
-    Build --> Push["Push to Registry<br/>(orders-api:8f3a12)"]
-    
-    subgraph PromotionPath ["Progressive Environment Promotion"]
-        Push --> Dev["1. Deploy to Dev VM<br/>(Run Dev configs)"]
-        Dev -->|Pass Gates| Staging["2. Deploy to Staging VM<br/>(Run Staging configs)"]
-        Staging -->|Pass Manual Approval| Prod["3. Deploy to Production VM<br/>(Run Production configs)"]
-    end
-```
+A **digest** is a content-based identifier. In OCI container images, descriptors include a digest that identifies the content. If the image changes, the digest changes. This gives deployment systems a stable way to say, "run this exact image."
 
-The golden rule dictates that **we never compile the code a second time** when promoting the release from dev to staging, or from staging to production. We pull the *exact same binary payload* that was validated in staging and deploy it to production. This guarantees absolute binary parity: the code running in production is 100% identical to the code that passed integration and QA test suites in staging.
+Here is the shape:
 
-## Managing Stateless Artifacts with Runtime Injection
+| Stage | Action | Output |
+|---|---|---|
+| Build | Compile, test, package, scan | `checkout-api@sha256:8f3a...` |
+| Dev deploy | Deploy same digest to dev | Dev evidence |
+| Staging deploy | Deploy same digest to staging | Staging evidence |
+| Production deploy | Deploy same digest to production | Production release |
 
-If a compiled artifact is completely immutable and identical across all environments, how does it connect to different staging databases, external APIs, and cloud services? 
+![Environment promotion flow showing build once, same digest, dev, staging, approval, production, and no rebuild](/content-assets/articles/article-cicd-deployment-strategies-environment-promotion-and-release-gates/build-once-promotion-flow.png)
 
-To achieve environment parity, applications must remain completely **Stateless** and generic. This aligns with the Twelve-Factor App methodology: **Store config in the environment**.
+*Promotion keeps one built artifact moving forward, so staging evidence applies to the same digest that reaches production.*
 
-The compiled binary or container must not contain hardcoded configurations, connection hosts, or passwords. Instead, the application is written to read all external settings from standard **Environment Variables** injected dynamically by the host operating system or container orchestrator at the exact second the runtime process starts.
-
-```text
-Host Environment (e.g. AWS ECS / K8s) ──(Injects Environment Vars)──> App Container (Stateless Binary)
-  Inject: DB_HOST = "db-prod.internal.net"
-  Inject: API_KEY = "prod-key-123"
-```
-
-Let's look at the correct Twelve-Factor configuration pattern in a Node.js server setup. Rather than hardcoding database ports or environments, the server initialization reads variables dynamically:
-
-```javascript
-const databaseConfig = {
-    host: process.env.DB_HOST,
-    port: parseInt(process.env.DB_PORT || '5432'),
-    username: process.env.DB_USER,
-    password: process.env.DB_PASSWORD,
-    environment: process.env.NODE_ENV
-};
-```
-
-Using this pattern, the exact same container image can be booted in the Dev subnet (where the orchestrator injects `DB_HOST=dev-db`), the Staging subnet (injecting `DB_HOST=staging-db`), and the Production subnet (injecting `DB_HOST=prod-db`), completely separating configuration state from application code.
-
-## Designing Progressive Promotion Pipelines
-
-Promoting a single, stateless artifact requires a structured **Progressive Promotion Pipeline** that moves the binary through increasingly strict quality environments.
-
-A production-grade pipeline enforces progressive delivery using three distinct gates:
-
-1. **Dev/QA Soak Gate**: The artifact is automatically deployed to the Dev environment immediately upon building. It must run successfully and pass automated API integration suites.
-2. **Staging Verification Gate**: The artifact is automatically promoted to Staging. It is subjected to load testing, performance profiling, and vulnerability security scans.
-3. **Production Manual Approval Gate**: Promotion from Staging to Production must be blocked by an explicit manual approval gate. A release manager or senior developer must manually sign off on the release in the pipeline interface before the orchestrator initiates the production rollout.
-
-Let's look at a complete, production-ready GitHub Actions workflow YAML. This pipeline implements the Build Once, Run Everywhere rule, configures progressive environment promotion, scopes specific environment secrets, and blocks production deployment with an explicit manual approval gate:
+The pipeline should pass the digest between jobs as data. Here is a simplified GitHub Actions example:
 
 ```yaml
-name: Progressive Promotion Pipeline
-
-on:
-  push:
-    branches:
-      - main
-
 jobs:
   build:
-    name: Build & Package
     runs-on: ubuntu-latest
     outputs:
-      image_tag: ${{ steps.vars.outputs.sha_short }}
+      image_digest: ${{ steps.build.outputs.digest }}
     steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
-
-      - name: Set Image Tag Output
-        id: vars
-        run: echo "sha_short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
-
-      - name: Build and Push Docker Image
+      - uses: actions/checkout@v6
+      - name: Build and push image
+        id: build
         run: |
-          docker build -t registry.internal.net/orders-api:${{ steps.vars.outputs.sha_short }} .
-          docker push registry.internal.net/orders-api:${{ steps.vars.outputs.sha_short }}
+          ./scripts/build-image.sh checkout-api "$GITHUB_SHA"
+          ./scripts/push-image.sh checkout-api "$GITHUB_SHA"
+          ./scripts/print-image-digest.sh checkout-api "$GITHUB_SHA" >> "$GITHUB_OUTPUT"
 
-  deploy-staging:
-    name: Staging Promotion
+  deploy_staging:
     needs: build
-    runs-on: ubuntu-latest
     environment: staging
-    steps:
-      - name: Deploy Staging Workload
-        run: |
-          echo "Deploying image orders-api:${{ needs.build.outputs.image_tag }} to Staging"
-          # Injects STAGING environment secrets (e.g. staging DB_HOST)
-          # Execute Helm or Kustomize rollout commands here
-
-  deploy-production:
-    name: Production Promotion
-    needs: [build, deploy-staging]
     runs-on: ubuntu-latest
-    environment: production # Triggers manual approval and environment protection rules
     steps:
-      - name: Deploy Production Workload
-        run: |
-          echo "Deploying verified image orders-api:${{ needs.build.outputs.image_tag }} to Production"
-          # Injects PRODUCTION environment secrets (e.g. production DB_HOST)
-          # Execute production rolling target update commands here
+      - uses: actions/checkout@v6
+      - run: ./scripts/deploy.sh staging "${{ needs.build.outputs.image_digest }}"
+
+  deploy_production:
+    needs: [build, deploy_staging]
+    environment: production
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - run: ./scripts/deploy.sh production "${{ needs.build.outputs.image_digest }}"
 ```
 
-### The Environment Safety Valve
+The important detail is that production uses `needs.build.outputs.image_digest`. Production deploys the existing build output. The staging result means something because production receives the same artifact.
 
-Notice the `environment: production` parameter inside the final deployment job. In GitHub, GitLab, and other modern CI/CD systems, linking a job to a protected `environment` automatically triggers platform-level safety rules:
+This rule creates the next question. If the image stays the same, how can dev, staging, and production use different databases, secrets, URLs, and feature flags? That is runtime configuration.
 
-* **Manual Reviewers**: The pipeline halts execution at the end of the `Staging Promotion` phase, sending an email and Slack alert to the release team. The `Production Promotion` job remains paused until an authorized reviewer clicks the `Approve` button.
-* **Wait Timers**: Configures a minimum soak delay (e.g. 30 minutes) during which the artifact must run stably in staging before the production gate can be unlocked.
+## Runtime Configuration
+<!-- section-summary: Environment differences should come from runtime config and secrets, while the artifact stays unchanged. -->
 
-## Artifact Registry Promotion Paths
+**Runtime configuration** means values supplied when the application starts or runs, instead of values baked into the artifact during the build. Examples include database URLs, API keys, queue names, log levels, and feature flag keys.
 
-When managing container images, platform teams often use **Artifact Registry Tag Promotion** to represent the maturity of a release.
+The Twelve-Factor App describes config as something that should live in the environment. In daily engineering terms, the container image should know how to read `DATABASE_URL`; the environment decides what `DATABASE_URL` contains. Dev points to a dev database. Staging points to staging. Production points to production. The image stays identical.
 
-Rather than copying heavy image files across separate registries, the image is stored in a single, secure private registry. The maturity of the image is declared by updating its logical tags:
+Here is a small Kubernetes Deployment fragment:
 
-```text
-1. Image Pushed  ──>  orders-api:sha-8f3a12
-2. Staging Pass  ──>  orders-api:sha-8f3a12  ──(Add Tag)──>  orders-api:staging-latest
-3. Reviewer OK   ──>  orders-api:sha-8f3a12  ──(Add Tag)──>  orders-api:prod-ready
+```yaml
+containers:
+  - name: checkout-api
+    image: registry.example.com/checkout-api@sha256:8f3a...
+    env:
+      - name: NODE_ENV
+        value: production
+      - name: DATABASE_URL
+        valueFrom:
+          secretKeyRef:
+            name: checkout-api-secrets
+            key: database-url
+      - name: PAYMENTS_BASE_URL
+        valueFrom:
+          configMapKeyRef:
+            name: checkout-api-config
+            key: payments-base-url
 ```
 
-Tag promotion provides three key operational benefits:
+This keeps secrets and environment-specific values out of the image. The same image can move from staging to production, while each environment injects its own secret and config sources.
 
-1. **Immutable Audit Trail**: The primary tag (`sha-8f3a12`) remains unchanged, guaranteeing that we can always track the compiled image back to the exact Git commit that produced it.
-2. **Simplified Pull Policies**: Edge clusters can be configured to pull the `prod-ready` tag dynamically during emergency rollouts, ensuring they always fetch the latest approved release without needing manual image ID updates.
-3. **Secure Namespace Segregation**: Separate registries or namespaces can be locked down with IAM rules, ensuring that production servers can only pull images carrying the cryptographically signed `prod-ready` signature.
+![Runtime configuration boundary showing the same image receiving staging and production secrets, feature flags, and payment URLs at runtime](/content-assets/articles/article-cicd-deployment-strategies-environment-promotion-and-release-gates/runtime-config-boundary.png)
+
+*The artifact stays the same; each environment supplies its own runtime config, secrets, feature flags, and external endpoints.*
+
+Runtime config still needs discipline. A production deploy should record which config version was active, which feature flags were enabled, and which secret references the service used. A release can fail because config changed, even when the artifact stayed the same. Teams often treat config as its own reviewed change, with environment-level protection rules for production secrets.
+
+Once the same artifact and runtime config boundary are clear, the pipeline can promote the artifact through gates.
+
+## Quality Gates
+<!-- section-summary: Gates decide whether the artifact has enough evidence to move to the next environment. -->
+
+A **quality gate** is a check that must pass before the artifact moves forward. Some gates are automated, like unit tests or vulnerability scans. Some gates are manual, like production approval for a high-risk checkout change. The useful part is that the gate attaches evidence to one artifact.
+
+For the checkout API, a promotion path can look like this:
+
+| Gate | What it checks | Where it runs |
+|---|---|---|
+| Build gate | Unit tests, linting, type checks, image build | CI |
+| Security gate | Dependency scan, container scan, secret scan | CI |
+| Dev gate | Service starts and basic API smoke test passes | Dev |
+| Staging gate | Integration tests, contract tests, synthetic checkout | Staging |
+| Approval gate | Release owner or on-call approves production | Production environment |
+| Production gate | Canary, health checks, metrics watch | Production |
+
+GitHub Actions environments can hold environment secrets and require reviewers before a job targeting that environment proceeds. GitLab environments can track deployments, and GitLab deployment safety features can prevent outdated deployment jobs from rolling older code over newer deployments. Different platforms use different names, but the release idea stays the same: the production step has a clear gate.
+
+Here is a compact GitHub Actions production job:
+
+```yaml
+deploy_production:
+  needs: deploy_staging
+  environment:
+    name: production
+    url: https://checkout.example.com
+  concurrency:
+    group: checkout-api-production
+    cancel-in-progress: false
+  steps:
+    - uses: actions/checkout@v6
+    - run: ./scripts/deploy.sh production "$IMAGE_DIGEST"
+    - run: ./scripts/smoke-test.sh https://checkout.example.com
+```
+
+The `environment: production` line connects the job to production protection rules. The `concurrency` group prevents two production deploys for the same service from racing each other. The smoke test proves the service answers the main path after deployment.
+
+Gates should produce visible evidence. A good release record says: artifact digest, commit, CI run, scan results, staging deployment, staging smoke test, approver, production deployment, and post-release checks. That evidence becomes very useful when rollback or audit questions appear later.
+
+There is one more practical layer. Some teams promote the same image digest by copying it between registry locations or changing tags in a controlled way. That is registry promotion.
+
+## Registry Promotion
+<!-- section-summary: Registry promotion gives teams controlled names for the same digest without rebuilding the image. -->
+
+An **artifact registry** stores built artifacts. For containers, that might be Amazon ECR, GitHub Container Registry, GitLab Container Registry, Docker Hub, JFrog Artifactory, or another registry. Registry promotion means the team marks the same digest as approved for a later environment.
+
+There are two common patterns:
+
+| Pattern | What changes | What stays stable |
+|---|---|---|
+| Same repository, environment tags | Tags such as `staging` and `production` move to the digest. | The digest identifies the exact image. |
+| Separate repositories or registries | The digest gets copied from a build repo to an approved production repo. | The content digest and provenance stay tied to the build. |
+
+Mutable tags can be convenient for humans, but deployment records should still store the digest. A tag like `production` can move. A digest points at content. If an incident starts, the team needs the digest to know exactly what is running.
+
+A registry promotion script might do this:
+
+```bash
+IMAGE_DIGEST="sha256:8f3a..."
+SOURCE="registry.example.com/build/checkout-api@$IMAGE_DIGEST"
+TARGET="registry.example.com/prod/checkout-api:2026.06.13.2"
+
+skopeo copy "docker://$SOURCE" "docker://$TARGET"
+```
+
+The exact tool can be Docker, Skopeo, Crane, cloud registry CLI, or a platform feature. The important rule is that promotion copies or labels the already-built artifact while source compilation stays in the build stage.
+
+Registry promotion connects closely to supply chain security. The team wants to know who built the artifact, from which commit, with which workflow, and whether anyone changed it.
+
+## Provenance and Traceability
+<!-- section-summary: Provenance links the deployed artifact back to the build that produced it and the source commit it came from. -->
+
+**Provenance** means evidence about where an artifact came from and how it was built. A provenance record can connect the checkout image to the repository, commit SHA, workflow run, builder, and build instructions. Artifact attestations and SLSA-style provenance help teams verify that production runs artifacts created by trusted pipelines.
+
+This matters because environment promotion creates trust over time. Staging passed for digest `sha256:8f3a...`. Production approval applied to digest `sha256:8f3a...`. If someone can swap the image behind a tag, the evidence chain breaks. Provenance and digest-based deployment keep the chain intact.
+
+A useful release record includes:
+
+| Field | Example |
+|---|---|
+| Service | `checkout-api` |
+| Artifact digest | `sha256:8f3a...` |
+| Source commit | `8f3a12` |
+| Build workflow | `github.com/acme/checkout/actions/runs/7421` |
+| Attestation | Signed provenance attached to the artifact |
+| Staging result | `passed synthetic checkout at 2026-06-13T10:15Z` |
+| Production approver | `release-manager@example.com` |
+| Production deployment | `deployment-20260613-1042` |
+
+During an incident, this record answers fast questions. Which version changed? Which artifact should we roll back to? Did production rebuild anything? Did the artifact pass staging? Which person approved the gate?
+
+Now the full promotion story is ready.
 
 ## Putting It All Together
+<!-- section-summary: Promotion gives every deployment pattern a stable, traceable artifact to release and recover. -->
 
-Enforcing the Build Once, Run Everywhere rule, progressive promotion gates, and stateless runtime configurations solves our environmental drift and release risk:
+The checkout team commits code at SHA `8f3a12`. CI builds one container image, scans it, tests it, signs or attests it, and stores digest `sha256:8f3a...` in the release record. Dev deploys that digest. Staging deploys that digest with staging config and runs integration tests plus synthetic checkout. Production receives the same digest after the approval gate.
 
-* **Separate-Compilation Drifts**: Compiling the binary exactly once during the initial CI stage guarantees that the code running in production is physically identical to the code that passed QA verification in staging, eliminating compiler environment drift.
-* **Hardcoded Staging Credentials**: Separating configurations from the application using the Twelve-Factor App methodology ensures that database connection hosts and passwords are fully generic, injected dynamically by the orchestrator at runtime.
-* **Unrestricted Releases**: Utilizing progressive promotion pipelines blocked by explicit manual approvals and staging soak timers prevents experimental or unreviewed code from bypassing release gates.
+Runtime configuration supplies the environment differences. Production database credentials and staging URLs stay outside the artifact. Each environment injects its own secrets and config at runtime, and the release record keeps track of which config version went with the deployment.
+
+The production deployment can then use rolling, blue-green, or canary. Those strategies decide how traffic moves. Environment promotion decides what artifact moves. When a release fails, rollback can return to a known previous digest, and responders can see exactly which build and gate produced it.
+
+![Promotion traceability summary showing commit, build, digest, staging pass, approval, production, and release record](/content-assets/articles/article-cicd-deployment-strategies-environment-promotion-and-release-gates/promotion-traceability-summary.png)
+
+*A promotion record connects the deployed version back to its commit, build, digest, staging result, approval, and production deployment.*
 
 ## What's Next
+<!-- section-summary: Deployment runbooks turn the release process into repeatable operations that humans and automation can follow under pressure. -->
 
-Now that we have automated the progressive promotion of stateless, immutable artifacts across gated environments, we face the final operational hurdle: **Human Execution Coordination**. While our CI/CD pipelines automate code packaging and environment gates, complex release windows often involve manual database checks, external API coordination, and post-deployment manual verification loops. Let's move to **Deployment Runbooks** to learn how to capture, version-control, and automate release procedures using executable, idempotent runbooks.
-
-![Environment promotion summary showing one artifact moving through dev, staging, approval, production, and registry promotion](/content-assets/articles/article-cicd-deployment-strategies-environment-promotion-and-release-gates/environment-promotion-summary.png)
-
-*Use this as the promotion checklist: move one artifact through environments, inject runtime config, gate dev and staging, require production approval, and promote through registries without rebuilding.*
+The final article in this module covers **deployment runbooks**. We will take the promotion path, gates, rollback decision, smoke tests, and production watch window and turn them into a repeatable runbook that a team can execute without guessing.
 
 ---
 
 **References**
 
-* [The Twelve-Factor App: III. Config](https://12factor.net/config) - Standard specifications on storing configurations and credentials within environment variables.
-* [GitHub Actions Documentation: Protecting Environments](https://docs.github.io/en/actions/deployment/targeting-different-environments/using-environments-for-deployment) - Official guide on manual approval gates, deployment reviewers, and wait timers.
-* [Continuous Delivery: Reliable Software Releases](https://refactoring.com/books/continuousDelivery.html) - SRE reference book on progressive promotion paths, binary parity, and artifact registries.
-* [Twelve-Factor App: X. Dev/prod parity](https://12factor.net/dev-prod-parity) - Keeping development, staging, and production as similar as possible to enable predictable rollbacks.
+- [OCI image descriptor specification](https://github.com/opencontainers/image-spec/blob/main/descriptor.md) - Defines descriptors, including media type, digest, and size for OCI content.
+- [The Twelve-Factor App: Config](https://12factor.net/config) - Explains storing configuration in the environment rather than baking environment-specific values into code.
+- [GitHub Actions environments](https://docs.github.com/en/actions/how-tos/deploy/configure-and-manage-deployments/manage-environments) - Documents environment secrets, protection rules, deployment branches, and environment settings.
+- [GitHub Actions reviewing deployments](https://docs.github.com/en/actions/how-tos/deploy/configure-and-manage-deployments/review-deployments) - Shows approval and rejection flow for jobs waiting on deployment review.
+- [GitLab deployment safety](https://docs.gitlab.com/ci/environments/deployment_safety/) - Documents deployment safety controls such as preventing outdated deployment jobs.
+- [SLSA provenance](https://slsa.dev/spec/v1.0/provenance) - Defines provenance fields that describe how an artifact was built.
+- [GitHub artifact attestations](https://docs.github.com/en/actions/concepts/security/artifact-attestations) - Explains signed build provenance and integrity claims for artifacts.

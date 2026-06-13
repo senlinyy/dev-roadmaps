@@ -9,254 +9,355 @@ id: article-infrastructure-as-code-ansible-workflow
 
 ## Table of Contents
 
-1. [The Operations Pipeline Workflow](#the-operations-pipeline-workflow)
-2. [Early Inventory and Connection Preview](#early-inventory-and-connection-preview)
-3. [Step 1: Inspecting the Host Catalog Graph](#step-1-inspecting-the-host-catalog-graph)
-4. [Step 2: Proving Remote Execution](#step-2-proving-remote-execution)
-5. [Step 3: Dry Runs and Output Differences](#step-3-dry-runs-and-output-differences)
-6. [Under the Hood: SSH Multiplexing and Sockets](#under-the-hood-ssh-multiplexing-and-sockets)
-7. [Step 4: Blast Radius Minimization](#step-4-blast-radius-minimization)
-8. [Step 5: Verifying System Stability](#step-5-verifying-system-stability)
-9. [Putting It All Together](#putting-it-all-together)
-10. [What's Next](#whats-next)
+1. [The Run Order](#the-run-order)
+2. [Prepare the Automation Repo](#prepare-the-automation-repo)
+3. [Confirm Inventory and Variables](#confirm-inventory-and-variables)
+4. [Prove Connection and Privilege](#prove-connection-and-privilege)
+5. [Validate the Playbook Shape](#validate-the-playbook-shape)
+6. [Preview Supported Changes](#preview-supported-changes)
+7. [Apply One Host First](#apply-one-host-first)
+8. [Verify the Service](#verify-the-service)
+9. [Widen the Rollout](#widen-the-rollout)
+10. [Read Failures Like Signals](#read-failures-like-signals)
+11. [Roll Back Safely](#roll-back-safely)
+12. [Move the Workflow Into CI or Automation Platform](#move-the-workflow-into-ci-or-automation-platform)
+13. [Putting It All Together](#putting-it-all-together)
+14. [What's Next](#whats-next)
+15. [References](#references)
 
-## The Operations Pipeline Workflow
+## The Run Order
+<!-- section-summary: A safe Ansible workflow proves the target set, access path, planned change, real canary, verification, and rollback path in order. -->
 
-An Ansible workflow is the safe run order from inventory selection to connection proof, dry-run evidence, controlled apply, and recap review.
+An **Ansible workflow** is the operating order around a playbook run. The playbook says what should happen to the systems. The workflow decides how the team proves the target, previews the change, limits the first real apply, verifies the service, and handles a bad result.
 
-An Ansible workflow is a structured sequence of checks and commands that you execute to safely apply configuration changes to your server infrastructure. Instead of running a playbook immediately against your entire fleet of machines, a disciplined workflow validates your host targets, tests remote access channels, dry-runs task updates, and verifies system stability in layers. This gradual process isolates failures early and prevents simple configuration typos from affecting all your active production environments.
+Let's keep using the orders platform from the first article. The production web fleet has `web-01` and `web-02` behind a load balancer. The team needs to change the Nginx proxy timeout from `30s` to `45s` because checkout requests sometimes wait on a slow payment provider. The YAML change is small, but the production blast radius depends on the workflow.
 
-To see why a structured workflow is essential, consider our concrete scenario. You are tasked with deploying an application software update across a dual-node web application cluster. You need to update an environment configuration file, install a new security utility package, and restart the backend services.
+A first production workflow has a steady rhythm. The team checks the repo state, confirms the inventory group, proves Ansible can connect, proves privilege escalation, validates the playbook, previews supported changes, applies one host, verifies the service, reads the recap, runs again to confirm the state settles, and then widens the rollout. Each layer answers a different question before the next layer adds more risk.
 
-Without a structured verification workflow, a mismatched SSH configuration silently excludes hosts from the run, a stale inventory entry directs tasks to the wrong machine, and a playbook with no dry-run step can push a broken configuration to the entire cluster before anyone notices.
+This workflow gives production runs a visible shape. Ansible can target many hosts, and the operator can still choose one host, one tag, one batch, or one environment for the next step. Every command shows the target, the inventory, and the amount of risk being accepted.
 
-A professional operations pipeline removes this uncertainty. You do not treat the playbook run as a single giant step. Instead, you break the operation down into controlled validation steps: inspecting parsed target groups, confirming connection handshakes, dry-running state changes to view file differences, applying changes to a single target host first, reading the run recap metrics, and executing a second run to confirm that the hosts have settled.
+## Prepare the Automation Repo
+<!-- section-summary: The repo should tell the operator which inventory, config, dependencies, and playbook version the run will use. -->
 
-## Early Inventory and Connection Preview
+The first safety check happens before Ansible touches a host. The team should know which Git commit they are running, which inventory they are using, which collections are installed, and which config file Ansible will read. A production incident becomes much easier to understand when the run points to a commit and a job record instead of a private working tree.
 
-Here is an early, comment-free YAML preview of the inventory configuration and host group definition used to manage the dual-node application cluster in our scenario:
+For a small orders repo, the structure might look like this. The important part is the separation between playbooks, inventories, environment variables, roles, templates, and handlers. The example below uses that split.
 
 ```yaml
-all:
-  children:
-    app_cluster:
-      hosts:
-        app-node-01:
-          ansible_host: 10.50.20.11
-        app-node-02:
-          ansible_host: 10.50.20.12
-      vars:
-        ansible_user: admin
-        ansible_ssh_private_key_file: ~/.ssh/deploy_key
+site.yml
+ansible.cfg
+requirements.yml
+inventories/
+  staging/
+    hosts.yml
+    group_vars/
+      web.yml
+  prod/
+    hosts.yml
+    group_vars/
+      web.yml
+roles/
+  orders_web/
+    tasks/
+      main.yml
+    templates/
+      orders-api.conf.j2
+    handlers/
+      main.yml
 ```
 
-## Step 1: Inspecting the Host Catalog Graph
+The `ansible.cfg` file keeps common defaults close to the project. It can point to the default inventory for local development, set the roles path, and tune normal execution settings. Production teams still pass `-i inventories/prod` explicitly in release commands so the target environment stays visible in the command history and job output.
 
-The very first layer of any Ansible run is verifying the host catalog, which is commonly called the inventory. Before you instruct Ansible to make any modifications or open any network connections, you must confirm exactly which computers the control node expects to touch.
+```ini
+[defaults]
+inventory = inventories/staging
+roles_path = roles
+retry_files_enabled = False
+forks = 10
 
-You query this information using the `ansible-inventory` command. By passing the inventory path and the graph flag, you instruct Ansible to parse the host files and output a tree-like diagram of your infrastructure.
+[privilege_escalation]
+become = False
+```
+
+Dependencies should be installed before the run. Collections from `requirements.yml` and Python dependencies for the execution environment should be stable enough that the same playbook behaves the same way in CI, on an engineer laptop, and in an automation controller job. In Red Hat Ansible Automation Platform, an execution environment image gives this a stronger production boundary because the job runs with a known Ansible runtime and known collections.
+
+The repo check should also record the exact commit. A small release note can say: commit `a1b2c3d`, inventory `inventories/prod`, playbook `site.yml`, collection lock from `requirements.yml`, and operator or CI job that launched the run. That record turns a later incident review into evidence instead of memory. If a canary fails, the team can compare the failing job to the last healthy job and see whether the content, inventory, runtime, or release value changed.
+
+## Confirm Inventory and Variables
+<!-- section-summary: Inventory inspection confirms which hosts and variable values Ansible will use before tasks run. -->
+
+Inventory is the first runtime safety boundary. It decides which machines Ansible can see and how Ansible reaches them. Before a production change, the team should confirm the group resolves to the expected hosts and that the host variables contain the expected connection and app settings.
+
+The web group can be inspected as a graph. This gives the operator a quick view of group membership before a task runs. The command prints the selected group shape.
 
 ```bash
-ansible-inventory -i inventory/hosts.yml --graph
+ansible-inventory -i inventories/prod --graph web
 ```
 
-For our dual-node web application cluster, the parsed graph outputs a clean structural layout:
+For the timeout change, the team expects `web-01` and `web-02`. If `web-stg-01` appears under the production inventory, the problem is visible before a task reaches a machine. If `web-03` is missing after a scale-out, the team can fix inventory before one host misses the config update.
 
-```plain
-@all:
-  |--@ungrouped:
-  |--@app_cluster:
-  |  |--app-node-01
-  |  |--app-node-02
-```
-
-This output is a vital validation gate. If you see a machine listed in the wrong group, or if a production server appears inside a testing group group, you know your host mappings are misaligned. This check is incredibly safe because it operates entirely inside the memory of the control node, without sending a single network packet to the remote servers. You fix all structural catalog bugs here before touching your network channels.
-
-To inspect the specific connection variables assigned to an individual server, you query the specific host details:
+Host variables deserve a second look because they often explain surprising runs. The command below shows the compiled values for one host after inventory files, group variables, host variables, and plugins have been processed. This is the place to catch a wrong remote user, interpreter path, or environment value:
 
 ```bash
-ansible-inventory -i inventory/hosts.yml --host app-node-01
+ansible-inventory -i inventories/prod --host web-01
 ```
 
-This command prints the final, merged dictionary of variables that Ansible will use when connecting to `app-node-01`. You use this to verify that target addresses, connection ports, remote SSH users, and private key paths match your expectations.
+The output should show values such as `ansible_host`, `ansible_user`, `ansible_python_interpreter`, and the application variables used by the template. For the orders platform, the team should see the production server name and the new timeout value. Those two values prove the template will render for production rather than staging:
 
-## Step 2: Proving Remote Execution
+```yaml
+orders_api_server_name: orders.example.com
+orders_api_proxy_timeout: 45s
+```
 
-Once you have verified the host graph, the next step is to prove that the control node can actively connect to the managed hosts and run commands. You achieve this using Ansible's built-in `ping` module.
-
-You execute this as an ad-hoc command, which is a quick way to run a single module against a group of hosts without writing a full playbook file:
+The playbook target can also be listed before tasks run. This keeps target selection separate from task execution. The command below asks Ansible which hosts the playbook would select.
 
 ```bash
-ansible app_cluster -i inventory/hosts.yml -m ansible.builtin.ping
+ansible-playbook -i inventories/prod site.yml --limit web --list-hosts
 ```
 
-It is important to understand that this is not a standard network ping. It does not send ICMP packets from your kernel to the target host. Instead, Ansible opens a real SSH network connection, verifies your login credentials, searches for a Python interpreter on the remote machine, transfers a small temporary Python script, runs it, and waits for a specific JSON formatted response containing the string `pong`.
+This command gives the operator one more chance to catch a bad target pattern. It is especially useful when dynamic inventory is involved because cloud tags and inventory plugins can produce a host set that differs from what a person expected.
 
-A successful connection test produces a clean result block for each host:
+## Prove Connection and Privilege
+<!-- section-summary: Connection and privilege checks separate SSH or sudo problems from playbook logic. -->
 
-```json
-app-node-01 | SUCCESS => {
-    "changed": false,
-    "ping": "pong"
-}
-app-node-02 | SUCCESS => {
-    "changed": false,
-    "ping": "pong"
-}
-```
-
-This output proves three things:
-- The control node has a valid network path to the managed servers.
-- The SSH keys and user credentials match the remote security rules.
-- The target hosts have a working Python environment that can run Ansible's temporary module payloads.
-
-If a host returns a status of `UNREACHABLE`, you know the connection layer is broken. You do not waste time debugging playbook configuration bugs. You focus entirely on network and access issues: verifying SSH key file permissions, adjusting local firewalls, checking VPN gateways, or correcting login usernames.
-
-## Step 3: Dry Runs and Output Differences
-
-With verified connection paths, you can now preview the exact changes your playbook will apply. You do this by running the playbook in check mode (using the `--check` flag) and requesting a line-by-line configuration difference (using the `--diff` flag).
+After the target set looks right, the next question is basic access. The `ansible.builtin.ping` module checks whether Ansible can connect to the host, authenticate, run a tiny module, and receive a structured response. It checks Ansible module execution rather than ICMP packets.
 
 ```bash
-ansible-playbook -i inventory/hosts.yml playbooks/deploy.yml --check --diff
+ansible -i inventories/prod web -m ansible.builtin.ping
 ```
 
-Check mode asks Ansible modules to query the current state of the remote machines, compare it to your playbook goals, and report what they would change without applying supported writes. Diff mode works alongside this by showing before-and-after details for modules that support diff output, commonly file and template modules. Treat both modes as strong review evidence rather than a perfect simulator, because unsupported modules and tasks that depend on earlier real changes can produce incomplete previews.
+A successful result tells the team that the control node can reach the managed nodes through the configured connection path. A failure here still says nothing about the Nginx playbook. The problem likely sits in SSH keys, host key checking, DNS, bastion routing, firewall rules, the remote user, or Python discovery.
 
-For our application cluster configuration file update, the dry run output displays the exact text line that will be written:
-
-```diff
---- /etc/app/config.json
-+++ /etc/app/config.json
-@@ -2,3 +2,3 @@
- {
--  "port": 8080,
-+  "port": 9000,
-   "debug": false
- }
-```
-
-This visual preview allows you to verify that your variables are interpolating correctly and that no unexpected files will be modified.
-
-You must keep in mind that check mode has structural limitations. While standard file and template modules can predict changes accurately, some tasks depend on steps that must create real files or resources earlier in the playbook. For example, if a task creates a user database, and a subsequent task connects to that database to configure tables, the second task will fail during a dry run because the database does not physically exist yet. Understanding this limitation helps you distinguish between true playbook bugs and expected dry run limitations.
-
-## Under the Hood: SSH Multiplexing and Sockets
-
-SSH multiplexing is connection reuse for SSH. Instead of opening a brand-new encrypted login session for every task, the SSH client keeps one authenticated connection open and lets later task commands reuse it through a local socket file.
-
-Example: a playbook with ten tasks against five hosts might need fifty remote command executions. With multiplexing, each host can reuse its existing SSH session for later tasks, so Ansible spends less time repeating handshakes and more time running module payloads.
-
-Opening a new SSH connection for every single task introduces substantial latency. A standard SSH handshake requires multiple network round trips to negotiate cryptographic algorithms, exchange host keys, and verify user credentials. In high-latency cloud networks or multi-region environments, this handshake sequence can take anywhere from 200ms to 800ms. If repeated fifty times across ten tasks and five hosts, network handshakes alone can add several minutes to a simple playbook run.
-
-To solve this problem, Ansible leverages a low-level SSH performance protocol known as **SSH Multiplexing** (often configured via the `ControlMaster` and `ControlPersist` SSH settings).
-
-```mermaid
-flowchart LR
-    subgraph ControlNode["Control Node"]
-        Command1["Task 1: Install Nginx"]
-        Command2["Task 2: Copy Config"]
-        Socket[("Control Socket<br/>(/tmp/ansible-ssh-...)")]
-    end
-
-    subgraph Network["Network Connection"]
-        TCP["Persistent SSH Session<br/>(One TCP Socket Host Port 22)"]
-    end
-
-    subgraph ManagedNode["Managed Node"]
-        Daemon["SSH Daemon (sshd)"]
-        Work1["Run Module Payload 1"]
-        Work2["Run Module Payload 2"]
-    end
-
-    Command1 --> Socket
-    Command2 --> Socket
-    Socket ===|Shared Persistent Path| TCP
-    TCP === Daemon
-    Daemon --> Work1
-    Daemon --> Work2
-```
-
-When SSH Multiplexing is enabled:
-1. **Initialize the Control Socket**: On the first task of a play, Ansible opens a standard SSH connection to the remote host. It creates a special local domain socket file (typically inside `/tmp/ansible-ssh-...`).
-2. **Hold the Connection Open**: The `ControlPersist` setting tells the SSH client to keep this initial secure TCP channel active in the background, even after the first task exits (for example, keeping it alive for 60 seconds).
-3. **Route Subsequent Tasks**: When the second task runs, the Ansible control process routes the SSH commands directly through the existing local control socket file. The command bypasses the entire cryptographic handshake and credential verification sequence, traveling instantly over the pre-established TCP tunnel.
-4. **Serialize the Pipeline**: Ansible's task execution engine manages the flow of these commands. It reads the tasks sequentially, sends temporary module payloads through the open connection, and uses a callback plugin manager to capture and process result streams.
-
-This socket reuse reduces the per-task execution latency to a few milliseconds, making agentless automation extremely fast and highly responsive.
-
-## Step 4: Blast Radius Minimization
-
-Even with verified connections and successful dry runs, running a new playbook on your entire production fleet at once is risky. If a subtle runtime error occurs, you can take down all nodes simultaneously.
-
-A professional workflow minimizes this risk by limiting the initial playbook run to a single host (using the `--limit` CLI argument). This host is the live canary target.
+Privilege needs its own proof because the orders Nginx change writes under `/etc` and reloads a system service. The team can check the effective user through a small ad hoc command. That turns sudo access into a clear pass or fail before the real playbook runs:
 
 ```bash
-ansible-playbook -i inventory/hosts.yml playbooks/deploy.yml --limit app-node-01
+ansible -i inventories/prod web -b -m ansible.builtin.command -a whoami
 ```
 
-By targeting only `app-node-01`, you verify that the execution succeed on a real, live host. If the systemd service fails to reload, or if a configuration parameter triggers a service crash, the blast radius is confined to a single machine. The other half of your dual-node cluster stays completely healthy, continuing to serve web traffic to your users.
+If the output returns `root`, the become path works for those hosts. If the output fails, the team can fix sudo policy, `ansible_become_user`, password prompts, or automation controller credentials before the playbook mixes privilege problems with template and service behavior.
 
-Once the limited run completes, you inspect the final Play Recap block:
+Production teams often keep this check in their runbook because it saves time during incidents. A broken sudo rule should be fixed as an access problem before anyone treats it as an application deployment bug. The separation makes the next step cleaner.
 
-```plain
-PLAY RECAP
-app-node-01 : ok=15 changed=3 unreachable=0 failed=0 skipped=2
-```
+## Validate the Playbook Shape
+<!-- section-summary: Syntax checks and task listings catch playbook structure problems before any host changes. -->
 
-You analyze these numbers to verify that the execution matches your expectations:
-
-| Field | Meaning |
-|---|---|
-| `ok` | Task ran and the system was already in the correct state |
-| `changed` | Task ran and modified the system |
-| `failed` | Task ran but returned a non-zero exit code or module failure |
-| `unreachable` | Ansible could not establish a connection to the host |
-
-For our scenario, `changed` should be exactly 3 (writing the config file, installing the package, and restarting the service). Both `failed` and `unreachable` must be 0.
-
-Once you have verified the canary run, you can confidently run the playbook against the entire host group without the limit flag, rolling out the changes to the rest of your fleet.
-
-## Step 5: Verifying System Stability
-
-The final step in a professional workflow is verifying that your tasks are truly idempotent and that your systems have settled into a stable, quiet state. You achieve this by running the exact same playbook command a second time against the hosts you just updated.
+Once access works, the team can validate the playbook shape. A syntax check catches YAML mistakes, missing includes, and some playbook structure errors. It gives fast feedback before a preview or real run spends time connecting to every host.
 
 ```bash
-ansible-playbook -i inventory/hosts.yml playbooks/deploy.yml --limit app-node-01
+ansible-playbook -i inventories/prod site.yml --syntax-check
 ```
 
-During this second run, if your playbook is designed correctly, the output should display no active modifications. Every task should report `ok` and the `changed` count in the recap should be exactly 0:
+The task list is useful when a playbook has roles, tags, or includes. It shows the operator which task names Ansible plans to run for the selected target. For the orders timeout change, the list should include the template task and the Nginx reload handler path, while unrelated worker tasks should stay out of the selected web run.
 
-```plain
-PLAY RECAP
-app-node-01 : ok=15 changed=0 unreachable=0 failed=0 skipped=2
+```bash
+ansible-playbook -i inventories/prod site.yml --limit web-01 --list-tasks
 ```
 
-If the second run reports changes, the cause is almost always a task that is not truly state-aware. A common pattern is using the `shell` module to append text to a file on every run rather than using a declarative file module that checks existing content first. Template tasks that embed dynamic timestamp values or random variables fail the content checksum comparison on every execution, causing a file rewrite even when nothing meaningful changed. Handlers can also misfire continuously if their parent task reports changes on every run, triggering service restarts that should only happen once.
+Tags can make large playbooks easier to operate when the tag design is clear. For example, a role might tag Nginx config tasks as `nginx_config` and application deployment tasks as `orders_deploy`. Tags should match operational jobs a human actually wants to run, because a tag that selects half of a dependency chain can produce a confusing partial run.
 
-Fixing these issues ensures that your playbooks are safe to run continuously (such as in an automated cron loop or CI/CD environment) without causing constant service interruptions or configuration drift.
+```bash
+ansible-playbook -i inventories/prod site.yml --limit web-01 --tags nginx_config --list-tasks
+```
+
+This stage also catches repo hygiene problems. Missing roles, missing collections, and broken variable includes should fail here or during preview instead of during the first production apply. The operator now has a known commit, a known inventory, working access, and a playbook that at least loads.
+
+## Preview Supported Changes
+<!-- section-summary: Check mode and diff mode show planned changes where modules can predict safely, and their limits should be read honestly. -->
+
+**Check mode** asks Ansible to predict changes without applying them. **Diff mode** asks supported modules to show before-and-after details. Together, they provide review evidence before the real run, especially for file and template changes.
+
+For the orders timeout change, the preview can target one host. The command keeps the evidence small enough for a human to review. The output should explain exactly which supported tasks expect change.
+
+```bash
+ansible-playbook -i inventories/prod site.yml --limit web-01 --check --diff
+```
+
+The expected result is narrow. The template task should report a planned change to `/etc/nginx/conf.d/orders-api.conf`, and the diff should show `proxy_read_timeout` moving from `30s` to `45s`. Package and service tasks should usually report `ok` or predictable status for a config-only change.
+
+Preview output has limits, and those limits are part of the workflow. Some modules support check mode fully, some support it partially, and command-style tasks often need explicit choices because their effects live outside module knowledge. Registered variables can also make check-mode behavior different when a later task depends on a result that a skipped task would normally create.
+
+Diff output can reveal secrets when templates contain credentials, tokens, or private config. Sensitive tasks should set `diff: false`, and secrets should live in a proper secret path such as Ansible Vault, automation controller credentials, or an external secret manager. The preview should help the team review the change without printing production secrets into logs.
+
+```yaml
+- name: Render private app config
+  ansible.builtin.template:
+    src: orders-secrets.env.j2
+    dest: /etc/orders-api/secrets.env
+    owner: root
+    group: orders
+    mode: "0640"
+  diff: false
+```
+
+The preview stage gives the operator evidence. A real canary still matters because service reloads, package hooks, external APIs, and validation commands can behave differently once the change actually applies. The team should treat preview as one layer in the workflow, then prove the real behavior on one host.
+
+## Apply One Host First
+<!-- section-summary: A canary run proves the real task behavior on one host before the fleet receives the change. -->
+
+The first real production apply should touch one host when the service shape allows it. The `--limit` flag narrows the playbook target at runtime. The playbook can know about the whole `web` group while the first real command applies only to `web-01`.
+
+```bash
+ansible-playbook -i inventories/prod site.yml --limit web-01 --diff
+```
+
+This run writes the Nginx config, triggers any handlers, and reloads Nginx if the template changed. The recap should show the template task as changed and the handler as changed. A second run against the same host should usually settle to `ok` for the template because the file already matches the requested state.
+
+```bash
+ansible-playbook -i inventories/prod site.yml --limit web-01
+```
+
+That second run is the idempotency check. If the template still changes, the file may include a timestamp, random value, host-specific value, or changing whitespace. If a command task changes every time, it may need `creates`, `removes`, `changed_when`, or a module replacement.
+
+Some services need load balancer coordination before the canary. The team may drain `web-01`, run the playbook, verify locally, and then return the host to service. Ansible can orchestrate those steps if the team has modules or API calls for the load balancer, but the first beginner habit is simpler: choose one host, make the run observable, and verify before widening.
+
+## Verify the Service
+<!-- section-summary: Verification checks the system and the user-facing service after Ansible reports success. -->
+
+Ansible success means the playbook tasks completed according to their modules. The application still deserves direct verification. For the orders web fleet, the team should check the local service, the Nginx config syntax, the health endpoint, and a user-facing path through the load balancer.
+
+The host-local checks can use ad hoc commands. These checks prove the machine-level service state after the canary apply. The commands stay narrow because they target only the canary host.
+
+```bash
+ansible -i inventories/prod web-01 -b -m ansible.builtin.command -a "systemctl is-active nginx"
+ansible -i inventories/prod web-01 -b -m ansible.builtin.command -a "nginx -t"
+ansible -i inventories/prod web-01 -b -m ansible.builtin.command -a "systemctl is-active orders-api"
+```
+
+The user-facing checks can run from the operator environment or a monitoring runner. These checks prove the service path that users and upstream systems depend on. The health endpoint should pass before the rollout grows.
+
+```bash
+curl -fsS https://orders.example.com/health
+curl -fsS https://orders.example.com/api/orders/health
+```
+
+The playbook can also include verification tasks when the check belongs to every run. A syntax check before reload is a good pattern for service config changes. The task should avoid noisy change reporting because a verification command should usually report `ok` when the check passes.
+
+```yaml
+- name: Check Nginx configuration syntax
+  ansible.builtin.command: nginx -t
+  changed_when: false
+```
+
+Verification should happen before widening the rollout. A green recap from Ansible plus a failing health endpoint means the system still has a problem. The recap tells the team the automation completed; service checks tell the team the platform is healthy for users.
+
+## Widen the Rollout
+<!-- section-summary: The rollout can expand through limits, serial batches, and failure controls after the canary proves healthy. -->
+
+After `web-01` passes verification, the team can widen the rollout to the rest of the group. A simple pattern is to exclude the canary host and run the remaining web hosts. That avoids repeating the canary while still using the same reviewed playbook:
+
+```bash
+ansible-playbook -i inventories/prod site.yml --limit "web:!web-01" --diff
+```
+
+For larger fleets, the playbook can define **serial** batches so Ansible processes a few hosts at a time. Serial rollout protects the service when one host failure should stop the batch before every host changes. It also gives monitoring and load balancers time to show problems while the affected set is still small.
+
+```yaml
+- name: Configure orders web servers
+  hosts: web
+  become: true
+  serial: 2
+  any_errors_fatal: true
+  roles:
+    - orders_web
+```
+
+The `serial: 2` line tells Ansible to work through two web hosts at a time. The `any_errors_fatal: true` line makes a failure stop the play more aggressively across the current operation. A small web fleet might use `serial: 1`, while a larger fleet might use batches of 5 or 10 depending on capacity and service risk.
+
+The `forks` setting controls how many hosts Ansible can work on in parallel at the engine level. `serial` controls the rollout batch for a play. Those two knobs answer different questions: how much parallelism the runner can use, and how much of this service should change at once.
+
+## Read Failures Like Signals
+<!-- section-summary: The failure category usually points to the broken layer: target selection, connection, privilege, preview, module behavior, or service validation. -->
+
+A failed run should be read by layer. The play recap separates `unreachable` from `failed`, and task messages usually name the module and host that had the problem. That structure helps the team avoid guessing.
+
+`unreachable` points to connection setup. The likely causes are wrong host address, missing SSH key, changed host key, broken bastion route, firewall rules, wrong remote user, or interpreter discovery trouble. A narrow verbose ping gives better evidence. It keeps the investigation focused on one host and one connection path:
+
+```bash
+ansible -i inventories/prod web-02 -m ansible.builtin.ping -vvv
+```
+
+Privilege failures show up around sudo, protected file paths, or permission denied messages. The `whoami` check with `-b` can confirm whether Ansible can become root. In automation controller, the same issue may sit in the selected credential or in whether the job template allows privilege escalation prompts.
+
+Template and variable failures usually name the missing variable or the file that failed to render. The team should check `group_vars`, host variables, and environment-specific values before changing task logic. A production variable typo can make a correct role fail only in one inventory.
+
+Service failures usually happen after the file was changed. For Nginx, `nginx -t` tells the team whether syntax is valid, and systemd status or logs can show why reload failed. A handler failure means the config may already be written, so verification and rollback should come before another full-fleet run.
+
+Check-mode surprises also have a pattern. A task may skip because the module lacks full check-mode support, or a later task may lack a registered value from an earlier task. That output should reduce confidence in the preview for that task, and the canary apply should carry more weight.
+
+## Roll Back Safely
+<!-- section-summary: Rollback should use the same reviewed automation path, with a narrow target first and verification after the revert. -->
+
+Rollback should be concrete before the production apply starts. For a config-only change, the clean rollback is usually a Git revert plus the same playbook run against the affected host. That keeps the fix visible, reviewed, and repeatable.
+
+```bash
+git revert <change-commit>
+ansible-playbook -i inventories/prod site.yml --limit web-01 --diff
+ansible -i inventories/prod web-01 -b -m ansible.builtin.command -a "nginx -t"
+curl -fsS https://orders.example.com/health
+```
+
+For a bad application artifact, rollback might mean setting the previous version variable and running the deployment role against the canary host first. The exact command depends on the team's deploy design, but the operating shape stays the same: narrow target, known previous version, service verification, then wider rollout.
+
+```bash
+ansible-playbook -i inventories/prod site.yml --limit web-01 --tags orders_deploy -e orders_api_version=2026.06.12
+```
+
+For a bad data migration, rollback needs more care because a playbook may have changed state outside the host filesystem. The runbook should name the database backup, the restore procedure, the migration owner, and the verification query before the deployment starts. Ansible can orchestrate pieces of that process, but the team still needs a real data recovery plan.
+
+Rollback can also use Ansible error-handling features for local cleanup. Blocks and rescue sections can group tasks and define recovery actions when a task fails. That is useful for temporary files, load balancer drain steps, or local service restoration, while human approval still belongs around risky data or fleet-wide rollback.
+
+For the orders platform, the rollback table can be written before the release. A bad Nginx template means revert the Git change, rerun `site.yml` against the canary, run `nginx -t`, and check the public health endpoint. A bad package release means restore `orders_api_version` to the previous approved value, run the deploy tag on one host, then widen only after health checks pass. A bad migration means stop the rollout, call the database restore owner, confirm the backup timestamp, and run the verification query before any application hosts move again.
+
+## Move the Workflow Into CI or Automation Platform
+<!-- section-summary: The same workflow can become a CI pipeline or an automation controller job template with approvals and recorded output. -->
+
+After the team trusts the manual sequence, the same workflow can move into CI. CI can install collections, run `ansible-lint`, run syntax checks, list hosts for the selected inventory, and run staging previews. A protected production job can require approval before it runs the canary and full rollout commands.
+
+A simple CI command sequence might look like this. The same commands from the manual workflow become repeatable checks in the pipeline. The staging preview gives reviewers evidence before a protected production job runs.
+
+```bash
+ansible-galaxy collection install -r requirements.yml
+ansible-playbook -i inventories/staging site.yml --syntax-check
+ansible-playbook -i inventories/staging site.yml --limit web --check --diff
+```
+
+Red Hat Ansible Automation Platform gives the same idea a managed interface. A project syncs the automation repo, an inventory defines the host set, credentials provide access without exposing secrets to every operator, an execution environment supplies the runtime, and a job template stores the playbook plus allowed prompts. The job output records who launched it, when it ran, which hosts changed, and where it failed.
+
+For the orders platform, the production job template might prompt for `orders_api_version`, allow a `limit` value, require an approval step, and run through a tested execution environment. That makes the safe workflow easier for on-call engineers because the risky choices are explicit instead of hidden in a long terminal command.
+
+Automation should keep the same guardrails as the manual version. The pipeline should still make the target visible, run a canary, verify service health, and stop on meaningful failures. Automating an unsafe sequence only makes the unsafe sequence faster.
 
 ## Putting It All Together
+<!-- section-summary: The full workflow moves from repo proof to inventory proof, access proof, preview evidence, canary apply, verification, rollout, and rollback. -->
 
-We started by examining the dangers of running configuration playbooks across a dual-node web application cluster without a disciplined workflow, where simple typos, SSH access issues, or target mistakes can take down your entire application fleet.
+The orders team can now run the Nginx timeout change in a clean order. They confirm the Git commit and dependencies, inspect `inventories/prod`, list the selected web hosts, inspect `web-01` variables, prove module execution, prove `become`, run syntax and task-list checks, preview `web-01` with check and diff mode, and then apply `web-01`.
 
-Ansible answers these dangers by providing a structured, layered execution pipeline:
-- **Visual Validation**: We run graph checks to verify parsed target groups before opening network channels.
-- **Connection Proof**: We use the ping module to verify SSH handshakes, keys, and remote Python availability.
-- **Dry-Run Previews**: We combine check and diff modes to preview configuration file modifications line-by-line.
-- **Under-the-Hood Efficiency**: We use SSH Multiplexing to share network sockets, bypassing handshake overhead and optimizing task pipelines.
-- **Canary Rollouts**: We limit initial runs to a single host to minimize the blast radius, checking run recap metrics before full rollouts.
-- **Idempotency Auditing**: We execute a second run to confirm that the hosts have settled and that the changed count is exactly zero.
+After the canary, they verify Nginx, verify the orders API, read the recap, and run the same playbook again against `web-01` to confirm idempotency. If the service is healthy, they widen the rollout with `--limit "web:!web-01"` or let `serial` move through batches. If the service is unhealthy, they revert the Git change, run the same playbook narrowly, and verify again.
 
-Following this workflow gives you concrete evidence before and after each run, making your automation safer, more predictable, and easier to recover when a host behaves differently than expected.
+That workflow is the practical difference between "we ran Ansible" and "we operated production carefully." The playbook gives the desired state. The workflow gives the evidence, order, and blast-radius control around that desired state.
 
 ## What's Next
 
-Now that you have mastered a safe playbook execution workflow and understand the underlying mechanics of SSH socket multiplexing, the next submodule will explore the structure of playbooks and tasks. We will look at how Ansible parses YAML text files, maps keys to module arguments, and defines the structural building blocks of machine states.
+This workflow started with inventory because every safe Ansible run depends on a trustworthy host map. The next article goes deeper into inventory structure, host names, groups, variables, static files, dynamic inventory, and the difference between a host's automation name and its network address.
+
+The host map gives every later command its boundary. A playbook can be correct, and safe operation still starts by knowing exactly which systems will receive it.
 
 ---
 
 **References**
 
-- [Ansible Command Line Utilities Guide](https://docs.ansible.com/ansible/latest/user_guide/command_line_tools.html) - Documentation for ansible-inventory and ad-hoc execution tools.
-- [Ansible Check Mode and Diff Mode](https://docs.ansible.com/ansible/latest/playbook_guide/playbooks_checkmode.html) - How to safely preview and dry-run playbook modifications.
-- [OpenSSH Multiplexing Specification](https://www.openssh.com/txt/release-3.9) - Original release notes and protocol details for SSH ControlMaster and ControlPersist.
-- [Ansible Connection Tuning](https://docs.ansible.com/ansible/latest/playbook_guide/playbooks_connection.html) - Best practices for optimizing SSH connection sharing and pipelining.
+- [Ansible documentation](https://docs.ansible.com/projects/ansible/latest/index.html) - Main entry point for current Ansible community documentation.
+- [Getting started with Ansible](https://docs.ansible.com/projects/ansible/latest/getting_started/index.html) - Defines the basic Ansible components: control node, inventory, and managed nodes.
+- [Building an inventory](https://docs.ansible.com/projects/ansible/latest/getting_started/get_started_inventory.html) - Shows beginner inventory creation, inventory verification, and a first module ping.
+- [How to build your inventory](https://docs.ansible.com/projects/ansible/latest/inventory_guide/intro_inventory.html) - Explains inventory formats, groups, host variables, and organization patterns.
+- [Working with dynamic inventory](https://docs.ansible.com/projects/ansible/latest/inventory_guide/intro_dynamic_inventory.html) - Covers dynamic inventory sources for changing infrastructure.
+- [Ansible playbooks](https://docs.ansible.com/projects/ansible/latest/playbook_guide/playbooks_intro.html) - Documents playbooks, plays, task execution, idempotency, check mode, and syntax verification.
+- [ansible-playbook](https://docs.ansible.com/projects/ansible/latest/cli/ansible-playbook.html) - CLI reference for playbook execution flags such as inventory, limit, tags, syntax check, check mode, and diff mode.
+- [ansible-inventory](https://docs.ansible.com/projects/ansible/latest/cli/ansible-inventory.html) - CLI reference for inspecting compiled inventory with list, graph, and host output.
+- [Introduction to ad hoc commands](https://docs.ansible.com/projects/ansible/latest/command_guide/intro_adhoc.html) - Explains one-off module commands used for ping, privilege checks, and service verification.
+- [Validating tasks: check mode and diff mode](https://docs.ansible.com/projects/ansible/latest/playbook_guide/playbooks_checkmode.html) - Documents preview behavior, diff output, module support limits, and `diff: false`.
+- [Controlling playbook execution: strategies and more](https://docs.ansible.com/projects/ansible/latest/playbook_guide/playbooks_strategies.html) - Covers strategies, forks, serial batches, and execution control keywords.
+- [Error handling in playbooks](https://docs.ansible.com/projects/ansible/latest/playbook_guide/playbooks_error_handling.html) - Documents failed and unreachable host behavior, handlers on failure, blocks, and rescue patterns.
+- [Ansible Configuration Settings](https://docs.ansible.com/projects/ansible/latest/reference_appendices/config.html) - Reference for `ansible.cfg` settings and precedence.
+- [Red Hat Ansible Automation Platform job templates](https://docs.redhat.com/en/documentation/red_hat_ansible_automation_platform/2.5/html/using_automation_execution/controller-job-templates) - Describes reusable job templates with playbooks, inventory, credentials, and runtime parameters.
+- [Red Hat Ansible Automation Platform best practices](https://docs.redhat.com/en/documentation/red_hat_ansible_automation_platform/2.5/html/using_automation_execution/assembly-controller-best-practices) - Covers source control, inventory, variable management, scale, and CI/CD guidance for automation controller.

@@ -11,156 +11,217 @@ aliases:
 
 ## Table of Contents
 
-1. [The Problem](#the-problem)
-2. [The Isolated Twin Environment Model](#the-isolated-twin-environment-model)
-3. [Instant Router-Level Traffic Swapping](#instant-router-level-traffic-swapping)
-4. [The Database Synchronization Dilemma](#the-database-synchronization-dilemma)
-5. [Resource and Cost Tradeoffs](#resource-and-cost-tradeoffs)
-6. [Putting It All Together](#putting-it-all-together)
-7. [What's Next](#whats-next)
+1. [Why Rolling Is Sometimes Too Mixed](#why-rolling-is-sometimes-too-mixed)
+2. [The Blue and Green Environments](#the-blue-and-green-environments)
+3. [Traffic Switching](#traffic-switching)
+4. [Validation Before the Switch](#validation-before-the-switch)
+5. [Database Compatibility](#database-compatibility)
+6. [Cost and Cleanup](#cost-and-cleanup)
+7. [Putting It All Together](#putting-it-all-together)
+8. [What's Next](#whats-next)
 
-## The Problem
+## Why Rolling Is Sometimes Too Mixed
+<!-- section-summary: Blue-green deployments help when old and new versions need stronger isolation than a rolling rollout gives. -->
 
-Executing rolling deployments on database-heavy applications exposes production systems to severe version conflicts. When software teams attempt to update applications running on shared state without complete environment separation, they face critical release roadblocks:
+In the rolling deployment article, the checkout API moved from version `2026.06.13.1` to `2026.06.13.2` a few containers at a time. That worked because the old and new versions could safely run together for a short period. Many releases fit that pattern.
 
-* **The Concurrent Schema Crash**: An engineering team deploys a major database-heavy update. Because rolling deployments run old and new versions side-by-side, old application tasks process incoming requests at the same time new tasks run database migrations. The old code reads a table modified by the new version's startup script, encounters an unexpected column format, throws raw runtime errors, and corrupts checkout records.
-* **The Slow DNS Propagation Delay**: A platform team attempts to switch traffic to a new server cluster by updating the public DNS record pointer (`orders.example.com` $\rightarrow$ `new-ip`). Because client web browsers, mobile apps, and internet service providers aggressively cache DNS records locally, more than 30% of the active user base continues to route requests to the old, deprecated server for hours after the release.
-* **The Idle Server Cost Trap**: To prevent version mixing, administrators manually maintain a second, permanently running production environment clone in their cloud account. Because this replica environment sits idle 98% of the time, the organization's monthly infrastructure bill doubles, incurring massive financial waste that is hard to justify to business stakeholders.
+Now imagine a bigger checkout change. The old version stores discount data in a column called `discount_code`. The new version reads a new table called `cart_discounts`, writes a new audit event, and changes the payment authorization payload. During a rolling deployment, both versions may process live checkouts at the same time. One user request could hit the old version, the next request could hit the new version, and background jobs may read data written by either version.
 
-These failures show that production deployments require absolute version isolation, instant traffic switches, and automated, ephemeral infrastructure lifecycles.
+That mixed state can create real production problems. The old version may read data shaped by the new version. The new version may assume a queue message includes a field the old version never writes. A payment retry may pass through a different version than the original request. This can work if the team designed every interface to handle both versions. It becomes risky when the change crosses application code, database schema, queues, and third-party calls.
 
-## The Isolated Twin Environment Model
+A **blue-green deployment** gives the new version a separate production-like environment before users touch it. One environment serves all real traffic. The other environment runs the new release and waits for validation. When the team accepts the new environment, traffic moves over in one controlled switch.
 
-A **Blue-Green Deployment** eliminates release-window version mixing by maintaining two identical, fully isolated environment pools: **Blue** and **Green**.
+The important thing is the boundary. Rolling deployment changes instances inside one live service pool. Blue-green deployment changes which full environment receives traffic.
 
-Under this topology, one environment acts as the live production host, while the other serves as the isolated staging sandbox for the new release. The roles flip with every deployment.
+## The Blue and Green Environments
+<!-- section-summary: Blue-green uses two complete environment pools so the new release can be built and tested away from live users. -->
 
-* **Blue Environment**: The active, live production environment currently serving 100% of user traffic. In our example, it runs version `1.8.3` of the application.
-* **Green Environment**: The inactive, isolated replica environment. It runs the new release candidate, version `1.8.4`.
+The names **blue** and **green** are just labels. Blue might run the current production version today, and green might run the next version. After the switch, green becomes production and blue becomes the standby or cleanup target.
 
-```mermaid
-flowchart LR
-    subgraph Active ["Active Production Route"]
-        Router["Router / ALB"] -->|100% Traffic| Blue["Blue Environment<br/>(Stable Code: 1.8.3)"]
-    end
+For our checkout API, a blue-green setup might look like this:
 
-    subgraph Idle ["Isolated Staging Sandbox"]
-        Green["Green Environment<br/>(New Release: 1.8.4)"]
-    end
+| Environment | Version | Traffic role | Main pieces |
+|---|---|---|---|
+| Blue | `2026.06.13.1` | Serves users now | Checkout tasks, target group, config, secrets, alarms |
+| Green | `2026.06.13.2` | Receives test traffic | New checkout tasks, separate target group, same production dependencies where safe |
 
-    SharedDB[("Shared Database")]
-    Blue --> SharedDB
-    Green --> SharedDB
+In Amazon ECS with CodeDeploy, this pattern usually uses two target groups behind a load balancer. The original task set sits behind one target group. CodeDeploy creates a replacement task set and connects it to the other target group. A production listener sends user traffic to the active target group. An optional test listener can send validation traffic to the replacement task set before production traffic moves.
+
+In Kubernetes, teams often use a controller such as Argo Rollouts for blue-green behavior. The rollout has an active Service that points to the live ReplicaSet and a preview Service that points to the new ReplicaSet. The preview Service lets smoke tests and manual checks reach the green version before promotion.
+
+Here is a simplified Argo Rollouts shape:
+
+```yaml
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
+metadata:
+  name: checkout-api
+spec:
+  replicas: 10
+  strategy:
+    blueGreen:
+      activeService: checkout-api
+      previewService: checkout-api-preview
+      autoPromotionEnabled: false
+      scaleDownDelaySeconds: 900
+  selector:
+    matchLabels:
+      app: checkout-api
+  template:
+    metadata:
+      labels:
+        app: checkout-api
+    spec:
+      containers:
+        - name: checkout-api
+          image: registry.example.com/checkout-api:2026.06.13.2
 ```
 
-The defining advantage of the twin-environment model is **Complete Version Isolation**. Because the Green environment has its own independent servers, caches, and system dependencies, developers can deploy, configure, and thoroughly test version `1.8.4` in Green without affecting a single live user in Blue. 
+The preview Service gives the pipeline a stable address for green validation. The active Service stays on blue until someone or some automated policy promotes the release. The `scaleDownDelaySeconds` value keeps the old version alive for a short time after promotion, which gives the team a fast path back if the new version fails immediately.
 
-If the Green installation encounters a compilation crash, memory leak, or permission block, the live Blue environment continues to handle production traffic smoothly and with zero user impact.
+![Blue-green deployment showing blue live environment, green preview environment, load balancer switch, test traffic, promote, and fast revert](/content-assets/articles/article-cicd-deployment-strategies-blue-green-deployments/blue-green-environment-switch.png)
 
-## Instant Router-Level Traffic Swapping
+*Blue-green keeps a full live environment and a full preview environment, then moves traffic at the routing layer when green is ready.*
 
-To prevent the slow propagation delays associated with DNS record caches, Blue-Green deployments execute traffic switches instantly at the **Router or Load Balancer level**.
+Once the green environment exists, the release becomes a routing problem. The team needs a traffic switch that moves users cleanly and predictably.
 
-Rather than modifying public DNS records, the DNS entry for `orders.example.com` remains pinned permanently to a single, stable Application Load Balancer (ALB). The load balancer acts as a reverse proxy, coordinating two backend target groups (Blue and Green).
+## Traffic Switching
+<!-- section-summary: Blue-green traffic should move at the router or load balancer layer instead of depending on slow DNS-only changes. -->
 
-The transition occurs by executing a single target-swap command at the load balancer:
+**Traffic switching** means changing which environment receives production requests. The switch should happen close to the load balancer, gateway, ingress controller, or service routing layer. That gives the deployment system one controlled place to move traffic.
 
-1. The platform team deploys version `1.8.4` to the Green target group.
-2. Automated smoke tests validate that Green is healthy and ready.
-3. The pipeline sends a command to the ALB to swap target group ports or weights, immediately routing 100% of new incoming TCP connections to the Green targets.
-4. If a critical regression is discovered minutes later, the pipeline sends a reverse swap command, instantly shifting all traffic back to the stable Blue targets in milliseconds.
+For ECS and CodeDeploy, the switch happens by rerouting the production listener from the original task set target group to the replacement task set target group. For Kubernetes blue-green, the active Service selector changes from the old ReplicaSet to the new ReplicaSet, or a rollout controller updates the routing object that backs the active Service.
 
-```mermaid
-flowchart TD
-    ALB["Load Balancer (ALB)"]
-    BlueTarget["Blue Target Group<br/>(Active: 100% weight)"]
-    GreenTarget["Green Target Group<br/>(Idle: 0% weight)"]
+This is different from using public DNS as the main release switch. DNS is useful for many traffic-management tasks, but DNS records can live in client caches, resolver caches, mobile networks, and corporate proxies. If the release depends on every client seeing a DNS change quickly, some users may stay on the old environment long after the team thinks the switch finished.
 
-    ALB -->|Initial: 100%| BlueTarget
-    ALB -.->|Staging: 0%| GreenTarget
-    
-    ALB -->|Target Swap: 100%| GreenTarget
-    ALB -.->|Revert: 0%| BlueTarget
+A practical blue-green switch has a small set of controlled actions:
+
+```bash
+./scripts/deploy-green.sh registry.example.com/checkout-api@sha256:8f3a...
+./scripts/smoke-test.sh https://checkout-preview.example.com
+./scripts/promote-green.sh checkout-api
+./scripts/watch-release.sh checkout-api --minutes 30
 ```
 
-This instant target swap eliminates client-cached DNS propagation delays. The moment the ALB registers the route change, the next incoming HTTP request hits the new version, ensuring a clean and immediate transition.
+That flow tells us something important. Deployment creates the green environment. Promotion moves production traffic to it. Keeping those two moments separate gives the team time to inspect the new environment before customers use it.
 
-## The Database Synchronization Dilemma
+The green environment still needs proof before the switch. A working container process is only the first signal. The next step is validation.
 
-While Blue-Green deployments isolate application compute workloads, both environments must connect to the same **Shared Database** to preserve production data state. This shared state presents a severe challenge: if the new application version requires a database schema change, how do we write database updates without breaking the active old code?
+## Validation Before the Switch
+<!-- section-summary: The green environment needs pre-traffic checks that prove the real release path works before promotion. -->
 
-If version `1.8.4` deletes a database column immediately upon deployment, the active `1.8.3` code in Blue will instantly throw raw exceptions when it tries to read that table, causing a major outage.
+**Pre-traffic validation** means testing the green environment before it serves normal users. These checks should use the same image, config style, routing path, and observability that production uses. The point is to catch wiring problems while blue still carries the business.
 
-### The Expand-and-Contract Pattern
+For the checkout API, a good validation set might include:
 
-To safely execute migrations across isolated environments, database schemas must follow a strict, backwards-compatible lifecycle known as the **Expand-and-Contract Pattern**. This pattern splits a single schema change into three safe, progressive phases executed across separate deployments.
+| Check | What it proves |
+|---|---|
+| `/ready` health check | The app booted, loaded config, and can reach required dependencies. |
+| Synthetic checkout | The main user path can create a cart, apply a discount, and authorize a test payment. |
+| Database migration status | The schema version expected by the app exists. |
+| Queue compatibility | The app can publish and consume expected message shapes. |
+| Observability labels | Logs, metrics, traces, and alerts identify the new version. |
 
-Let's look at how a team renames a database field from `phone` to `phoneNumber` without causing service downtime:
+AWS CodeDeploy supports lifecycle hooks for ECS deployments. A validation Lambda can run after test traffic reaches the replacement task set and before production traffic moves. If validation fails and rollback is configured, CodeDeploy can fail the deployment and return components to the previous state. In Kubernetes, Argo Rollouts can pause before promotion and use analysis checks to decide whether to continue.
 
-```mermaid
-flowchart TD
-    Expand["1. Expand Phase<br/>(Add new 'phoneNumber' column)"] --> Transition["2. Transition Phase<br/>(Code writes to both columns)"]
-    Transition --> Contract["3. Contract Phase<br/>(Safely delete old 'phone' column)"]
+The smoke test should avoid fake success. A request to `/health` can say the web server is running while checkout itself is broken. A better synthetic check calls the smallest meaningful business path. For a checkout service, that could be:
+
+```bash
+curl -fsS https://checkout-preview.example.com/internal/smoke/checkout \
+  -H "X-Smoke-Test: true" \
+  -H "X-Release: 2026.06.13.2"
 ```
 
-#### Phase 1: Expand
+The endpoint should use test data, never charge a real customer, and write logs that make the run easy to find. Teams often gate this endpoint behind internal auth, network rules, or a signed header because it exercises sensitive paths.
 
-The database migration script *only* adds the new column (`phoneNumber`). It does not delete, alter, or rename the old column (`phone`). Both columns exist side-by-side in the database.
+Validation can prove the green application environment works. The hardest shared part still remains: the database. Blue and green often point at the same production data store, and that makes compatibility the center of safe blue-green work.
 
-#### Phase 2: Transition
+## Database Compatibility
+<!-- section-summary: Blue-green still needs backward-compatible database changes because both environments may touch the same data store. -->
 
-The application version `1.8.4` is deployed to the Green environment. The new code is written to read from `phoneNumber` if present, but default back to `phone`. Crucially, all database writes from the new code write identical data to *both* columns.
+A **database schema** is the shape of the database: tables, columns, indexes, constraints, and relationships. Blue-green gives code strong environment isolation, but many teams keep one shared production database. That means the old blue code and the new green code may both need to work with the database during deployment, validation, promotion, and rollback.
 
-During the switch window, if the new code writes an order, both fields are populated, ensuring that if an instant rollback to Blue (`1.8.3`) is forced, the old code can read the `phone` field successfully.
+The most dangerous database change is a destructive one that ships too early. Dropping a column, renaming a column in place, changing a type in place, or changing a constraint can break the old version immediately. If the team promotes green and then needs to return traffic to blue, blue may crash because the database no longer has the shape blue expects.
 
-#### Phase 3: Contract
+Real teams handle this with **expand and contract migrations**. The idea is to spread the database change across multiple releases:
 
-Once the new version has run stably in production for several days, the platform team executes a background cleanup script to copy any missing historical data to the new column. Finally, a subsequent deployment executes the Contract phase, dropping the old `phone` column from the database.
+| Phase | What happens | Why it helps |
+|---|---|---|
+| Expand | Add the new table, column, or nullable field while keeping the old shape. | Old code still works. New code can start writing new data. |
+| Migrate | Backfill existing rows and write to both old and new places if needed. | Data catches up while production keeps running. |
+| Read switch | Deploy code that reads from the new shape after data is ready. | The app moves to the new model safely. |
+| Contract | Remove old columns or old write paths later. | Cleanup happens after rollback risk has passed. |
 
-### Expand-and-Contract Steps
+![Blue-green shared database compatibility showing blue app, green app, expand, migrate, read switch, and contract later](/content-assets/articles/article-cicd-deployment-strategies-blue-green-deployments/blue-green-database-compatibility.png)
 
-| Phase | Database Schema State | Application Code Behavior | Rollback Safety |
-| :--- | :--- | :--- | :--- |
-| **1. Expand** | Both columns exist (`phone` & `phoneNumber`) | Old code reads/writes `phone` | 100% Safe (old code untouched) |
-| **2. Transition** | Both columns exist | New code writes to both, reads new | 100% Safe (old code can read `phone`) |
-| **3. Contract** | Old column (`phone`) dropped | New code reads/writes `phoneNumber` | Reverting requires database restore |
+*Blue and green can share one production database safely when schema changes stay compatible during the release window.*
 
-## Resource and Cost Tradeoffs
+Here is a very small example. Suppose `orders.discount_code` needs to become a richer `cart_discounts` table. The expand release adds the new table first:
 
-While Blue-Green deployments provide absolute safety and instant rollbacks, they require a major infrastructure tradeoff: **Resource Redundancy**.
+```sql
+CREATE TABLE cart_discounts (
+  id bigserial PRIMARY KEY,
+  order_id bigint NOT NULL REFERENCES orders(id),
+  code text NOT NULL,
+  amount_cents integer NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+```
 
-During the deployment window, you must run double the compute resources (servers, virtual machines, container tasks) to host both environments simultaneously. If your production cluster costs $5,000 a month, maintaining a permanently running idle replica duplicates that expense to $10,000.
+The next application release writes to both `orders.discount_code` and `cart_discounts`. A backfill job copies existing discount data into the new table. Once the team verifies the new table has the right data, a later application release reads from `cart_discounts`. The final cleanup release removes `orders.discount_code`.
 
-### The Ephemeral Infrastructure Pattern
+This matters for rollback. If green has a bug after promotion, blue can still read the old column because the database still has it. The database gives both versions a common safe shape during the release window.
 
-To minimize financial waste, modern cloud architectures use **Ephemeral Infrastructure**. Rather than keeping the Green environment running permanently, the CI/CD pipeline provisions the Green environment on-demand dynamically when a release is triggered:
+Once database compatibility is handled, the remaining blue-green question is cost. A second environment gives safety, but it also needs resources and cleanup discipline.
 
-1. The pipeline calls cloud APIs (such as AWS CloudFormation or Terraform) to provision the Green infrastructure resources dynamically.
-2. The pipeline deploys the new release candidate, executes automated checks, and performs the router target swap.
-3. The old Blue environment remains active as a standby pool for a short "soak window" (e.g. 2 hours).
-4. Once the soak window completes with zero alerts, the pipeline automatically de-provisions and destroys the old Blue infrastructure, returning cloud resource consumption back to a single active pool.
+## Cost and Cleanup
+<!-- section-summary: Blue-green costs more during the release window, so teams automate scale-up, scale-down, and cleanup. -->
+
+Blue-green deployments usually need more infrastructure than rolling deployments. For a short time, the team may run two full sets of application containers, two target groups, extra load balancer rules, preview routes, and extra monitoring. If the green environment stays running forever at full size, blue-green can double compute cost for that service.
+
+The practical answer is automation. The green environment should scale up for the release, stay alive for validation and the rollback window, then scale down or become the next standby according to the platform design.
+
+A common production policy looks like this:
+
+| Moment | Resource policy |
+|---|---|
+| Before deployment | Standby environment stays at zero or low capacity if the platform supports quick scale-up. |
+| During validation | Green scales to production-equivalent capacity for realistic checks. |
+| After promotion | Old blue stays alive for 15 to 60 minutes for fast revert. |
+| After watch window | Old blue scales down or becomes the next preview target. |
+
+The cost conversation should include observability too. Blue and green need separate release labels in metrics and logs so the team can compare behavior after promotion. A good label set includes `service`, `version`, `environment_color`, `deployment_id`, and `git_sha`. The names can differ by stack, but the goal is the same: when an alert fires, responders can tell which environment produced it.
+
+Blue-green gives us stronger isolation and a fast traffic switch. It still switches all production users at promotion time. Some releases need smaller exposure than that, especially when the risk only appears under real traffic patterns. That leads naturally to canary deployments.
 
 ## Putting It All Together
+<!-- section-summary: Blue-green separates deployment from promotion so teams can validate the new environment before users reach it. -->
 
-By separating the production environment into Twin Blue-Green pools and executing instant router target swaps, we solve our database, DNS caching, and infrastructure cost vulnerabilities:
+Let's put the checkout release together.
 
-* **Concurrent Schema Crashes**: Adhering to the Expand-and-Contract database migration pattern guarantees that database changes remain fully backwards-compatible, allowing old and new application instances to access the shared database concurrently without crash side-effects.
-* **DNS Propagation Delays**: Swapping target groups at the load balancer level ensures that all new incoming HTTP connections are routed to the Green environment in milliseconds, eliminating client-side DNS caching issues.
-* **Idle Server Costs**: Utilizing on-demand ephemeral infrastructure provisioning ensures that duplicate compute resources are only billed during the active release and verification window, minimizing cloud spend.
+Blue runs version `2026.06.13.1` and serves all users. The pipeline deploys version `2026.06.13.2` into green using the same image digest that passed CI. Green gets its own task set or ReplicaSet, its own target group or preview Service, and the same runtime configuration style as production.
+
+Before promotion, the team runs readiness checks, synthetic checkout, migration checks, queue checks, and log or metric label checks against green. The database change follows expand and contract, so both blue and green can work with the shared production data during the release window.
+
+Promotion moves the load balancer, Service, or rollout controller from blue to green. The pipeline watches error rate, latency, target health, and business smoke tests. Blue stays alive for a short rollback window. If the new version fails, traffic can move back quickly because the old environment still exists and the database still supports it.
+
+Blue-green is a strong choice when version mixing creates risk, when validation needs a full production-like environment, or when the team wants a clear traffic switch. The tradeoff is extra cost and a large exposure jump at promotion time.
+
+![Blue-green release summary showing deploy green, validate, promote, watch, keep blue, and clean up](/content-assets/articles/article-cicd-deployment-strategies-blue-green-deployments/blue-green-release-summary.png)
+
+*A complete blue-green release separates deployment from promotion, keeps blue nearby for fast revert, and cleans up after the watch window.*
 
 ## What's Next
+<!-- section-summary: Canary deployments add smaller production exposure steps before the whole user base moves to the new version. -->
 
-While Blue-Green deployments isolate active production and ensure instant, single-click rollbacks, they operate as a binary switch: 100% of user traffic is moved to the new version at once. If the new code contains a subtle memory leak or database deadlock that only triggers under production-scale load, the entire user base encounters the failure simultaneously. To minimize this risk, we must explore progressive traffic splits. Let's move to **Canary Deployments** to learn how to route a tiny, 2% slice of real user traffic to the new version while monitoring live telemetry before promoting the release globally.
-
-![Blue-green deployment summary showing twin environments, router swap, no mixed versions, schema compatibility, and capacity cost](/content-assets/articles/article-cicd-deployment-strategies-blue-green-deployments/blue-green-summary.png)
-
-*Use this as the blue-green checklist: run full twin environments, switch traffic deliberately, avoid mixed versions, plan for database compatibility, use expand-and-contract changes, and budget for double capacity.*
+The next article covers **canary deployments**. We will keep the checkout API, but instead of switching all production traffic to green at once, we will send a small percentage to the new version, compare telemetry, and increase traffic only when the signals look healthy.
 
 ---
 
 **References**
 
-* [AWS Whitepaper: Blue/Green Deployments on AWS](https://docs.aws.amazon.com/whitepapers/latest/blue-green-deployments/introduction.html) - Architectural patterns, DNS routing, and load balancer target group swaps on cloud environments.
-* [Martin Fowler: BlueGreenDeployment Specification](https://martinfowler.com/bliki/BlueGreenDeployment.html) - Core mental models, environment cloning principles, and database handling rules.
-* [Refactoring Databases: Evolutionary Database Design](https://www.agiledata.org/essays/databaseRefactoring.html) - Technical details on evolutionary schemas, Expand-and-Contract patterns, and safe migrations.
-* [Application Load Balancer Target Group Swaps](https://docs.aws.amazon.com/elasticloadbalancing/latest/application/load-balancer-target-groups.html) - AWS documentation on managing port and routing weight transitions.
+- [AWS CodeDeploy deployments on an Amazon ECS compute platform](https://docs.aws.amazon.com/codedeploy/latest/userguide/deployment-steps-ecs.html) - Documents ECS blue/green components, target groups, test listeners, lifecycle events, and traffic rerouting.
+- [AWS CodeDeploy deployment configurations](https://docs.aws.amazon.com/codedeploy/latest/userguide/deployment-configurations.html) - Explains predefined and custom deployment configurations, including blue/green and traffic shifting options.
+- [Argo Rollouts blue-green strategy](https://argo-rollouts.readthedocs.io/en/stable/features/bluegreen/) - Documents active services, preview services, promotion, and scale-down delay behavior.
+- [Prisma expand-and-contract migrations](https://www.prisma.io/docs/guides/database/data-migration) - Shows a practical expand, migrate, and contract workflow for production database changes.
+- [GitLab backwards compatibility across updates](https://docs.gitlab.com/development/multi_version_compatibility/) - Explains why multi-component deployments need backward compatibility during non-atomic updates.

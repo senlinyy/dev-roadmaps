@@ -12,328 +12,362 @@ aliases:
 
 ## Table of Contents
 
-1. [The Problem: High-Availability Rollouts and Outage Risks](#the-problem-high-availability-rollouts-and-outage-risks)
-2. [Canary Targets: The Command-Line Limit Boundary](#canary-targets-the-command-line-limit-boundary)
-3. [Linear Slicing: The Serial Execution Scheduler](#linear-slicing-the-serial-execution-scheduler)
-4. [Under the Hood: How Serial Slices the Playbook Queue](#under-the-hood-how-serial-slices-the-playbook-queue)
-5. [The Interaction Between Serial and Strategy Plugins](#the-interaction-between-serial-and-strategy-plugins)
-6. [The Timing of Change: Handlers and Flushing Boundaries](#the-timing-of-change-handlers-and-flushing-boundaries)
-7. [Designing Robust Application Health Checks](#designing-robust-application-health-checks)
-8. [Load Balancer Integration and Target Status Checking](#load-balancer-integration-and-target-status-checking)
-9. [Failure Boundaries and the max_fail_percentage Algorithm](#failure-boundaries-and-the-max_fail_percentage-algorithm)
-10. [Stateless versus Stateful Rollout Strategies](#stateless-versus-stateful-rollout-strategies)
-11. [Putting It All Together](#putting-it-all-together)
-12. [What's Next](#whats-next)
+1. [The Rollout Boundary](#the-rollout-boundary)
+2. [Start with --limit](#start-with---limit)
+3. [Use serial for Batches](#use-serial-for-batches)
+4. [Health Checks Between Batches](#health-checks-between-batches)
+5. [Failure Thresholds and Handler Timing](#failure-thresholds-and-handler-timing)
+6. [Concurrency Controls](#concurrency-controls)
+7. [Rollback and Recovery](#rollback-and-recovery)
+8. [Putting It All Together](#putting-it-all-together)
+9. [What's Next](#whats-next)
+10. [References](#references)
 
-## The Problem: High-Availability Rollouts and Outage Risks
+## The Rollout Boundary
+<!-- section-summary: Safe rollouts control target selection, batch size, validation, and stop conditions before a bad change can affect the whole service. -->
 
-Ansible rollout controls are execution-scope tools that limit which hosts run now and how many hosts run in each batch.
+Preview tells you what a playbook is likely to change. The next question is how much production you want to expose to the first real run. A playbook that updates every host at once can turn a small template mistake into a full service incident.
 
-When managing a high-availability checkout microservice for a global e-commerce portal, system engineering teams face strict uptime constraints. The checkout service runs across a cluster of four independent application servers, situated behind an elastic load balancer. If the checkout database password changes, the web server proxy configurations are updated, or the application package is upgraded, the configuration changes must be deployed across the entire cluster.
+Let's keep the orders platform. The service runs behind a load balancer on six web hosts: `orders-web-01` through `orders-web-06`. A change updates the Nginx timeout, renders a new environment file, and restarts the app. The team wants one canary first, then two hosts at a time, with a health check before each batch finishes.
 
-In a default Ansible playbook configuration, the execution engine targets all matched inventory hosts in parallel. If you have four web servers, Ansible executes the first task on all four hosts simultaneously, then the second task, and so on.
+That rollout boundary has four parts. `--limit` chooses the first slice of inventory. `serial` controls how many hosts the play processes together. Health checks decide whether the current batch is safe. Failure thresholds decide when Ansible should stop instead of pushing onward.
 
-While this parallel model is highly efficient, it is extremely dangerous during a production rollout. If a new application package contains a critical runtime bug, or if Nginx is rendered with an invalid syntax configuration, the parallel execution will apply the broken state to all four web servers at the same time.
+This is operational safety in plain form. The YAML can still describe the whole desired state for `orders_web`, while the run command and play keywords decide how fast production receives it.
 
-The entire cluster will fail, Nginx will crash, the checkout service will go offline, and the load balancer will begin reporting HTTP 502 Bad Gateway errors to customers worldwide.
+## Start with --limit
+<!-- section-summary: --limit narrows a playbook run to a canary host, a subset, or an emergency target without changing the playbook's normal host pattern. -->
 
-To prevent these catastrophic cluster-wide outages, system engineers must design controlled deployment pipelines. By isolating a single node as a canary, dividing the remaining hosts into sequential execution batches, and validating the health of each batch before proceeding, you can isolate errors and keep the blast radius of any deployment failure restricted to a single host.
-
-## Canary Targets: The Command-Line Limit Boundary
-
-A canary target is one carefully chosen host that receives a change before the rest of the fleet. In Ansible, the `--limit` flag is the command-line filter that restricts a run to that host or small group.
-
-Example: run the checkout deployment only on `checkout-web-01.internal` first, verify the service and load balancer health, then continue to the rest of `checkout_web`. The `--limit` flag instructs the control node to narrow the playbook's default `hosts` pattern for the current execution.
-
-Before running a play, developers should verify which hosts are targeted by appending the `--list-hosts` flag to their command:
-
-```bash
-ansible-playbook -i inventory/prod.ini playbooks/deploy_checkout.yml \
-  --list-hosts \
-  --limit checkout-web-01.internal
-```
-
-The terminal output should explicitly list only the single canary node:
-
-```plain
-playbook: playbooks/deploy_checkout.yml
-
-  play #1 (checkout_web): Deploy Checkout Service
-    pattern: ['checkout_web']
-    hosts (1):
-      checkout-web-01.internal
-```
-
-Once the target list is verified, the developer applies the changes to the canary server:
-
-```bash
-ansible-playbook -i inventory/prod.ini playbooks/deploy_checkout.yml \
-  --limit checkout-web-01.internal
-```
-
-By deploying exclusively to `checkout-web-01.internal`, you isolate the production change. If the application process fails to start on this first server, the load balancer detects the failure, removes the single canary node from the active target group, and redirects all customer checkout traffic to the three remaining healthy servers. The system continues to operate, and the engineering team has time to debug the failure without causing downtime.
-
-## Linear Slicing: The Serial Execution Scheduler
-
-Serial execution splits matched hosts into batches and runs the play on one batch at a time. It exists so a deployment can keep enough healthy capacity online while each batch is changed and checked.
-
-Example: with four checkout web hosts, `serial: 1` updates one host at a time, while `serial: "50%"` updates two hosts at a time. Once the canary node has been successfully updated and verified, serial batches help deploy to the remaining hosts without changing the whole cluster at once.
-
-The following playbook declares a rolling deployment strategy using a progressive list of serial batch sizes:
+The playbook should usually target the honest service group:
 
 ```yaml
-- name: Deploy Checkout Service
-  hosts: checkout_web
+- name: Configure orders web fleet
+  hosts: orders_web
   become: true
-  serial:
-    - 1
-    - "50%"
+```
+
+The first production apply can narrow that target with `--limit`. This keeps the playbook reusable while the operator controls the first slice at runtime.
+
+```bash
+ansible-playbook \
+  -i inventories/prod \
+  orders.yml \
+  --limit orders-web-01 \
+  --vault-id prod@prompt
+```
+
+That canary run proves real behavior on one host. It writes files, triggers handlers, restarts services, calls health checks, and exposes any host-specific surprises. If the run fails, the team investigates one host instead of a whole fleet.
+
+After the canary succeeds, you can run the same playbook against the remaining group:
+
+```bash
+ansible-playbook \
+  -i inventories/prod \
+  orders.yml \
+  --limit 'orders_web:!orders-web-01' \
+  --vault-id prod@prompt
+```
+
+Inventory patterns can express intersections and exclusions, so keep the command visible in deployment records. A reviewer should be able to see whether the run selected one host, the whole group, or the whole group minus the canary.
+
+Use `--limit` for emergency repair too. If `orders-web-03` drifted after a manual fix, a narrow run can restore that host without touching the healthy fleet. The playbook remains the same, and the target set carries the operational intent.
+
+## Use serial for Batches
+<!-- section-summary: serial tells Ansible how many selected hosts should move through the play together before the next batch starts. -->
+
+`serial` controls batch size inside the play. If the play targets six hosts and `serial: 2`, Ansible processes two hosts through the play, then moves to the next two. This is the core Ansible rolling-update tool.
+
+```yaml
+- name: Configure orders web fleet
+  hosts: orders_web
+  become: true
+  serial: 2
   tasks:
-    - name: Render checkout virtual host configuration
+    - name: Render orders Nginx site
       ansible.builtin.template:
-        src: checkout.conf.j2
-        dest: /etc/nginx/sites-available/checkout.conf
+        src: orders-nginx.conf.j2
+        dest: /etc/nginx/conf.d/orders.conf
+        owner: root
+        group: root
+        mode: "0644"
       notify: Reload nginx
 ```
 
-Under this configuration, the execution engine divides the checkout web hosts into sequential execution batches:
-- **Batch 1**: Executes the play on exactly 1 host. This is the canary run.
-- **Batch 2**: Executes the play on 50% of the original matched host set. In a four-host play, that means 2 hosts.
-- **Batch 3**: Executes the play on all remaining hosts.
+For a six-host service, `serial: 2` keeps four hosts serving traffic while two restart. That assumes the service has enough capacity, the load balancer drains traffic correctly, and the health check catches broken hosts before the next batch starts. Batch size is a capacity decision as well as an Ansible setting.
 
-This progressive batch rollout updates the fleet in measured steps. The exact capacity left online depends on how many hosts are in the pool, whether the canary run is separate from the full rollout, and how your load balancer drains or removes targets.
+A simple capacity check helps. If six equal web hosts each carry about 17% of traffic, a batch of two removes about a third of capacity during restart. If normal peak traffic already uses 75% of fleet capacity, that batch may overload the remaining hosts. A safer first rollout might use `serial: 1`, drain one host from the load balancer, wait for healthy traffic, and then continue.
 
-## Under the Hood: How Serial Slices the Playbook Queue
-
-The playbook queue is the ordered list of tasks and handlers Ansible needs to run for the selected hosts. `serial` changes the queue from "run each task across all hosts" to "finish the whole play for one batch, then move to the next batch."
-
-Example: with `serial: 1`, Host 1 receives Task 1, Task 2, handlers, and health checks before Host 2 starts. That ordering is what stops a bad change after the first failed batch.
-
-In a normal playbook execution without the `serial` parameter, the engine loops vertically through tasks:
-
-```mermaid
-flowchart LR
-    T1All["Task 1: All Hosts"] --> T2All["Task 2: All Hosts"] --> T3All["Task 3: All Hosts"] --> HAll["Handlers: All Hosts"]
-```
-
-If a playbook uses `serial: 1`, the execution engine slices the matched inventory host array into independent execution subsets (batches) and runs the entire play horizontally from start to finish on the active batch before starting the play for the next batch:
-
-```mermaid
-flowchart LR
-    B1["Batch 1 - Host 1: Task 1 → Task 2 → Task 3 → Handlers → Health Check"]
-    B2["Batch 2 - Host 2: Task 1 → Task 2 → Task 3 → Handlers → Health Check"]
-    B1 --> B2
-```
-
-This horizontal slicing is critical to system safety. The engine completes the play for the active batch before starting the next batch. If the health check fails on Host 1, the playbook stops before later batches are modified.
-
-```mermaid
-graph TD
-    subgraph Parallel ["Parallel Execution (Unsafe)"]
-        T1All["Task 1: All Hosts"]
-        T2All["Task 2: All Hosts"]
-        T1All --> T2All
-    end
-
-    subgraph SerialFlow ["Serial Execution: serial: 1 (Safe)"]
-        B1T1["Batch 1 (Host 1): Task 1"]
-        B1T2["Batch 1 (Host 1): Task 2"]
-        B1Handlers["Batch 1 (Host 1): Handlers"]
-        B1Health["Batch 1 (Host 1): Health Check"]
-
-        B2T1["Batch 2 (Host 2): Task 1"]
-        B2T2["Batch 2 (Host 2): Task 2"]
-
-        B1T1 --> B1T2
-        B1T2 --> B1Handlers
-        B1Handlers --> B1Health
-        B1Health -->|Passed| B2T1
-        B2T1 --> B2T2
-        B1Health -.->|Failed| Terminate["Playbook Aborts Immediately"]
-    end
-```
-
-## The Interaction Between Serial and Strategy Plugins
-
-An execution strategy controls how hosts inside the active batch move through the task list. `serial` controls the batch boundary, while the strategy controls scheduling inside that boundary.
-
-Example: `linear` makes both hosts in a `serial: 2` batch finish Task A before either starts Task B. `free` lets each host move ahead independently, but the next serial batch still waits until the active batch completes.
-
-By default, Ansible uses the `linear` strategy. Under this plugin, the execution engine coordinates tasks across all hosts inside the active batch simultaneously. The engine runs Task A, waits for all batch hosts to report success, then runs Task B.
-
-If you configure the playbook to use the `free` strategy, the engine behaves differently:
+`serial` can also use staged lists. This pattern starts with one host, moves to two hosts, and then takes larger batches after the first evidence is good. It writes the rollout shape directly into the play:
 
 ```yaml
-- name: Deploy Checkout Fleet in Free Strategy
-  hosts: checkout_web
-  strategy: free
-  serial: 2
+serial:
+  - 1
+  - 2
+  - "50%"
 ```
 
-In the `free` strategy, Ansible allows each host to run through the entire task list as fast as it can, without waiting for other hosts.
+That shape fits production changes where the first host is the highest-risk moment. Once the canary and the first small batch pass, the team may accept a larger batch for the rest of the fleet.
 
-However, when `serial` is combined with `free`, Ansible still respects batch boundaries. Even though Host 1 and Host 2 in Batch 1 execute their tasks at different speeds, Batch 2 does not begin until the active batch has completed. This boundary helps preserve your rollout blast radius.
+One detail matters with `run_once`. When `run_once` appears inside a play using `serial`, Ansible runs it once per batch. That is useful for batch-level checks, and surprising for one-time global actions like a database migration. For truly global work, use a separate play or a condition that targets one specific host from the full play host list.
 
-## The Timing of Change: Handlers and Flushing Boundaries
+## Health Checks Between Batches
+<!-- section-summary: Batch safety depends on checks that prove the current hosts are healthy before Ansible continues to the next hosts. -->
 
-A flush boundary is the point where Ansible runs queued handlers. In a rollout, handler timing matters because health checks should test the newly reloaded service, not the old process still running in memory.
+A batch boundary only helps when the playbook validates the batch before continuing. A service restart followed by no health check is just slower risk. The play should prove that the app is running and ready before the next batch starts.
 
-Example: after rendering `checkout.conf`, a `meta: flush_handlers` task can force Nginx to reload before the play checks `http://127.0.0.1:8443/healthz`. By default, Ansible queues all notified handlers and executes them at the very end of the play.
-
-However, in a serial rollout, this default behavior introduces a severe operational vulnerability. If the playbook renders the checkout configuration file, registers the `Reload nginx` notification, and immediately executes a health check task, the health check will run against the old Nginx process state because the reload handler is still queued in memory. The health check will pass, and the play will proceed to the next batch. Only at the end of the play will the handlers reload Nginx, exposing a configuration error after the playbook has already approved the rollout.
-
-To eliminate this timing vulnerability, you must force queued handlers to run immediately using the `meta: flush_handlers` directive before executing your health checks:
+For local service health, call the host's own endpoint:
 
 ```yaml
-- name: Render Nginx virtual host site configuration
-  ansible.builtin.template:
-    src: checkout.conf.j2
-    dest: /etc/nginx/sites-available/checkout.conf
-  notify: Reload nginx
-
-- name: Flush handlers to reload Nginx immediately
+- name: Flush restart before health check
   ansible.builtin.meta: flush_handlers
 
-- name: Execute web port health validation check
+- name: Check local orders health
   ansible.builtin.uri:
-    url: http://127.0.0.1:8443/healthz
-    status_code: 200
-```
-
-By placing the `ansible.builtin.meta: flush_handlers` task between the template render and the health check, the control plane immediately executes the queued reload task. The subsequent health check task evaluates the active service state after the reload attempt, so the rollout proceeds only if the new configuration is actually serving traffic.
-
-## Designing Robust Application Health Checks
-
-An application health check is a read-only test that proves the changed service can actually handle a normal request. It should check useful behavior, not only whether a process exists.
-
-Example: `GET http://127.0.0.1:8080/healthz` with status `200` proves more than `systemctl is-active app`, because the endpoint can verify routing, database connection setup, or basic dependency readiness.
-
-A robust health check must query the application endpoint locally over HTTP and assert that the application can execute standard system functions successfully.
-
-The following task validates the local checkout health endpoint, implementing a retry loop to allow the application process time to complete its startup sequence:
-
-```yaml
-- name: Verify that checkout API is responding on localhost
-  ansible.builtin.uri:
-    url: http://127.0.0.1:8080/healthz
+    url: "http://127.0.0.1:8080/health"
     status_code: 200
     return_content: false
-  register: checkout_health_check
-  until: checkout_health_check.status == 200
-  retries: 10
-  delay: 3
+  register: orders_health
   changed_when: false
 ```
 
-The parameters in this check establish a safe operational boundary:
-- **`status_code: 200`**: Verifies that the endpoint returned a successful HTTP 200 response rather than an HTTP 500 or 502 error.
-- **`retries: 10` and `delay: 3`**: Instructs the task to loop up to 10 times, waiting 3 seconds between attempts. This gives the application process up to 30 seconds to initialize database connection pools before reporting a failure.
-- **`until: checkout_health_check.status == 200`**: Directs the loop to succeed and exit immediately as soon as the API becomes healthy.
-- **`changed_when: false`**: Prevents the read-only HTTP request from reporting a false `changed` state in the playbook run recaps.
+`meta: flush_handlers` matters because handlers normally run later. If a template changed and notified a restart, the health check should observe the restarted service after it has consumed the new config.
 
-## Load Balancer Integration and Target Status Checking
+For load-balanced services, local health may be only half of the story. The load balancer also needs to see the host as healthy before traffic can return. That check often runs from the control node or a dedicated admin host because the app host may not have credentials or network access to query the load balancer API.
 
-Load balancer target status is the routing system's view of whether a host should receive user traffic. A local health check proves the process works on the host, but the load balancer check proves the network path to that host is healthy.
-
-Example: a checkout process can return `200` on `localhost`, but still be marked unhealthy by the load balancer if port `8443` is blocked by a host firewall or cloud security rule.
-
-A truly robust canary check should query the load balancer's API to confirm that the server is reporting a `healthy` target status before the playbook starts modifying the next batch:
+Production teams often pair local checks with an outside signal. The playbook can prove `http://127.0.0.1:8080/health`, while the release checklist checks load balancer health, error-rate dashboards, or a synthetic checkout request. Local readiness tells you the process is up. External health tells you users can reach it through the real path.
 
 ```yaml
-- name: Wait for checkout server to report healthy in target group
+- name: Wait for current host to be healthy in the load balancer
   ansible.builtin.command:
-    argv:
-      - aws
-      - elbv2
-      - describe-target-health
-      - --target-group-arn
-      - "{{ checkout_target_group_arn }}"
-      - --targets
-      - "Id={{ ansible_facts['instance_id'] }},Port=8443"
-  delegate_to: localhost
-  register: target_health_raw
-  until: >
-    (target_health_raw.stdout | from_json)
-    .TargetHealthDescriptions[0].TargetHealth.State == "healthy"
-  retries: 15
-  delay: 10
+    cmd: "lbctl target-health --service orders --host {{ inventory_hostname }}"
+  delegate_to: lb-admin-01
+  register: lb_health
+  changed_when: false
+  failed_when: lb_health.stdout != "healthy"
+```
+
+This task belongs to the current app host in the output, but it runs on `lb-admin-01`. That gives the rollout a clean per-host story: update this host, restart this host, prove the local app is healthy, prove the load balancer sees it as healthy, then move to the next host.
+
+## Failure Thresholds and Handler Timing
+<!-- section-summary: Failure controls decide when the play should stop, and handler timing decides whether changed hosts finish their restart path before validation. -->
+
+By default, Ansible stops running tasks on a host after a task fails on that host and continues with other hosts. During a production rollout, that default may be too loose. If one host in a small batch fails a health check, continuing to the next batch can spread the same bad change.
+
+Use `any_errors_fatal: true` when one host failure should stop the whole play. This fits changes where a single failure suggests a shared playbook or artifact problem.
+
+```yaml
+- name: Configure orders web fleet
+  hosts: orders_web
+  become: true
+  serial: 2
+  any_errors_fatal: true
+```
+
+Use `max_fail_percentage` when a small number of failures is acceptable but a larger rate should stop the rollout. Be careful with small batches because percentages can be unintuitive. With `serial: 2`, one failed host is already half the batch.
+
+```yaml
+- name: Configure orders web fleet
+  hosts: orders_web
+  become: true
+  serial: 2
+  max_fail_percentage: 0
+```
+
+Handlers deserve attention in failure paths. A task can render a config file and notify a handler, then a later task can fail before handlers run. That can leave a host with changed files and an old service process. Use `meta: flush_handlers` before health checks, and consider `force_handlers` only when the team understands that it can run notified handlers even after later task failures.
+
+```yaml
+- name: Validate Nginx config before reload
+  ansible.builtin.command:
+    cmd: nginx -t
+  register: nginx_validate
+  changed_when: false
+  failed_when: nginx_validate.rc != 0
+
+- name: Flush safe reload after validation
+  ansible.builtin.meta: flush_handlers
+```
+
+This ordering gives the rollout a better failure story. Render the file, validate the config, then reload and check health. If validation fails, Ansible stops before reloading Nginx with a broken config.
+
+## Concurrency Controls
+<!-- section-summary: forks, throttle, order, and delegation shape how much work Ansible attempts at once inside and around serial batches. -->
+
+`serial` controls host batch size. Other controls shape concurrency inside that batch. The most visible one is `forks`, which controls how many hosts Ansible can work on in parallel from the control node.
+
+```bash
+ansible-playbook \
+  -i inventories/prod \
+  orders.yml \
+  --limit orders_web \
+  --forks 10
+```
+
+If `serial: 2`, the serial batch still caps that play at two hosts at once. The serial batch is the tighter boundary. Forks still matter across broader plays and across tasks that target larger host sets.
+
+`throttle` limits a specific task or block. This helps when a task calls a rate-limited API, uses a shared admin host, or performs a heavier operation than the rest of the play.
+
+```yaml
+- name: Query load balancer target health
+  ansible.builtin.command:
+    cmd: "lbctl target-health --service orders --host {{ inventory_hostname }}"
+  delegate_to: lb-admin-01
+  throttle: 1
+  register: lb_health
   changed_when: false
 ```
 
-By querying the cloud load balancer target group with the provider API or an appropriate collection module, you verify that the local application process is active and accepting connections, that Nginx is listening and correctly routing traffic, that the host-level firewall and cloud security groups permit incoming requests, and that the load balancer has completed its own health checks and marked the node active to receive customer traffic. Only after all of these conditions are confirmed does the playbook proceed to the next batch.
+`order` controls which hosts Ansible chooses first from the selected set. This can be useful when you want a stable or sorted order, but a named canary through `--limit` is usually clearer than relying on inventory ordering for the first production host.
 
-## Failure Boundaries and the max_fail_percentage Algorithm
+Delegation can create hidden concurrency. If every app host delegates a load balancer task to the same admin host, that admin host receives multiple operations. `serial` and `throttle` keep that from becoming an accidental burst.
 
-`max_fail_percentage` is a batch failure threshold. It tells Ansible how much failure is acceptable inside the active batch before the rollout should stop.
+## Rollback and Recovery
+<!-- section-summary: Rollback needs a prepared previous state, a target limit, and verification that the recovered hosts are healthy before the rollout resumes. -->
 
-Example: with `serial: 10` and `max_fail_percentage: 20`, two failed hosts in a batch of ten can be tolerated, but a third failure stops the play before the next batch begins. In larger clusters, this lets teams use larger batch sizes without ignoring failure patterns.
+Rollback should be planned before the first apply. For the orders Nginx config, rollback might mean reverting the config change commit and rerunning the playbook against the failed host or batch. For a package deployment, rollback may mean pinning the previous package version and rerunning the role. For a database migration, rollback may require a separate database recovery plan.
 
-When deploying in larger batches, a single host failure should not necessarily halt the entire play if the remaining hosts in the active batch deploy successfully. To control this tolerance, Ansible provides the `max_fail_percentage` parameter.
+A simple config rollback command uses the same narrow target:
 
-```yaml
-- name: Deploy Web Fleet Configuration
-  hosts: web_fleet
-  become: true
-  serial: 10
-  max_fail_percentage: 20
-  tasks:
-    - name: Apply standard package updates
-      ansible.builtin.apt:
-        name: ["curl", "sysstat"]
-        state: latest
+```bash
+git revert <change-commit>
+
+ansible-playbook \
+  -i inventories/prod \
+  orders.yml \
+  --limit orders-web-01 \
+  --vault-id prod@prompt
 ```
 
-Under this configuration, the execution engine monitors failures within each active batch of 10 hosts:
-1. **Calculation**: If 2 out of 10 hosts fail during a task in the active batch, the failure ratio is exactly 20%.
-2. **Evaluation**: Because the failure percentage does not exceed the `max_fail_percentage` threshold of 20%, the control plane permits the play to continue on the 8 remaining healthy hosts.
-3. **Execution**: If a third host fails, pushing the failure ratio to 30%, the engine triggers an immediate abort. The entire play terminates, preventing the subsequent batch of 10 hosts from being modified.
+If a batch fails after two hosts changed, keep the rollback target to that batch first. Restore those hosts, verify health, then decide whether to pause the rollout or fix forward. Avoid jumping straight back to the whole group while the failure cause is still unclear.
 
-This math-based failure boundary allows teams to deploy across large fleets quickly while stopping the rollout when failures exceed the tolerance you configured.
+Ansible blocks can make local recovery clearer. A block can drain a host, update it, and re-add it to the load balancer. A rescue section can try to re-enable the host or leave a clear failure message when the update fails.
 
-## Stateless versus Stateful Rollout Strategies
+```yaml
+- name: Update one orders host with load balancer recovery
+  block:
+    - name: Disable current host in load balancer
+      ansible.builtin.command:
+        cmd: "lbctl disable --service orders --host {{ inventory_hostname }}"
+      delegate_to: lb-admin-01
 
-Stateless services can lose or replace an individual host without losing durable data, while stateful services store important data or cluster membership that must be coordinated. Rollout strategy depends on which kind of service you are changing.
+    - name: Render orders Nginx site
+      ansible.builtin.template:
+        src: orders-nginx.conf.j2
+        dest: /etc/nginx/conf.d/orders.conf
+      notify: Reload nginx
 
-Example: a checkout web node behind a load balancer can usually be drained, restarted, and returned to service. A database node may need replication checks, failover planning, and cluster-manager commands before restart.
+    - name: Flush reload before validation
+      ansible.builtin.meta: flush_handlers
 
-### Stateless Application Servers
+    - name: Check local orders health
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:8080/health"
+        status_code: 200
+      changed_when: false
 
-Stateless application servers do not keep the only copy of important user or business data on the host. They can usually be removed from traffic, updated, checked, and returned to traffic one batch at a time.
+    - name: Enable current host in load balancer
+      ansible.builtin.command:
+        cmd: "lbctl enable --service orders --host {{ inventory_hostname }}"
+      delegate_to: lb-admin-01
+  rescue:
+    - name: Keep failed host out of load balancer
+      ansible.builtin.command:
+        cmd: "lbctl disable --service orders --host {{ inventory_hostname }}"
+      delegate_to: lb-admin-01
+```
 
-Stateless services, such as checkout web nodes or frontend APIs, are highly tolerant to rolling updates. Because the hosts do not store persistent data, you can reload, replace, or reboot individual hosts sequentially using `serial: 1` or `serial: "25%"` without risking data corruption.
-
-The only constraint is maintaining load balancer capacity to prevent overloading the remaining online servers.
-
-### Stateful Database Clusters
-
-Stateful services keep data, ownership, or cluster coordination state that must stay consistent during maintenance. Updating one node can affect leadership, replication, or quorum for the whole system.
-
-Stateful services, such as relational database clusters or distributed cache stores like Redis or Elasticsearch, require strict rollout boundaries. If you apply a database package upgrade using `serial: 1` without coordinating the cluster state, restarting the first database node can trigger automatic master failovers, split-brain scenarios, or replication lag, degrading the entire system.
-
-For stateful services, the playbook must coordinate with the cluster manager, pausing replication, upgrading the secondary nodes first, executing failover commands, and verifying data synchronization before starting the next host, making explicit playbook orchestration far safer than simple serial batch loops.
+The rescue path should match your service design. Some teams prefer leaving a failed host out of rotation until a person investigates. Others prefer rolling back the local config and re-enabling the host automatically. The playbook should make that policy visible.
 
 ## Putting It All Together
+<!-- section-summary: A production rollout combines a canary limit, serial batches, handler flushes, service checks, load balancer checks, and stop conditions. -->
 
-Controlled execution boundaries are essential to protecting production environments from cluster-wide downtime. While dry runs provide valuable review evidence, rolling deployments with batch limits, flushed handlers, and local health checks are required to deploy changes safely.
+Here is a complete rollout shape for the orders web fleet:
 
-By coordinating these execution boundaries, you establish a multi-layered deployment strategy:
+```yaml
+- name: Roll orders web safely
+  hosts: orders_web
+  become: true
+  serial:
+    - 1
+    - 2
+    - "50%"
+  any_errors_fatal: true
+  tasks:
+    - name: Disable current host in load balancer
+      ansible.builtin.command:
+        cmd: "lbctl disable --service orders --host {{ inventory_hostname }}"
+      delegate_to: lb-admin-01
+      throttle: 1
 
-| Deployment Phase | Control Tool | Operational Mechanism | Architectural Purpose |
-| :--- | :--- | :--- | :--- |
-| **Canary Auditing** | Command Line `--limit` | Restricts eligible hosts to a single target server | Verifies configuration variables on a single host, keeping the remaining cluster safe. |
-| **Rolling Rollouts** | Playbook `serial` | Slices the inventory host array into sequential batches | Upgrades the fleet in measured steps while preserving capacity targets you have calculated. |
-| **Timing Coordination** | `meta: flush_handlers` | Forces queued handlers to run immediately | Restarts processes and reloads services before downstream health assertions run. |
-| **State Verification** | Local HTTP checks | Queries `/healthz` local endpoints with retry loops | Confirms the new process can connect to dependencies before approving the batch. |
-| **Routing Validation** | Load Balancer Check | Queries cloud target group APIs using instance metadata | Confirms the node is successfully registered and actively receiving public client traffic. |
-| **Failure Protection** | `max_fail_percentage` | Monitored failure ratio thresholds inside active batches | Stops the play if failures exceed high-availability tolerances. |
+    - name: Render orders Nginx site
+      ansible.builtin.template:
+        src: orders-nginx.conf.j2
+        dest: /etc/nginx/conf.d/orders.conf
+        owner: root
+        group: root
+        mode: "0644"
+      notify: Reload nginx
 
-By enforcing these deployment boundaries, you transform automated configurations into a more reliable infrastructure platform, helping your e-commerce applications remain active, performant, and secure across deployment lifecycles.
+    - name: Validate Nginx config
+      ansible.builtin.command:
+        cmd: nginx -t
+      register: nginx_validate
+      changed_when: false
+      failed_when: nginx_validate.rc != 0
+
+    - name: Flush reload before health checks
+      ansible.builtin.meta: flush_handlers
+
+    - name: Check local orders health
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:8080/health"
+        status_code: 200
+        return_content: false
+      changed_when: false
+
+    - name: Enable current host in load balancer
+      ansible.builtin.command:
+        cmd: "lbctl enable --service orders --host {{ inventory_hostname }}"
+      delegate_to: lb-admin-01
+      throttle: 1
+
+    - name: Confirm load balancer sees current host healthy
+      ansible.builtin.command:
+        cmd: "lbctl target-health --service orders --host {{ inventory_hostname }}"
+      delegate_to: lb-admin-01
+      register: lb_health
+      changed_when: false
+      failed_when: lb_health.stdout != "healthy"
+
+  handlers:
+    - name: Reload nginx
+      ansible.builtin.service:
+        name: nginx
+        state: reloaded
+```
+
+The first command can still use a narrow canary limit:
+
+```bash
+ansible-playbook -i inventories/prod orders.yml --limit orders-web-01 --vault-id prod@prompt
+```
+
+After the canary passes, the same playbook can continue through the group with its own serial stages:
+
+```bash
+ansible-playbook -i inventories/prod orders.yml --limit 'orders_web:!orders-web-01' --vault-id prod@prompt
+```
+
+That is the safety stack in order. Preview the change, apply it to one host, roll through controlled batches, validate each batch, and stop when the evidence says stop. Ansible gives you the controls, and the production process decides how strict they should be.
+
+## What's Next
+
+So far the safety discussion has focused on what Ansible changes and how quickly it changes hosts. The next article asks where a task actually runs. That matters because load balancer calls, artifact checks, API updates, and local validation often belong on the control node or a delegated host rather than on the app server being updated.
 
 ---
 
 **References**
 
-- [Ansible Playbook Serial Guide](https://docs.ansible.com/ansible/latest/playbook_guide/playbooks_strategies.html#controlling-playbook-execution-strategies-and-more)
-- [Managing Handlers and Meta Tasks](https://docs.ansible.com/ansible/latest/playbook_guide/playbooks_handlers.html)
-- [Ansible Error Handling: max_fail_percentage](https://docs.ansible.com/ansible/latest/playbook_guide/playbooks_error_handling.html#setting-a-maximum-failure-percentage)
-- [Targeting Hosts with Limit Patterns](https://docs.ansible.com/ansible/latest/inventory_guide/intro_patterns.html)
+- [Controlling playbook execution: strategies and more](https://docs.ansible.com/projects/ansible/latest/playbook_guide/playbooks_strategies.html) - Documents `serial`, `throttle`, `order`, `run_once`, and execution strategy behavior.
+- [ansible-playbook](https://docs.ansible.com/projects/ansible/latest/cli/ansible-playbook.html) - Command reference for `--limit`, `--forks`, inventory selection, and playbook execution flags.
+- [Error handling in playbooks](https://docs.ansible.com/projects/ansible/latest/playbook_guide/playbooks_error_handling.html) - Covers `any_errors_fatal`, `max_fail_percentage`, handler behavior, `failed_when`, and block rescue handling.
+- [Controlling where tasks run: delegation and local actions](https://docs.ansible.com/projects/ansible/latest/playbook_guide/playbooks_delegation.html) - Explains `delegate_to`, load balancer orchestration examples, and delegated task behavior.
+- [Validating tasks: check mode and diff mode](https://docs.ansible.com/projects/ansible/latest/playbook_guide/playbooks_checkmode.html) - Provides the preview step that usually comes before a controlled rollout.

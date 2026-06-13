@@ -11,159 +11,252 @@ aliases:
 
 ## Table of Contents
 
-1. [The Problem](#the-problem)
-2. [The Failure of Informal Text Checklists](#the-failure-of-informal-text-checklists)
-3. [The Concept of the Executable Runbook](#the-concept-of-the-executable-runbook)
-4. [Designing Idempotent Deployment Scripts](#designing-idempotent-deployment-scripts)
-5. [Automating Post-Deployment Verification (Smoke Tests)](#automating-post-deployment-verification-smoke-tests)
-6. [Pre-Flight and Post-Flight Checklists in Version Control](#pre-flight-and-post-flight-checklists-in-version-control)
+1. [Why Runbooks Finish the Module](#why-runbooks-finish-the-module)
+2. [From Checklist to Executable Runbook](#from-checklist-to-executable-runbook)
+3. [Pre-Flight Checks](#pre-flight-checks)
+4. [Idempotent Deployment Steps](#idempotent-deployment-steps)
+5. [Post-Flight Verification](#post-flight-verification)
+6. [Human Gates and Automation Boundaries](#human-gates-and-automation-boundaries)
 7. [Putting It All Together](#putting-it-all-together)
 
-## The Problem
+## Why Runbooks Finish the Module
+<!-- section-summary: A runbook turns deployment strategy decisions into repeatable steps that work during normal releases and incidents. -->
 
-Coordinating complex software releases across distributed staging and production infrastructures introduces severe human and scheduling variables. When engineering organizations rely on informal, undocumented, and manual release procedures, they encounter critical operational failures:
+This module has built a release toolbox. Rolling deployments replace instances in waves. Blue-green deployments switch between full environments. Canary deployments expose a new version slowly. Rollback and roll-forward decisions restore service when a release fails. Environment promotion makes sure the same artifact moves through gates.
 
-* **The Out-of-Order Migration Outage**: A development group coordinates a complex database migration at midnight. The release instructions are written in an informal shared document. Under pressure, the operator accidentally skips step four (disabling database table write-locks) and executes step five (running the column transition script) out of order. The table locks immediately, database connections exhaust, and the active production service crashes, corrupting checkout records.
-* **The Blind Pipeline Green-Light**: A CI/CD deployment pipeline executes successfully, and the dashboard marks the deployment green. However, because the system has no automated verification checks, no one realizes that a minor network routing typo has blocked the backend API container port. Users are greeted with connection gateway timeout errors, while the operations team remains unaware of the outage for thirty minutes because the core container process itself is technically running.
-* **The Missing Backup Disasters**: A platform team triggers a major schema update. Halfway through the migration, the database host crashes. The team attempts to roll back but discovers that the pre-deployment backup script was never executed because the manual release checklist forgot to declare a backup confirmation gate.
+A **deployment runbook** turns all of that into a repeatable operating procedure. It explains what the team checks before release, what the automation runs, what evidence the release must produce, when a human approves, when the system stops, and how the team recovers.
 
-These crises demonstrate that release procedures must be codified as version-controlled, repeatable, and executable code.
+The runbook matters because production releases happen under time pressure. A person who knows the system well may be tired, distracted, or covering an incident. A new team member may need to run the release while the usual release owner is away. A written checklist helps, but a checklist that lives only in a wiki can drift away from the real scripts.
 
-## The Failure of Informal Text Checklists
+The strongest runbooks live close to the code and pipeline. They are versioned, reviewed, tested in lower environments, and automated where automation makes the result safer. For the checkout API, the runbook should describe how to promote one image digest, deploy it through the selected rollout pattern, verify checkout behavior, and recover if the signals fail.
 
-In the early years of system administration, deployments were guided by text-based checklists stored in shared wikis, emails, or text files. The release process involved an operator SSHing into a server, copy-pasting commands from the document, and manually checking off items.
+The first step is moving from an informal checklist to something the pipeline can execute and audit.
 
-This practice introduces three severe operational failures:
+## From Checklist to Executable Runbook
+<!-- section-summary: An executable runbook combines human-readable intent with scripts and pipeline jobs that perform the release. -->
 
-1. **Human Misinterpretation**: A command written as `rm -rf cache/*` is easily mistyped by a tired operator at 2 AM as `rm -rf cache *`, which deletes the entire root application directory. Loose text instructions depend heavily on the operator's experience and stress levels.
-2. **Configuration Parity Drift**: The shared text document is rarely tested in staging. Over time, the commands listed in the wiki drift from the actual code base dependencies and server variables, leading to unexpected command failures during live releases.
-3. **No Rollback Validation**: Text checklists focus almost entirely on the "happy path" of forward progress. They rarely document the exact command sequences needed to revert changes if a specific step fails, leaving operators to improvise under high-stress outage conditions.
+A text checklist usually says things like "deploy the new image" or "check the logs." That can help, but it leaves too much interpretation for a stressful moment. Which image? Which environment? Which log query? Which metric threshold? Which rollback command?
 
-To eliminate human error, release steps must be taken out of human hands. We must transition from descriptive documents to **Executable Runbooks**.
+An **executable runbook** keeps the human explanation, but the actual operations point to scripts, pipeline jobs, or commands with clear inputs. The runbook becomes the bridge between people and automation.
 
-## The Concept of the Executable Runbook
+Here is a compact runbook shape for the checkout API:
 
-An **Executable Runbook** is a version-controlled, automated script or configuration manifest committed directly to the application repository. It defines every operational step—pre-flight checks, database migrations, configuration changes, and rollback paths—in code.
+```yaml
+service: checkout-api
+release:
+  artifact_input: image_digest
+  rollout_pattern: canary
+  owner: payments-platform
 
-Under this model, the human operator does not copy-paste commands manually. The operator triggers a single execution command or runs a CI/CD job that executes the runbook script.
+preflight:
+  - name: verify artifact exists
+    command: ./scripts/verify-image.sh "$IMAGE_DIGEST"
+  - name: verify staging evidence
+    command: ./scripts/check-staging-release.sh "$IMAGE_DIGEST"
+  - name: verify migration state
+    command: ./scripts/check-migration-compatibility.sh
 
-```mermaid
-flowchart TD
-    Runbook["Executable Runbook<br/>(Git Versioned Script)"] -->|1. Pre-Flight Checks| Gate["Schema & Backup Gates"]
-    Gate -->|2. Execution| Migrate["Run Idempotent Migrations"]
-    Migrate -->|3. Verification| Smoke["Auto Smoke Tests"]
-    Smoke -->|Success| Complete["Rollout Complete"]
-    Smoke -->|Failure| Rollback["Auto Rollback Script"]
+deploy:
+  - name: start canary
+    command: ./scripts/deploy-canary.sh checkout-api "$IMAGE_DIGEST" 1
+  - name: watch first window
+    command: ./scripts/watch-canary.sh checkout-api 10m
+
+postflight:
+  - name: smoke test checkout
+    command: ./scripts/smoke-checkout.sh production
+  - name: record release
+    command: ./scripts/record-release.sh checkout-api "$IMAGE_DIGEST"
+
+rollback:
+  command: ./scripts/rollback-checkout.sh
+  trigger: "failed canary gate or severe checkout error spike"
 ```
 
-### The Rule of Idempotency
+![Executable deployment runbook showing pre-flight, deploy, post-flight, rollback, production service, and release record](/content-assets/articles/article-cicd-deployment-strategies-deployment-runbooks-and-release-automation/executable-runbook-flow.png)
 
-The absolute requirement of any executable runbook script is **Idempotency**. An operation is idempotent if running it multiple times yields the exact same system state without causing side-effects, errors, or data corruption.
+*An executable runbook keeps the human-readable release plan tied to scripts, pipeline jobs, rollback automation, and release evidence.*
 
-If a runbook script is interrupted halfway through due to a network blip, the operator must be able to re-run the exact same script from the beginning. The script must inspect the active system state and safely skip already-completed steps without attempting to recreate existing databases or duplicate records.
+This is still readable by humans, but it removes guesswork. The scripts hold the operational details. The pipeline can call the same scripts. Reviewers can see when the release process changes because the runbook and scripts live in version control.
 
-Let's look at the difference between a fragile, non-idempotent script and a robust, idempotent script in shell execution:
+GitHub Actions and other CI/CD systems can run repository scripts as workflow steps. That means a runbook can become a real pipeline instead of a separate document. The next question is what the runbook should check before touching production.
 
-#### Non-Idempotent (Fragile)
+## Pre-Flight Checks
+<!-- section-summary: Pre-flight checks catch missing release inputs before production traffic changes. -->
 
-```bash
-# Will crash if folder already exists, halting the entire pipeline
-mkdir production_cache
-tar -xf assets.tar.gz -C production_cache/
-```
+**Pre-flight checks** run before deployment starts. They answer, "Do we have the required evidence and safe starting conditions?" These checks should fail quickly. A pre-flight failure is much cheaper than a half-finished production release.
 
-#### Idempotent (Safe & Re-runnable)
+For the checkout API, pre-flight should check four areas:
 
-```bash
-# Safe to run repeatedly; checks state before taking action
-if [ ! -d "production_cache" ]; then
-    mkdir -p production_cache
-fi
-tar --skip-old-files -xf assets.tar.gz -C production_cache/
-```
+| Area | Example check | Why it matters |
+|---|---|---|
+| Artifact | The image digest exists and has a passing build record. | The pipeline should deploy a known artifact. |
+| Environment | Production cluster, database, load balancer, and secrets are reachable. | The release should wait during obvious platform trouble. |
+| Data compatibility | Pending migrations are additive or already applied safely. | Rollback should stay available. |
+| Change coordination | No other checkout deployment is running. | Checkout releases should run one at a time. |
 
-Writing runbooks using idempotent tools (such as Ansible, Terraform, or robust shell checks) ensures that deployments can recover gracefully from transient infrastructure interruptions.
-
-## Automating Post-Deployment Verification (Smoke Tests)
-
-A pipeline is not complete when the container orchestrator reports that the task is running. To guarantee delivery safety, the runbook must execute automated **Smoke Tests** immediately post-rollout before releasing the pipeline.
-
-A smoke test is a fast, automated test suite that queries the live production endpoints to verify that all vital application components are fully functional:
-
-* **Internal Port Check**: Confirms the container is listening on the expected port.
-* **Database Write Check**: Executes a temporary database write and read to verify database connection pool viability.
-* **External API Handshake**: Validates that external payment or messaging API gateways are reachable.
-
-Let's look at a clean, idempotent shell script that executes an automated post-deployment smoke test immediately after a release:
+Here is a simple artifact verification script:
 
 ```bash
-#!/bin/bash
+#!/usr/bin/env bash
 set -euo pipefail
 
-TARGET_URL="https://orders-api.example.com/health"
-MAX_ATTEMPTS=5
-TIMEOUT_SEC=5
+image_digest="${1:?image digest required}"
+service="checkout-api"
 
-echo "Starting post-deployment smoke tests against ${TARGET_URL}..."
-
-for ((attempt=1; attempt<=MAX_ATTEMPTS; attempt++)); do
-    # Queries the live health API check
-    RESPONSE=$(curl --silent --show-error --write-out "%{http_code}" --max-time "$TIMEOUT_SEC" "$TARGET_URL" -o /dev/null || true)
-    
-    if [ "$RESPONSE" -eq 200 ]; then
-        echo "SUCCESS: Smoke test passed on attempt ${attempt}."
-        exit 0
-    else
-        echo "WARNING: Attempt ${attempt}/${MAX_ATTEMPTS} returned HTTP ${RESPONSE}. Retrying..."
-        sleep 5
-    fi
-done
-
-echo "ERROR: Smoke tests FAILED after ${MAX_ATTEMPTS} attempts."
-exit 1
+./scripts/registry-has-digest.sh "$service" "$image_digest"
+./scripts/attestation-verify.sh "$service" "$image_digest"
+./scripts/release-evidence.sh "$service" "$image_digest" --require-staging-pass
 ```
 
-Integrating this script into the deployment pipeline ensures that if the new containers are running but cannot reach the database, the smoke test fails, halting the pipeline and triggering an automated rollback before real users ever encounter the issue.
+The script fails if any required evidence is missing. That is exactly what we want. A production release should stop before traffic changes if the artifact never passed staging or if provenance verification fails.
 
-## Pre-Flight and Post-Flight Checklists in Version Control
+Pre-flight checks should also include a human-readable release note. The note can stay short. It should say what changed, what risk the team sees, which deployment pattern will run, and which rollback path is available. That context helps approvers make a real decision instead of clicking a button from habit.
 
-While scripts automate execution, certain manual coordination tasks (such as business sign-offs, marketing alerts, or third-party provider calls) cannot be fully coded. 
+After pre-flight passes, the runbook needs deployment steps that can tolerate retries. That brings us to idempotency.
 
-To bridge this gap, platform teams commit structured, version-controlled **Pre-Flight and Post-Flight Checklists** inside the application repository as markdown files (`docs/releases/release-playbook.md`).
+## Idempotent Deployment Steps
+<!-- section-summary: Idempotent steps can run more than once safely, which makes retries and recovery less dangerous. -->
 
-An operational release checklist must be highly specific, structured, and auditable:
+**Idempotent** means running the same operation more than once leaves the system in the same intended state. Deployment steps should be idempotent because pipelines fail halfway, network calls time out, and humans may rerun a job during an incident.
 
-### Pre-Deployment Checklist (Pre-Flight)
+Here is a non-idempotent example. A script creates a new target group every time it runs, then attaches the service to that target group. If the first run times out after creating the target group, the second run creates another one. Soon the load balancer has several unused target groups and the operator has to figure out which one is real.
 
-* `[ ]` **Backup Verification**: Verify that the automated pre-migration database snapshot was created successfully and is healthy.
-* `[ ]` **Schema Compatibility**: Confirm that the database expand schema script has been pre-run and verified on the staging environment.
-* `[ ]` **Secrets Audit**: Confirm that all new environment variables required by the new release are registered in the production secrets vault.
+An idempotent script names resources from stable inputs and checks existing state:
 
-### Post-Deployment Checklist (Post-Flight)
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
 
-* `[ ]` **Smoke Test Validation**: Confirm that the automated smoke test suite executed successfully with zero error exits.
-* `[ ]` **Telemetry Soak**: Monitor the stable p95 latency and 5xx error rate comparison dashboards for exactly 15 minutes post-swap.
-* `[ ]` **Idle Tear-down**: De-provision and destroy the inactive staging/Blue environment to prevent resource waste.
+service="checkout-api"
+image_digest="${1:?image digest required}"
+release_id="$(./scripts/release-id-from-digest.sh "$image_digest")"
+target_group="checkout-api-${release_id}"
 
-Committing this playbook alongside the code ensures that the release checklists are subjected to code review, remain perfectly in sync with the codebase state, and are tested thoroughly in staging replica environments before ever being executed in production.
+if ! ./scripts/target-group-exists.sh "$target_group"; then
+  ./scripts/create-target-group.sh "$target_group"
+fi
+
+./scripts/render-task-definition.sh "$service" "$image_digest" > task-definition.json
+./scripts/register-task-definition.sh task-definition.json
+./scripts/update-service-canary.sh "$service" "$target_group" --weight 1
+```
+
+If the script runs twice with the same digest, it aims at the same target group and same task definition content. It avoids creating a pile of duplicate resources. The operation converges toward the desired release state.
+
+Good idempotent deployment scripts usually follow this pattern:
+
+| Step | Behavior |
+|---|---|
+| Read current state | Query the platform before changing it. |
+| Compare desired state | Check whether the intended resource already exists. |
+| Apply missing changes | Create or update only what differs. |
+| Verify result | Confirm the platform reached the expected state. |
+| Exit clearly | Return success when the desired state exists, even after retry. |
+
+![Idempotent deployment steps showing read state, compare, apply missing, verify, safe retry, and no duplicates](/content-assets/articles/article-cicd-deployment-strategies-deployment-runbooks-and-release-automation/idempotent-deployment-steps.png)
+
+*Idempotent deployment scripts converge on the intended state, so retrying a failed job does not create duplicate release resources.*
+
+Idempotency helps forward deployment and rollback. A rollback script should also tolerate reruns. If traffic already points to the previous healthy version, rerunning rollback should report success instead of creating a new problem.
+
+After deployment steps run, the runbook needs proof that production actually works.
+
+## Post-Flight Verification
+<!-- section-summary: Post-flight verification checks the real service after deployment instead of trusting the pipeline status alone. -->
+
+**Post-flight verification** runs after the deployment changes production. A CI job turning green only proves the pipeline finished its commands. Post-flight checks prove the service from the outside and compare production signals.
+
+For the checkout API, post-flight can include:
+
+| Check | Practical example |
+|---|---|
+| Readiness | Production `/ready` returns success from multiple regions. |
+| Synthetic transaction | A test cart can apply a discount and reach payment sandbox authorization. |
+| Error budget signal | 5xx rate and p95 latency stay within the release threshold. |
+| Business metric | Checkout success rate stays near baseline. |
+| Observability | Logs, metrics, and traces include the new image digest or version. |
+
+Here is a small smoke test script:
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+
+base_url="${1:?base url required}"
+
+curl -fsS "$base_url/ready" > /dev/null
+
+response="$(curl -fsS "$base_url/internal/smoke/checkout" \
+  -H "X-Smoke-Test: true" \
+  -H "Content-Type: application/json" \
+  --data '{"sku":"test-plan","discount":"SMOKE10"}')"
+
+echo "$response" | jq -e '.status == "authorized" and .orderId != null' > /dev/null
+```
+
+The smoke test calls a meaningful path and checks the response shape. It uses test-only inputs and a safe endpoint. It should write enough logs for responders to find the test run later.
+
+Post-flight also needs a watch window. A canary may pass the first smoke test and fail after real traffic hits a less common path. A runbook can require a 30-minute watch for high-risk checkout releases, with specific dashboards and alerts linked in the release record.
+
+The last practical topic is the human boundary. Automation should handle repeatable checks, but some decisions need accountable approval.
+
+## Human Gates and Automation Boundaries
+<!-- section-summary: Good runbooks automate repeatable checks while keeping accountable humans on risky production decisions. -->
+
+A **human gate** is an approval or decision point assigned to a person or group. The goal is accountability and judgment. A human gate helps when the release has business risk, customer communication risk, data migration risk, or unclear signals.
+
+Automation should own checks that machines can judge reliably:
+
+| Automation should decide | Humans should decide |
+|---|---|
+| Artifact exists | Whether a risky change should ship today |
+| Tests passed | Whether degraded but improving metrics are acceptable |
+| Staging smoke test passed | Whether customer support needs a heads-up |
+| Canary threshold failed | Whether to extend the canary watch window |
+| Rollback command succeeded | Whether to open a broader incident |
+
+The runbook should name the owner for each gate. For production checkout releases, the approver might be the release owner plus the payments on-call engineer. GitHub Actions environments can require reviewers before a production deployment job proceeds. Other tools have similar environment approval concepts. The key practice is that approval happens in the same system that records the deployment.
+
+Human gates should have enough context to be useful:
+
+```yaml
+approval_context:
+  service: checkout-api
+  artifact: registry.example.com/checkout-api@sha256:8f3a...
+  change_summary: "new discount calculation path"
+  rollout: "canary 1 -> 5 -> 25 -> 100"
+  rollback: "./scripts/rollback-checkout.sh"
+  data_risk: "expand phase only, old columns remain"
+  support_note: "watch discount-related checkout failures"
+```
+
+This approval record tells the reviewer what they are accepting. It also helps the incident team if the release fails later.
+
+Now the whole module can close as one release system.
 
 ## Putting It All Together
+<!-- section-summary: A complete deployment runbook makes releases repeatable, observable, recoverable, and reviewable. -->
 
-Centralizing release operations inside Git-versioned executable runbooks and automated smoke-test verification suites resolves our manual release risks:
+The checkout team wants to release image digest `sha256:8f3a...`. The runbook starts with pre-flight checks. It verifies the artifact, provenance, staging evidence, migration compatibility, production health, and deployment lock. If any required input is missing, the release stops before production changes.
 
-* **Out-of-Order Migration Outages**: Abstracting database migrations and configuration changes into Git-managed, idempotent scripts ensures that commands execute in the exact correct order every time, eliminating manual human typing mistakes.
-* **Blind Pipeline Green-Lights**: Integrating automated curl-based smoke tests immediately post-deployment ensures that network blocks or startup connection failures are caught instantly, halting the pipeline and triggering rollbacks before user traffic is exposed.
-* **Missing Database Backups**: Enforcing structured pre-flight check gates inside version-controlled markdown playbooks guarantees that database snapshots are confirmed healthy before any migration commands execute.
+The production job waits for the required environment approval. The approval context shows the change summary, rollout pattern, rollback command, data risk, and support note. Once approved, the runbook executes idempotent scripts that deploy the canary at 1%, wait for health, run smoke tests, and watch telemetry.
 
-![Deployment runbook summary showing runbook steps, idempotent actions, smoke tests, pre-flight, post-flight, and automation boundary](/content-assets/articles/article-cicd-deployment-strategies-deployment-runbooks-and-release-automation/deployment-runbook-summary.png)
+The runbook then moves through the canary steps. At each step, automated gates compare canary and baseline metrics. If the canary fails, rollback sets the traffic weight back to the previous healthy version and records the event. If every gate passes, the release reaches 100%, runs post-flight verification, records the release, and keeps the service under a watch window.
 
-*Use this as the runbook checklist: turn release steps into executable actions, make them idempotent, verify with smoke tests, keep pre-flight and post-flight checks in version control, and know where automation should stop for human judgment.*
+This is what deployment strategy looks like in daily production work. The patterns are useful, but the runbook makes them reliable. It gives the team a shared path before the release, during the rollout, and after something goes wrong. The best runbook feels boring because it turns high-pressure work into clear steps with evidence.
+
+![Deployment runbook summary showing pre-flight, approval, rollout, smoke tests, watch window, rollback trigger, and release record](/content-assets/articles/article-cicd-deployment-strategies-deployment-runbooks-and-release-automation/runbook-release-summary.png)
+
+*A complete runbook connects pre-flight evidence, approval, rollout, smoke tests, watch windows, rollback triggers, and the final release record.*
 
 ---
 
 **References**
 
-* [Google Site Reliability Engineering: Automation](https://sre.google/sre-book/automation/) - SRE principles on eliminating manual toil, writing idempotent scripts, and building executable runbooks.
-* [Ansible Documentation: Idempotency](https://docs.ansible.com/ansible/latest/reference_appendices/glossary.html) - Technical definitions and practices for building idempotent, repeatable server playbooks.
-* [Continuous Delivery: Deployment Pipelines](https://refactoring.com/books/continuousDelivery.html) - Standard guides on automating post-deployment smoke tests and release gate orchestrations.
-* [OWASP: Pre-Deployment Security Checklist](https://owasp.org/www-project-web-security-testing-guide/) - Guidelines on pre-flight security validations, backup audits, and permission gates during releases.
+- [GitHub Actions: adding scripts to your workflow](https://docs.github.com/en/actions/how-tos/write-workflows/choose-what-workflows-do/add-scripts) - Shows how workflows run repository scripts and shell commands.
+- [GitHub Actions: deploying to a specific environment](https://docs.github.com/en/actions/how-tos/write-workflows/choose-what-workflows-do/deploy-to-environment) - Documents jobs that target environments and use environment URLs.
+- [GitHub Actions: reviewing deployments](https://docs.github.com/en/actions/how-tos/deploy/configure-and-manage-deployments/review-deployments) - Explains approving or rejecting jobs waiting on deployment review.
+- [Google SRE Workbook: Incident Response](https://sre.google/workbook/incident-response/) - Covers incident roles, clear responsibilities, and structured response.
+- [Prometheus alerting practices](https://prometheus.io/docs/practices/alerting/) - Describes actionable alerting rules that support automated and human release decisions.
+- [SLSA provenance](https://slsa.dev/spec/v1.0/provenance) - Defines provenance information that can connect an artifact to its source and build process.

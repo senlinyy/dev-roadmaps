@@ -1,5 +1,5 @@
 ---
-title: "Compute Mental Model"
+title: "AWS Compute Foundation"
 description: "Choose where application code runs in AWS by matching EC2, ECS with Fargate, and Lambda to the workload shape and team ownership model."
 overview: "Compute is the AWS layer where your application code gets CPU, memory, network access, startup behavior, scaling behavior, and runtime evidence. This article builds the foundation for choosing between server-shaped, container-shaped, and event-shaped compute."
 tags: ["compute", "ec2", "ecs", "fargate", "lambda", "aws"]
@@ -24,6 +24,7 @@ aliases:
 8. [What's Next](#whats-next)
 
 ## The Localhost Execution Illusion
+<!-- section-summary: Local development hides the different runtime shapes that appear when an application reaches AWS. -->
 
 When you run a software application on your local laptop during development, the physical environment that executes your code is simple and unified. The application process runs directly on the laptop guest operating system, binds to a local port like `3000`, writes logs directly to standard output or a local file on your hard drive, and reads environment configurations from a local dotenv file. If the process crashes, you press a key to restart it, and if it runs out of memory, you simply close unrelated personal browser tabs to free up resources.
 
@@ -33,9 +34,10 @@ However, once you are ready to host that application in the cloud for real users
 * A specialized enterprise fraud-detection worker that intercepts network packets via a custom-compiled Linux kernel module (`sec-audit.ko`) to analyze socket buffers in kernel space, and uses a vendor license that expects stable host-level identifiers or dedicated host placement.
 * Nightly email campaigns, financial exports, and database cleanups that only need to run once a day or when a queue message arrives.
 
-Trying to force all of these tasks onto the same virtual server or runtime environment creates massive operational friction. The continuous API process can choke during a heavy background export batch, a crash in the email campaign script can bring down the entire checkout path, and you spend your cloud budget paying for idle servers that do nothing but wait for nightly exports. To deploy software successfully in the cloud, you must step back from the specific tool names and build a systematic mental model around application compute.
+Trying to force all of these tasks onto the same virtual server or runtime environment creates massive operational friction. The continuous API process can choke during a heavy background export batch, a crash in the email campaign script can bring down the entire checkout path, and you spend your cloud budget paying for idle servers that do nothing but wait for nightly exports. To deploy software successfully in the cloud, you must step back from the specific tool names and build a clear decision framework around application compute.
 
 ## What Is Compute
+<!-- section-summary: Compute is the AWS layer that gives application code CPU, memory, network access, startup behavior, and scaling behavior. -->
 
 Compute is the generic term for the physical hardware and virtual operating environments that execute your application code. In plain English, compute is the combination of virtual CPU, memory (RAM), storage, networking interfaces, and process supervisors that actually runs your software.
 
@@ -64,6 +66,7 @@ flowchart TD
 By mapping your application's distinct functions to these three runtime profiles, you can run a single product across multiple compute styles. Your web API can run on containers, your legacy background processes on virtual servers, and your side effects on serverless functions, with all of these sharing the same database while maintaining clean, isolated operational boundaries.
 
 ## The Workload Shape
+<!-- section-summary: Workload shape names whether code needs to run as a continuous service, host-dependent process, or bounded event handler. -->
 
 Before comparing specific AWS service features, you must describe the work your code performs in plain English. This is the practice of identifying the workload shape:
 
@@ -74,6 +77,8 @@ A workload shape is the execution pattern your code naturally needs: always list
 * **Event-Shaped (Reactive)**: Workloads that only execute when triggered by an external event. They do not need to listen on a port all day; instead, they boot, process a single message or file, and exit. The receipt email sender and nightly financial exports are event-shaped workloads.
 
 Filing your tasks by their natural shape prevents you from over-engineering simple features or under-engineering complex runtimes.
+
+There is one important production bridge for EC2. When a long-running service truly needs EC2 because of host-level control, the production shape is a fleet of replaceable instances behind one stable entry point. The team usually turns the EC2 recipe into a launch template, runs it through an Auto Scaling group, places instances in private subnets across Availability Zones, and sends public traffic through an Application Load Balancer and target group. That gives the service the same basic service-shaped needs we just named: multiple replicas, health checks, load-balanced routing, scaling rules, and rolling replacement.
 
 Workload Characterization Matrix:
 
@@ -96,6 +101,7 @@ Workload Characterization Matrix:
 By identifying these shapes first, you ensure that you do not force a short event campaign to run on a permanent, expensive virtual machine, or overload a critical long-running HTTP server with memory-intensive file processing tasks.
 
 ## The Ownership Budget
+<!-- section-summary: Ownership budget names the operating work your team accepts after AWS provisions the runtime. -->
 
 Every compute choice is an operational trade-off. The key to choosing the right service is evaluating your team's ownership budget: the amount of administrative work, security patching, process monitoring, and capacity scaling your engineers are prepared to carry.
 
@@ -123,6 +129,7 @@ If you have a small engineering team with zero dedicated systems administrators,
 For such teams, defaulting to ECS with Fargate for continuous containers and AWS Lambda for event jobs matches their ownership budget, allowing them to focus entirely on the application boundary.
 
 ## EC2 vs. ECS Fargate
+<!-- section-summary: EC2 gives guest OS control, while ECS Fargate gives a managed container interface and removes host fleet ownership. -->
 
 When you deploy a long-running, continuous workload on AWS, the core architectural decision centers on whether to host your application directly on Amazon EC2 virtual servers or utilize Amazon ECS on AWS Fargate. While both services provide elastic, cloud-based compute, they operate under fundamentally different infrastructure contracts and engineering lifecycles.
 
@@ -178,6 +185,7 @@ Selecting between these two compute models is a design decision about matching y
 By applying this decision framework, you prevent your engineering team from carrying unnecessary administrative burdens, while guaranteeing that specialized, host-dependent workloads receive the deep OS and hardware control they require.
 
 ## Connecting the Workloads
+<!-- section-summary: Compute choices need clean request, queue, and private network paths so the application parts work together. -->
 
 No compute runtime operates in isolation. Once you distribute your application across EC2, ECS, and Lambda, you must connect them using clean network and messaging paths:
 
@@ -188,6 +196,7 @@ No compute runtime operates in isolation. Once you distribute your application a
 By separating and decoupling your compute workloads, you build a system that is naturally secure, highly resilient to traffic spikes, and simple to observe and debug during production incidents.
 
 ## Putting It All Together
+<!-- section-summary: AWS compute choices match workload shape, team ownership, and the runtime boundary each service provides. -->
 
 Evaluating AWS compute is the practice of matching application needs to the right runtime environment:
 
@@ -199,8 +208,9 @@ Evaluating AWS compute is the practice of matching application needs to the righ
 By designing your compute around workload shapes and team ownership, you build a system that is cost-efficient, resilient, and manageable at any scale.
 
 ## What's Next
+<!-- section-summary: The next article turns EC2 from a compute choice into a concrete virtual-server operating model. -->
 
-We now have a clean mental model for choosing where our application code should run in AWS. However, to operate virtual machines effectively when a host-shaped workload truly demands it, we must understand the baseline compute service under the cloud. In the next article, we will go deep into EC2 virtual servers, deconstructing AMIs, instance types, EBS storage volumes, automated boot scripts, and process daemons.
+We now have a clear way to choose where our application code should run in AWS. However, to operate virtual machines effectively when a host-shaped workload truly demands it, we must understand the baseline compute service under the cloud. In the next article, we will go deep into EC2 virtual servers, deconstructing AMIs, instance types, EBS storage volumes, automated boot scripts, and process daemons.
 
 ![Six-tile AWS compute checklist covering workload shape, ownership budget, EC2, ECS Fargate, Lambda, and queues](/content-assets/articles/article-cloud-providers-aws-compute-application-hosting-compute-mental-model/compute-checklist-summary.png)
 
@@ -211,6 +221,7 @@ We now have a clean mental model for choosing where our application code should 
 **References**
 
 - [Amazon EC2 Overview](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/concepts.html) - Introduction to elastic virtual servers and instance management.
+- [Amazon EC2 Auto Scaling](https://docs.aws.amazon.com/autoscaling/ec2/userguide/what-is-amazon-ec2-auto-scaling.html) - Documents Auto Scaling groups for maintaining EC2 application capacity.
 - [Amazon ECS on AWS Fargate](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/AWS_Fargate.html) - Technical details on running serverless containers without managing EC2 host fleets.
 - [Amazon ECS Express Mode](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/express-service-overview.html) - Explains simplified Fargate-based service creation with managed supporting infrastructure.
 - [AWS Lambda Basics](https://docs.aws.amazon.com/lambda/latest/dg/welcome.html) - Technical documentation on event-driven, serverless execution lifecycles.

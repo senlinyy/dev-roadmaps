@@ -1,7 +1,7 @@
 ---
 title: "Shared Libraries"
 description: "Centralize pipeline configurations, build standardized global steps, and enforce organization-wide compliance using Groovy Shared Libraries."
-overview: "Duplicate pipelines across hundreds of repositories lead to configuration drift and maintenance deadlocks. Learn how to structure a Jenkins Shared Library repository, how to write custom global variables and single-line pipeline wrappers, and how to manage security sandboxes and compliance version-pinning."
+overview: "Duplicate pipelines across hundreds of repositories lead to configuration drift and maintenance deadlocks. Learn how to structure a Jenkins Shared Library repository, how to write global steps, how to use src and resources, and how to version library changes without breaking production."
 tags: ["jenkins", "shared-libraries", "groovy", "devops"]
 order: 3
 id: article-cicd-jenkins-shared-libraries
@@ -11,257 +11,246 @@ aliases:
 
 ## Table of Contents
 
-1. [The Problem](#the-problem)
-2. [The Duplication and Drift Bottleneck](#the-duplication-and-drift-bottleneck)
-3. [Structure of a Jenkins Shared Library](#structure-of-a-jenkins-shared-library)
-4. [Authoring Reusable Steps in the vars Folder](#authoring-reusable-steps-in-the-vars-folder)
-5. [The Script Security Sandbox and Trust Model](#the-script-security-sandbox-and-trust-model)
-6. [Enforcing Version Pinning and Compliance](#enforcing-version-pinning-and-compliance)
+1. [Why Shared Libraries Exist](#why-shared-libraries-exist)
+2. [Configuring and Loading Libraries](#configuring-and-loading-libraries)
+3. [The Global Step in vars](#the-global-step-in-vars)
+4. [Helpers in src and Templates in resources](#helpers-in-src-and-templates-in-resources)
+5. [Versioning by Git Ref](#versioning-by-git-ref)
+6. [The Day the Library Broke Production](#the-day-the-library-broke-production)
 7. [Putting It All Together](#putting-it-all-together)
 8. [What's Next](#whats-next)
 
-## The Problem
+## Why Shared Libraries Exist
+<!-- section-summary: Shared libraries move repeated Jenkinsfile logic into a versioned repository that many pipelines can call. -->
 
-As a software organization grows, copy-pasting build descriptions introduces severe maintenance overhead. When engineering teams attempt to manage individual pipelines across dozens or hundreds of microservices, they face recurring delivery blockages:
+A **Jenkins Shared Library** is a Git-backed library of Groovy pipeline code that Jenkins can load into many Jenkinsfiles. It gives a platform team one place to maintain repeated delivery logic, such as standard build stages, security scans, Docker image publishing, Slack notifications, Helm deploys, and release evidence collection.
 
-* **The Stagnant Security Audit**: A security team discovers a critical vulnerability in a base Docker image used across fifty microservices. To enforce compliance, they must inject a new image-scanning tool execution step into every repository's build pipeline. Because each application maintains its own copy-pasted `Jenkinsfile`, platform engineers must open fifty individual pull requests, wait for fifty development teams to approve them, and manually debug configuration drifts across multiple branches.
-* **The Registry Migration Crisis**: A systems administrator migrates the company's internal artifact registry to a new cloud domain. Because thirty microservice pipelines hardcode the old registry hostname inside their build stages, a wave of builds fails immediately. The administrator must spend days hunting down, modifying, and testing registry host strings across separate repositories.
-* **The Compilation Sandbox Failure**: An engineer attempts to import standard Java utility classes directly into a local repository's `Jenkinsfile`. Because the Jenkins controller enforces a strict JVM security sandbox on local application scripts, the pipeline immediately crashes with a `RejectedAccessException` error, blocking the developer until an administrator manually approves the raw Java methods in the web panel.
+Summit Retail now has good Jenkinsfiles for `checkout-api`, `inventory-api`, and `payments-api`. After a few months, the team notices that all three files contain almost the same Maven build, Trivy scan, Docker push, and Kubernetes deploy stages. A vulnerability scanner flag changes, and the platform team opens the same pull request in three repositories. Next quarter, that becomes thirty repositories.
 
-These operational crises demonstrate that pipeline logic must be centralized, standardized, and kept DRY (Don't Repeat Yourself).
+That is the point where Shared Libraries become useful. Each application repository can keep a small Jenkinsfile that names the service and chooses a few options. The shared library holds the repeated build mechanics. When the platform team improves the scanner command, the change lands in one library repository instead of thirty service repositories.
 
-## The Duplication and Drift Bottleneck
+This gives the team leverage, and it also creates responsibility. A shared library can break many pipelines at once. It can also run trusted Groovy code depending on how Jenkins configures it. The rest of this article builds the library carefully: first how Jenkins loads it, then how `vars/`, `src/`, and `resources/` split responsibility, then how versioning prevents a helpful refactor from becoming a production outage.
 
-In a classic microservice architecture, separate repositories often share nearly identical delivery processes. For example, twenty separate Java services might all run: check out code, run Maven tests, build a Docker image, push it to ECR, and apply a Kubernetes rollout.
+## Configuring and Loading Libraries
+<!-- section-summary: Jenkins loads shared libraries from configured source-control locations, and Jenkinsfiles request them by name and version. -->
 
-Copy-pasting an 80-line declarative `Jenkinsfile` across these twenty repositories creates **Configuration Drift**. Over time, different teams customize their local pipelines—changing timeouts, skipping test stages, or referencing older tool versions. This drift makes it impossible for platform teams to manage global standards.
+Jenkins needs to know where a library lives before a Jenkinsfile can use it. An administrator can define a global shared library under Manage Jenkins, System, Global Trusted Pipeline Libraries or Global Untrusted Pipeline Libraries. A folder can also define a library for jobs inside that folder, which helps large companies scope library access by team or business unit.
 
-```mermaid
-flowchart TD
-    subgraph Microservices ["Microservice Repositories"]
-        App1["App 1 Repo<br/>(Local Jenkinsfile)"]
-        App2["App 2 Repo<br/>(Local Jenkinsfile)"]
-        App3["App 3 Repo<br/>(Local Jenkinsfile)"]
-    end
+The library configuration has three important parts. The **name** is the short identifier that Jenkinsfiles use. The **retrieval method** tells Jenkins how to fetch the library from source control, usually Git through the Modern SCM option. The **default version** is the branch, tag, or commit Jenkins loads when the Jenkinsfile asks for the library without an explicit version.
 
-    subgraph Centralized [" DRY Platform Topology"]
-        AppLib1["App 1 Repo<br/>(1-Line Jenkinsfile)"]
-        AppLib2["App 2 Repo<br/>(1-Line Jenkinsfile)"]
-        SharedLib["Central Shared Library<br/>(Reusable Groovy Templates)"]
-    end
-
-    App1 -->|Duplicate Copy-Paste| App2
-    App2 -->|Duplicate Copy-Paste| App3
-    
-    AppLib1 -->|Dynamically Import| SharedLib
-    AppLib2 -->|Dynamically Import| SharedLib
-```
-
-Centralizing pipeline logic solves the drift problem. Instead of writing all stages locally, application repositories maintain a minimal, one-line `Jenkinsfile` that imports a central **Jenkins Shared Library**. This architecture decouples application configurations from global delivery mechanics, allowing platform teams to update compilers, security scans, and registry hosts globally without touching individual codebases.
-
-## Structure of a Jenkins Shared Library
-
-A Jenkins Shared Library is a standalone Git repository structured in a specific directory layout that the Jenkins controller recognizes. The repository must use the following standard schema:
-
-```text
-shared-library-root/
-├── src/
-│   └── net/
-│       └── devpolaris/
-│           └── Utility.groovy
-├── vars/
-│   ├── standardBuild.groovy
-│   ├── slackNotify.groovy
-│   └── buildDockerImage.groovy
-└── resources/
-    └── net/
-        └── devpolaris/
-            └── config-template.json
-```
-
-### The Folder Responsibilities
-
-* **`vars/`**: This directory contains global variables and custom pipeline step scripts. Each Groovy file in this folder represents a single step that application pipelines can invoke directly by name. For example, `vars/slackNotify.groovy` exposes a `slackNotify` step. This is the primary directory used to write high-level Declarative wrappers and reusable pipeline stages.
-* **`src/`**: This directory is reserved for standard Java-like Groovy classes. It follows standard Java package namespace conventions (such as `net.devpolaris.Utility`). Classes inside `src/` are used to write complex utility functions, database parsers, or API clients that require standard object-oriented programming.
-* **`resources/`**: This directory holds static non-Groovy assets (such as JSON configuration templates, XML files, or SQL scripts). Reusable steps in the library can load these static resources dynamically during pipeline runs using the `libraryResource` step helper.
-
-## Authoring Reusable Steps in the vars Folder
-
-The most common way to build shared library steps is by writing Groovy scripts in the `vars/` directory. Each script must define a public parameterless method named `call`.
-
-### Custom Step Variable: slackNotify.groovy
-
-Let's look at a simple reusable step placed in `vars/slackNotify.groovy` to standardize Slack alert colors and formats across applications:
+Summit Retail configures a library called `summit-pipeline` with a Git URL like `git@github.com:summit/jenkins-shared-library.git`. The platform team sets the default version to `v1` for stable consumers. Application repositories can then load it at the top of the Jenkinsfile:
 
 ```groovy
-// vars/slackNotify.groovy
+@Library('summit-pipeline@v1.4.2') _
+
+standardMavenService(
+    serviceName: 'checkout-api',
+    imageName: 'registry.summit.example/checkout-api'
+)
+```
+
+The underscore looks strange the first time you see it. In this pattern, the annotation needs something to attach to, and `_` acts as a small placeholder. The important part is `@Library('summit-pipeline@v1.4.2')`, which tells Jenkins to load that library version before compiling the Jenkinsfile.
+
+Jenkins can also load a library dynamically inside a pipeline with the `library` step. Teams usually reserve that for advanced cases, such as choosing a library ref from a parameter or matching a library branch to the application branch. Most application Jenkinsfiles stay clearer with the top-level `@Library` annotation.
+
+The trust setting matters. A **trusted global library** can call Jenkins internals and Java APIs with broad power, so only a tightly controlled platform repository should feed that kind of library. Folder-level libraries always run as untrusted libraries in the Groovy sandbox, which gives teams a scoped reuse path with a smaller administrative blast radius.
+
+## The Global Step in vars
+<!-- section-summary: Files in vars become pipeline-callable global steps, and a call method makes the step feel like built-in Jenkins syntax. -->
+
+The `vars/` directory is where most teams start. Each Groovy file under `vars/` becomes a global variable or step that a Jenkinsfile can call. If the file defines a `call` method, Jenkins lets the pipeline invoke the filename like a function.
+
+Summit Retail creates this library file:
+
+`vars/standardMavenService.groovy`
+
+```groovy
 def call(Map config = [:]) {
-    def channel = config.get('channel', '#deploy-logs')
-    def status  = config.get('status', 'SUCCESS')
-    def message = config.get('message', "Build #${env.BUILD_NUMBER} finished")
+    String serviceName = config.serviceName
+    String imageName = config.imageName
 
-    def color = (status == 'SUCCESS') ? 'good' : 'danger'
+    pipeline {
+        agent none
+        options {
+            timestamps()
+            disableConcurrentBuilds()
+            timeout(time: 45, unit: 'MINUTES')
+        }
+        environment {
+            IMAGE = "${imageName}:${env.BUILD_NUMBER}"
+        }
+        stages {
+            stage('Compile') {
+                agent { label 'linux && maven' }
+                steps {
+                    sh 'mvn -B -DskipTests package'
+                }
+            }
+            stage('Unit Test') {
+                agent { label 'linux && maven' }
+                steps {
+                    sh 'mvn -B test'
+                }
+                post {
+                    always {
+                        junit 'target/surefire-reports/*.xml'
+                    }
+                }
+            }
+            stage('Build Image') {
+                agent { label 'linux && docker' }
+                steps {
+                    sh 'docker build -t "$IMAGE" .'
+                }
+            }
+        }
+        post {
+            always {
+                cleanWs()
+            }
+            failure {
+                slackNotify(service: serviceName, result: 'failed')
+            }
+        }
+    }
+}
+```
 
-    slackSend(
-        channel: channel,
-        color: color,
-        message: "${message} (Status: ${status})"
+Now every Maven service can use a very small Jenkinsfile. The application repository still owns the service name and image name, while the library owns the standard stages. This is a good boundary because service teams can read the contract quickly, and the platform team can improve the common implementation.
+
+`vars/` files should stay mostly stateless. Jenkins pipelines can survive controller restarts by serializing pipeline state, and global variables that store mutable state can surprise people after a restart. A `vars/` file works best as a collection of steps that receives inputs, calls Jenkins steps, and returns results.
+
+Documentation can live beside the global step as `vars/standardMavenService.txt`. Jenkins can show that help in the Global Variable Reference for jobs that import the library. This small habit helps new service teams understand the accepted options without reading every line of Groovy.
+
+## Helpers in src and Templates in resources
+<!-- section-summary: src holds reusable Groovy classes, while resources holds non-code files that library steps can load at runtime. -->
+
+As the library grows, every helper should not live in `vars/`. The `src/` directory holds regular Groovy or Java-style classes using package directories. Jenkins adds this directory to the classpath when the library loads, so `vars/` steps can import helper classes and keep pipeline-facing code small.
+
+Summit Retail wants one helper that validates semantic versions. The class belongs in `src/` because it is a normal reusable helper, and it can be unit-tested outside Jenkins more easily than a pipeline step.
+
+`src/com/summit/pipeline/Semver.groovy`
+
+```groovy
+package com.summit.pipeline
+
+class Semver implements Serializable {
+    static boolean validReleaseTag(String value) {
+        return value ==~ /^v\\d+\\.\\d+\\.\\d+$/
+    }
+}
+```
+
+A global step can import and use it:
+
+`vars/releaseGuard.groovy`
+
+```groovy
+import com.summit.pipeline.Semver
+
+def call(String tagName) {
+    if (!Semver.validReleaseTag(tagName)) {
+        error "Release tag must look like v1.2.3"
+    }
+}
+```
+
+The `resources/` directory holds non-code files that the library loads with `libraryResource`. This is useful for small templates, JSON payloads, notification bodies, or default Helm values. Jenkins treats the path like a package path, so unique directories reduce naming collisions between libraries.
+
+`resources/com/summit/pipeline/deploy-values.yaml`
+
+```yaml
+replicaCount: 2
+image:
+  repository: registry.summit.example/placeholder
+  tag: latest
+service:
+  port: 8080
+```
+
+A library step can load that template, replace a few values, and write it into the workspace:
+
+```groovy
+def values = libraryResource 'com/summit/pipeline/deploy-values.yaml'
+values = values.replace('registry.summit.example/placeholder', config.imageRepository)
+values = values.replace('latest', config.imageTag)
+writeFile file: 'generated-values.yaml', text: values
+```
+
+This folder split keeps the library understandable. `vars/` exposes the friendly pipeline interface. `src/` holds real helper code. `resources/` holds templates and static files. Once a library has that shape, versioning becomes the next big design choice.
+
+## Versioning by Git Ref
+<!-- section-summary: Pinning a library by branch, tag, or commit controls how quickly shared pipeline changes reach application repositories. -->
+
+A Jenkins shared library version can be a Git branch, tag, or commit hash. That Git ref controls the rollout speed of platform changes. A branch moves whenever someone pushes to it. A tag should stay fixed by team policy. A commit hash points at one exact revision.
+
+`@Library('summit-pipeline@main') _` gives fast adoption. Every consumer that uses `main` receives the newest library code on the next build. This helps early experiments and internal sandbox jobs, but it gives the platform team a large blast radius because one merge can change many production pipelines.
+
+`@Library('summit-pipeline@v1.4.2') _` gives a stable release line. A service stays on that library version until its team changes the Jenkinsfile. This creates an explicit upgrade pull request, where reviewers can read the library changelog and run a staging build before production deployment jobs pick up the new behavior.
+
+`@Library('summit-pipeline@2f4c8a1') _` gives maximum reproducibility. Regulated or high-risk deployment pipelines sometimes pin to a commit hash because it names the exact library code. The cost is maintenance, because humans prefer release tags and changelogs over raw SHAs for day-to-day work.
+
+Summit Retail uses three lanes:
+
+| Lane | Example ref | Good fit |
+|---|---|---|
+| Sandbox | `main` | Testing library changes with low-risk jobs |
+| Standard services | `v1.4.2` | Normal application pipelines with planned upgrades |
+| Regulated deploys | `2f4c8a1` | Pipelines that need exact historical reproduction |
+
+Versioning also needs release notes. A library release should explain changed stages, changed agent labels, new required parameters, credential behavior changes, and migration steps. The application pull request that bumps `v1.4.1` to `v1.4.2` should link to those notes and run the service pipeline in a non-production branch.
+
+## The Day the Library Broke Production
+<!-- section-summary: A shared library outage usually comes from unpinned consumers, missing compatibility tests, or a wide trusted-code blast radius. -->
+
+Here is the failure that teaches the lesson. Summit Retail has twenty services loading `@Library('summit-pipeline@main') _`. A platform engineer renames `standardMavenService` option `imageName` to `imageRepository` and updates two services. The code merges to `main`, and the next build for every other service fails before deployment because their Jenkinsfiles still pass the old key.
+
+The incident feels like a Jenkins problem, but the root cause is release management. The shared library changed a public contract without a compatibility window. The services consumed a moving branch. The platform team had no compatibility test suite that ran sample Jenkinsfiles against the new library ref before merge.
+
+The fix has several parts. First, the library restores backwards compatibility for one release by accepting both option names. Second, production services move from `main` to version tags. Third, the platform team adds a small library test suite with representative Jenkinsfiles for Maven, Node.js, and deploy-only services. Fourth, each library release gets notes that call out new parameters and deprecated ones.
+
+A safe replacement step might look like this:
+
+```groovy
+def call(Map config = [:]) {
+    String imageRepository = config.imageRepository ?: config.imageName
+
+    if (!imageRepository) {
+        error 'standardMavenService requires imageRepository'
+    }
+
+    standardMavenPipeline(
+        serviceName: config.serviceName,
+        imageRepository: imageRepository
     )
 }
 ```
 
-Application developers invoke this step inside their pipeline `post` blocks:
+This wrapper gives older consumers time to upgrade while new consumers use the clearer name. The team can then remove `imageName` support in the next major library version, after every service has moved. Shared libraries need the same compatibility discipline as any other internal API because a Jenkinsfile that calls `standardMavenService(...)` is a consumer of that API.
 
-```groovy
-post {
-    failure {
-        slackNotify(status: 'FAILURE', channel: '#emergency-alerts')
-    }
-}
-```
-
-### Reusable Pipeline Wrapper: standardBuild.groovy
-
-For ultimate centralization, platform teams write complete, single-line pipeline wrappers. Let's look at `vars/standardBuild.groovy`, which encapsulates the entire checkout, build, lint, test, and container push workflow:
-
-```groovy
-// vars/standardBuild.groovy
-def call(Map pipelineParams = [:]) {
-    def appName     = pipelineParams.get('appName')
-    def registryUrl = pipelineParams.get('registryUrl', 'registry.devpolaris-internal.net')
-    def nodeVersion = pipelineParams.get('nodeVersion', '22')
-
-    pipeline {
-        agent { label 'linux-docker-executor' }
-
-        options {
-            timeout(time: 30, unit: 'MINUTES')
-            timestamps()
-            disableConcurrentBuilds()
-            cleanWs()
-        }
-
-        stages {
-            stage('Checkout') {
-                steps {
-                    checkout scm
-                }
-            }
-
-            stage('Install Dependencies') {
-                steps {
-                    sh "nvm use ${nodeVersion} || npm ci"
-                }
-            }
-
-            stage('Quality Checks') {
-                failFast true
-                parallel {
-                    stage('Lint') {
-                        steps {
-                            sh 'npm run lint'
-                        }
-                    }
-                    stage('Unit Tests') {
-                        steps {
-                            sh 'npm run test -- --reporter=junit --reporter-option output=results.xml'
-                        }
-                    }
-                }
-            }
-
-            stage('Container Build') {
-                steps {
-                    sh "docker build -t ${registryUrl}/${appName}:${env.BUILD_NUMBER} ."
-                }
-            }
-        }
-
-        post {
-            always {
-                junit testResults: '**/results.xml', allowEmptyResults: true
-                cleanWs()
-            }
-            failure {
-                slackNotify(status: 'FAILURE', message: "${appName} build failed!")
-            }
-        }
-    }
-}
-```
-
-This single script completely encapsulates the organization's delivery standard.
-
-## The Script Security Sandbox and Trust Model
-
-To understand how shared libraries execute, we must understand the Jenkins controller's security boundaries.
-
-### The Groovy Sandbox
-
-Jenkins runs untrusted application pipelines (such as standard repository `Jenkinsfiles`) inside a restricted **Groovy Sandbox**. The sandbox blocks scripts from calling core Java APIs directly (such as `System.exit()`, `java.io.File`, or internal Jenkins reflection classes). This protects the controller filesystem and memory from malicious user code. 
-
-If an application pipeline attempts to call a sandboxed method, the build aborts immediately with a script security exception. An administrator must manually approve the specific signature in the controller's "In-process Script Approval" dashboard.
-
-### Trusted Shared Libraries
-
-Unlike local repository scripts, Jenkins Shared Libraries registered globally by system administrators are **Fully Trusted**. 
-
-Shared libraries bypass the Groovy Sandbox entirely. They can call raw Java APIs, read and write files on the controller's filesystem, execute arbitrary JVM instructions, and invoke third-party Java libraries. 
-
-Because shared libraries run with administrative privileges, platform teams must enforce strict code-review guidelines on the shared library repository. A single unreviewed merge containing a buggy `java.io.File` write or infinite loop could corrupt `$JENKINS_HOME` or crash the central controller server process.
-
-## Enforcing Version Pinning and Compliance
-
-To safely import a shared library without breaking microservice pipelines during updates, Jenkins provides explicit version-pinning controls.
-
-### Importing a Library
-
-Administrators register the library globally in the Jenkins System Configuration panel under "Global Pipeline Libraries," assigning it a logical name (such as `polaris-pipeline-library`).
-
-Application developers import the library at the very top of their `Jenkinsfile` using the `@Library` annotation:
-
-```groovy
-@Library('polaris-pipeline-library@v1.2.0') _
-
-standardBuild(
-    appName: 'polaris-orders',
-    nodeVersion: '22'
-)
-```
-
-The underscore (`_`) at the end of the annotation is mandatory. It tells the Groovy compiler to import all global variable steps from the library into the current script's classpath immediately.
-
-### Safe Versioning Guidelines
-
-To maintain stability and enforce security compliance, teams must adhere to three version-pinning rules:
-
-1. **Never Rely on Default Master Branches**: Using `@Library('my-library@master')` is highly dangerous. A platform team pushing a new feature or registry update to `master` will instantly affect every active codebase in the organization, introducing widespread build failures due to breaking API shifts.
-2. **Pin to Git Tags or Commit SHAs**: Developers must explicitly lock their imports to immutable Git tags (`@v1.2.0`) or specific commit hashes (`@8a3d12b`). This ensures that the pipeline execution remains 100% deterministic over time.
-3. **Automate Updates via Staged Environments**: Platform teams should test library changes by pointing a test job to `@Library('my-library@feature-branch')` before tagging a production release, ensuring that new delivery gates are fully validated against test codebases.
+Trust also matters during an incident. If the library is trusted, a malicious or careless commit can call powerful Jenkins APIs from the controller. The right defense is repository protection: required reviews, protected tags, limited maintainers, branch protection, signed release tags where the organization supports them, and a small admin group that controls trusted library configuration.
 
 ## Putting It All Together
+<!-- section-summary: A healthy shared-library setup keeps Jenkinsfiles thin, library APIs stable, and production consumers pinned to reviewed releases. -->
 
-Let's look at how centralizing pipeline configurations completely resolves the microservice delivery crises described at the start:
+Summit Retail ends with a clean pattern. Application repositories keep small Jenkinsfiles that load `summit-pipeline` and pass service-specific values. The shared library owns reusable steps, helper classes, and templates. `vars/` exposes global steps, `src/` holds reusable classes, and `resources/` holds small files loaded at runtime.
 
-* **Stagnant Security Audits**: When the security team mandates a new SCA (Software Component Analysis) container scanner, platform engineers do not need to edit fifty microservice repositories. They simply add the scanning step inside `vars/standardBuild.groovy` once, test it, and tag a new version (`v1.3.0`). Individual teams update their single-line imports to `@Library('polaris-pipeline-library@v1.3.0')` when ready, instantly inheriting the new security gate.
-* **Registry Host Migrations**: The INTERNAL registry URL hostname is abstracted inside the central library's default configuration parameters. When the registry migrates, the platform team changes the host value inside `vars/standardBuild.groovy` once. Every microservice dynamically inherits the new address during their next build execution.
-* **Sandbox Exceptions**: Because global shared libraries run as trusted code, complex utility methods that read configurations or parse build logs run smoothly without triggering sandbox exceptions or requiring manual system administrator approvals in the web UI.
+The team also treats the shared library like a product. Changes land through review, test Jenkinsfiles run before merge, release tags get notes, and production services consume tags instead of a moving branch. Sandbox jobs can still follow `main`, because fast feedback belongs in low-risk places.
+
+This is the natural next step after good Jenkinsfiles. Pipeline as Code gives each repository a reviewed delivery contract. Shared Libraries keep that contract small while giving the platform team one maintained implementation for the repeated parts.
 
 ## What's Next
+<!-- section-summary: The next article moves from pipeline code to the controller itself: plugins, Configuration as Code, and repeatable Jenkins installations. -->
 
-Now that we have abstracted our pipeline configurations into reusable code and global shared libraries, we must secure the underlying Jenkins controller itself from manual UI adjustments. While shared libraries keep our code DRY, administrators still manage plugins, define credentials, and allocate system nodes manually through the Jenkins web UI forms, making the controller server a highly fragile "snowflake" asset. 
+Shared libraries reduce duplication inside pipelines. The controller still has another kind of duplication risk: manually installed plugins, hand-edited settings, and configuration that exists only inside `$JENKINS_HOME`.
 
-To solve this, we define the entire controller's configuration as code. Let's move to **Plugins and Configuration** to learn how to manage Jenkins Configuration as Code (JCasC) and package immutable, Docker-baked controllers.
-
-![Jenkins shared library summary showing duplicated pipeline code, library folders, vars steps, trust boundary, and version pinning](/content-assets/articles/article-cicd-jenkins-shared-libraries/shared-library-summary.png)
-
-*Use this as the shared-library checklist: remove duplicated pipeline logic, keep the library structure clear, expose `vars` steps and wrappers, understand sandbox trust, and pin library versions.*
+The next article moves to plugins and configuration. It shows how teams pin plugin versions, manage Jenkins Configuration as Code, separate reloads from restarts, and create an upgrade cadence that survives real production pressure.
 
 ---
 
 **References**
 
-* [Jenkins Documentation: Shared Libraries](https://www.jenkins.io/doc/book/pipeline/shared-libraries/) - Official structural reference guide for directory structures, logical variables, and dynamic library loading.
-* [Jenkins Script Security Plugin](https://plugins.jenkins.io/script-security/) - Technical documentation on sandbox boundaries, method approvals, and the security model for trusted vs. untrusted code.
-* [Groovy Language Documentation](https://groovy-lang.org/documentation.html) - Structural syntax reference for maps, variables, closures, and dynamic object bindings used in Jenkinsfile authoring.
-* [Jenkins Pipeline Utility Steps](https://plugins.jenkins.io/pipeline-utility-steps/) - Official plugin guide for using helper steps like `readJSON`, `writeJSON`, and `libraryResource` within shared libraries.
+- [Jenkins: Extending with Shared Libraries](https://www.jenkins.io/doc/book/pipeline/shared-libraries/) - Documents shared library configuration, directory structure, `vars`, `src`, `resources`, trusted libraries, library versions, and `@Library`.
+- [Jenkins: Pipeline Syntax](https://www.jenkins.io/doc/book/pipeline/syntax/) - Provides the Pipeline syntax reference used by shared-library steps.
+- [Jenkins: Pipeline Development Tools](https://www.jenkins.io/doc/book/pipeline/development/) - Covers tooling for Pipeline and shared-library development, including testing support and replay notes.
+- [Jenkins: In-process Script Approval](https://www.jenkins.io/doc/book/managing/script-approval/) - Explains the Groovy sandbox and script approval model that affects untrusted pipeline code.

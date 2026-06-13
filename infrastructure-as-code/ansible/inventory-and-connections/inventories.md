@@ -12,205 +12,252 @@ aliases:
 
 ## Table of Contents
 
-1. [The Infrastructure Host Catalog](#the-infrastructure-host-catalog)
-2. [The Static Inventory Code Preview](#the-static-inventory-code-preview)
-3. [INI vs. YAML Syntaxes: Structural Formats](#ini-vs-yaml-syntaxes-structural-formats)
-4. [Hierarchical Groups: Mapping Tiers and Environments](#hierarchical-groups-mapping-tiers-and-environments)
-5. [Dynamic Inventories: Live Service Discovery](#dynamic-inventories-live-service-discovery)
-6. [Under the Hood: Catalog Parsing and DNS Resolution](#under-the-hood-catalog-parsing-and-dns-resolution)
-7. [Auditing the Parsed Graph](#auditing-the-parsed-graph)
-8. [Putting It All Together](#putting-it-all-together)
-9. [What's Next](#whats-next)
+1. [What Inventory Solves](#what-inventory-solves)
+2. [The Orders Platform Fleet](#the-orders-platform-fleet)
+3. [Inventory Names and Connection Addresses](#inventory-names-and-connection-addresses)
+4. [Groups, Children, and Useful Slices](#groups-children-and-useful-slices)
+5. [Static Inventory You Can Review](#static-inventory-you-can-review)
+6. [Dynamic Inventory from Cloud Metadata](#dynamic-inventory-from-cloud-metadata)
+7. [Inspecting What Ansible Loaded](#inspecting-what-ansible-loaded)
+8. [Safety Checks Before a Real Run](#safety-checks-before-a-real-run)
+9. [Putting It All Together](#putting-it-all-together)
+10. [What's Next](#whats-next)
+11. [References](#references)
 
-## The Infrastructure Host Catalog
+## What Inventory Solves
+<!-- section-summary: Inventory is the host map Ansible uses before it can choose targets, connect, and run tasks. -->
 
-An Ansible inventory is the host catalog that maps human names and groups to reachable machines and connection variables.
+An **inventory** is the list of machines Ansible knows about, plus the groups and connection details that describe those machines. Before Ansible can install a package, restart a service, or render a config file, it needs a clear answer to a simple question: which managed nodes are in scope for this work?
 
-An Ansible inventory is a structured database file or dynamic script that records all host machines and network targets in your infrastructure. Before a playbook can perform system writes, package installations, or directory creations, Ansible must consult this host catalog to determine exactly which computers exist, how to reach them over the network, and how they are organized into logical service groups. The inventory defines your automation boundary, ensuring that playbooks target only the intended environments and preventing configuration changes from spilling into the wrong servers.
+In daily production work, inventory becomes the shared map between people and automation. Operators talk about `prod_web`, the deployment pipeline runs against `orders_workers`, and an incident note names `orders-web-02` as the first host to check. Those names only stay useful when the inventory has a careful shape.
 
-To see why maintaining an accurate inventory is critical, consider our scenario. You are managing a multi-tier production cluster containing two web application servers and a backend database server.
+Inventory also sets up the rest of the Ansible workflow. **Patterns** choose hosts from inventory, **limits** narrow a run, **group variables** describe shared values, and **host variables** describe one-machine exceptions. If the host map is hard to read, every later playbook command carries extra risk.
 
-If your host catalog is poorly designed or unmaintained, a playbook meant to run database optimizations might target your web servers instead, bringing down your user-facing sites, or a staging playbook might run against active production servers because the two environments share a single messy host file. Without clean host aliases, recap logs display raw IP addresses that leave you unable to verify which physical nodes were actually updated.
+## The Orders Platform Fleet
+<!-- section-summary: A small production fleet gives the inventory examples a concrete shape. -->
 
-Ansible solves this by separating human-friendly host aliases from physical connection parameters. The catalog provides the first safety boundary, allowing you to define distinct environments such as staging and production in isolated files, group servers by their operational roles, and query the entire network layout safely before executing changes.
+Let's use a small orders platform as the running example. The platform has two production web servers, one production worker, one read-only reporting host, and a matching staging environment. The names are boring on purpose because production names should help humans move quickly during a deployment or an incident.
 
-## The Static Inventory Code Preview
+The team wants one playbook that can configure all web servers, another that can configure workers, and a shared baseline playbook for users, time sync, log shipping, and security packages. Nobody wants to copy host lists into every playbook because copied lists drift after the first rebuild or scaling event.
 
-Here is an early, comment-free YAML static inventory preview that maps our multi-tier production cluster. This catalog separates our friendly server aliases from their network paths and organizes them into logical sub-groups:
+The inventory gives the fleet stable automation names. The web playbook can target `prod_web`, the baseline playbook can target `prod`, and a first production run can narrow to `orders-web-01`. That shape lets people say what they mean without editing task files every time the host list changes.
 
-```yaml
-all:
-  children:
-    production:
-      children:
-        webservers:
-          hosts:
-            web-node-01:
-              ansible_host: 10.60.30.21
-            web-node-02:
-              ansible_host: 10.60.30.22
-        databases:
-          hosts:
-            db-node-01:
-              ansible_host: 10.60.30.51
-      vars:
-        ansible_port: 22
-        ansible_user: admin
-```
+## Inventory Names and Connection Addresses
+<!-- section-summary: The inventory name is the stable Ansible name, while ansible_host is the address Ansible connects to. -->
 
-## INI vs. YAML Syntaxes: Structural Formats
+An inventory host has an **inventory name**. That name is what Ansible shows in play output, what templates can read as `inventory_hostname`, and what operators usually put in runbooks. The inventory name can stay stable even when the IP address or DNS record changes.
 
-INI and YAML are two text formats Ansible can read for static inventory files. They describe the same host map, but INI is compact and line-based, while YAML is nested and easier to review when groups and variables grow.
-
-Example: a small lab with two web servers can fit comfortably in INI, but a production inventory with parent groups, child groups, SSH users, ports, and host-specific variables is usually clearer in YAML.
-
-### 1. The INI Format
-The INI format is a legacy, line-oriented text format. It uses square brackets to declare host groups, and lists hosts and variables as compact, single-line string definitions:
-
-```ini
-[webservers]
-web-node-01 ansible_host=10.60.30.21
-web-node-02 ansible_host=10.60.30.22
-
-[databases]
-db-node-01 ansible_host=10.60.30.51
-```
-
-The major benefit of the INI syntax is that it is highly compact and quick to read. However, as your infrastructure variables grow (such as adding key files, SSH arguments, and custom ports), INI lines can become extremely long and difficult to read, leading to parsing errors.
-
-### 2. The YAML Format
-The YAML format is the modern standard for Ansible configurations. It represents your host catalog as a deeply nested, key-value data structure:
+The actual network target lives in `ansible_host`. This variable tells Ansible where to connect for that inventory name. For a rebuilt instance, the team can update `ansible_host` and keep the meaningful name `orders-web-01`.
 
 ```yaml
 all:
   children:
-    webservers:
+    prod_web:
       hosts:
-        web-node-01:
-          ansible_host: 10.60.30.21
+        orders-web-01:
+          ansible_host: 10.42.10.11
+        orders-web-02:
+          ansible_host: 10.42.10.12
+    prod_workers:
+      hosts:
+        orders-worker-01:
+          ansible_host: orders-worker-01.internal.example.com
+    prod_reporting:
+      hosts:
+        orders-report-01:
+          ansible_host: 10.42.30.21
 ```
 
-YAML's structured indentation makes nested parent-child group hierarchies highly visible. It forces you to write parameters on separate lines, which is significantly easier to review in pull requests and git histories. The primary caveat is that a single incorrect space or indentation level can place a host under the wrong group or variable block, requiring strict syntax validation.
+This separation matters in real operations. Logs and deployment notes can keep using `orders-web-01`, while the private IP can change after an instance replacement. The playbook output stays readable because Ansible reports the inventory name instead of asking every human to remember which IP belonged to which server yesterday.
 
-## Hierarchical Groups: Mapping Tiers and Environments
+Connection variables can appear beside the host when they describe how to reach that host. A legacy reporting server might use a different SSH port, and an older image might need a specific Python interpreter path. Keep those connection facts close to the host, then move shared values into group files when several hosts need the same setting.
 
-One of the most powerful features of an Ansible inventory is **hierarchical grouping**. A group is simply a named collection of hosts. Instead of targeting individual machines by name, you target groups that represent specific operational roles, tiers, or environments.
-
-You design groups using a parent-child structure. In our cluster scenario, we have a parent group named `production` that contains two child groups: `webservers` and `databases`.
-
-Group variables cascade automatically from parent groups to every child host they contain. Declaring a variable once on the `production` group pushes it to every web server, database node, and cache instance in that environment without repeating it in each host entry. Nested group hierarchies also let you run a playbook against a specific sub-tier, such as only the `webservers` group, without touching any other part of the production fleet. Service boundary groups enforce a clean operational contract: broad, generic group names like `web` should be avoided entirely. If multiple teams share a network, a generic `web` group might target unrelated services, so you use highly descriptive names like `customer_portal_web` or `billing_api` to ensure that service blast radiuses are clear.
-
-## Dynamic Inventories: Live Service Discovery
-
-A dynamic inventory is an inventory source that asks another system for the current host list at run time. Instead of relying on a hand-edited file, Ansible can query a cloud API, CMDB, or Kubernetes API and build groups from live metadata.
-
-Example: an AWS EC2 inventory plugin can select instances tagged `Env=production` and place them into a `production` group automatically. While static files are excellent for small or stable networks, they fail in modern cloud environments where virtual machines are continuously created, destroyed, or autoscaled. If your fleet changes daily, manually updating static files is impossible and leads to stale records.
-
-Ansible solves this using **Dynamic Inventories**. A dynamic inventory is usually an inventory plugin, and older script-based inventories are also supported. Instead of reading a fixed host list from disk, the inventory source asks another system, such as AWS EC2, GCP Compute, Kubernetes, or NetBox, for the current host catalog and turns that response into Ansible groups and variables.
-
-When Ansible calls a dynamic inventory plugin, it initiates a secure API call to the target platform (EC2, GCE, Azure, or a CMDB) and retrieves a snapshot of active resources with their addresses, tags, and metadata. The plugin filters those resources based on rules you configured, such as selecting only instances tagged `Env=production`, then maps them into Ansible host names, groups, and variable blocks held in memory. If inventory caching is enabled, Ansible stores that result for the duration of the run, reducing repeated API calls. If the platform tags a resource with `env=staging`, the plugin surfaces that as a group membership, letting you target `staging` in your playbook without editing any static file.
-
-This dynamic mapping means autoscaled hosts can appear and disappear through the source system instead of requiring constant manual edits to a static host file.
-
-## Under the Hood: Catalog Parsing and Connection Setup
-
-Inventory parsing is the local step where Ansible turns host files or plugins into an in-memory host map. Connection setup is the later step where Ansible uses that map to open SSH or another transport to the selected address.
-
-Example: `web-node-01` can parse successfully with `ansible_host: 10.60.30.21`, but the run can still fail later if port `22` is blocked or the SSH key is wrong. Separating these two phases helps you know whether a problem is a catalog problem or a network access problem.
-
-When you launch `ansible-playbook`, the engine parses the inventory target through several sequential execution gates:
-
-1. **Catalog Parsing**: The engine loads inventory files or inventory plugins, building a unified host database in memory.
-2. **Variable Merging**: It resolves all group and host variable trees, applying precedence rules to create a final parameter dictionary for each host.
-3. **Connection Variable Selection**: For each targeted host, Ansible decides which value should be used as the network destination. If `ansible_host` is set, the SSH connection normally uses that value; otherwise it uses the inventory host name.
-4. **Transport Attempt**: The selected connection plugin, usually SSH for Linux hosts, asks the operating system to resolve DNS names and open a socket. DNS, routing, authentication, or host-key problems appear as connection failures, often reported as `UNREACHABLE`.
-5. **Host Key Check**: For SSH connections, the local SSH client compares the server's host key with the user's known-hosts policy. This verifies that the server key is trusted; it does not prove that the inventory data itself was correct.
-
-```mermaid
-flowchart TD
-    subgraph ControlNode["Control Node (Local)"]
-        Parser["Catalog Parsing Engine"] -->|1. Merge Vars| VarTree["Host Parameter Map"]
-        VarTree -->|2. Choose ansible_host or alias| ConnectionVars["Connection Variables"]
-        ConnectionVars -->|3. Open transport| SSHAgent["SSH Connection Manager"]
-        SSHAgent -->|4. Connection failure| Unreachable["Mark Host UNREACHABLE"]
-    end
-
-    subgraph DNS["Network Services"]
-        SSHAgent -->|Resolve DNS if needed| DNSServer[("DNS Server")]
-    end
-
-    subgraph Managed["Managed Server"]
-        SSHAgent -->|5. Handshake| SSHD["SSH Daemon (sshd)"]
-    end
+```yaml
+prod_reporting:
+  hosts:
+    orders-report-01:
+      ansible_host: 10.42.30.21
+      ansible_port: 2222
+      ansible_python_interpreter: /usr/bin/python3
 ```
 
-This split gives you two useful checkpoints: audit the parsed inventory before a run, then let the connection layer fail loudly if DNS, routing, authentication, or host-key trust does not match reality.
+## Groups, Children, and Useful Slices
+<!-- section-summary: Groups let the same inventory support role-based, environment-based, and rollout-based targeting. -->
 
-## Auditing the Parsed Graph
+A **group** is a named set of hosts. Groups let a playbook say `hosts: prod_web` instead of listing every web server by hand. A host can belong to several groups, which lets the same server be selected by role, environment, region, or operating system.
 
-Because inventory parsing involves merging multiple files, variables, and potential dynamic scripts, the loaded catalog can occasionally surprise you. You must audit your parsed inventory structure using the `ansible-inventory` utility before running playbooks.
+Child groups let a larger group contain smaller groups. For the orders platform, `prod` can contain `prod_web`, `prod_workers`, and `prod_reporting`. The staging environment can follow the same shape, so playbooks and deployment jobs use consistent names across environments.
 
-You query the structural tree using the `--graph` flag:
+```yaml
+all:
+  children:
+    prod:
+      children:
+        prod_web:
+          hosts:
+            orders-web-01:
+              ansible_host: 10.42.10.11
+            orders-web-02:
+              ansible_host: 10.42.10.12
+        prod_workers:
+          hosts:
+            orders-worker-01:
+              ansible_host: 10.42.20.11
+        prod_reporting:
+          hosts:
+            orders-report-01:
+              ansible_host: 10.42.30.21
+    staging:
+      children:
+        staging_web:
+          hosts:
+            orders-stg-web-01:
+              ansible_host: 10.52.10.11
+        staging_workers:
+          hosts:
+            orders-stg-worker-01:
+              ansible_host: 10.52.20.11
+```
+
+This structure gives the team several clean target shapes. A baseline hardening play can target `prod`, a web deploy can target `prod_web`, and a staging smoke test can target `staging_web`. The playbook describes the kind of work, while the inventory carries the current fleet shape.
+
+It also makes production review easier. When a pull request adds `orders-web-03` under `prod_web`, reviewers can see that the new host will receive every play that targets production web servers. The host joined the automation boundary through one visible inventory change.
+
+## Static Inventory You Can Review
+<!-- section-summary: Static inventory works well when the host list is small, stable, and worth reviewing in version control. -->
+
+A **static inventory** is written as files in the automation project. It works well for small fleets, lab environments, stable bare-metal servers, and production systems where each host addition should go through code review. YAML inventory is usually easier to maintain than INI once groups, children, and host-level variables grow.
+
+For a small orders fleet, the reviewed file might live at `inventories/prod/hosts.yml`. The pull request that adds `orders-web-03` shows both the host name and the group it joins. Reviewers can ask whether the host should receive every `prod_web` play, whether its `ansible_host` points to the right private address, and whether it needs a temporary canary group before it joins the normal rollout group.
+
+A practical project layout often keeps one inventory directory per environment. The `hosts.yml` file describes membership, while `group_vars` and `host_vars` hold values that the next article covers in detail.
+
+```yaml
+inventories/
+  staging/
+    hosts.yml
+    group_vars/
+    host_vars/
+  prod/
+    hosts.yml
+    group_vars/
+    host_vars/
+```
+
+This layout gives reviewers quick answers. The path says which environment changed, `hosts.yml` says which machines changed, and the variable directories say which values changed. In a small team, that clarity matters more than clever inventory generation.
+
+Static inventory also has a simple rollback story. If a host was added to the wrong group, revert the inventory commit and inspect the graph again before launching another playbook. The inventory change itself usually leaves servers untouched; the risk comes from running automation against the wrong target set after the bad map is loaded.
+
+## Dynamic Inventory from Cloud Metadata
+<!-- section-summary: Dynamic inventory builds the host map from a source such as a cloud API, usually using tags or metadata. -->
+
+A **dynamic inventory** is generated by a plugin or script from another system. Cloud fleets often need this because instances can be replaced by autoscaling, image refreshes, blue-green deployments, or disaster recovery work. The host map should follow the live infrastructure as the provisioning system changes it.
+
+In AWS, the `amazon.aws.aws_ec2` inventory plugin can query EC2 and build groups from instance tags. The orders team might tag instances with `App=orders`, `Environment=prod`, and `Tier=web`, then let the plugin create groups from those tags.
+
+```yaml
+plugin: amazon.aws.aws_ec2
+regions:
+  - us-east-1
+filters:
+  tag:App: orders
+  instance-state-name: running
+hostnames:
+  - tag:Name
+compose:
+  ansible_host: private_ip_address
+keyed_groups:
+  - key: tags.Environment
+    prefix: env
+  - key: tags.Tier
+    prefix: tier
+```
+
+With that configuration, a host tagged `Environment=prod` and `Tier=web` can appear in groups like `env_prod` and `tier_web`. The playbook can target a stable group expression while the plugin refreshes which instances currently match the cloud metadata.
+
+Dynamic inventory moves the review point from a host list to the plugin configuration and the resource tags. That is a real production tradeoff. If a new instance has the wrong tag, Ansible can place it in the wrong group, so teams usually protect tags through infrastructure code, cloud policy, deployment checks, or a review step in the provisioning pipeline.
+
+The plugin setup also needs a normal dependency path. The repo can pin the collection in `requirements.yml`, the CI job can run `ansible-galaxy collection install -r requirements.yml`, and the inventory plugin file can stay in source control beside the static inventory. Cloud credentials should come from the runner or controller credential system, not from values committed next to inventory. When hosts appear or disappear quickly, the runbook should include an inventory refresh step so cached inventory does not send a playbook toward retired hosts.
+
+## Inspecting What Ansible Loaded
+<!-- section-summary: ansible-inventory shows the compiled host map after inventory files, plugins, and variable sources have loaded. -->
+
+Ansible compiles inventory before it runs a command or playbook. The compiled view includes inventory sources, groups, child groups, host variables, group variables, and plugin output. That compiled view is the one to trust because it shows what Ansible will actually use.
+
+For a visual group graph, run:
 
 ```bash
-ansible-inventory -i inventory/production.yml --graph
+ansible-inventory -i inventories/prod --graph
 ```
 
-For our hierarchical cluster scenario, the command prints the clean, parsed relationships:
-
-```plain
-@all:
-  |--@ungrouped:
-  |--@production:
-  |  |--@webservers:
-  |  |  |--web-node-01
-  |  |  |--web-node-02
-  |  |--@databases:
-  |  |  |--db-node-01
-```
-
-If you see a staging host listed inside the `@production` branch, you know your syntax or file boundaries are broken.
-
-To inspect the exact, merged connection details for an individual server, you query the specific host key:
+For the full inventory in JSON, run:
 
 ```bash
-ansible-inventory -i inventory/production.yml --host web-node-01
+ansible-inventory -i inventories/prod --list
 ```
 
-This outputs the complete, structured JSON dictionary:
+For one host's final variables, run:
 
-```json
-{
-    "ansible_host": "10.60.30.21",
-    "ansible_port": 22,
-    "ansible_user": "admin"
-}
+```bash
+ansible-inventory -i inventories/prod --host orders-web-01
 ```
 
-This view allows you to audit the active network target and user parameters in isolation, ensuring that no stale variables are leaking into your execution.
+These commands are the first verification step after changing inventory. If `orders-web-03` should be in `prod_web`, the graph should show it there. If Ansible should connect to `10.42.10.13`, the host output should show that value before a playbook tries to use it.
+
+The compiled view also helps with common failures. An empty graph usually means the wrong inventory path was selected or a plugin failed to parse. A host in the wrong group usually points to a YAML indentation issue, a copied host entry, or a cloud tag problem. A strange SSH target often shows up as an unexpected `ansible_host`, `ansible_port`, or `ansible_user` value.
+
+For dynamic inventory, add the plugin source to the same inspection habit:
+
+```bash
+ansible-inventory -i inventories/prod/aws_ec2.yml --list --yaml
+ansible-inventory -i inventories/prod/aws_ec2.yml --graph env_prod
+```
+
+If a host is missing, fix the tag, filter, credential, or region before running the playbook. If a retired host still appears, refresh the inventory cache or check the cloud source before trusting the target list.
+
+## Safety Checks Before a Real Run
+<!-- section-summary: A safe inventory workflow proves the host map, proves connectivity, and narrows the first production run. -->
+
+Inventory review should happen before a production playbook changes anything. Start by inspecting the graph, then inspect one representative host, then run a harmless module to confirm Ansible can reach the selected hosts.
+
+```bash
+ansible-inventory -i inventories/prod --graph prod_web
+ansible-inventory -i inventories/prod --host orders-web-01
+ansible -i inventories/prod prod_web -m ansible.builtin.ping
+```
+
+The `ping` module is an Ansible connectivity test. It checks that Ansible can connect, transfer and run a small module, and receive a response. It proves the inventory and basic connection path enough to move to the next check, while sudo, application health, and playbook behavior still need their own checks.
+
+For a playbook, preview the selected hosts before running tasks. This is especially useful in pipelines because a human approver can see the target set in the job output before the deploy step starts.
+
+```bash
+ansible-playbook -i inventories/prod deploy-orders-web.yml --list-hosts
+ansible-playbook -i inventories/prod deploy-orders-web.yml --limit orders-web-01 --list-hosts
+```
+
+If the target list is wrong, stop at the inventory layer. Fix the map, inspect it again, and then rerun the preview. A playbook can be perfectly written and still cause an outage when it runs against the wrong hosts.
 
 ## Putting It All Together
+<!-- section-summary: Reliable inventory gives stable names, current connection targets, useful groups, and a verification path. -->
 
-We started by looking at how an inaccurate or poorly maintained host catalog can lead to disastrous target errors across your production databases and web servers.
+The orders platform now has a clear host map. Inventory names such as `orders-web-01` stay stable for humans, `ansible_host` stores the current connection address, and groups such as `prod_web` and `staging_web` let playbooks target useful slices without copied host lists.
 
-Ansible answers this by separating host records into a disciplined, multi-layered inventory structure:
-- **Syntax Formats**: We use static INI or YAML files, preferring YAML's nested key-value definitions to maintain clear, readable structures.
-- **Hierarchical Groups**: We design parent-child trees (like `production` containing `webservers`) to ensure scope inheritance and granular playbook targeting.
-- **Dynamic Inventories**: We utilize secure cloud plugins that query live metadata and output JSON schemas, automating scaling environments.
-- **Under-the-Hood Resolution**: The control engine processes host catalog records in memory, making socket `getaddrinfo()` calls to verify target IPs and executing strict host key audits before connecting.
-- **Graph Diagnostics**: We leverage `ansible-inventory` tools to graph and audit merged host catalogs, validating boundaries before active playbooks run.
+The team can start with static inventory while the fleet is small. As production moves toward autoscaling or frequent instance replacement, dynamic inventory can pull from cloud metadata, provided the team treats tags and plugin filters as deployment boundaries.
 
-Following these practices ensures that your host catalog is a stable, secure map of your entire infrastructure.
+The daily habit stays the same in both cases. Inspect the compiled graph, check one host's final variables, prove basic connectivity, and preview the playbook host list before changing production. Inventory is the map, so the safest automation work starts by making the map visible.
 
 ## What's Next
 
-Now that you understand the structure of inventories, static and dynamic catalogs, and the mechanics of host-to-address mapping, the next article will explore **Groups and Host Variables**. We will look at how to organize variables into dedicated files, separate configuration values by operational groups, and avoid hardcoding environment settings in playbooks.
+Once the host map is readable, values start showing up. Web ports, service users, package names, feature flags, data paths, and environment labels all need homes. The next article shows how group variables and host variables keep those values close to the machines they describe.
 
 ---
 
 **References**
 
-- [Ansible Inventory Guide](https://docs.ansible.com/ansible/latest/inventory_guide/intro_inventory.html) - Official reference for static host catalogs and variable parameters.
-- [Working with Dynamic Inventories](https://docs.ansible.com/ansible/latest/inventory_guide/intro_dynamic_inventory.html) - Documentation on cloud inventory plugins and structured JSON schemas.
-- [POSIX System Interfaces - getaddrinfo()](https://pubs.opengroup.org/onlinepubs/9699919799/functions/getaddrinfo.html) - The IEEE POSIX standard defining socket-level DNS address resolution.
-- [Ansible Inventory Command Line Utility](https://docs.ansible.com/ansible/latest/cli/ansible-inventory.html) - Reference manual for graphing and auditing loaded inventories.
+- [Ansible inventory guide](https://docs.ansible.com/projects/ansible/latest/inventory_guide/index.html)
+- [How to build your inventory](https://docs.ansible.com/projects/ansible/latest/inventory_guide/intro_inventory.html)
+- [Working with dynamic inventory](https://docs.ansible.com/projects/ansible/latest/inventory_guide/intro_dynamic_inventory.html)
+- [Inventory plugins](https://docs.ansible.com/projects/ansible/latest/plugins/inventory.html)
+- [amazon.aws.aws_ec2 inventory plugin](https://docs.ansible.com/projects/ansible/latest/collections/amazon/aws/aws_ec2_inventory.html)
+- [ansible-inventory command](https://docs.ansible.com/projects/ansible/latest/cli/ansible-inventory.html)
+- [Introduction to ad hoc commands](https://docs.ansible.com/projects/ansible/latest/command_guide/intro_adhoc.html)

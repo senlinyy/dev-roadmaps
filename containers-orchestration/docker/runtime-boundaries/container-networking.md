@@ -12,210 +12,234 @@ aliases:
 
 ## Table of Contents
 
-1. [Why Networking Feels Weird](#why-networking-feels-weird)
-2. [The Mental Model](#the-mental-model)
-3. [Host to Container](#host-to-container)
-4. [Container to Container](#container-to-container)
-5. [The Bind Address](#the-bind-address)
-6. [Seeing the Path](#seeing-the-path)
-7. [Where Networking Breaks](#where-networking-breaks)
-8. [Putting It All Together](#putting-it-all-together)
-9. [What's Next](#whats-next)
+1. [The Four Networking Questions](#the-four-networking-questions)
+2. [Host-to-Container Traffic](#host-to-container-traffic)
+3. [Container-to-Container Traffic](#container-to-container-traffic)
+4. [`localhost` Depends on the Caller](#localhost-depends-on-the-caller)
+5. [Process Bind Addresses](#process-bind-addresses)
+6. [Compose Networks in Daily Work](#compose-networks-in-daily-work)
+7. [Inspecting the Path](#inspecting-the-path)
+8. [Common Failure Patterns](#common-failure-patterns)
+9. [Putting It All Together](#putting-it-all-together)
+10. [What's Next](#whats-next)
 
-## Why Networking Feels Weird
+## The Four Networking Questions
+<!-- section-summary: Docker networking becomes readable when you follow the caller, host entry point, Docker network, and application listener in order. -->
 
-Docker networking is a set of caller-specific paths between host ports, container network namespaces, bridge networks, service names, and process bind addresses.
+Picture a small team building a product catalog. The stack has a browser-based `web` app, a Node `api` service that listens on port `3000`, and a Postgres `db` service that listens on port `5432`. The containers start cleanly, the API logs say `Listening on 3000`, and then the browser gets a connection error at `http://localhost:3000`.
 
-The orders API container is running. The logs say `Listening on 3000`. You open `http://localhost:3000` and the browser fails. A few minutes later, the API tries to connect to Postgres at `localhost:5432` and fails too, even though the database container is healthy.
+A junior engineer might say, "The container is running, so why is the port closed?" The senior answer focuses first on **who is making the request**. A browser on the host, a process inside the API container, and a process inside the database container each sees a different network view. That caller-first habit turns the problem into a path the team can check one hop at a time.
 
-Those two failures look similar because both are connection failures. They are different paths. The browser is outside the container, trying to enter from the host. The API is inside one container, trying to reach another container. The word `localhost` means something different in each place.
+This article follows four questions through the same product catalog stack. **Where is the caller?** **Which host port, if any, points into Docker?** **Which Docker network and name carry service-to-service traffic?** **Which address and port does the application process actually listen on?** Those four questions connect every section that follows.
 
-A request does not simply "go to Docker." It crosses boundaries. Each boundary answers a different question: where is the caller, is there a published host port, which Docker network carries the traffic, which name resolves on that network, and which address is the process listening on inside the container.
+Docker gives each container its own **network namespace**. A network namespace is a private network view with its own interfaces, routes, ports, and loopback address. The host has its own network view too, so the host's port `3000` and the API container's port `3000` are separate places unless Docker creates a forwarding path between them.
 
-## The Mental Model
+## Host-to-Container Traffic
+<!-- section-summary: A published port creates a host-side entry point that forwards traffic into a container port. -->
 
-A network namespace is the container's private network table: interfaces, routes, ports, and loopback address belong to that namespace rather than to the host.
+**Host-to-container traffic** means a caller outside the container wants to enter the container. In local development, that caller is usually your browser, curl, an API client, or another program running directly on your laptop. Docker uses **port publishing** to create the entry point from the host into the container.
 
-A container has its own network namespace. That means it has its own interfaces, routes, ports, and loopback address. From inside the container, `localhost` means that container. From the host, `localhost` means the host. From another container, `localhost` means the other container making the call.
-
-Example: the API container can listen on `127.0.0.1:3000` inside its namespace while your browser's `127.0.0.1:3000` still points at the host. They are both loopback addresses, but they belong to different network tables.
-
-| Viewpoint | What it can see directly | What `localhost` means |
-| --- | --- | --- |
-| Host | Host ports and Docker-published ports | The Docker host |
-| One container | Its own interfaces and loopback | That same container |
-| Docker bridge network | Peer containers attached to the network | Each caller's own container |
-
-The useful picture is two paths:
-
-```mermaid
-flowchart LR
-    Browser["Browser<br/>(host)"]
-    HostPort["Host port<br/>(8080)"]
-    Forward["Docker port forward"]
-    Bridge["Bridge network"]
-    ApiIface["API container interface"]
-    Api["API process<br/>(3000)"]
-    Dns["Docker DNS"]
-    Db["db container<br/>(5432)"]
-
-    Browser --> HostPort --> Forward --> Bridge --> ApiIface --> Api
-    Api --> Dns --> Db
-```
-
-The top path is host-to-container traffic. The bottom path is container-to-container traffic. They use different names, ports, and evidence.
-
-## Host to Container
-
-Host-to-container traffic uses a published port rule that maps a host address and port to a port inside the container's network namespace.
-
-
-![Diagram showing host traffic flowing through a Docker published port to a container listener](/content-assets/articles/article-containers-orchestration-docker-container-networking/host-container-port-path.png)
-
-*The host-to-container path only works when the port rule and the application listener line up.*
-
-A process inside a container can listen on port 3000 without opening port 3000 on the host. That port belongs to the container's network namespace. Two containers can both listen on port 3000 internally because they do not share the same port table.
-
-Publishing creates a path from a host address and port to a container port:
+A container can listen on port `3000` internally while the host has no port `3000` open for that container. The internal port belongs to the container's network namespace. The host needs a published rule that maps a host address and host port to the container port.
 
 ```bash
 docker run -d \
-  --name orders-api \
+  --name catalog-api \
   -p 127.0.0.1:8080:3000 \
-  devpolaris/orders-api:local
+  catalog-api:dev
 ```
 
-Read the mapping as `host address:host port -> container port`. A browser on the host calls `127.0.0.1:8080`. Docker forwards that traffic to port `3000` inside the container. The application still listens on `3000`. The outside caller uses `8080`.
+The mapping says that requests to `127.0.0.1:8080` on the host should forward to port `3000` inside the `catalog-api` container. The API process still listens on `3000`. The browser uses `8080` because `8080` is the host-side door.
 
-The host address matters. Publishing `8080:3000` publishes on all host interfaces by default. Publishing `127.0.0.1:8080:3000` limits the host entry point to loopback. For local APIs, databases, and admin tools, loopback publishing is usually the safer development default.
+The host address matters. `-p 8080:3000` publishes the port on all host interfaces by default, so other machines that can reach your laptop may also reach the service. `-p 127.0.0.1:8080:3000` keeps the host entry point on loopback, which is a safer default for local APIs, admin tools, and databases.
 
-`EXPOSE 3000` in a Dockerfile does not create this forwarding path. It documents the intended container port. Publishing happens when the container is created.
+The Dockerfile instruction `EXPOSE 3000` helps humans and tools understand which port the image expects to use. It documents the container port. The actual host forwarding rule appears when the container starts with `-p` or `--publish`, or when Compose declares a `ports` entry.
 
-## Container to Container
+Host traffic is only half of the catalog stack. After the browser reaches the API, the API still needs to call Postgres, and that second request starts from inside a container.
 
-Container-to-container traffic usually uses a shared Docker network and service names rather than host published ports.
+## Container-to-Container Traffic
+<!-- section-summary: Containers on a shared user-defined network reach each other by service name and container port. -->
 
+**Container-to-container traffic** means one container process calls another container process. In the catalog stack, the API connects to Postgres. The caller is now inside the `api` container, so the host-published port is the wrong piece of information for that request.
 
-![Diagram showing container-to-container DNS resolution on a Docker bridge network](/content-assets/articles/article-containers-orchestration-docker-container-networking/container-dns-bridge-network.png)
+Docker's normal path for service-to-service traffic is a **user-defined bridge network**. A bridge network is a private network Docker creates on the host so attached containers can exchange traffic. User-defined bridges also provide automatic DNS resolution, so a container can call another container by name or network alias.
 
-*Container-to-container traffic uses network names and container ports, not the host-facing published port.*
-
-Containers on the same user-defined bridge network can reach each other directly on that network. Docker also provides name resolution so a container can use another container's name or network alias instead of a changing IP address.
-
-Example: an API container should call `postgres://orders:orders@db:5432/orders` when the database service is named `db` on the same Compose network. It should not call `localhost:5432` unless the database process is inside the API container itself.
-
-Compose makes this normal:
+In Compose, service names become the everyday DNS names. If the database service is named `db`, the API connection string should use `db:5432` because `5432` is the Postgres container port on the shared network.
 
 ```yaml
 services:
   api:
     build: .
     environment:
-      DATABASE_URL: postgres://orders:orders@db:5432/orders
+      DATABASE_URL: postgres://catalog:catalog@db:5432/catalog
 
   db:
-    image: postgres:18
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: catalog
+      POSTGRES_PASSWORD: catalog
+      POSTGRES_DB: catalog
 ```
 
-Compose creates a project network and attaches both services. The API uses `db` because `db` is the service name. Docker's embedded DNS resolves that name to the current database container address on the project network.
+Compose creates a default project network and attaches both services. The API asks Docker DNS for `db`, Docker returns the current database container address on that network, and the API connects to port `5432` in the database container. If the database container gets recreated with a new private IP, the service name remains the stable name the API uses.
 
-Container IP addresses are weak configuration. A container can get a different IP when it is recreated. Service names are stronger because they describe the role the application wants. The API does not care which private address the current database container has. It cares that the database service is reachable as `db` on port 5432.
+This is why container IP addresses make weak configuration. They describe one container instance at one moment. Service names describe the role the caller wants: "the database for this stack." Docker's official Compose networking docs call out this difference directly: service names stay stable while container IP addresses can change after recreation.
 
-This is also why service-to-service traffic should not usually go through the host published port. The API does not need to call `localhost:8080` to reach another service on the same Compose network. It should use the service name and the container port.
+Now the catalog team has two working paths: browser to host port to API, and API to service name to Postgres. The word that still trips people up is `localhost`, so let's slow down there.
 
-## The Bind Address
+## `localhost` Depends on the Caller
+<!-- section-summary: `localhost` means the loopback address inside the caller's own network namespace. -->
 
-The bind address is the interface address where the application process accepts connections inside its own network namespace.
+**`localhost`** is the loopback name for the machine or namespace making the request. On your laptop shell, `localhost` points at the host. Inside the `api` container, `localhost` points back at the `api` container. Inside the `db` container, `localhost` points back at the `db` container.
 
-In plain terms, the bind address answers "which local network addresses will this process listen on?" `127.0.0.1` means loopback only. `0.0.0.0` means all interfaces inside that namespace.
+That caller viewpoint explains two common catalog bugs. The browser can use `http://localhost:8080` because the browser lives on the host and Docker published host port `8080`. The API should use `db:5432` for Postgres because the API lives on the Docker network and the database service name lives there.
 
-Publishing a port and resolving a name only get traffic to the container. The application process still has to accept the connection.
+Here is the same idea in a small table:
 
-Many development servers bind to `127.0.0.1` by default. On a laptop without containers, that often works because the browser is on the same machine. Inside a container, `127.0.0.1` is the container's loopback interface. A process bound only to loopback may accept connections from inside the same container while rejecting traffic arriving through the container's network interface.
+| Caller | Example address | What the address reaches |
+| --- | --- | --- |
+| Browser on host | `http://localhost:8080` | Host port `8080`, forwarded to API port `3000` |
+| API container | `postgres://db:5432/catalog` | The `db` service on the Compose network |
+| API container | `http://localhost:3000` | The API container itself |
+| Database container | `localhost:5432` | The database container itself |
 
-For an HTTP service that should receive Docker network traffic, the process usually needs to bind to `0.0.0.0` inside the container:
+This is also why a container can seem healthy while the host still fails to reach it. The API may respond to `curl localhost:3000` from inside the container. The browser still needs the host publish rule, the correct host port, and an application listener that accepts traffic coming from the container interface.
 
-```text
-Listening on 0.0.0.0:3000
-```
+That last part brings us to the process bind address. Docker can deliver packets to the container, and the application process still has to accept them.
 
-That does not mean the service is automatically exposed to the world. It means the process accepts connections on the container's interfaces. The host-side publication can still be restricted to loopback:
+## Process Bind Addresses
+<!-- section-summary: The process bind address controls which container interfaces the application listens on. -->
+
+A **bind address** is the local network address a process chooses for accepting connections. `127.0.0.1` means loopback only. `0.0.0.0` means all IPv4 interfaces inside that namespace. The same application port can behave very differently depending on that address.
+
+Many development servers bind to `127.0.0.1` by default. That works fine when the browser and server run directly on the same laptop network view. Inside a container, `127.0.0.1` belongs to the container's loopback interface, so traffic arriving from Docker's bridge interface may never reach the process.
+
+For a containerized HTTP API that should receive host-published or Compose-network traffic, the application usually needs to listen on `0.0.0.0` inside the container:
 
 ```bash
-docker run -p 127.0.0.1:8080:3000 devpolaris/orders-api:local
+HOST=0.0.0.0 PORT=3000 node server.js
 ```
 
-The process bind address and host publish address live at different boundaries.
+Frameworks expose this setting in different ways. Vite often uses `--host 0.0.0.0`, Next.js can receive `-H 0.0.0.0`, Rails has `-b 0.0.0.0`, and many Node servers accept a host argument in `server.listen`. The exact flag belongs to the framework, while the Docker idea stays the same.
 
-## Seeing the Path
+Binding to `0.0.0.0` inside the container tells the process to accept traffic on the container's interfaces. The host publish address still controls the outside entry point, so `-p 127.0.0.1:8080:3000` can keep the host-facing side local while the process listens broadly inside the container.
 
-Network inspection is most useful when you follow the exact caller path: host to published port, or container to service name.
+At this point the team knows the separate choices: host port for outside callers, service name for peer containers, and bind address for the process. Compose puts those choices into one repeatable file.
 
-Start with the host path:
+## Compose Networks in Daily Work
+<!-- section-summary: Compose separates host-facing ports from service-to-service names, which keeps local stacks predictable. -->
 
-```text
-CONTAINER ID   IMAGE                         STATUS        PORTS                        NAMES
-9f7a8c2d4d1a   devpolaris/orders-api:local   Up 2 minutes  127.0.0.1:8080->3000/tcp     orders-api
+**Docker Compose** describes a multi-container application in one file. For networking, Compose creates a project-scoped network by default, attaches the services to it, and gives each service a DNS name based on the service key. That default is enough for many local stacks.
+
+The product catalog stack can publish only the API to the host while keeping the database available to peer containers by service name:
+
+```yaml
+services:
+  api:
+    build: ./api
+    command: npm run dev -- --host 0.0.0.0
+    ports:
+      - "127.0.0.1:8080:3000"
+    environment:
+      DATABASE_URL: postgres://catalog:catalog@db:5432/catalog
+    depends_on:
+      - db
+
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: catalog
+      POSTGRES_PASSWORD: catalog
+      POSTGRES_DB: catalog
 ```
 
-The `PORTS` column shows the host-to-container translation. If it is empty, the host has no published entry point. If it says `127.0.0.1:8080->3000/tcp`, the host should call port 8080 and Docker should forward to port 3000 inside the container.
+The `ports` entry creates the host-to-container path for the browser. The `DATABASE_URL` uses `db:5432` for the container-to-container path. The API command binds to `0.0.0.0` so Docker-delivered traffic can reach the process inside the container.
 
-Then check the listener from inside the container:
+This separation is valuable in production-like local work. Databases and queues often need no host publication at all, because only other services in the stack should reach them. API and web services usually publish a loopback host port so humans and local tools can test them.
+
+`depends_on` affects startup order in Compose. Postgres may still need a few seconds before it accepts connections. Real applications still need retry logic, health checks, or wait behavior because the container may start before the database process has finished initialization.
+
+Once a path fails, the fastest debugging approach is to inspect the same path the caller used. The host path and the container path leave different evidence.
+
+## Inspecting the Path
+<!-- section-summary: Network debugging should check the caller's path before checking random Docker objects. -->
+
+For host-to-container traffic, the first evidence is the published port. `docker compose ps` or `docker ps` shows the host address, host port, and container port Docker created. If the API should be reachable at `http://localhost:8080`, the port table should show a rule like `127.0.0.1:8080->3000/tcp`.
 
 ```bash
-docker exec orders-api sh -lc "ss -tlnp || netstat -tlnp"
+docker compose ps
+docker port catalog-api
 ```
 
-Useful output looks like this:
-
-```text
-State   Local Address:Port
-LISTEN  0.0.0.0:3000
-```
-
-For container-to-container paths, inspect the network and test from the caller:
+For the process listener, check from inside the API container. The useful evidence is the local address and port the process listens on. A listener on `0.0.0.0:3000` can accept Docker-network traffic, while a listener on `127.0.0.1:3000` only accepts loopback traffic inside that container.
 
 ```bash
-docker network inspect orders_default
-docker exec orders-api sh -lc "getent hosts db && nc -vz db 5432"
+docker compose exec api sh -lc 'ss -tlnp || netstat -tlnp'
 ```
 
-`getent hosts db` proves name resolution from the API's viewpoint. `nc -vz db 5432` proves a TCP connection to the database port. If DNS works and TCP fails, the name is fine but the database process or port is not ready.
+For service-to-service traffic, test from the caller container. In the catalog stack, the API is the caller and the database is the target. Name resolution and TCP reachability are separate checks, so the command below tests both.
 
-## Where Networking Breaks
+```bash
+docker compose exec api sh -lc 'getent hosts db && nc -vz db 5432'
+```
 
-Host-to-container failures often start with missing or wrong port publication. The container can be healthy, the app can listen on 3000, and the browser can still fail because nothing forwards host traffic into the container.
+`getent hosts db` checks Docker DNS from the API's viewpoint. `nc -vz db 5432` checks whether the API container can open a TCP connection to the database container port. If DNS works and TCP fails, the name path is fine and the database listener, readiness, network membership, or firewall-like runtime setting needs attention.
 
-Container-to-container failures often start with `localhost`. From inside the API container, `localhost` is the API container. If the database is another container, the hostname should be `db` or another network alias on a shared Docker network.
+The network object itself can also tell a useful story. `docker network inspect` shows which containers attach to the network and which aliases Docker registered. That output helps when two Compose projects have similar names or a service accidentally attaches to a different custom network.
 
-Bind-address failures are subtler. The port is published. The container is on the right network. The process is running. The app still only listens on `127.0.0.1` inside the container, so traffic arriving from Docker's bridge cannot reach it.
+```bash
+docker network inspect catalog_default
+```
 
-Stale-container failures happen when the name or port belongs to an old container. You rebuild an image, but the running container still came from the previous image. Or port 8080 is already attached to a container you forgot about. `docker ps -a` tells that story.
+These checks line up with the four questions from the start. Caller, host entry point, network name, and process listener each has its own command and its own evidence.
+
+## Common Failure Patterns
+<!-- section-summary: Most Docker networking failures come from mixing up host ports, container ports, names, caller location, or listener addresses. -->
+
+The first common failure is using the container port from the host. The API logs say `Listening on 3000`, so the browser opens `localhost:3000`. If Docker published `127.0.0.1:8080:3000`, the browser needs `localhost:8080` because `8080` is the host-side port.
+
+The second failure is using the host port from another container. The API connects to `localhost:8080` or `localhost:5432` because those addresses worked from the laptop. From inside the API container, `localhost` points back at the API container, so peer services should use service names like `db` and their container ports.
+
+The third failure is missing a shared network. Two containers can both run successfully while they sit on different user-defined networks. Docker DNS only resolves names inside the networks where the caller and target both participate.
+
+The fourth failure is a process bound to loopback. The port publish rule exists and the service name resolves, yet the process accepts only `127.0.0.1` inside its own container. Changing the application host setting to `0.0.0.0` usually fixes that specific shape.
+
+The fifth failure is readiness. Compose can create the network and start containers in the expected order, while Postgres still needs a few seconds before it accepts connections. Application retry logic and health checks handle that real startup gap.
+
+Each failure has a different fix because each one lives at a different part of the path. The senior habit is to name the caller first, then follow the path one hop at a time.
 
 ## Putting It All Together
+<!-- section-summary: A working Docker network path matches the caller, address, port, Docker network, service name, and process listener. -->
 
-The opening failures were not one networking problem. They were two paths:
+The product catalog stack now has a readable network story. The browser runs on the host, so it enters through `127.0.0.1:8080`. Docker forwards that host port to API port `3000` inside the `api` container. The API process listens on `0.0.0.0:3000`, so it accepts the traffic delivered by Docker.
 
-- Browser to host port to Docker forwarding rule to container port to API process.
-- API container to Docker DNS to database container to Postgres port.
+The API talks to Postgres from inside the Compose network. It uses `db:5432` because `db` is the service name and `5432` is the database container port. Docker DNS resolves the service name on the shared network, and the database process accepts the connection inside the `db` container.
 
-The word `localhost` changed meaning depending on the caller. The published host port existed only for callers outside the container. The service name existed on the Docker network. The process bind address decided whether Docker-delivered traffic could actually enter the app.
+The important ideas connect cleanly:
 
-Once you can draw the path, the evidence lines up. `docker ps` shows the host entry point. `ss` inside the container shows whether the process listens on the right address. `docker network inspect` shows shared network membership and aliases. A caller-side DNS and TCP test shows whether one container can reach another.
+| Concept | Plain English meaning | Catalog example |
+| --- | --- | --- |
+| **Network namespace** | The caller's private network view | Host, `api`, and `db` each have their own loopback |
+| **Published port** | Host entry point forwarded into a container | `127.0.0.1:8080` to API `3000` |
+| **Bridge network** | Private Docker network for attached containers | Compose creates `catalog_default` |
+| **Docker DNS** | Name lookup for containers on a user-defined network | `api` resolves `db` |
+| **Container port** | Port the target process listens on inside its container | Postgres listens on `5432` |
+| **Bind address** | Local address the process accepts traffic on | API listens on `0.0.0.0` |
+
+Networking problems feel random when all those ideas collapse into "the Docker connection failed." They become normal engineering problems when the path is spelled out from the caller's side. The browser, API, and database each get their own path, and each path gives you a small set of evidence to check.
 
 ## What's Next
 
-Networking explains how traffic crosses the container boundary. The next article covers the filesystem boundary. A container can be reachable and still lose data, hide built files, or write host files with surprising ownership if storage is not placed deliberately.
+The catalog API can now receive browser traffic and reach Postgres by service name. The next surprise comes from storage. A database container can be reachable and healthy, while its data still disappears after recreation because the files lived in the wrong place.
 
-![Summary infographic for Docker network namespaces, bridges, DNS, published ports, bind addresses, and caller viewpoint](/content-assets/articles/article-containers-orchestration-docker-container-networking/container-networking-summary.png)
-
-*The networking summary keeps the caller viewpoint at the center of every address choice.*
+The next article follows Docker's filesystem view: image layers, writable layers, named volumes, bind mounts, hidden files, and ownership. The same style of thinking applies there too, because storage problems also come from crossing a runtime boundary without naming which side owns the path.
 
 ---
 
 **References**
 
-- [Docker Docs: Networking overview](https://docs.docker.com/engine/network/) - Official overview of Docker networks, drivers, and the default bridge network.
-- [Docker Docs: Bridge network driver](https://docs.docker.com/engine/network/drivers/bridge/) - Official details on bridge networks, port publishing, isolation, and container communication.
-- [Docker Docs: Publishing and exposing ports](https://docs.docker.com/get-started/docker-concepts/running-containers/publishing-ports/) - Official explanation of host ports, container ports, and default publication behavior.
-- [Docker Docs: Networking in Compose](https://docs.docker.com/compose/how-tos/networking/) - Official guide to Compose service names, default networks, and container IP behavior.
+- [Docker Docs: Networking overview](https://docs.docker.com/engine/network/) - Official overview of Docker networking concepts, drivers, and how containers connect.
+- [Docker Docs: Bridge network driver](https://docs.docker.com/engine/network/drivers/bridge/) - Documents user-defined bridge networks, automatic DNS resolution, network isolation, and bridge behavior.
+- [Docker Docs: Port publishing and mapping](https://docs.docker.com/engine/network/port-publishing/) - Explains how Docker publishes container ports on the host and how host addresses affect exposure.
+- [Docker Docs: Publishing and exposing ports](https://docs.docker.com/get-started/docker-concepts/running-containers/publishing-ports/) - Beginner guide covering host ports, container ports, `-p`, `-P`, and `EXPOSE`.
+- [Docker Docs: Networking in Compose](https://docs.docker.com/compose/how-tos/networking/) - Explains Compose service names, project networks, container IP changes, and host-versus-container ports.
+- [Docker Docs: docker container run](https://docs.docker.com/reference/cli/docker/container/run/) - CLI reference for `--publish`, networking options, and container runtime flags.

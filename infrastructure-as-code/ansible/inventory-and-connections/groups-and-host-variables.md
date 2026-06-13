@@ -9,190 +9,238 @@ id: article-infrastructure-as-code-ansible-groups-host-variables
 
 ## Table of Contents
 
-1. [Variable Scoping in Configuration Management](#variable-scoping-in-configuration-management)
-2. [The Variable Structure Preview](#the-variable-structure-preview)
-3. [Group Variables: Designing Practical Scopes](#group-variables-designing-practical-scopes)
-4. [Host Variables: Handling Infrastructure Exceptions](#host-variables-handling-infrastructure-exceptions)
-5. [Directory-Based Variables beside Inventory](#directory-based-variables-beside-inventory)
-6. [Under the Hood: Variable Compilation and Memory Resolution](#under-the-hood-variable-compilation-and-memory-resolution)
-7. [Auditing Merged Variables](#auditing-merged-variables)
-8. [Putting It All Together](#putting-it-all-together)
-9. [What's Next](#whats-next)
+1. [Why Values Need a Home](#why-values-need-a-home)
+2. [The Directory Shape](#the-directory-shape)
+3. [Group Variables for Shared Settings](#group-variables-for-shared-settings)
+4. [Host Variables for Exceptions](#host-variables-for-exceptions)
+5. [How Ansible Chooses a Value](#how-ansible-chooses-a-value)
+6. [Secrets and Ansible Vault](#secrets-and-ansible-vault)
+7. [Verifying Values Before a Run](#verifying-values-before-a-run)
+8. [Failure Reading and Rollback](#failure-reading-and-rollback)
+9. [Putting It All Together](#putting-it-all-together)
+10. [What's Next](#whats-next)
+11. [References](#references)
 
-## Variable Scoping in Configuration Management
+## Why Values Need a Home
+<!-- section-summary: Group and host variables let the inventory describe environment values without copying playbooks. -->
 
-Group and host variables are inventory-scoped configuration values that Ansible merges before running tasks on each selected host.
+Inventory starts as a host map, then real work adds values. The orders web servers need an application port, an Nginx server name, a service user, a log directory, and a package version. Staging and production need different domains, and one older production host may need a temporary data path until it is rebuilt.
 
-In system automation, variable scoping is the method of restricting the visibility and lifetime of a variable value to a specific logical boundary, such as a whole infrastructure fleet, a specific service tier, or a single physical server node. Instead of hardcoding concrete parameters like IP addresses, service ports, domain names, and directory paths directly inside your playbook files, you use variables to act as placeholders. You then declare the actual data values inside your host catalog, allowing the playbook to remain a highly reusable blueprint that behaves differently based on the target hosts.
+**Group variables** and **host variables** give those values a clear home. A group variable applies to every host in a group, while a host variable applies to one inventory host. The playbook can stay focused on the task, and the inventory can describe the differences between environments, roles, and one-machine exceptions.
 
-To understand why a disciplined variable scoping strategy is essential, consider our scenario. You are managing a configuration playbook for a web application database cluster.
+That separation is what lets one playbook configure both staging and production. The template task can render `{{ orders_app_port }}` every time, while the value comes from the right inventory files for the selected host. The playbook remains one source of behavior instead of becoming a pile of copied environment-specific versions.
 
-If you hardcode these parameters inside your playbooks, a single playbook file cannot deploy both staging and production environments because the ports, usernames, and database names differ between them. Temporary maintenance changes, such as draining traffic from a single server, force you to modify the shared playbook, risking configuration errors across healthy servers, while secrets committed in plaintext create an immediate security vulnerability.
+## The Directory Shape
+<!-- section-summary: A predictable inventory directory makes host membership, group values, and host exceptions easy to review. -->
 
-Ansible solves this by splitting playbooks from variables. The playbook defines *how* the work is done, templates define *how* values are placed, and the inventory defines *what* values apply to which hosts. By scoping variables at the narrowest useful level, you keep your playbooks completely general, modular, and easy to maintain.
+Most teams start with a simple layout and grow into a directory per environment. Each environment directory contains a host map and two optional variable directories. `group_vars` stores values for groups, and `host_vars` stores values for individual hosts.
 
-## The Variable Structure Preview
-
-Here is an early, comment-free directory structure and variable configuration preview. It demonstrates how to separate shared group variables from unique host variables using structured YAML files placed beside your main inventory:
-
-### File: `inventory/hosts.yml`
 ```yaml
+inventories/
+  staging/
+    hosts.yml
+    group_vars/
+      all.yml
+      staging_web.yml
+      staging_workers.yml
+    host_vars/
+      orders-stg-web-01.yml
+  prod/
+    hosts.yml
+    group_vars/
+      all.yml
+      prod_web.yml
+      prod_workers.yml
+    host_vars/
+      orders-web-02.yml
+```
+
+This layout gives reviewers quick clues before they read the YAML. A change under `inventories/prod/group_vars/prod_web.yml` affects production web hosts. A change under `inventories/prod/host_vars/orders-web-02.yml` affects one host, so the reviewer can ask why that machine needs special treatment.
+
+The path also helps operators during incidents. If the order web port looks wrong on `orders-web-02`, the team can check the host file first, then the web group file, then the environment-wide `all.yml`. The files line up with the questions people ask under pressure.
+
+## Group Variables for Shared Settings
+<!-- section-summary: Group variables define shared values once for every host in a role, environment, or platform slice. -->
+
+A **group variable** applies to every host in an inventory group. Use it for values that are true for all hosts in that group: application ports, service names, package channels, log endpoints, feature flags, timezone settings, and environment labels.
+
+For the production web group, the orders team might define the values needed by Nginx, systemd, and the application config template:
+
+```yaml
+orders_environment: production
+orders_service_user: orders
+orders_app_port: 9000
+orders_app_root: /opt/orders
+orders_config_dir: /etc/orders
+orders_nginx_server_name: orders.example.com
+orders_package_version: "2026.06.12"
+```
+
+Now the web role can use the same variable names for every environment. Production supplies `orders_nginx_server_name: orders.example.com`, while staging supplies `orders_nginx_server_name: staging-orders.example.com`. The tasks stay free of environment-specific branches for normal differences.
+
+```yaml
+- name: Render orders application config
+  ansible.builtin.template:
+    src: orders.yml.j2
+    dest: "{{ orders_config_dir }}/orders.yml"
+    owner: "{{ orders_service_user }}"
+    group: "{{ orders_service_user }}"
+    mode: "0640"
+```
+
+Group variables can also sit directly inside inventory YAML, but separate files scale better. The host map stays about membership, and the group files stay about values. That split makes reviews cleaner when the fleet grows beyond a handful of hosts.
+
+The full shape is easier to see when the files sit next to each other:
+
+```yaml
+# inventories/prod/hosts.yml
 all:
   children:
-    staging:
+    prod_web:
       hosts:
-        stage-app-01:
-          ansible_host: 10.70.40.11
-    production:
-      hosts:
-        prod-app-01:
-          ansible_host: 10.70.50.11
-        prod-app-02:
-          ansible_host: 10.70.50.12
+        orders-web-01:
+        orders-web-02:
+
+# inventories/prod/group_vars/prod_web.yml
+orders_app_port: 9000
+orders_nginx_server_name: orders.example.com
+orders_api_log_level: warn
+
+# inventories/prod/host_vars/orders-web-02.yml
+orders_api_log_level: debug
 ```
 
-### File: `inventory/group_vars/production.yml`
+For this run, `orders-web-01` receives `warn`, and `orders-web-02` receives `debug`. That one-host exception should have a reason and an expiry, because host variables are easy to forget after the incident is over.
+
+## Host Variables for Exceptions
+<!-- section-summary: Host variables should make one-machine exceptions visible and temporary. -->
+
+A **host variable** applies to one inventory host. Use it for exceptions that truly belong to one machine: a temporary data directory, a migration flag, a special SSH port, a different disk mount, or a maintenance window for a host that has unusual customer traffic.
+
+For example, `orders-web-02` may still use an old attached disk during a storage migration. The group default says the data directory is `/var/lib/orders`, and the host file overrides only the value that differs.
+
 ```yaml
-app_port: 9000
-app_domain: app.example.com
-ansible_user: admin
+orders_data_dir: /mnt/legacy-orders-data
+orders_storage_migration_ticket: INC-48291
+orders_maintenance_window: sunday-0200-utc
 ```
 
-### File: `inventory/host_vars/prod-app-02.yml`
+The playbook can keep rendering `{{ orders_data_dir }}` without knowing which host supplied the value. Most web hosts receive the group value, and `orders-web-02` receives the host value until the migration finishes.
+
+Host variables should be easy to explain. If five web hosts need the same value, move it to the group. If a host variable stays around after the migration ticket closes, remove it in a cleanup pull request so the inventory stops teaching future readers that the exception is normal.
+
+## How Ansible Chooses a Value
+<!-- section-summary: Variable precedence decides which copy wins when the same variable name appears in several places. -->
+
+Ansible has **variable precedence**, which means some variable sources override others when the same name appears more than once. The full table can wait until you need it, and the practical habit starts right away: keep each important value in one narrow, explainable place.
+
+For inventory variables, host-specific values override broader group values. A value in `host_vars/orders-web-02.yml` can override a value from `group_vars/prod_web.yml` for that one host. More explicit runtime values, such as extra variables passed with `-e`, can override many other sources, so they deserve careful handling.
+
+Here is a common production shape:
+
 ```yaml
-drain_before_reload: true
+# inventories/prod/group_vars/all.yml
+orders_environment: production
+orders_log_endpoint: logs.prod.internal.example.com
 ```
 
-## Group Variables: Designing Practical Scopes
-
-Group variables are values that apply automatically to every host machine that belongs to a specific inventory group. They are the ideal choice for settings that are shared across an entire service tier, environment, or physical datacenter location.
-
-For example, all servers inside your production database group will likely share the same values for these parameters:
-
-| Variable | Example Value |
-|---|---|
-| `http_port` | `8080` |
-| `log_directory` | `/var/log/app` |
-| `ansible_user` | `deploy` |
-
-By defining these values at the group level, you enforce consistency across your systems. You write the parameter once in your group variables block, and every host inside that group receives the same setting unless a narrower variable scope deliberately overrides it.
-
-The main operational trap is choosing group names that are too broad. If you define a group variable named `port: 80` inside a broad parent group named `web`, you might accidentally overwrite custom ports on specialized web servers that belong to child groups. You must design group structures around clear, bounded service definitions (like `customer_db` or `internal_api`) to ensure variables only apply to the intended targets.
-
-## Host Variables: Handling Infrastructure Exceptions
-
-Host variables are values that apply to exactly one managed server node in your inventory. They are best reserved for unique infrastructure exceptions and physical parameters, not shared configuration values.
-
-The `ansible_host` variable overrides the connection address for a specific node. When the inventory name is a human-readable label like `prod-cache-01`, `ansible_host` holds the actual IP or DNS name Ansible dials. Storage-specific variables like `storage_disk_path` let the same role behave differently on each machine based on its disk layout. Drain-trigger variables like `drain_before_reload` control conditional logic inside the role, allowing the playbook to wait for active connections to close before restarting a service.
-
-You must avoid copying the same variable across multiple individual host files. If you find yourself writing `db_port: 5432` inside five separate host variable files, you are creating a drift hazard. If the database port shifts to `5433` in the future, you must update five separate files by hand. If you miss one, that server will drift. In this scenario, `db_port` is a shared group variable, not a host exception, and must be moved to the group scope immediately.
-
-## Directory-Based Variables beside Inventory
-
-Directory-based variables are variable files stored beside the inventory instead of inline inside the host list. This keeps the inventory focused on which machines exist, while `group_vars/` and `host_vars/` hold the values those machines need.
-
-Example: `inventory/hosts.yml` can list `prod-app-02`, while `inventory/host_vars/prod-app-02.yml` stores its unique `drain_before_reload: true` setting. While you can write variables inline inside your main inventory file, this practice quickly leads to massive, unreadable documents as your infrastructure scales.
-
-The directory structure follows a strict naming convention:
-
-```plain
-inventory/
-├── hosts.yml              # The clean host catalog map (contains no vars)
-├── group_vars/
-│   ├── all.yml            # Variables applied to every host in the inventory
-│   ├── staging.yml        # Variables applied only to hosts in group "staging"
-│   └── production.yml     # Variables applied only to hosts in group "production"
-└── host_vars/
-    ├── prod-app-01.yml    # Variables applied only to host "prod-app-01"
-    └── prod-app-02.yml    # Variables applied only to host "prod-app-02"
+```yaml
+# inventories/prod/group_vars/prod_web.yml
+orders_app_port: 9000
+orders_data_dir: /var/lib/orders
 ```
 
-When you run a playbook, the Ansible execution engine automatically searches for these folders. If it targets a host named `prod-app-01` that belongs to the group `production`, it reads `group_vars/production.yml` and `host_vars/prod-app-01.yml`, merging their content in memory. This physical separation keeps your inventory files extremely clean, makes pull requests simple to review, and prevents a variable change on a single host from modifying unrelated group settings.
-
-## Under the Hood: Variable Compilation and Memory Resolution
-
-Variable compilation is the step where Ansible builds one final variable dictionary for each selected host. A namespace is that host's isolated set of active values, so one host's exceptions do not automatically become another host's settings.
-
-Example: `prod-app-01` and `prod-app-02` can share `app_port: 9000` from `group_vars/production.yml`, while only `prod-app-02` receives `drain_before_reload: true` from its host file.
-
-Under the hood, when you trigger a playbook, Ansible opens a fresh variable scope in memory for each target host. Group variables merge into this scope starting from the highest-level ancestor group and working down to the most specific child group, with more specific groups overriding broader ones on conflict. If a host belongs to multiple sibling groups at the same hierarchy level, Ansible applies deterministic merge rules, and `ansible_group_priority` can make that ordering explicit when needed. Host variables then layer on top, giving individual machine settings the final word.
-
-Jinja2, the Python-based templating engine that Ansible uses to evaluate `{{ }}` expressions, reads the completed per-host scope when rendering task arguments. Because the scope is built fresh per host before any task runs, two hosts in the same play can receive completely different rendered values from the same task definition. If a task running on `prod-app-01` registers a temporary runtime value, that registered result belongs to that host's task context rather than becoming a shared value for every other host.
-
-```mermaid
-flowchart TD
-    subgraph Filesystem["Filesystem Configuration"]
-        AllFile["group_vars/all.yml<br/>(Global Vars)"]
-        GroupFile["group_vars/production.yml<br/>(Group Vars)"]
-        HostFile["host_vars/prod-app-01.yml<br/>(Host Exceptions)"]
-    end
-
-    subgraph Memory["Control Node Memory (prod-app-01 Namespace)"]
-        Base["1. Base Namespace"]
-        GroupMerge["2. Group Overwrites"]
-        HostMerge["3. Host Overwrites"]
-        JinjaEval["4. Jinja2 Value Rendering"]
-    end
-
-    AllFile -->|Load Base| Base
-    GroupFile -->|Overlay & Overwrite| GroupMerge
-    HostFile -->|Final Overlay| HostMerge
-    Base --> GroupMerge
-    GroupMerge --> HostMerge
-    HostMerge -->|Runtime Task Execution| JinjaEval
-    JinjaEval -->|Compiled Values| ActiveTask["Active Task Execution"]
+```yaml
+# inventories/prod/host_vars/orders-web-02.yml
+orders_data_dir: /mnt/legacy-orders-data
 ```
 
-This dynamic compilation ensures that every task receives a highly custom, validated, and safe variable state tailored precisely to that host's position in the infrastructure.
+When Ansible prepares `orders-web-02`, `orders_data_dir` becomes `/mnt/legacy-orders-data`. When it prepares `orders-web-01`, `orders_data_dir` remains `/var/lib/orders`. That is useful, and it also means hidden duplicate values can surprise people.
 
-## Auditing Merged Variables
+Specific names reduce confusion. `port` is too vague in a real project because Nginx, the app, metrics, and admin endpoints may all have ports. Names like `orders_app_port`, `nginx_listen_port`, and `node_exporter_port` tell readers which system consumes the value and make debug output easier to search.
 
-Because variables can be defined across multiple files and directories, tracking down exactly which value a server will receive can be confusing. To remove this uncertainty, you must audit the final, merged variables using the `ansible-inventory` command.
+## Secrets and Ansible Vault
+<!-- section-summary: Sensitive values need an encrypted workflow, while variable names should stay searchable for reviewers. -->
 
-To view the complete, compiled variable dictionary for a specific host, run the query command with the host flag:
+Some inventory values are sensitive. Database passwords, API tokens, become passwords, private keys, and webhook secrets should use a secret workflow instead of plain YAML. In Ansible projects, **Ansible Vault** is the built-in way to encrypt files or individual variable values.
+
+For small projects, encrypting one variable can be enough:
 
 ```bash
-ansible-inventory -i inventory/hosts.yml --host prod-app-02
+ansible-vault encrypt_string --name orders_database_password
 ```
 
-The tool parses the inventory and variable directories, resolves parent-child overrides, and outputs a merged JSON dictionary that shows the effective variables Ansible has discovered for that host:
+That command prompts for the secret value and prints encrypted YAML that can be placed in a variable file. The variable name stays visible, while the value is protected.
 
-```json
-{
-    "ansible_host": "10.70.50.12",
-    "ansible_port": 22,
-    "ansible_user": "admin",
-    "app_domain": "app.example.com",
-    "app_port": 9000,
-    "drain_before_reload": true
-}
+```yaml
+orders_database_password: !vault |
+  $ANSIBLE_VAULT;1.1;AES256
+  3639343961383762346334373862316539316632666239653533366639366536
+  3137373633343238313466363138353534663332316136310a37626539386433
 ```
 
-This output is the merged-value record for the selected host. If a configuration file is rendered with the wrong port, or a login task uses the wrong username, you inspect this merged JSON block before modifying any playbooks. It tells you instantly whether the issue is a file path typo, a scope leakage, or an incorrect variable overwrite.
+Many production teams keep sensitive values in a separate vaulted file such as `group_vars/prod_web/vault.yml`, then keep safe defaults or variable names in a readable file such as `group_vars/prod_web/main.yml`. That pattern helps reviewers see which secrets exist without exposing the secret values.
+
+Vault password handling also needs a team decision. A developer laptop may prompt for a Vault password, while Automation Controller or another CI system should use a managed credential. The important part is that secret access is auditable and separate from normal inventory review.
+
+In CI or Automation Platform, the Vault password should come from a protected credential, a Vault ID, or a password client script. The repository can show `orders_database_password` as a name, while the value stays encrypted or supplied at runtime. Debug tasks should print safe metadata such as whether a value is defined, not the value itself.
+
+## Verifying Values Before a Run
+<!-- section-summary: ansible-inventory and small debug plays show the final values before a role uses them. -->
+
+The safest way to debug variables is to inspect what Ansible compiled for one host. Start with `ansible-inventory --host` because it shows the merged values for that host without running your role.
+
+```bash
+ansible-inventory -i inventories/prod --host orders-web-02
+```
+
+If the output shows `orders_data_dir` as `/mnt/legacy-orders-data`, the host override is active. If the value is missing, check the inventory path, group name, host name, file name, YAML indentation, and whether the host actually belongs to the group that owns the variable.
+
+For a focused check, a short ad hoc command can print a non-secret variable. Keep this away from passwords and tokens because command output often lands in terminal scrollback, CI logs, and chat transcripts.
+
+```bash
+ansible -i inventories/prod orders-web-02 -m ansible.builtin.debug -a "var=orders_data_dir"
+```
+
+For playbook validation, run check mode when the modules support it. Check mode can show which templates or packages would change, and diff mode can show rendered file differences for supported modules. Treat it as a strong preview, then still use a canary before touching the whole group.
+
+```bash
+ansible-playbook -i inventories/prod deploy-orders-web.yml --limit orders-web-02 --check --diff
+```
+
+When the rollback is a value rollback, keep the target narrow. Restore the previous variable file or remove the stale host override, run `ansible-inventory --host orders-web-02`, run the playbook with `--limit orders-web-02 --check --diff`, and only then apply. That sequence proves the winning value changed before any host receives the rendered file.
+
+## Failure Reading and Rollback
+<!-- section-summary: Variable failures usually point to missing names, wrong scope, YAML mistakes, or emergency overrides. -->
+
+Variable problems tend to leave recognizable clues. An `undefined variable` error means the selected host never received the name the task expected. A rendered config with a staging domain in production usually means the wrong inventory path or group file was loaded. A value that changes only on one host often points to `host_vars`.
+
+YAML mistakes are also common. A host under the wrong indentation level may leave a group empty, and an unquoted value such as `yes`, `no`, or an old-style version number can be parsed differently than a human expected. Quoting application versions and strings with special characters keeps reviews and rendered templates more predictable.
+
+Rollback starts by restoring the value source that introduced the problem. If the bad value came from `group_vars/prod_web.yml`, revert that inventory change and rerun `ansible-inventory --host` for a representative host. If the problem came from a one-host override, remove the host variable and verify that the group value returns.
+
+Runtime overrides need extra care. Extra variables passed with `-e` are powerful, and they can hide what the repository says. If an incident run used `-e orders_package_version=2026.06.11`, write that into the deployment record and remove the override from the next normal run so the team returns to the repository value.
 
 ## Putting It All Together
+<!-- section-summary: Clean variable placement lets one playbook adapt to environments while keeping exceptions and secrets visible. -->
 
-We started by looking at how hardcoding environments and parameters inside playbook files limits reusability, forces risky playbook modifications, and creates security issues.
+The orders platform now has a host map and a value map. Environment-wide values live in `group_vars/all.yml`, production web values live in `group_vars/prod_web.yml`, and the temporary storage exception for `orders-web-02` lives in one host file with a ticket number beside it.
 
-Ansible solves these problems by providing a clear, structured variable scoping model:
-- **Playbook Independence**: Playbooks define general tasks, templates organize variables, and inventories define host-specific data.
-- **Group Scopes**: We use group variables to enforce consistency across entire service tiers, defining shared ports and users at the group level.
-- **Host Scopes**: We restrict host variables to unique physical exceptions (like connection addresses or disk paths), avoiding duplicate values across files.
-- **Directory Layouts**: We organize variable files into dedicated `group_vars/` and `host_vars/` sibling directories, keeping our host maps clean and easy to audit.
-- **Memory Resolution**: Under the hood, the engine compiles isolated memory namespaces for each host, dynamically resolving variables at runtime via lazy Jinja2 evaluation.
-- **Catalog Auditing**: We leverage `ansible-inventory --host` queries to inspect merged JSON states, verifying boundaries before execution.
+The playbook stays readable because it uses stable variable names. Templates refer to `orders_app_port`, `orders_data_dir`, and `orders_nginx_server_name`, while inventory supplies the right values for each selected host. Secrets use Vault, and non-secret values stay visible for review.
 
-Structuring your variables this way keeps your playbooks general, clean, and easier to audit.
+When something looks wrong, the team can inspect the final host variables before running tasks. That habit turns variable debugging from guesswork into a short path: check the compiled host, find the source file, fix the scope, and verify the value again.
 
 ## What's Next
 
-Now that you have mastered inventory variable scopes and directory-based layouts, the next article will explore **Connection Targets and Privilege Escalation**. We will look at how Ansible establishes remote SSH connections, handles authentication parameters, and uses the sudo privilege escalation protocol (`become: true`) to execute administrative tasks safely.
+Inventory variables can also control connection details. `ansible_host`, `ansible_user`, SSH keys, ports, and privilege escalation settings all affect how Ansible reaches a machine and what it can do after login. The next article separates those layers so SSH failures and sudo failures stay readable.
 
 ---
 
 **References**
 
-- [Ansible Variables Documentation](https://docs.ansible.com/ansible/latest/playbook_guide/playbooks_variables.html) - Official reference for variables, scoping, and directory layout rules.
-- [Organizing Host and Group Variables](https://docs.ansible.com/ansible/latest/inventory_guide/intro_inventory.html#organizing-host-and-group-variables) - Best practices for variable folder locations.
-- [Jinja2 Template Designer Guide](https://jinja.palletsprojects.com/en/3.1.x/templates/) - Comprehensive documentation for the Jinja2 rendering engine used by Ansible.
-- [Ansible Variable Precedence Hierarchy](https://docs.ansible.com/ansible/latest/playbook_guide/playbooks_variables.html#variable-precedence-where-should-i-put-a-variable) - Detailed guide to the ordering of variable overwrites.
+- [How to build your inventory](https://docs.ansible.com/projects/ansible/latest/inventory_guide/intro_inventory.html)
+- [Using variables](https://docs.ansible.com/projects/ansible/latest/playbook_guide/playbooks_variables.html)
+- [Controlling how Ansible behaves: precedence rules](https://docs.ansible.com/projects/ansible/latest/reference_appendices/general_precedence.html)
+- [Encrypting content with Ansible Vault](https://docs.ansible.com/projects/ansible/latest/vault_guide/vault_encrypting_content.html)
+- [ansible-vault command](https://docs.ansible.com/projects/ansible/latest/cli/ansible-vault.html)
+- [ansible-inventory command](https://docs.ansible.com/projects/ansible/latest/cli/ansible-inventory.html)

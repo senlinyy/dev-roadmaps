@@ -1,7 +1,7 @@
 ---
 title: "Docker Workflow"
-description: "Follow the everyday Docker loop from source changes to image builds, container runs, inspection, cleanup, and rebuilds."
-overview: "Docker becomes much easier to use when each command is tied to one lifecycle step. This article follows a small service through the build-run-inspect-change loop that developers repeat all day."
+description: "Practice the daily Docker loop: build images, run containers, inspect logs, replace stale containers, keep local data safe, and clean unused objects."
+overview: "This article follows the same inventory API through edit, build, run, inspect, replace, debug, storage, registry, and cleanup steps so each Docker command has a clear job."
 tags: ["docker", "workflow", "containers"]
 order: 2
 id: article-containers-orchestration-docker-docker-workflow
@@ -9,268 +9,343 @@ id: article-containers-orchestration-docker-docker-workflow
 
 ## Table of Contents
 
-1. [The Edit-Build-Run Loop](#the-edit-build-run-loop)
-2. [The Container State Machine](#the-container-state-machine)
-3. [Building the Image Artifact](#building-the-image-artifact)
-4. [Launching and Attaching Processes](#launching-and-attaching-processes)
-5. [Inspecting Live and Stopped States](#inspecting-live-and-stopped-states)
-6. [Rebuilding and Replacing Processes](#rebuilding-and-replacing-processes)
-7. [Housekeeping: Reclaiming Storage](#housekeeping-reclaiming-storage)
-8. [Putting It All Together](#putting-it-all-together)
-9. [What's Next](#whats-next)
+1. [The Workflow Map](#the-workflow-map)
+2. [Build the Image](#build-the-image)
+3. [Run the Container](#run-the-container)
+4. [Inspect What Happened](#inspect-what-happened)
+5. [Change Code and Replace the Container](#change-code-and-replace-the-container)
+6. [Debug Inside the Running Container](#debug-inside-the-running-container)
+7. [Keep Data in the Right Place](#keep-data-in-the-right-place)
+8. [Push or Pull Through a Registry](#push-or-pull-through-a-registry)
+9. [Clean Up Local Docker State](#clean-up-local-docker-state)
+10. [Putting It All Together](#putting-it-all-together)
+11. [What's Next](#whats-next)
 
-## The Edit-Build-Run Loop
+## The Workflow Map
+<!-- section-summary: A Docker workflow is the repeated path from source edits to an image, a container, runtime evidence, replacement, and cleanup. -->
 
-A Docker workflow is the repeatable path from source files to image artifact to container process to inspection and cleanup.
+In the previous article, we used a small Node service called `inventory-api`. Now we care less about the definition of Docker and more about the loop a developer repeats during a normal day. A **workflow** is that repeatable order of actions: change files, build an image, run a container, inspect what happened, replace stale runtime state, and clean up old objects.
 
-
-![Diagram showing the Docker edit, build, run feedback loop from source code to image artifact to running container](/content-assets/articles/article-containers-orchestration-docker-docker-workflow/edit-build-run-loop.png)
-
-*Docker workflow becomes repeatable when source changes produce image artifacts, and image artifacts produce containers.*
-
-When you integrate Docker into your everyday development routine, you transition from running commands directly on your laptop to operating on a structured software delivery loop. A typical developer setup requires cloning a repository, compiling the code, running a local server, and monitoring the outputs.
-
-Example: after editing `src/routes/orders.ts`, a production-like Docker loop usually means rebuilding `orders-api:local`, removing the old `orders-api` container, and starting a new container from the updated image. If you skip the rebuild or keep the old container, Docker may keep running the previous filesystem.
-
-In a traditional development loop, editing a file yields immediate feedback because the runtime reads your project directory directly. In a containerized loop, this immediate connection is broken.
-
-If you edit a source file on your host machine while a container is running, the container process does not see the modification. The process inside the container is isolated from your live project directory, reading a virtual filesystem that was frozen at the moment you compiled the image.
-
-To see your changes, you must explicitly rebuild the image artifact, destroy the old container, and start a new process from the updated image.
-
-```plain
-$ docker build -t app:local .
-$ docker run -d --name web-server -p 8080:80 app:local
-```
-
-Understanding this lifecycle prevents the common developer confusion of running an outdated container or hitting port binding conflicts when attempting to run multiple container instances. 
-
-Operating in a containerized environment requires mapping each of your terminal commands to a specific step in a process lifecycle. 
-
-## The Container State Machine
-
-A container state machine is Docker's lifecycle record for one process boundary. A container is a dynamic, kernel-supervised process with a strict state machine. The Docker engine manages this state machine, tracking whether the underlying namespaces, cgroups, write layers, and network interfaces are created, active, or terminated.
-
-
-![Diagram showing Docker container states from created to running to exited](/content-assets/articles/article-containers-orchestration-docker-docker-workflow/container-state-machine.png)
-
-*A container is a lifecycle record around one process run, not the reusable artifact itself.*
-
-Example: a container in `Created` has a record, writable layer, network settings, and resource rules prepared, but its application process has not started. A container in `Exited (1)` did start its process, then recorded that the process ended with error code 1.
+The important shift is that Docker adds an artifact step between source code and the running process. A normal local Node command reads the working tree directly. A Docker container usually runs the files that were copied into the image during the last build, so an edit in `src/` needs a rebuild or a deliberate bind mount before the running process sees it.
 
 ```mermaid
-flowchart TD
-    subgraph StateMachine["Docker Container State Machine"]
-        Created["Created State<br/>(Namespaces & layers ready)"]
-        Running["Running State<br/>(Process active on CPU)"]
-        Paused["Paused State<br/>(cgroup freezer active)"]
-        Stopped["Stopped State<br/>(Process terminated, logs kept)"]
-        Deleted["Deleted State<br/>(Layers & records purged)"]
-    end
-
-    Created -->|docker start| Running
-    Running -->|docker pause| Paused
-    Paused -->|docker unpause| Running
-    Running -->|docker stop / SIGTERM| Stopped
-    Stopped -->|docker start| Running
-    Stopped -->|docker rm| Deleted
-    Running -->|docker rm -f / SIGKILL| Deleted
+flowchart LR
+    Edit["Edit source"] --> Build["Build image"]
+    Build --> Run["Run container"]
+    Run --> Inspect["Inspect logs and state"]
+    Inspect --> Replace["Replace container"]
+    Replace --> Edit
+    Inspect --> Cleanup["Clean retired objects"]
 ```
 
-To manage your workflow, you must trace each transition inside this state machine:
+That loop explains most beginner Docker confusion. A developer changes a file and refreshes the browser, and the old code still runs because the image still contains the previous files. Another developer starts a second copy and gets a port conflict. Someone deletes an image and Docker refuses because a stopped container still points at it.
 
-* **Created**: The engine parses your command, downloads the requested image, creates the isolated write layer, sets up the virtual network interface, and reserves cgroup limits. The application process has not started yet.
-* **Running**: The OCI runtime (`runC`) initializes namespaces, applies cgroup rules, mounts the OverlayFS stack, and boots the main application process. The process is actively consuming host CPU and memory resources.
-* **Paused**: The engine uses the cgroup freezer controller to suspend all execution threads inside the container. The process remains in host memory, but the scheduler refuses to grant it CPU execution time until it is unpaused.
-* **Stopped**: The main process has terminated (either via exit code 0 on completion, or via crash, or via a stop signal). The virtual network card is detached, and memory allocations are freed. However, the container's write layer and standard I/O log buffers remain intact on the host storage disk.
-* **Deleted**: The engine purges the container's metadata records, deletes the write layer directory, and releases all host namespace bindings, freeing all associated disk storage.
+We will walk through the loop in order. Each command has one job, and the same `inventory-api` scenario will carry through the whole article.
 
-If you attempt to modify or delete resources out of order, the state machine will block your action. For example, Docker will refuse to delete an image if an active or stopped container still depends on its read-only filesystem layers. You must destroy the dependent container processes first.
+## Build the Image
+<!-- section-summary: The build step turns the Dockerfile and build context into a tagged image artifact. -->
 
-## Building the Image Artifact
+A build is usually the first action in the Docker workflow. A **build** reads a Dockerfile, uses the files available in the build context, runs the Dockerfile instructions, and creates an image. For `inventory-api`, the image is the packaged service Docker can run later.
 
-An image artifact is the reusable filesystem and metadata package Docker can use to create one or many containers.
-
-The workflow begins by compiling your application files into a reusable image. This step is driven by the `build` command, which reads a Dockerfile build recipe and packages your project directories:
-
-```plain
-$ docker build -t orders-api:local .
+```bash
+docker build -t inventory-api:local .
 ```
 
-The build command accepts two critical inputs. The final `.` is the build context, which means "send this host directory to the Docker engine as the file set available during the build." The tag `orders-api:local` is a readable name for the image Docker produces, so later commands can refer to the image without copying its long image ID.
+The `-t inventory-api:local` part gives the image a human-friendly tag. The repository name is `inventory-api`, and the tag is `local`. The final `.` tells Docker to use the current directory as the build context, which gives the builder access to files such as `package.json`, `package-lock.json`, `src/`, and `Dockerfile`.
 
-* **The Build Context**: Represented by the final `.` in the command, this tells the Docker Client to scan the specified host directory and package its contents into a temporary archive. The client transmits this context archive over a UNIX socket to the background engine daemon. The daemon can only build files that are explicitly sent inside this context.
-* **The Image Tag**: Represented by `-t orders-api:local`, this applies a human-readable label to the resulting image. A tag is composed of a repository name (`orders-api`) followed by a version identifier (`local`).
+The build context deserves attention because Docker can only copy files that entered that context. If the Dockerfile says `COPY config/default.json ./config/default.json`, that file must exist inside the context. If the context includes a huge `node_modules` folder or local secrets, Docker may send too much data to the builder and may place risky files within reach of `COPY`.
 
-Under the hood, the engine parses the Dockerfile, launches temporary scratch containers to execute build steps, and commits the resulting files into immutable, read-only layers. 
+A `.dockerignore` file keeps unwanted files out of the context:
 
-If you run the build command multiple times, the engine compares the context file hashes against its local layer database. If no changes are found, it uses the cached layers, completing the build instantly.
-
-The crucial gotcha is that rebuilding an image does not automatically modify running containers. A running container is bound to the specific image layer hash that existed when the container was created. To update the running application, you must push the updated image through the next phases of the lifecycle state machine.
-
-## Launching and Attaching Processes
-
-`docker run` is the runtime transition that turns an image reference and a set of run options into a container record and a main process.
-
-Once the image artifact is compiled, you use the `run` command to transition it into an active container process on the host:
-
-```plain
-$ docker run --name orders-api -p 8080:3000 orders-api:local
+```gitignore
+node_modules
+.git
+.env
+coverage
+dist
 ```
 
-The run command performs two operations under the hood: it creates the container record from the image, and then it starts the isolated process. 
+Docker also uses a build cache. If the Dockerfile instruction and the relevant input files match a previous build, Docker can reuse the cached layer. This is why many Node Dockerfiles copy `package*.json` and run `npm ci` before copying `src/`: source changes can reuse the slower dependency install layer as long as the package files stay the same.
 
-Your terminal interaction with this running process depends on which attachment flags you choose:
+After a build, the image exists locally:
 
-* **Foreground Attachment (Default)**: Your terminal stdout, stderr, and stdin are attached directly to the container process. You can see application logs in real time. Pressing `Ctrl+C` sends a standard `SIGINT` signal to PID 1 inside the container, prompting it to stop.
-* **Detached Mode (`-d`)**: The engine starts the container in the background, prints the long container ID to your terminal, and immediately returns control to your shell. The container process continues running privately in the background.
-
-```plain
-$ docker run -d --name orders-api -p 8080:3000 orders-api:local
-83f1207eab56114a908ce91244cf0c0df4a819b5f903a48e7188b0a9477ef290
+```bash
+docker image ls inventory-api
 ```
 
-When running in detached mode, the process's standard output streams are not lost. The container shim intercepts all writes to stdout and stderr and writes them into local host log files managed by Docker's logging driver ring.
+That command gives the team evidence that the artifact exists before they try to run it. The next step creates a container from the image.
 
-If your application server listens on a network port, you must configure port publishing during this run step. The flag `-p 8080:3000` instructs the host kernel to map host port 8080 to container port 3000. 
+## Run the Container
+<!-- section-summary: The run step creates a container record, starts the main process, and applies runtime settings such as names, ports, and environment variables. -->
 
-If you omit this port mapping, the container process runs in its isolated network namespace, remaining completely unreachable from host browsers or external clients.
+`docker run` turns an image into a container. It creates the container record, prepares the writable layer and network settings, and starts the image's main command. For `inventory-api`, the run step starts the Node process declared by the Dockerfile.
 
-## Inspecting Live and Stopped States
-
-Docker inspection commands are read-only queries against the runtime evidence Docker recorded for containers and processes.
-
-Operating a containerized system requires checking execution metrics, reading logs, and inspecting filesystem states to ensure the process is behaving correctly. Docker provides a suite of diagnostic commands to make these isolated containers visible:
-
-```plain
-$ docker ps
-CONTAINER ID   IMAGE              COMMAND                  STATUS         PORTS                    NAMES
-83f1207eab56   orders-api:local   "node dist/server.js"    Up 4 minutes   0.0.0.0:8080->3000/tcp   orders-api
+```bash
+docker run \
+  --name inventory-api \
+  -p 8080:3000 \
+  -e PORT=3000 \
+  inventory-api:local
 ```
 
-The default `ps` command lists only active containers. If your container crashes immediately upon startup, it will not appear in this list. You must append the `-a` flag to list all containers, including stopped or crashed ones:
+The `--name inventory-api` flag gives the container a stable name for later commands. The `-p 8080:3000` flag publishes host port `8080` to container port `3000`, so the developer can use `http://localhost:8080`. The `-e PORT=3000` flag passes a runtime setting into the process.
 
-```plain
-$ docker ps -a
-CONTAINER ID   IMAGE              STATUS                     NAMES
-9e2f11a5cb12   orders-api:local   Exited (1) 2 minutes ago   orders-api
+By default, this foreground run keeps the terminal attached to the container's output. That can be useful for the first run because the developer sees startup logs immediately. If the API prints `Listening on port 3000`, the host can call it through the published port.
+
+Most local service runs use detached mode after the first check:
+
+```bash
+docker run \
+  -d \
+  --name inventory-api \
+  -p 8080:3000 \
+  -e PORT=3000 \
+  inventory-api:local
 ```
 
-This status line is a critical troubleshooting indicator. The status `Exited (1)` tells you the main process terminated with error code 1. To inspect why the process failed, you query the captured standard output log buffers:
+The `-d` flag starts the container in the background and returns the terminal to the developer. Docker prints a container ID, and the process keeps running. The logs still exist; the developer retrieves them with `docker logs` instead of watching the foreground terminal.
 
-```plain
-$ docker logs orders-api
-Error: Config file 'config/prod.json' not found
-    at Object.<anonymous> (/app/dist/server.js:14:11)
+The container name now belongs to that container record. If someone repeats the same `docker run --name inventory-api ...` command while the old container exists, Docker reports a name conflict. If the old container still publishes `8080`, a second container trying to use the same host port also fails because one host port can serve one listener at a time.
+
+Those conflicts lead naturally into inspection. Before replacing anything, the team needs to see what Docker has recorded.
+
+## Inspect What Happened
+<!-- section-summary: Inspection commands show live containers, stopped containers, logs, ports, image names, exit codes, and runtime configuration. -->
+
+Inspection commands answer the question "what is Docker running or remembering right now?" Docker keeps records for running containers and stopped containers, and those records explain many local problems. The most common first check is `docker ps`.
+
+```bash
+docker ps
 ```
 
-If the container is running and you need to inspect its internal state, you can use the `exec` command to spawn a secondary process inside the container's existing namespaces:
+For the running API, the output might include:
 
-```plain
-$ docker exec -it orders-api sh
-/app # ls -l
-total 12
-drwxr-xr-x    2 root     root          4096 May 31 11:00 dist
-drwxr-xr-x  156 root     root          4096 May 31 11:00 node_modules
--rw-r--r--    1 root     root           285 May 31 11:00 package.json
+```bash
+CONTAINER ID   IMAGE                 STATUS          PORTS                    NAMES
+6c51b9ad8a21   inventory-api:local   Up 2 minutes    0.0.0.0:8080->3000/tcp   inventory-api
 ```
 
-The flag `-it` allocates a pseudo-TTY and attaches your interactive terminal stdin to the shell process. 
+This line tells us the container name, image tag, status, and published port. If the browser fails to reach the service, the `PORTS` column gives the first clue. If the row is missing, the process may have exited.
 
-Executing `sh` inside a container is a powerful diagnostic habit. It lets you run ping commands, read configuration directories, and test database connections from within the exact network and mount namespace the application uses. 
+`docker ps -a` includes stopped containers:
 
-However, any modifications you make inside this diagnostic shell exist only inside that specific container's writable layer, and will vanish as soon as the container is destroyed.
-
-## Rebuilding and Replacing Processes
-
-Replacing a container is the update path for image-based development: build a new artifact, stop the old process boundary, and create a new container from the updated image.
-
-Applying a code change requires replacing the running container instance. This replacement loop is a deliberate three-step sequence: compile the new image layer, stop and destroy the old process container to release the host port, and launch a new container from the updated image.
-
-Attempting to run a new container while the old one is active will trigger a port binding collision in the host kernel network stack:
-
-```plain
-$ docker run -d --name orders-api -p 8080:3000 orders-api:local
-docker: Error response from daemon: driver failed programming external connectivity on endpoint orders-api: Bind for 0.0.0.0:8080 failed: port is already allocated.
+```bash
+docker ps -a
 ```
 
-To prevent this collision and update your workload cleanly, you execute a serial replacement sequence:
+A crashed API might show `Exited (1)` or another exit code. That status means the main process started and then ended with an error. The next command reads the captured stdout and stderr records:
 
-```plain
-$ docker stop orders-api
-$ docker rm orders-api
-$ docker run -d --name orders-api -p 8080:3000 orders-api:local
+```bash
+docker logs inventory-api
 ```
 
-The `stop` command sends a `SIGTERM` signal to PID 1 inside the container, granting the process a default 10-second grace window to close active database connections, flush in-memory buffers, and exit cleanly. If the process does not terminate within this window, the daemon issues a `SIGKILL` to force termination.
+The logs might show:
 
-For local development iteration where speed is critical, you can use a bind mount to bypass the rebuild step. By mounting your local project folder directly into the container's mount namespace, you allow the containerized runtime to read host file changes in real time:
-
-```plain
-$ docker run -d --name orders-api -p 8080:3000 -v "$PWD":/app orders-api:local npm run dev
+```bash
+Error: DATABASE_URL is required
+    at startServer (/app/src/server.js:18:11)
 ```
 
-This mount changes the boundary. The process still runs inside isolated network and PID namespaces, but it reads the application files directly from your host repository. 
+Now the problem has a concrete shape. The image can start the Node process, and the runtime configuration missed `DATABASE_URL`. The fix belongs in the `docker run` command, a Compose file, or the deployment configuration, depending on the environment.
 
-Using mounts enables rapid local iteration, but you must still execute full rebuilds periodically to verify that your Dockerfile can compile the image correctly from a clean, unmounted state before deploying.
+For deeper questions, `docker inspect` returns the full container metadata as JSON:
 
-## Housekeeping: Reclaiming Storage
+```bash
+docker inspect inventory-api
+```
 
-Docker housekeeping is ownership-aware deletion of retired runtime objects, cached layers, and local networks.
+Teams use `inspect` to check environment variables, mounts, network names, IP addresses, restart policy, image ID, and exact port bindings. The output is large, so most daily debugging uses `ps`, `ps -a`, and `logs` first, then moves to `inspect` after the simple evidence runs out.
 
-The useful starting point is to name what you are deleting before deleting it. A stopped API container might only hold old logs. A named database volume might hold a week of local test data. Both consume Docker disk space, but they do not have the same value.
+After inspection, a common next step is a code change. That brings us to the replacement part of the workflow.
 
-Unlike virtual machines that clean up guest memory on shutdown, Docker persists container write layers, cached image directories, and network records on your host storage disk. Over days of development, these retired assets accumulate, slowly consuming disk space.
+## Change Code and Replace the Container
+<!-- section-summary: A source change needs a new image or a development bind mount, and the old container usually needs removal before the new one can take its name and port. -->
 
-Docker provides targeted cleanup commands to safely manage this local state:
+Imagine the team changes `src/routes/products.js` so the API returns a new `warehouseStatus` field. The running container still uses the files copied into the previous image build. A clean image-based workflow builds a new image, stops the old container, removes the old container record, and starts a fresh one from the new image.
 
-* **Container Cleanup**: Removing a stopped container freed its associated write layer. You can purge all stopped container records in one step:
-  ```plain
-  $ docker container prune
-  Total reclaimed space: 1.24 GB
-  ```
-* **Image Cleanup**: An image tag can only point to one image ID at a time. When you rebuild a tag like `orders-api:local`, the old image ID loses its tag name, becoming a "dangling" image. You can purge these untagged intermediate layers safely:
-  ```plain
-  $ docker image prune
-  Total reclaimed space: 3.42 GB
-  ```
-* **System Purge**: To reclaim maximum storage, you can run a system sweep to remove all stopped containers, network segments, and dangling images:
-  ```plain
-  $ docker system prune
-  ```
+```bash
+docker build -t inventory-api:local .
+docker stop inventory-api
+docker rm inventory-api
+docker run -d --name inventory-api -p 8080:3000 -e PORT=3000 inventory-api:local
+```
 
-Operating these cleanup sweeps requires strict operational caution. If you append the `-a` flag (all) or prune volumes (`--volumes`), the engine will delete unused tagged images and persistent database volumes.
+`docker stop` asks the main process to shut down gracefully. Docker sends `SIGTERM` first and then sends `SIGKILL` after the configured grace period if the process keeps running. For a web API, that graceful window gives the server a chance to stop accepting requests and close active work.
 
-Always verify which data stores are active before executing destructive prunes.
+`docker rm` removes the stopped container record and its writable layer. This releases the container name and avoids confusing old state. The next `docker run` creates a new record from the newly built image and can reuse the same name and host port.
+
+For short local test runs, some teams use `--rm` so Docker removes the container automatically after the process exits:
+
+```bash
+docker run --rm inventory-api:local npm test
+```
+
+That pattern works well for one-off commands because the container does useful work and exits. Long-running services usually keep their container record so developers can inspect logs, status, and exit codes after something fails.
+
+There is also a faster local development path: a bind mount. A bind mount connects the host working tree into the container so the process can see source edits as the developer saves files. That gives quick feedback for dev servers, while the team still needs clean image builds before shipping.
+
+```bash
+docker run \
+  -d \
+  --name inventory-api-dev \
+  -p 8080:3000 \
+  --mount type=bind,src="$(pwd)",target=/app \
+  -w /app \
+  node:22-alpine \
+  sh -c "npm install && npm run dev"
+```
+
+This development command uses the `node:22-alpine` image and mounts the current directory into `/app`. It helps during local coding because the runtime sees host file edits. The release path still goes through `docker build`, because production should run the packaged image that CI tested.
+
+Once a service is running, the next workflow question is how to look inside the exact environment where the process lives.
+
+## Debug Inside the Running Container
+<!-- section-summary: `docker exec` starts a second process inside an existing running container for targeted debugging. -->
+
+`docker exec` runs a new command inside a running container. It uses the container's existing filesystem, network, and process context, so it helps answer questions from the application's point of view. If `inventory-api` fails to reach the database, an exec shell can check environment variables and network names from inside the same container boundary.
+
+```bash
+docker exec -it inventory-api sh
+```
+
+The `-i` flag keeps standard input open, and the `-t` flag allocates a pseudo-terminal. Together they make the shell feel interactive. Inside that shell, the developer can inspect files, print environment variables, or test a connection using tools available in the image.
+
+```bash
+printenv DATABASE_URL
+ls -la /app
+node -e "console.log(process.version)"
+```
+
+This kind of debugging has a clear limit. The extra shell runs only while the container's main process is running, and files changed in the shell land in that one container's writable layer. If the developer fixes `/app/src/server.js` by hand inside the shell, the fix vanishes when the container is removed and leaves the image unchanged.
+
+Production teams use exec with care. It can reveal what a process sees, and repeatable fixes belong in source code, Dockerfiles, configuration, or deployment manifests. The shell gives evidence for a proper repair.
+
+That evidence often points to state. Maybe the API returns successful health responses, and the database data disappears after replacement. That means the storage boundary needs attention.
+
+## Keep Data in the Right Place
+<!-- section-summary: Container writable layers suit temporary files, volumes suit durable generated data, and bind mounts suit local host-file sharing. -->
+
+Docker gives each container a writable layer, and that layer belongs to the container lifecycle. If the API writes a temporary cache file under `/tmp`, the writable layer handles it. If a database writes actual business data there, deleting the container also removes that write layer.
+
+A **volume** stores data outside the individual container lifecycle. Docker creates and manages the volume on the host, then mounts it into the container at a path. For a local PostgreSQL database used by `inventory-api`, the team can keep database files in a named volume.
+
+```bash
+docker volume create inventory-db-data
+
+docker run \
+  -d \
+  --name inventory-db \
+  -e POSTGRES_PASSWORD=secret \
+  -v inventory-db-data:/var/lib/postgresql/data \
+  postgres:16
+```
+
+Now the database container can be replaced while `inventory-db-data` remains available. This is useful for development data, integration test fixtures, and local databases. In production, teams still design storage carefully through managed databases, orchestrator storage classes, backup policy, and restore testing.
+
+A **bind mount** solves host-file sharing instead of durable Docker-managed storage. The development command from the previous section mounted the source repository into `/app`, which made local edits visible inside the container. Docker documents that bind mounts tie a container to a specific host path, so they work best for local development and explicit host-file sharing.
+
+This distinction saves real time. If the API source code needs live reload, a bind mount fits. If the database data needs to survive container replacement, a volume fits. If the image should contain production code, the Dockerfile and image build fit.
+
+After the team has images, containers, volumes, and perhaps bind mounts working locally, the workflow often needs a registry step so another machine can run the same artifact.
+
+## Push or Pull Through a Registry
+<!-- section-summary: Registry steps move the image from one machine to another without rebuilding from source on every host. -->
+
+A **registry workflow** stores the image outside the local Docker host. The developer or CI system builds the image, tags it with a registry path, and pushes it. Another machine pulls that image and runs a container from the pulled artifact.
+
+```bash
+docker tag inventory-api:local registry.example.com/platform/inventory-api:2026-06-13.1
+docker push registry.example.com/platform/inventory-api:2026-06-13.1
+```
+
+The tag should carry a meaning the team can trace. Some teams use version numbers such as `1.8.3`, some use Git SHAs, and some use date-based build numbers. The important habit is that staging and production can point back to the image that CI built and tested.
+
+On another Docker host, the runtime side looks like this:
+
+```bash
+docker pull registry.example.com/platform/inventory-api:2026-06-13.1
+docker run -d --name inventory-api -p 8080:3000 registry.example.com/platform/inventory-api:2026-06-13.1
+```
+
+This is the handoff Docker was built to support. The second host can run the service without the source repository or the local build cache. It needs Docker access to the registry and the runtime configuration required by the container.
+
+Registry work creates another kind of local state: older image tags and layers. That brings us to housekeeping.
+
+## Clean Up Local Docker State
+<!-- section-summary: Cleanup commands remove retired containers, dangling images, unused networks, build cache, and sometimes volumes, with volume cleanup needing extra care. -->
+
+Docker keeps local objects until someone removes them. Stopped containers keep their writable layers and logs. Rebuilds can leave dangling image layers. Networks and build cache can accumulate during experiments. Volumes can hold useful data long after the container that created them has disappeared.
+
+`docker system df` gives a quick storage summary:
+
+```bash
+docker system df
+```
+
+For targeted cleanup, Docker has prune commands by object type:
+
+```bash
+docker container prune
+docker image prune
+docker network prune
+docker buildx prune
+```
+
+`docker container prune` removes stopped containers. `docker image prune` removes dangling images by default, which usually means image layers without a tag and without a container reference. `docker buildx prune` clears build cache for the selected builder.
+
+`docker system prune` combines several cleanup operations:
+
+```bash
+docker system prune
+```
+
+Docker documents an important volume rule: system prune leaves volumes alone by default, and volume deletion requires explicit volume pruning or `docker system prune --volumes`. That default protects data because a volume may contain a local database, uploaded files, or test records someone still needs.
+
+```bash
+docker volume ls
+docker volume prune
+```
+
+The safe habit is to name valuable volumes and know what they hold. `inventory-db-data` clearly belongs to the local database, while a random anonymous volume from a test run may have no value. Cleanup is part of the workflow because Docker keeps evidence and cache for you, and those helpful leftovers eventually need review.
 
 ## Putting It All Together
+<!-- section-summary: The complete Docker workflow gives every command a target object and every state change a reason. -->
 
-Operating Docker effectively means tracking how your source repository relates to running host processes. By structuring your daily commands around the container lifecycle, you avoid state conflicts and maintain a clean development environment.
+Let's replay a normal development cycle for `inventory-api`. The developer edits the route, builds a new image, replaces the old container, checks the logs, and keeps durable database data in a named volume. Each command points at a Docker object: image, container, log stream, or volume.
 
-* **Lifecycle Continuity**: A change to your source code is only visible inside a running container after a rebuild or when using a deliberate development bind mount.
-* **Process State**: A container transitions through a strict state machine (Created, Running, Paused, Stopped, Deleted) managed by the host kernel cgroups and OCI shims.
-* **Process Replacement**: Updating a running server requires stopping and removing the old container to release port bindings before spawning the new instance.
-* **Process Attachment**: detached mode (`-d`) routes stdout streams to host log rings, while interactive terminal flags (`-it`) let you spawn diagnostic shells inside the container namespaces.
-* **Storage Housekeeping**: Unused layer assets, stopped container write directories, and untagged dangling images accumulate on host disks and must be pruned systematically.
+```bash
+docker build -t inventory-api:local .
+docker stop inventory-api
+docker rm inventory-api
+docker run -d --name inventory-api -p 8080:3000 -e PORT=3000 inventory-api:local
+docker logs inventory-api
+```
 
-Mapping each command to its target object ensures your development loop remains predictable.
+If the container crashes, `docker ps -a` shows the exit status and `docker logs inventory-api` shows the application output. If the process keeps running and the environment looks wrong, `docker exec -it inventory-api sh` starts a shell inside the running container. If the local Docker host fills up, `docker system df` and targeted prune commands show what can be reclaimed.
+
+The workflow also gives names to common mistakes. Old source code usually points to an image that still needs a rebuild or a container that still needs replacement. A port error usually means an existing container still owns the host port. Missing data after replacement usually means the data lived in the container writable layer instead of a volume.
+
+That is the daily Docker loop: build the artifact, run the process, inspect the evidence, replace stale containers, keep data in the right storage boundary, share images through a registry, and clean up retired local state.
 
 ## What's Next
 
-Now that we have mastered the container lifecycle and the local developer loop, our next step is to examine how to declare our filesystem images. The Dockerfile is the repeatable build recipe for the compiled artifact.
+You now have the everyday Docker command flow. The next article goes into the Dockerfile itself, because the quality of the workflow depends heavily on the quality of the image recipe.
 
-In the next chapter, we will study the **Dockerfile** in deep structural detail. We will learn how to write clean, secure instructions, optimize the build context to prevent slow data transfers, and configure `.dockerignore` files to protect sensitive credentials from entering our image layers.
-
-![Summary infographic for Docker edit, build, run, inspect, replace, and prune workflow](/content-assets/articles/article-containers-orchestration-docker-docker-workflow/docker-workflow-summary.png)
-
-*The workflow summary ties everyday Docker commands back to artifacts, processes, evidence, replacement, and cleanup.*
+We will look at base images, instruction order, cache behavior, `.dockerignore`, build arguments, multi-stage builds, security defaults, and the practical choices that make an image clean and repeatable.
 
 ---
 
 **References**
 
-- [Run containers](https://docs.docker.com/engine/containers/run/) - Official guide on container execution parameters, background mode, and port bindings.
-- [docker container run CLI reference](https://docs.docker.com/reference/cli/docker/container/run/) - Comprehensive syntax reference for container startup arguments and environment setup.
-- [docker ps CLI reference](https://docs.docker.com/reference/cli/docker/container/ps/) - Details on listing containers, applying status filters, and formatting output properties.
-- [Prune unused Docker objects](https://docs.docker.com/config/pruning/) - Operational guidelines for reclaiming host disk space by safely pruning containers, images, and network segments.
-- [docker stop CLI reference](https://docs.docker.com/reference/cli/docker/container/stop/) - Technical details on how the daemon manages container shutdown grace periods and UNIX signal transitions.
+- [Build context](https://docs.docker.com/build/concepts/context/) - Explains local build contexts, which files the builder can access, and how `docker build .` sends the current directory.
+- [Using the build cache](https://docs.docker.com/get-started/docker-concepts/building-images/using-the-build-cache/) - Describes how Docker creates layers and reuses cached build results.
+- [Building best practices](https://docs.docker.com/build/building/best-practices/) - Covers build cache guidance, base image tags, and Dockerfile build recommendations.
+- [docker container run](https://docs.docker.com/reference/cli/docker/container/run/) - Documents `docker run`, detached mode, stopped container restart behavior, and runtime options.
+- [Running containers](https://docs.docker.com/engine/containers/run/) - Explains container isolation, filesystems, networking, process trees, foreground and detached behavior, and published ports.
+- [docker container logs](https://docs.docker.com/reference/cli/docker/container/logs/) - Documents retrieving stdout and stderr logs from containers.
+- [docker container exec](https://docs.docker.com/reference/cli/docker/container/exec/) - Documents running additional commands inside an existing running container.
+- [docker container stop](https://docs.docker.com/reference/cli/docker/container/stop/) - Documents the SIGTERM and SIGKILL shutdown sequence and stop timeout options.
+- [Volumes](https://docs.docker.com/engine/storage/volumes/) - Explains Docker-managed persistent data stores and volume lifecycle.
+- [Bind mounts](https://docs.docker.com/engine/storage/bind-mounts/) - Documents host-path mounts, `--mount` and `-v` syntax, and bind-mount constraints.
+- [Docker Hub quickstart](https://docs.docker.com/docker-hub/quickstart/) - Introduces sharing images through Docker Hub and pulling pre-built images.
+- [Prune unused Docker objects](https://docs.docker.com/engine/manage-resources/pruning/) - Documents pruning containers, images, volumes, networks, build cache, and system-wide unused objects.

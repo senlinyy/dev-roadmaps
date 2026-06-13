@@ -44,16 +44,9 @@ Those tools answer different parts of the same story. Cost Analysis finds the sh
 
 Here is the flow we will use for the orders service:
 
-```mermaid
-flowchart TD
-    Bill["Monthly bill forecast jumps"] --> Scope["Find the scope"]
-    Scope --> CostAnalysis["Group in Cost Analysis"]
-    CostAnalysis --> Resource["Find the service and resource"]
-    Resource --> Tags["Use tags for owner and environment"]
-    Tags --> Budget["Check budget alerts"]
-    Budget --> Metrics["Compare with metrics and deployments"]
-    Metrics --> Decision["Tune, clean up, or keep the capacity"]
-```
+![Cost visibility investigation loop moving from a bill forecast jump through scope, grouped spend, resource, tags, budget alerts, runtime evidence, and a safe decision](/content-assets/articles/article-cloud-providers-azure-cost-resilience-cost-management-budgets-tags/cost-visibility-investigation-loop.png)
+
+*The investigation loop turns bill shock into a sequence of smaller checks, so the team can find the expensive area and explain the runtime cause before changing anything.*
 
 The important beginner idea is that cost data trails behind runtime data. Azure services emit usage into the billing system, Cost Management processes that usage, and the portal shows the result after the data refreshes. For Enterprise Agreement and Microsoft Customer Agreement subscriptions, cost and usage data is commonly available within 8 to 24 hours. For pay-as-you-go subscriptions, it can take up to 72 hours. Current month costs are also estimates until the invoice is generated.
 
@@ -81,6 +74,10 @@ Now the team narrows the view. They filter to the Log Analytics service, group b
 > The orders production Log Analytics workspace `law-orders-prod` started costing more on May 16 because log ingestion grew after release `v2.4`.
 
 That is the value of Cost Analysis. It reduces the problem to a place where engineering can investigate. The team can now ask the application team why `v2.4` wrote more logs. Maybe a retry loop produced repeated stack traces. Maybe debug logging stayed on in production. Maybe real customer traffic grew and the extra logging is expected. Those answers come from operational data, but Cost Analysis got everyone to the correct place.
+
+![Cost Analysis drilldown from subscription to service name, resource, date, and the investigation question for a Log Analytics spike](/content-assets/articles/article-cloud-providers-azure-cost-resilience-cost-management-budgets-tags/cost-analysis-drilldown.png)
+
+*The drilldown view shows the practical shape of the investigation: subscription first, then service, resource, date, and the concrete question the owner needs to answer.*
 
 The same investigation can be written as a Cost Management Query API request. A platform team might keep a query like this in an internal notebook so the same question can be repeated during monthly reviews:
 
@@ -205,6 +202,10 @@ This example tracks cost for `rg-orders-prod` across monthly periods. In a real 
 
 Budgets also connect back to tags. A subscription-wide budget tells the cloud platform team that something somewhere is growing. A tag-filtered or resource-group budget tells the orders team that their service is growing. Both can exist. The platform budget catches broad account movement, and service budgets create owner-specific signals.
 
+![Owner signals and budget alerts showing resource tags flowing into a cost report and then into forecast and actual budget thresholds](/content-assets/articles/article-cloud-providers-azure-cost-resilience-cost-management-budgets-tags/owner-signals-budget-alerts.png)
+
+*Tags give the cost report a stable owner, and budget thresholds route the warning while production resources keep running.*
+
 Now the team has an alert loop. The next question is what to do with the recommendation that says a resource looks oversized.
 
 ## Right-Sizing
@@ -272,6 +273,10 @@ Notice how none of these reviews start with random deletion. The team first asks
 The orders team started with one scary forecast. By the end of the investigation, the bill became a chain of evidence. Cost Analysis showed the increase lived in Log Analytics. The resource view found `law-orders-prod`. Tags routed the review to `commerce-platform`. The budget design showed where the alert loop needed improvement. Runtime logs and deployment notes connected the jump to release `v2.4`. Advisor and metrics helped the team separate safe tuning from capacity that still had a purpose.
 
 That is the real job of cost visibility. It gives engineering, finance, and operations one shared story about spend. It also makes cost optimization safer, because every change has context.
+
+![Safe cost tuning summary showing cost evidence, runtime evidence, ownership evidence, and service promise feeding a shared review before tuning, cleaning up, or keeping capacity](/content-assets/articles/article-cloud-providers-azure-cost-resilience-cost-management-budgets-tags/safe-cost-tuning-summary.png)
+
+*The final review keeps the team from treating every increase as waste, because some spending supports a service promise and some spending is safe to tune.*
 
 The important pieces fit together like this:
 

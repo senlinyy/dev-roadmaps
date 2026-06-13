@@ -11,137 +11,218 @@ aliases:
 
 ## Table of Contents
 
-1. [The Problem](#the-problem)
-2. [The Revert vs. Patch Response Conflict](#the-revert-vs-patch-response-conflict)
-3. [Mean Time to Recovery (MTTR) as the Primary Metric](#mean-time-to-recovery-mttr-as-the-primary-metric)
-4. [The Database Schema Rollback Trap](#the-database-schema-rollback-trap)
-5. [Writing Backwards-Compatible Migrations](#writing-backwards-compatible-migrations)
-6. [Putting It All Together](#putting-it-all-together)
-7. [What's Next](#whats-next)
+1. [The Moment a Release Fails](#the-moment-a-release-fails)
+2. [Rollback](#rollback)
+3. [Roll-Forward](#roll-forward)
+4. [Choosing by Recovery Time](#choosing-by-recovery-time)
+5. [The Database Trap](#the-database-trap)
+6. [Compatible Migrations](#compatible-migrations)
+7. [Putting It All Together](#putting-it-all-together)
+8. [What's Next](#whats-next)
 
-## The Problem
+## The Moment a Release Fails
+<!-- section-summary: A failed deployment needs a recovery decision before the team gets pulled into open-ended debugging. -->
 
-Managing software failures in a live production environment forces engineering teams to make high-pressure technical decisions under strict time limits. When teams do not have established, metric-governed response playbooks, they hit critical operational failures:
+Our checkout API can now release through rolling, blue-green, or canary patterns. Those patterns reduce risk, and failure can still happen. Version `2026.06.13.2` can still break under real users. Maybe coupon validation throws 500 errors for old carts. Maybe the new payment payload fails for one card network. Maybe the canary looked good at 5%, then the service started timing out at 50%.
 
-* **The Frantic Hotfix Outage Extension**: A new backend release causes payment transactions to fail with raw database errors. Rather than immediately reverting the deployment, the development team spends three hours debugging the code, writing a local patch, waiting for the CI pipeline to compile it, and deploying a hotfix. The hasty hotfix compiles successfully but introduces a second, worse memory crash, extending a 10-minute outage into a 4-hour catastrophe.
-* **The Destructive Database Rollback**: A platform team rolls back a buggy server deployment to the last stable release. However, the new deployment's startup routine had already deleted a crucial database column. The stable, reverted code boots, attempts to read the dropped column, crashes instantly, and leaves the database in a partially corrupted state with no simple way to recover.
-* **The Analysis Paralysis Deadlock**: During a morning traffic surge, API response latencies triple. Rather than taking action to protect user capacity, the operations team spends forty minutes debating the root cause in a chat room, while thousands of customer transactions time out, severely damaging the brand's reliability.
+When that happens, the team has two recovery paths. **Rollback** means returning users to the last known healthy version. **Roll-forward** means shipping another change that fixes the broken release. Both can be correct. The wrong choice is the one that burns time while users keep hitting the failure.
 
-These operational crises demonstrate that incident response must prioritize instant service restoration over immediate bug diagnosis.
+This article focuses on the first response decision before the root cause investigation. Root cause matters, but the service needs to recover first. The release owner, incident commander, and on-call engineer need a shared rule for choosing the fastest safe path.
 
-## The Revert vs. Patch Response Conflict
+We will keep using the checkout service because payment failures make the tradeoff clear. Every minute of broken checkout creates failed orders and support load, so the recovery path needs to be calm, rehearsed, and measurable.
 
-When an application fails in production, the response team must choose between two mutually exclusive recovery pathways: **Rollback (Revert)** and **Roll-Forward (Patch)**.
+![Recovery decision map showing release failed, rollback to last healthy, roll-forward with small patch, and fastest safe path](/content-assets/articles/article-cicd-deployment-strategies-rollback-vs-roll-forward-decisions/recovery-decision-map.png)
 
-### Rollback (Revert)
+*Rollback and roll-forward are both recovery tools; the incident decision is which path restores service safely first.*
 
-A Rollback instantly reverts the system state to the last known healthy release. This is accomplished by redirecting traffic at the load balancer level back to the old, active standby containers, or by redeploying the previous, verified container image.
+## Rollback
+<!-- section-summary: Rollback restores the last healthy release when the previous version can still run safely. -->
 
-The core advantage of a rollback is **Immediacy and Predictability**. Because the old version was already thoroughly tested and ran stably in production, reverting to it is guaranteed to restore service health instantly without introducing new, unreviewed code variables.
+A **rollback** returns the service to a known healthy release. In Kubernetes, that might mean `kubectl rollout undo deployment/checkout-api`. In ECS with CodeDeploy, it might mean an automatic rollback or a new deployment that redeploys the previous application revision. In blue-green, it might mean moving traffic back to the old environment. In canary, it might mean setting the canary weight back to `0`.
 
-### Roll-Forward (Patch)
+Rollback usually gives the fastest recovery when three things are true:
 
-A Roll-Forward leaves the buggy release active in production while the development team frantically debugs the error, writes a code fix, compiles a new container image (`1.8.5`), and deploys it to overwrite the failing version (`1.8.4`).
+| Requirement | Why it matters |
+|---|---|
+| The old version still exists | The platform needs an image, task definition, ReplicaSet, or environment to return to. |
+| The old version can run against current data | A database or message format change should still support the old code. |
+| The failure came from the new release | Returning to the old version should remove the user-facing problem. |
 
-Rolling forward is highly risky. Writing code under intense pressure during an active outage frequently leads to syntax errors, missed edge cases, and incomplete testing, which often introduces secondary failures.
+Here is a Kubernetes rollback command:
 
-### Outage Recovery Strategy Comparison
-
-| Strategy | Restoration Speed | Risk Level | Code Stability | Database Dependency |
-| :--- | :--- | :--- | :--- | :--- |
-| **Rollback (Default)** | Seconds to Minutes | Extremely Low | Guaranteed Stable | Requires backwards-compatible schema |
-| **Roll-Forward (Exceptions)** | Hours | High | Unpredictable (hasty code) | Compatible with forward-only schema |
-
-## Mean Time to Recovery (MTTR) as the Primary Metric
-
-In modern site reliability engineering (SRE), the ultimate metric governing incident response is **Mean Time to Recovery (MTTR)**. MTTR is the average time required to repair a failed system and restore full service capacity to users.
-
-During an active production outage, the SRE team's single priority is to minimize MTTR. Restoration of service takes absolute priority over finding the root cause of the bug. Debugging is a post-incident exercise.
-
-To enforce this SRE discipline, platform teams establish a strict **Ten-Minute Revert Rule**:
-
-1. An outage is detected.
-2. The team has exactly ten minutes to identify and fix the issue (e.g. correcting a simple environment variable or restarting a stalled service).
-3. If the service is not restored within ten minutes, the team is strictly prohibited from further debugging. A rollback to the last known stable release is immediately forced.
-
- re-routing traffic first stabilizes production, returning users to a healthy experience. The development team can then debug the buggy container image inside the safety of the staging sandbox with zero active customer impact.
-
-## The Database Schema Rollback Trap
-
-While compute workloads (application servers) can be reverted instantly in milliseconds, **Data State (Databases) Cannot**. This asymmetry creates the dangerous "Database Schema Rollback Trap."
-
-When a new application version (`1.8.4`) is deployed, its startup routine often executes database migrations—adding tables, deleting old columns, or changing data types. If version `1.8.4` deletes a database column immediately upon deployment, the active database schema is modified irreversibly. 
-
-If a rollback is subsequent forced, the old code (`1.8.3`) is redeployed. The old code boots, attempts to execute an SQL query referencing the dropped column, and immediately crashes with a database exception:
-
-```text
-ERROR: Column "phone" does not exist in table "customers"
-FATAL: Application failed to initialize database connection.
+```bash
+kubectl rollout undo deployment/checkout-api
+kubectl rollout status deployment/checkout-api --timeout=5m
 ```
 
-The database mismatch makes a standard code rollback useless. The team is caught in a deadlock: the new code is buggy, but the old code cannot run on the modified database. Reversing the database change requires a slow, high-risk restore from backup, extending the outage for hours.
+That command tells Kubernetes to move the Deployment back to the previous revision and then waits for the rollout to finish. The command itself is small. The preparation behind it matters more: the previous image must still be available, readiness checks must work, and the database must still support the old code.
 
-## Writing Backwards-Compatible Migrations
+Rollback can feel emotionally unsatisfying because the team still needs to fix the bug. That is okay. During an incident, the first job is to restore service. After users stop seeing failures, the team can debug version `2026.06.13.2` with less pressure and ship a safer version later.
 
-To escape the database rollback trap, platform teams must strictly prohibit destructive migrations. Database schema changes must be designed to be completely **Backwards-Compatible**, ensuring that the old code (`1.8.3`) and new code (`1.8.4`) can read and write to the database concurrently.
+Rollback has one major weakness. It works cleanly when the system state can move back safely. The next path, roll-forward, matters when the old version lacks a safe path against current state or when the fix is smaller than the revert.
 
-This is accomplished using the **Expand-and-Contract Pattern**, which decomposes a single logical database change into multiple safe, progressive steps spread across separate releases.
+## Roll-Forward
+<!-- section-summary: Roll-forward ships a focused fix when returning to the old version would be slower or unsafe. -->
 
-### Renaming a Column: Step-by-Step
+A **roll-forward** fixes the bad release by deploying another version. The team keeps moving forward from `2026.06.13.2` to `2026.06.13.3` with a small patch.
 
-Let's look at the safe, backwards-compatible way to rename a database field from `phone` to `phoneNumber` without causing service downtime or blocking rollbacks:
+Roll-forward can be the right path when the previous version lacks support for current state. For example, the new release may have already written rows in a new table, sent new message types to a queue, or completed an irreversible data migration. Returning to the old version could create more failures than the bug itself.
 
-```mermaid
-flowchart TD
-    Expand["1. Expand Phase<br/>(Add new 'phoneNumber' column)"] --> Transition["2. Transition Phase<br/>(Code writes to both columns)"]
-    Transition --> Contract["3. Contract Phase<br/>(Safely delete old 'phone' column)"]
+Roll-forward can also be right when the fix is tiny and already understood. Suppose the checkout bug comes from a missing environment variable name:
+
+```diff
+- PAYMENT_TIMEOUT_MS: "300"
++ PAYMENTS_TIMEOUT_MS: "300"
 ```
 
-#### Step 1: The Expand Release (Release A)
+If the team has high confidence in that fix, the pipeline is fast, and the blast radius is understood, shipping `2026.06.13.3` may recover faster than moving the whole service back. The danger is turning an incident into live product development. A roll-forward patch should be narrow, reviewed, and verified through the same deployment gates as any other production change.
 
-1. The migration script *only* adds the new column (`phoneNumber`). It does not delete, alter, or rename the old column (`phone`). Both columns exist side-by-side in the database.
-2. The SQL migration is safe and non-blocking:
-   ```sql
-   ALTER TABLE customers ADD COLUMN phone_number VARCHAR(20);
-   ```
+Use a short checklist before choosing roll-forward:
 
-#### Step 2: The Transition Release (Release B)
+| Question | Strong answer for roll-forward |
+|---|---|
+| Do we know the exact cause? | Yes, with logs, traces, or a failing test. |
+| Is the patch small? | Yes, the change fits in one focused diff. |
+| Can CI and deployment finish quickly? | Yes, inside the recovery target. |
+| Can we test the fix before broad traffic? | Yes, through canary, blue-green validation, or smoke tests. |
+| Is rollback unsafe? | Yes, current data or external state makes rollback risky. |
 
-1. The new application version (`1.8.4`) is deployed to production.
-2. The new code is written to read from `phoneNumber` if present, but default back to `phone`. Crucially, all database writes from the new code write identical data to *both* columns.
-3. If a rollback to `1.8.3` is forced, the old code can read the `phone` field successfully because it was never deleted and contains the latest data written by the new code.
+Rollback and roll-forward both need one shared measurement: recovery time. That is where MTTR enters the conversation.
 
-#### Step 3: The Contract Release (Release C)
+## Choosing by Recovery Time
+<!-- section-summary: MTTR keeps the recovery decision focused on restoring service instead of winning a debugging debate. -->
 
-1. Once version `1.8.4` has run stably in production for several days, a background script is executed to backfill any historical database records, copying old `phone` values to `phoneNumber`.
-2. A subsequent, separate deployment executes the Contract phase, dropping the old `phone` column from the database:
-   ```sql
-   ALTER TABLE customers DROP COLUMN phone;
-   ```
+**Mean Time to Recovery**, often shortened to **MTTR**, measures how long it takes to restore service after a failure. During a release incident, the practical question is: which path restores the user experience safely in the shortest time?
 
-At this point, the migration is complete. If a rollback is forced during the crucial Release B window, the old code runs perfectly, eliminating the schema rollback trap completely.
+For the checkout API, we can write the decision in a simple table:
+
+| Situation | Prefer |
+|---|---|
+| New version fails readiness before traffic | Rollback or stop rollout immediately. |
+| Canary error rate spikes at 5% | Set canary weight to `0`, then investigate. |
+| Blue-green promotion fails but old blue still works | Move traffic back to blue. |
+| New release already completed a compatible schema expand | Rollback application if old version still works. |
+| New release ran a destructive schema change | Roll-forward or restore from a planned database recovery path. |
+| Bug is a one-line config mismatch with a tested fix | Roll-forward can be faster. |
+
+The incident lead should make this call early. A useful time box is 5 to 10 minutes for a severe user-facing outage. If the team lacks a clear root cause and safe patch inside that time, rollback usually protects users better.
+
+The decision should live in the deployment runbook. A runbook line might say:
+
+```yaml
+recovery_policy:
+  severe_checkout_failure:
+    first_action: "route traffic to previous healthy release"
+    debug_timebox_minutes: 10
+    roll_forward_allowed_when:
+      - "root cause is confirmed"
+      - "patch is reviewed"
+      - "database remains backward compatible"
+      - "canary gate can validate the patch"
+```
+
+This keeps the team from debating from scratch while customers are failing checkout. The most important part of that policy is the database line, because database changes are the most common reason rollback surprises people.
+
+## The Database Trap
+<!-- section-summary: Database and message changes can make application rollback unsafe even when the old image still exists. -->
+
+Application rollback feels simple because container images and task definitions are versioned. Data changes are different. Once the new version writes data, changes schema, or sends messages, the old version may no longer understand the world around it.
+
+Here is the classic checkout failure. Version `2026.06.13.2` renames `orders.discount_code` to `orders.promotion_code` in one migration. The new application reads `promotion_code`. The release fails because payment authorization times out. The team rolls the app back to `2026.06.13.1`. The old code starts and tries to read `discount_code`, but the column is gone. Now the rollback fails too.
+
+Message queues create a similar trap. If the new version starts publishing events with a required `promotionId` field and old consumers lack support for it, rolling back one service may leave downstream workers broken. External systems add another version of the problem. If the new release creates payment intents with a new provider configuration, the old release may lack the logic to reconcile them.
+
+A rollback plan should classify changes before release:
+
+| Change type | Rollback risk |
+|---|---|
+| App code only | Usually low if the previous image exists. |
+| Config only | Medium because old code may expect different names or values. |
+| Additive database change | Usually manageable if old columns and tables remain. |
+| Destructive database change | High because old code may crash or lose data. |
+| Queue message shape change | High unless producers and consumers support both shapes. |
+| External side effect | High when the old version lacks support for new external state. |
+
+![Database rollback trap showing drop column, old app breaks, expand, dual write, and rollback works](/content-assets/articles/article-cicd-deployment-strategies-rollback-vs-roll-forward-decisions/database-rollback-trap.png)
+
+*Destructive schema changes can break rollback, while expand-and-contract keeps both old and new versions able to read the data.*
+
+This is why teams talk about **backward compatibility** before the release. Backward compatibility means the old and new versions can both operate during the transition. The next section shows how to design that into database changes.
+
+## Compatible Migrations
+<!-- section-summary: Compatible migrations split risky data changes into small releases so rollback remains available. -->
+
+The safest database rollout pattern is **expand, migrate, and contract**. We introduced it in the blue-green article, and it matters even more when thinking about rollback. Instead of changing or deleting a field in one release, the team creates a path where old and new code can both work for a while.
+
+Let's redo the discount column safely.
+
+**Release 1: Expand the schema.** Add the new column while keeping the old one.
+
+```sql
+ALTER TABLE orders ADD COLUMN promotion_code text;
+```
+
+Version `2026.06.13.1` still reads `discount_code`. The database now also has `promotion_code`, but old code can ignore it safely.
+
+**Release 2: Write both fields.** Deploy application code that writes both `discount_code` and `promotion_code` for new orders.
+
+```ts
+await orders.update(orderId, {
+  discount_code: discountCode,
+  promotion_code: discountCode,
+});
+```
+
+Now rollback to the previous application still works because `discount_code` remains populated.
+
+**Release 3: Backfill old rows.** Copy existing values into the new column in a controlled job.
+
+```sql
+UPDATE orders
+SET promotion_code = discount_code
+WHERE promotion_code IS NULL
+  AND discount_code IS NOT NULL;
+```
+
+Large production tables need batched backfills, lock monitoring, and a tested pause or resume plan. The example is small so the idea stays visible.
+
+**Release 4: Read the new field.** Deploy code that reads `promotion_code`, while still writing both fields during the rollback window.
+
+**Release 5: Contract later.** After the team knows rollback to the old field is no longer needed, remove `discount_code` in a separate cleanup release.
+
+This sequence feels slower than one big migration, but it gives the incident team options. If Release 4 has an application bug, traffic can return to Release 3 because the old data path still exists. The team buys recoverability by splitting the change into safer steps.
+
+The same pattern applies to queue messages. Add new optional fields first, teach consumers to accept both shapes, then switch producers, then remove old fields after the rollback window. Compatibility is a release design habit across databases, queues, APIs, and external side effects.
+
+Now we can combine rollback, roll-forward, MTTR, and compatibility into a practical response plan.
 
 ## Putting It All Together
+<!-- section-summary: The recovery plan should choose the fastest safe path and make data compatibility part of the release design. -->
 
-By prioritizing MTTR, enforcing the 10-minute revert rule, and designing backwards-compatible database migrations, we build a highly resilient incident response framework:
+The checkout canary reaches 25%, and 500 errors spike for users with saved discounts. The release owner declares a release incident. Recovery comes before deep debugging.
 
-* **Frantic Hotfixes**: Enforcing the strict 10-minute revert rule ensures that failing deployments are reverted instantly to a known stable version, preventing teams from writing hasty, untested code patches under pressure.
-* **Destructive Database Rollbacks**: Adhering to the Expand-and-Contract database migration pattern guarantees that database changes remain fully backwards-compatible, allowing old and new application instances to access the database concurrently without database mismatch exceptions.
-* **Analysis Paralysis**: Prioritizing MTTR over root cause analysis ensures that operators focus entirely on restoring user capacity first, deferring debugging to a safe post-incident post-mortem window.
+The team checks the prewritten decision table. The old version still exists. The schema change was additive, because the team used expand and contract. The canary has written both old and new fields. The fastest safe action is rollback: set canary traffic to `0` or move the deployment back to the previous healthy version.
+
+If the same release had dropped the old column already, rollback would be dangerous. The team would choose a roll-forward patch or a database recovery path. That is a slower and riskier situation, so the release design should avoid it for normal product changes.
+
+A good deployment strategy treats rollback as a feature that must be kept working. That means immutable previous artifacts, traffic controls, health checks, observability, and backward-compatible data changes. Roll-forward stays available for small confirmed fixes or situations where current state blocks a safe move backward.
+
+![Recovery summary showing failed release, MTTR, data compatible, rollback ready, patch known, and restore service](/content-assets/articles/article-cicd-deployment-strategies-rollback-vs-roll-forward-decisions/recovery-summary.png)
+
+*A recovery plan keeps MTTR, data compatibility, rollback readiness, and patch confidence visible during the incident.*
 
 ## What's Next
+<!-- section-summary: Environment promotion makes sure the exact same artifact moves through quality gates before production. -->
 
-Executing safe rollbacks and migrations requires a highly reliable, standardized pipeline promotion flow. If the compiled code binary or container image is not identical across staging and production, environment drift will introduce new, unexpected variables that make rollbacks unpredictable. Let's move to **Environment Promotion** to learn how to enforce the "Build Once, Run Everywhere" golden rule and design progressive quality gates across staging and production.
-
-![Rollback versus roll-forward recovery summary showing revert path, patch path, MTTR pressure, schema trap, and compatible migrations](/content-assets/articles/article-cicd-deployment-strategies-rollback-vs-roll-forward-decisions/recovery-decision-summary.png)
-
-*Use this as the recovery checklist: compare revert and patch paths under MTTR pressure, identify schema traps, design compatible migrations, and choose the fastest safe recovery path.*
+The next article moves earlier in the release path. We will look at **environment promotion**, where one built artifact moves from development to staging to production through quality gates. That process gives rollback and roll-forward decisions a cleaner foundation because everyone knows exactly which artifact is running where.
 
 ---
 
 **References**
 
-* [Google Site Reliability Engineering: Accelerating Recovery](https://sre.google/sre-book/accelerating-recovery/) - SRE principles on MTTR optimization, rollback triggers, and mitigating blast radius.
-* [Refactoring Databases: Evolutionary Database Design](https://www.agiledata.org/essays/databaseRefactoring.html) - Structural guidelines on expand-contract database migrations and backwards-compatible schemas.
-* [Twelve-Factor App: Dev/Prod Parity](https://12factor.net/dev-prod-parity) - Principles on maintaining identical runtimes and environments to enable predictable rollbacks.
-* [AWS DevOps Blog: Safe Database Migrations](https://aws.amazon.com/blogs/devops/safe-database-migrations-with-aws-code-deploy/) - Technical implementations of blue-green database transitions and safe schema rollbacks.
+- [AWS CodeDeploy rollback and redeployment](https://docs.aws.amazon.com/codedeploy/latest/userguide/deployments-rollback-and-redeploy.html) - Explains automatic rollbacks, manual rollbacks, and how CodeDeploy redeploys previous revisions.
+- [AWS CodeDeploy stop deployment](https://docs.aws.amazon.com/codedeploy/latest/userguide/deployments-stop.html) - Documents stopping a deployment and stop-and-roll-back behavior.
+- [Kubernetes Deployments](https://kubernetes.io/docs/concepts/workloads/controllers/deployment/) - Documents rollout status and rolling back a Deployment.
+- [Google SRE Workbook: Incident Response](https://sre.google/workbook/incident-response/) - Describes incident response roles, communication, and response structure.
+- [Prisma expand-and-contract migrations](https://www.prisma.io/docs/guides/database/data-migration) - Shows a stepwise production workflow for schema changes and data migration.
+- [GitLab backwards compatibility across updates](https://docs.gitlab.com/development/multi_version_compatibility/) - Explains compatibility risks when a deployed system can contain multiple versions at once.

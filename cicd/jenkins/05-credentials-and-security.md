@@ -1,7 +1,7 @@
 ---
 title: "Credentials and Security"
 description: "Protect sensitive API keys inside the encrypted credentials vault, mask secrets dynamically in logs, and isolate controllers from compromised agents."
-overview: "Hardcoding access credentials in build scripts exposes servers to immediate exploit. Learn how the Jenkins internal credentials vault encrypts secrets at rest, how to inject and mask credentials dynamically inside pipeline steps, and how to configure the Agent-to-Controller Security Gateway to prevent filesystem breaches."
+overview: "Jenkins often holds deploy power for registries, clouds, clusters, and source-control systems. Learn how credentials binding works, where log masking helps, why trusted pipeline authors matter, and how teams replace long-lived static cloud keys with federated credentials."
 tags: ["jenkins", "security", "credentials", "secrets"]
 order: 5
 id: article-cicd-jenkins-credentials-and-security
@@ -11,206 +11,250 @@ aliases:
 
 ## Table of Contents
 
-1. [The Problem](#the-problem)
-2. [The Cryptographic Vault on Disk](#the-cryptographic-vault-on-disk)
-3. [Secure Credentials Binding and Log Masking](#secure-credentials-binding-and-log-masking)
-4. [Selecting Specific Secret Schemas](#selecting-specific-secret-schemas)
-5. [The Agent-to-Controller Security Gateway](#the-agent-to-controller-security-gateway)
-6. [Putting It All Together](#putting-it-all-together)
+1. [Why Jenkins Secrets Need Boundaries](#why-jenkins-secrets-need-boundaries)
+2. [Binding Credentials Into Builds](#binding-credentials-into-builds)
+3. [How Masking Actually Works and Where It Fails](#how-masking-actually-works-and-where-it-fails)
+4. [The Groovy Sandbox and Script Approval](#the-groovy-sandbox-and-script-approval)
+5. [Untrusted Pull Requests in Multibranch Pipelines](#untrusted-pull-requests-in-multibranch-pipelines)
+6. [From Static Keys to OIDC Federated Credentials](#from-static-keys-to-oidc-federated-credentials)
+7. [Putting It All Together](#putting-it-all-together)
 
-## The Problem
+## Why Jenkins Secrets Need Boundaries
+<!-- section-summary: Jenkins credentials need storage boundaries, runtime boundaries, author trust boundaries, and branch boundaries. -->
 
-Operating a CI/CD server that deploys to highly privileged production clouds requires strict controls over passwords, API keys, and private network routes. When software organizations fail to establish clear credential security boundaries, they face severe operational exploits:
+Jenkins sits in a powerful position. It checks out source code, builds artifacts, pushes images, deploys to clusters, publishes release notes, and sometimes talks to cloud accounts. To do that work, it often needs secrets: registry passwords, SSH keys, API tokens, cloud credentials, kubeconfig files, signing keys, and webhook tokens.
 
-* **The Plaintext Log Exposure**: An engineer needs to publish a built container image to a central Docker registry. To authenticate, they write their plaintext registry username and password directly inside a pipeline shell execution step (`docker login -u user -p mysecretpassword`). The pipeline executes, and Jenkins automatically prints the active shell commands to the web UI console logs. The password becomes visible to the entire organization, forcing the security team to revoke credentials immediately.
-* **The Master Filesystem Intrusion**: A virtual machine acting as a Jenkins build agent is compromised by a malicious dependency or an open network port. The attacker gains root shell access to the agent node and executes a script that attempts to read `$JENKINS_HOME/config.xml` directly from the primary controller over the network. Because the network gateway between the master and agent is unrestricted, the agent successfully steals global cryptographic keys and administrative passwords, compromising the entire company infrastructure.
-* **The Composed Credentials Leaks**: An administrator attempts to pass an SSH private key to a git clone step using simple environment variables. The key is written to a temporary environment file on the agent host's disk. Because workspace directories persist on shared agents, subsequent pipelines running on the same machine can read the exposed temporary file, leading to cross-project credential theft.
+Summit Retail learns this through a simple mistake. A developer adds `docker login -u summit -p super-secret` to a shell step during a late release. Jenkins prints commands and logs to the build console, so the password lands in a place many engineers can read. The security team rotates the registry credential, but the bigger lesson is about boundaries.
 
-These scenarios illustrate that credentials must be encrypted at rest, masked during execution, and strictly isolated from the execution agent nodes.
+A **credential** in Jenkins is a stored secret or identity material that jobs can use without hardcoding the value in a Jenkinsfile. Jenkins stores credentials through its credentials system, and jobs refer to them by a `credentialsId`. The Jenkinsfile should know the ID and the scope of use, while the raw secret value stays in the credentials store or an external secret provider.
 
-## The Cryptographic Vault on Disk
+There are four boundaries to think about:
 
-Jenkins incorporates a secure, internal **Credentials Vault** to store database passwords, API tokens, SSH keys, and file certificates. Rather than keeping credentials in plaintext files or local environment variables, all secrets are registered globally or within specific folder namespaces inside the controller's vault.
+| Boundary | Question it answers | Jenkins mechanism |
+|---|---|---|
+| Storage boundary | Where does the secret value live? | Jenkins credentials store, external secret manager, JCasC references |
+| Runtime boundary | Which step receives the secret? | `withCredentials`, scoped environment variables, isolated agents |
+| Author boundary | Who can write code that uses the secret? | Job permissions, repository permissions, script sandbox, trusted libraries |
+| Branch boundary | Which branch or PR can reach the secret? | Multibranch trust settings, `when` gates, credential scope |
 
-### Encryption at Rest
+The rest of the article follows those boundaries. First the team binds credentials into a build safely. Then they look at masking, because masking is useful but limited. After that they cover Groovy sandboxing, untrusted pull requests, and the move from static cloud keys to OIDC federation.
 
-When an administrator registers a new credential, the controller encrypts the secret value before writing it to the XML configurations on disk. Jenkins secures this data using a two-key AES (Advanced Encryption Standard) encryption system located within the `$JENKINS_HOME/secrets/` directory:
+## Binding Credentials Into Builds
+<!-- section-summary: Credentials binding gives one pipeline block temporary environment variables or files that reference stored Jenkins credentials. -->
 
-1. `secrets/master.key`: A master cryptographic key generated dynamically on the very first boot of the controller. This key is used exclusively to encrypt and protect the primary data key.
-2. `secrets/hudson.util.Secret`: The primary data key. This key is stored encrypted on disk by the `master.key`. When Jenkins needs to write a credential to `$JENKINS_HOME/credentials.xml`, it uses this data key to encrypt the secret string.
+The **Credentials Binding plugin** gives pipelines a step called `withCredentials`. This step takes a stored Jenkins credential, exposes it to a small block as an environment variable or temporary file, and removes that binding after the block finishes. The Jenkinsfile uses the credential ID, while Jenkins handles the secret value at runtime.
 
-Because the data key is protected by the `master.key`, an intruder who gains raw read access to the server's XML configuration files cannot decrypt the credentials. They would need access to both keys inside the secure `/secrets/` filesystem directory to decrypt the vault.
-
-```text
-secrets/master.key  ──(Decrypts)──>  secrets/hudson.util.Secret  ──(Decrypts)──>  credentials.xml (Plaintext Secret)
-```
-
-It is a critical system administration rule that the `/secrets/` directory must be protected with strict Linux filesystem permissions (`chmod 700`) and must never be backed up or committed to the same repository as the system's Configuration as Code (JCasC) YAML files.
-
-## Secure Credentials Binding and Log Masking
-
-Storing secrets securely at rest is only half the battle. When a pipeline runs, the agent must use those secrets to authenticate against registries, databases, and cloud providers. The pipeline must inject the secret into the build steps without exposing it in console logs or environment dumps.
-
-The Credentials Binding plugin solves this problem. It provides the `withCredentials` step wrapper, which binds vault secrets to temporary, local environment variables that exist *only* for the duration of that specific step block.
-
-### Groovy withCredentials Syntax
-
-Let's look at the correct, secure way to inject a username and password to authenticate against a Docker registry:
+Summit Retail stores a Docker registry username and password as a Jenkins credential with ID `registry-prod-push`. The publish stage can bind that credential only around the `docker login` and `docker push` commands:
 
 ```groovy
 stage('Publish Image') {
+    when {
+        branch 'main'
+    }
+    agent { label 'linux && docker' }
     steps {
         withCredentials([usernamePassword(
-            credentialsId: 'docker-hub-production',
+            credentialsId: 'registry-prod-push',
             usernameVariable: 'REGISTRY_USER',
             passwordVariable: 'REGISTRY_PASSWORD'
         )]) {
             sh '''
-                echo "Authenticating as: ${REGISTRY_USER}"
-                echo "${REGISTRY_PASSWORD}" | docker login -u "${REGISTRY_USER}" --password-stdin
+                set +x
+                printf '%s' "$REGISTRY_PASSWORD" | docker login registry.summit.example -u "$REGISTRY_USER" --password-stdin
+                docker push "$IMAGE"
             '''
         }
     }
 }
 ```
 
-### The Log-Masking Mechanism
+The stage has three useful controls. The `when` block keeps publishing on `main`. The `withCredentials` block keeps the registry secret inside one narrow scope. The shell uses `--password-stdin`, so the password travels through standard input instead of appearing as a command-line argument.
 
-When a secret is loaded inside the `withCredentials` block, the Jenkins controller automatically registers the raw secret string with its internal **Console Log Masker**. 
+Jenkins supports several credential shapes. **Secret text** works for API tokens. **Username and password** works for registries and basic-auth services. **SSH private key** works for Git or remote deployment targets. **Secret file** works for kubeconfig files, certificates, signing keys, or OIDC token files. The pipeline should choose the narrowest type that matches the tool.
 
-If a step accidentally prints `${REGISTRY_PASSWORD}` to stdout, or if a command fails and dumps the executing command line, the log masker scans the stream and replaces every occurrence of the secret with a secure redacted marker (`****` or `*`). 
+Here is an SSH key binding for a private Git fetch:
 
-### Key Security Caveats
-
-* **Avoid Global Scopes**: Secrets must never be bound globally at the pipeline root level. Binding a secret globally makes it visible to *every* stage, including third-party test suites or npm test commands that could exfiltrate env vars to external servers.
-* **Do Not Use Echo on Bound Variables**: Although the log masker is highly robust, developers must never write commands that attempt to manipulate or print the secret string (such as `sh "echo ${SECRET} | base64"`). Creative encodings can bypass the literal log masker, causing leaks.
-* **Use password-stdin**: Always pass passwords over standard input (`--password-stdin`) rather than CLI arguments (`-p ${PASSWORD}`). CLI arguments are visible in the operating system's process table (`ps aux`) to other users running on the shared agent machine.
-
-## Selecting Specific Secret Schemas
-
-Jenkins enforces typed schemas for different credential kinds to ensure that secrets are structured to match their target communication protocols.
-
-```mermaid
-flowchart TD
-    Vault["Credentials Vault"]
-    SecText["Secret Text<br/>(API Tokens)"]
-    UserPass["Username & Password<br/>(Docker / Git)"]
-    SSHKey["SSH Private Key<br/>(Server Shell / SCM)"]
-    SecFile["Secret File<br/>(Kubeconfigs / Certs)"]
-
-    Vault --> SecText
-    Vault --> UserPass
-    Vault --> SSHKey
-    Vault --> SecFile
+```groovy
+withCredentials([sshUserPrivateKey(
+    credentialsId: 'release-bot-ssh',
+    keyFileVariable: 'SSH_KEY',
+    usernameVariable: 'SSH_USER'
+)]) {
+    sh '''
+        set +x
+        GIT_SSH_COMMAND="ssh -i $SSH_KEY -o IdentitiesOnly=yes" git fetch git@github.com:summit/private-release-data.git
+    '''
+}
 ```
 
-### 1. Secret Text
+The binding gives the shell a temporary key file path. Jenkins deletes the temporary file after the block completes. The agent still matters, because any process running as the same operating-system user during that window may have opportunities to inspect environment or process data. Sensitive jobs deserve isolated agents or single-executor agents, especially when teams run code from many repositories.
 
-Used for simple, one-line string secrets such as Slack webhooks, AWS secret keys, or GitHub Personal Access Tokens (PATs).
+## How Masking Actually Works and Where It Fails
+<!-- section-summary: Masking reduces accidental console leaks, while credential scope and trusted authors provide the real security boundary. -->
 
-* **Binding Syntax**:
-  ```groovy
-  withCredentials([string(credentialsId: 'slack-webhook-token', variable: 'SLACK_TOKEN')]) {
-      sh 'curl -X POST -H "Authorization: Bearer ${SLACK_TOKEN}" https://slack.com/api/chat.postMessage'
-  }
-  ```
+When Jenkins binds a secret, it tries to mask matching secret values in the build log. If a tool prints the registry password, Jenkins may replace it with `****`. This protects against common accidents, such as a shell command echoing an environment variable or a CLI showing a token in normal output.
 
-### 2. Username and Password
+Masking has limits because a pipeline author who can use a credential can usually send it somewhere on purpose. The author can base64-encode it, split it into pieces, write it to a file artifact, send it to a network endpoint, or run a tool that hides the value from the log but still exfiltrates it. Jenkins log masking helps with accidental exposure; the stronger control is deciding which jobs, branches, authors, and agents can access the credential at all.
 
-Used for services that require dual-field credentials, such as container registries, database connections, or basic Git authentication.
+There is also a shell detail that matters. In Groovy, double-quoted strings can interpolate variables before the shell receives the script. In many cases, single-quoted Groovy strings or triple single-quoted shell blocks keep expansion inside the shell, which reduces the chance that Jenkins stores the secret in step metadata or process arguments.
 
-* **Binding Syntax**: Exposes separate variables for the username and password, as illustrated in the ECR/Docker Hub example in the previous section.
+This pattern keeps the shell responsible for expansion:
 
-### 3. SSH Private Key
-
-Used to authenticate shell connections to external bare-metal servers or secure SCM (Source Control Management) repositories.
-
-* **Binding Syntax**:
-  ```groovy
-  withCredentials([sshUserPrivateKey(
-      credentialsId: 'production-ssh-key',
-      keyFileVariable: 'KEY_PATH',
-      usernameVariable: 'SSH_USER'
-  )]) {
-      sh 'ssh -i "${KEY_PATH}" -l "${SSH_USER}" 10.0.4.12 "systemctl restart orders"'
-  }
-  ```
-
-Jenkins writes the private key to a temporary, read-only file on the agent's filesystem and binds the path to `KEY_PATH`, automatically deleting the temporary file when the block exits.
-
-### 4. Secret File
-
-Used for entire configuration payloads, such as Kubernetes `kubeconfig` files, GPG signing certificates, or SSL client keys.
-
-* **Binding Syntax**:
-  ```groovy
-  withCredentials([file(credentialsId: 'k8s-kubeconfig-staging', variable: 'KUBECONFIG')]) {
-      sh 'kubectl get pods -n staging'
-  }
-  ```
-
-Similar to the SSH private key, Jenkins securely mounts the file inside the agent workspace and deletes it immediately when the step finishes, preventing other jobs on the same agent from accessing the file.
-
-## The Agent-to-Controller Security Gateway
-
-In a distributed Jenkins architecture, the controller is the brain, while agents are the muscles. Agents are disposable executors that run untrusted developer code. This split introduces a severe threat vector: if a build agent is compromised (e.g., an attacker exploits a CVE in a running dependency), the compromised agent could try to attack the controller node.
-
-Historically, agents could request the controller to execute arbitrary Java methods or read files from `$JENKINS_HOME` over the JNLP remoting protocol, allowing a single compromised agent to seize administrative control of the entire Jenkins installation.
-
-The **Agent-to-Controller Security Gateway** solves this problem by enforcing a strict command and file-read firewall at the JNLP remoting layer on the controller.
-
-```mermaid
-flowchart TD
-    subgraph Agent ["Compromised Agent Node"]
-        MalCode["Malicious Test Script"]
-    end
-
-    subgraph Controller ["Secure Controller Node"]
-        Gateway["Security Gateway<br/>(Remoting Firewall)"]
-        JHome["$JENKINS_HOME/config.xml"]
-        Admin["Admin Commands"]
-    end
-
-    MalCode -->|1. Request file-read| Gateway
-    Gateway -->|2. BLOCKED & LOGGED| JHome
-    MalCode -->|3. Request system-restart| Gateway
-    Gateway -->|4. BLOCKED & LOGGED| Admin
+```groovy
+withCredentials([string(credentialsId: 'payments-api-token', variable: 'API_TOKEN')]) {
+    sh '''
+        set +x
+        curl -H "Authorization: Bearer $API_TOKEN" https://api.summit.example/release
+    '''
+}
 ```
 
-### Enforced Restrictions
+This pattern expands in Groovy before the shell runs, which creates extra exposure in process listings and Jenkins step metadata:
 
-When the security gateway is enabled (which is the default in all modern Jenkins versions), the controller rejects the following requests from agents:
+```groovy
+withCredentials([string(credentialsId: 'payments-api-token', variable: 'API_TOKEN')]) {
+    sh """
+        curl -H "Authorization: Bearer ${API_TOKEN}" https://api.summit.example/release
+    """
+}
+```
 
-* **File-Read Block**: Agents are strictly blocked from reading files outside their assigned workspace directory. An agent cannot request the controller to send it the contents of `$JENKINS_HOME/config.xml` or `/etc/passwd` on the master.
-* **System Commands Block**: Agents cannot request the controller to execute arbitrary system-level commands or Java reflection methods on the controller's JVM.
-* **Whitelisted Commands Only**: Only a narrow list of safe, pre-approved orchestration commands are allowed to flow over the network socket.
+Masking also struggles with tools that transform output. A command can print a URL-encoded token, a JSON-escaped token, a wrapped line, or a debug dump with partial values. The team should still set `set +x`, avoid debug logs around secrets, keep credentials out of command-line arguments where possible, and run secret-using steps on agents that untrusted jobs cannot share.
 
-### Hardening Best Practices
+The simple review question is this: who can change the code inside the `withCredentials` block? If that answer includes fork contributors, broad repository write access, or any pipeline author outside the trusted deployment group, the credential scope is too wide for production deploy power.
 
-To secure a self-hosted Jenkins cluster, platform teams must implement a four-layer security checklist:
+## The Groovy Sandbox and Script Approval
+<!-- section-summary: The Groovy sandbox limits which Jenkins and Java APIs untrusted pipeline code can call. -->
 
-1. **Enforce Agent-to-Controller Security**: Verify that `Enable Agent -> Controller Security` is checked in the controller's Global Security panel.
-2. **Restrict Directory Access**: Set absolute workspace paths on the agents (e.g. `/home/jenkins/workspace/`) and configure the agent system user with minimal OS privileges to block shell escapes to the host node.
-3. **Use Ephemeral Containers**: The most robust way to secure agents is by running them inside ephemeral Docker containers or Kubernetes Pods. If a container is compromised, the attacker is locked inside a temporary container namespace that is destroyed minutes later, preventing persistent lateral movement.
-4. **Isolate Master and Agent Networks**: Place the controller inside a highly secured private network subnet. Agents should reside in separate subnets, communicating with the controller exclusively over a one-way inbound HTTPS WebSocket port (443), with all other ports closed.
+Jenkins Pipeline executes Groovy, and Groovy can be very powerful. A script with wide access could try to read files, call Java APIs, inspect Jenkins internals, or change controller behavior. Jenkins uses the **Script Security plugin** to reduce that risk through the **Groovy sandbox** and **script approval**.
+
+The **Groovy sandbox** allows common pipeline operations while blocking method calls that Jenkins has not approved for sandboxed scripts. When a pipeline tries to call a restricted method, Jenkins stops the script and records a pending approval item. An administrator can review the requested signature in Manage Jenkins, In-process Script Approval.
+
+This matters for shared libraries and Jenkinsfiles. A normal application Jenkinsfile usually runs in the sandbox. A folder-level shared library also runs in the sandbox. A trusted global library can run outside those restrictions, so that library repository needs stricter review and branch protection than a normal application repository.
+
+Here is the practical review path. If a sandbox rejection appears, the team should ask why the pipeline needs that API. A normal application build rarely needs direct access to Jenkins controller internals. The safer fix often moves the operation into a supported pipeline step, a CLI on an agent, or a narrow trusted shared-library function owned by the platform team.
+
+Approving signatures by habit weakens the boundary. Each approval lets sandboxed pipeline code call more powerful APIs in the future. A useful approval record should mention which job needed it, why a normal step could not do the work, which data the method can reach, and whether a trusted shared-library wrapper would be safer.
+
+The sandbox connects back to credentials. If a Jenkinsfile can call unusual APIs and also bind production credentials, a small review miss can grow into a serious incident. Strong Jenkins security combines sandbox defaults, careful approvals, restricted credential scopes, and isolated agents.
+
+## Untrusted Pull Requests in Multibranch Pipelines
+<!-- section-summary: A pull request can change pipeline code, so fork trust settings and credential gates decide whether secrets stay protected. -->
+
+Multibranch Pipeline makes Jenkins convenient because every branch or pull request can bring its own Jenkinsfile. That same feature creates a security question. If a fork contributor can edit a Jenkinsfile, and Jenkins runs that file with production credentials, the pull request can try to steal the credential.
+
+Summit Retail has a public repository for a small SDK. A contributor opens a pull request that changes a test script. If the PR job receives the Docker registry credential, the contributor can modify the test to print or send the secret. Log masking might hide a direct print, but it cannot turn an untrusted pipeline author into a trusted one.
+
+Branch source plugins provide trust settings for pull requests from forks. The exact labels depend on the SCM plugin, but the security idea stays the same:
+
+| Trust choice | What usually happens | Good fit |
+|---|---|---|
+| Trust nobody from forks | Jenkins uses maintainer-controlled pipeline logic for fork PRs | Public repositories and broad contributor bases |
+| Trust known contributors | Jenkins trusts PR pipeline code from recognized contributors | Private or semi-open projects with clear membership |
+| Trust everyone | Jenkins runs fork-provided pipeline code as trusted | Rare internal setups with tightly controlled forks |
+
+For public repositories, Summit Retail keeps fork PR builds on a safe path. PRs compile, lint, and test without production credentials. Deployment stages run only after reviewed code reaches `main`. Registry push credentials live in a folder or credential domain that only trusted jobs can access, and the Jenkinsfile still uses branch gates as a second control.
+
+```groovy
+stage('Deploy Production') {
+    when {
+        allOf {
+            branch 'main'
+            expression { return params.DEPLOY_PRODUCTION }
+        }
+    }
+    steps {
+        withCredentials([string(credentialsId: 'prod-deploy-token', variable: 'DEPLOY_TOKEN')]) {
+            sh '''
+                set +x
+                ./scripts/deploy-prod.sh
+            '''
+        }
+    }
+}
+```
+
+This stage gives production deploy power only to a merged branch and an explicit deployment request. The repository permissions and Jenkins job permissions still matter, because anyone who can merge to `main` can affect the deployment path. CI/CD security always follows the chain of trust from source control to Jenkins to the target environment.
+
+Scan credentials also need attention. Organization folders and multibranch projects often use SCM credentials to discover repositories, index branches, update commit statuses, and check out code. Jenkins documentation warns that credentials available to multibranch jobs can become available to child jobs, so teams should scope scan credentials and checkout credentials with the same care as deploy credentials.
+
+## From Static Keys to OIDC Federated Credentials
+<!-- section-summary: OIDC federation lets Jenkins exchange short-lived build identity tokens for cloud credentials instead of storing long-lived access keys. -->
+
+Many Jenkins installations start with static cloud keys. An administrator creates an AWS IAM user named `jenkins-deploy`, stores the access key and secret access key in Jenkins, and uses them to deploy. That works, but the key can live for months, and every rotation requires coordination across Jenkins, cloud IAM, and every pipeline that expects the credential.
+
+**OIDC federation** gives CI jobs a different path. OIDC stands for OpenID Connect. A Jenkins build receives a short-lived identity token from a trusted issuer, and the cloud provider exchanges that token for temporary credentials tied to a role. AWS uses `sts:AssumeRoleWithWebIdentity` for this style of flow.
+
+The Jenkins OpenID Connect Provider plugin can issue build-specific ID tokens. The external service, such as AWS or GCP, trusts the issuer URL and verifies the signed token. The trust policy can check claims such as audience, subject, job name, or branch name, so only the intended Jenkins job can assume the role.
+
+For AWS, the role trust policy shape looks like this:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Principal": {
+        "Federated": "arn:aws:iam::123456789012:oidc-provider/jenkins.summit.example/oidc"
+      },
+      "Action": "sts:AssumeRoleWithWebIdentity",
+      "Condition": {
+        "StringEquals": {
+          "jenkins.summit.example/oidc:aud": "sts.amazonaws.com",
+          "jenkins.summit.example/oidc:sub": "https://jenkins.summit.example/job/checkout-api/job/main/"
+        }
+      }
+    }
+  ]
+}
+```
+
+The `Principal` names the IAM OIDC provider that represents Jenkins. The `Action` allows web identity federation. The `aud` condition checks that the token was meant for AWS STS, so the Jenkins OIDC credential audience or client ID must match `sts.amazonaws.com`. The `sub` condition narrows which Jenkins job identity can assume the role, and this example uses the plugin's default subject style: the Jenkins job URL.
+
+A pipeline can then use an OIDC token file credential and the AWS CLI's web identity environment variables:
+
+```groovy
+withCredentials([file(credentialsId: 'aws-prod-oidc-token', variable: 'AWS_WEB_IDENTITY_TOKEN_FILE')]) {
+    withEnv([
+        'AWS_ROLE_ARN=arn:aws:iam::123456789012:role/checkout-api-prod-deploy',
+        "AWS_ROLE_SESSION_NAME=jenkins-${env.BUILD_NUMBER}",
+        'AWS_DEFAULT_REGION=us-east-1'
+    ]) {
+        sh '''
+            set +x
+            aws sts get-caller-identity
+            ./scripts/deploy-aws.sh
+        '''
+    }
+}
+```
+
+This design removes the long-lived AWS access key from Jenkins. The build receives a short-lived token, AWS verifies the token, and STS returns temporary credentials for a role with narrow permissions. If a token leaks, its lifetime and claim restrictions limit the incident compared with a static access key that remains valid until rotation.
+
+OIDC still needs operational care. Jenkins must serve a stable HTTPS issuer or a configured alternate issuer. The IAM provider must trust the right issuer and audience. The role policy must grant only the needed actions. The trust policy must narrow subjects enough that one pipeline cannot borrow another pipeline's deploy role. The pipeline should still keep the token binding in the smallest possible block.
 
 ## Putting It All Together
+<!-- section-summary: Jenkins security works when storage, runtime scope, author trust, branch trust, and cloud identity all line up. -->
 
-By combining the cryptographic credentials vault, log-redacted binding blocks, typed secret schemas, and the master-agent security gateway, we build a highly secured self-hosted CI/CD engine:
+Summit Retail's final Jenkins setup has layered boundaries. Secrets live in Jenkins credentials or an external secret provider. Jenkinsfiles bind those credentials only inside narrow `withCredentials` blocks. Shell steps use `set +x`, stdin, and environment expansion patterns that reduce accidental leaks. Sensitive jobs run on isolated agents.
 
-* **Plaintext Log Leaks**: Registering registry tokens inside the secure vault and injecting them via `withCredentials` username-password bindings guarantees that secrets are masked dynamically during pipeline execution. Even if a script dumps its environment, the console output prints a harmless redacted marker (`****`).
-* **Compromised Agent Intrusions**: The Agent-to-Controller Security Gateway blocks compromised agents from requesting arbitrary Java execution or accessing the controller's `$JENKINS_HOME` directory. The master's configurations, plugin classpaths, and vault keys remain fully protected.
-* **Cross-Project Secret Leaks**: Utilizing typed SSH keys and Secret File bindings ensures that large credentials payloads are written only to temporary, read-only files that are forcefully wiped from the agent's workspace the moment the step exits, preventing subsequent builds from stealing credentials.
+The team also controls who can write secret-using code. Application Jenkinsfiles stay sandboxed. Trusted shared libraries live in protected repositories. Script approvals receive real review. Public pull requests run tests without production credentials. Deploy stages wait for trusted branches and explicit release intent.
 
-![Jenkins credentials security summary showing encrypted vault, credentials binding, masking, secret schemas, and controller-agent boundary](/content-assets/articles/article-cicd-jenkins-credentials-and-security/jenkins-credentials-summary.png)
+For cloud deployments, the team starts moving from static keys to OIDC federation. Jenkins issues a build identity token, AWS exchanges it for temporary role credentials, and role trust conditions tie that access to a specific job path and audience. The pipeline still uses Jenkins credentials binding, but the credential now represents a short-lived identity flow instead of a long-lived secret.
 
-*Use this as the credentials checklist: know what the encrypted vault protects, bind secrets only for the step that needs them, rely on masking without trusting it blindly, choose the right schema, and preserve the controller-agent boundary.*
+That completes the Jenkins module. The architecture gives the controller and agents a clean boundary. Jenkinsfiles make delivery reviewable. Shared libraries reduce repeated pipeline code. Plugins and Configuration as Code make the controller rebuildable. Credentials and security keep the deploy power inside Jenkins scoped to the people, branches, jobs, and runtimes that should have it.
 
 ---
 
 **References**
 
-* [Jenkins Documentation: Handling Credentials](https://www.jenkins.io/doc/book/pipeline/jenkinsfile/#handling-credentials) - Official guide on credentials vault, credentials bindings, and username/password injections.
-* [Jenkins Security: Agent-to-Controller Security Gateway](https://www.jenkins.io/doc/book/security/controller-isolation/) - Architectural specification of the remoting firewall, command whitelists, and master-agent security boundaries.
-* [Credentials Binding Plugin Specification](https://plugins.jenkins.io/credentials-binding/) - Technical reference guide for using `withCredentials`, file, and private key bindings inside Groovy pipelines.
-* [OWASP Jenkins Hardening Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Jenkins_Hardening_Cheat_Sheet.html) - Security guidelines for securing JCasC configurations, managing permissions, and isolating JVM classpaths.
+- [Jenkins: Credentials](https://www.jenkins.io/doc/book/security/credentials/) - Explains Jenkins credentials, credential scope, and secret protection guidance.
+- [Jenkins Credentials Binding plugin](https://plugins.jenkins.io/credentials-binding/) - Documents credentials binding, environment variable use, and automatic masking behavior.
+- [Jenkins Pipeline Steps: Credentials Binding](https://www.jenkins.io/doc/pipeline/steps/credentials-binding/) - Provides `withCredentials` syntax, binding types, masking caveats, and environment-variable warnings.
+- [Jenkins: In-process Script Approval](https://www.jenkins.io/doc/book/managing/script-approval/) - Explains the Groovy sandbox and administrator script approval flow.
+- [Jenkins: Securing SCM credentials for Organization Folders and Multibranch Pipelines](https://www.jenkins.io/doc/book/security/securing-org-folders-and-multibranch-pipelines/) - Documents trust risks when Jenkinsfiles can use credentials in multibranch jobs.
+- [Jenkins: Controller Isolation](https://www.jenkins.io/doc/book/security/controller-isolation/) - Explains agent-to-controller access control and controller isolation from build execution.
+- [Jenkins OpenID Connect Provider plugin](https://plugins.jenkins.io/oidc-provider/) - Documents Jenkins-issued OIDC ID tokens for keyless authentication to external systems.
+- [AWS IAM: OIDC federation](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_providers_oidc.html) - Explains OIDC federation and temporary AWS credentials for CI/CD workloads.
+- [AWS IAM: Create a role for OIDC federation](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_create_for-idp_oidc.html) - Documents OIDC provider trust policies and `sts:AssumeRoleWithWebIdentity`.

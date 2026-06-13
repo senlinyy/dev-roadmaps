@@ -141,6 +141,10 @@ The read-access variants, **RA-GRS** and **RA-GZRS**, allow reads from the secon
 
 Redundancy and data protection solve different problems. If a script deletes a receipt PDF, a redundant storage account faithfully replicates the current state of the account, including the deletion. Blob versioning and soft delete give the team an older state to recover. Redundancy protects physical availability and durability. Versioning, soft delete, PITR, and backups protect history.
 
+![Azure Storage redundancy choice map comparing LRS inside one datacenter, ZRS across zones, and GRS across a second region with wider failure scope and higher cost](/content-assets/articles/article-cloud-providers-azure-cost-resilience-recovery-planning-redundancy-backups/redundancy-choice-map.png)
+
+*This map separates LRS, ZRS, and GRS by failure scope, so the storage choice matches the kind of incident the recovery plan expects.*
+
 This distinction matters during design reviews. The team may choose GZRS for the receipt storage account because customers need receipts during a regional event. The same team still enables blob versioning and soft delete because accidental deletion and overwrite need recoverable history. The plan uses both because physical failure and human mistake are different incident shapes.
 
 Once the team chooses recovery points and replica placement, the last design question becomes the readiness level of the secondary environment. That is where recovery strategies come in.
@@ -184,6 +188,10 @@ The drill should measure both targets. The **actual RTO** starts when the team d
 
 A good drill record includes operational details beyond a success checkbox. It names the restored database, the recovery app, the Key Vault secrets used, the Front Door origin or test host, the identity assignments, the smoke tests, the data gap, the cleanup action, and the follow-up work. Those details turn the next drill into a shorter and calmer exercise.
 
+![Azure restore drill loop showing backup, restore sandbox, app verification, and recorded results while production stays separate and RTO and RPO are measured](/content-assets/articles/article-cloud-providers-azure-cost-resilience-recovery-planning-redundancy-backups/restore-drill-loop.png)
+
+*This loop shows why a restore drill needs a safe target, app validation, and recorded evidence instead of only checking that a backup exists.*
+
 Here is a compact drill record for the checkout scenario. It shows the kind of evidence that helps the team improve the next drill instead of relying on memory. The gaps matter as much as the pass results.
 
 ```yaml
@@ -226,6 +234,10 @@ Here is the final recovery map. It ties each user-facing workflow to the Azure f
 | **Receipts** | Blob versioning, soft delete, geo-redundant copies | Restored blob or secondary storage path | 2-hour RTO, 15-minute RPO | Pilot light | Customer download and metadata check |
 | **Exports** | Orders database and job definition | New export file | 24-hour RTO, rerunnable RPO | Backup and restore | Row count and checksum |
 | **Search** | Product catalog database | Rebuilt index | 8-hour RTO, rebuildable RPO | Backup and restore | Search smoke query and catalog count |
+
+![Azure recovery planning ladder showing a healthy service, failure, RPO, restore, RTO, verified service, redundancy choices, restore drills, and improvement loop](/content-assets/articles/article-cloud-providers-azure-cost-resilience-recovery-planning-redundancy-backups/recovery-planning-ladder.png)
+
+*This summary connects the article's main pieces: redundancy protects the running system, recovery points limit data loss, RTO limits downtime, and drills prove the plan works.*
 
 The main lesson is practical. Azure backups and redundancy provide raw materials, and the recovery plan turns those materials into a working service. RTO and RPO tell the team what "working soon enough" means. Restore drills show whether the plan survives real configuration, identity, traffic, and validation details.
 

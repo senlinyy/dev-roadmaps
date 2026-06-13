@@ -76,16 +76,9 @@ Unlike traditional procedural programming languages that execute source code top
 
 The construction of the Directed Acyclic Graph occurs during planning. Under the hood, Terraform reads the configuration, creates a graph vertex for every resource, data source, provider, and variable block, and then connects vertices when one block needs values or ordering from another block. The exact DOT arrow direction you see in `terraform graph` is a representation detail. The practical meaning is simpler: if the database uses the key ARN, the database operation cannot run until Terraform has handled the key operation that produces that ARN. The term "directed" means the relationship has an order, while "acyclic" means Terraform must be able to walk the graph without hitting a closed loop.
 
-```mermaid
-flowchart TD
-    KMS["KMS Key<br/>(aws_kms_key.database_key)"]
-    IAM["IAM Policy Attachment<br/>(aws_iam_role_policy_attachment.bootstrap_access)"]
-    DB["Postgres Database<br/>(aws_db_instance.postgres_cluster)"]
-    APP["Application Instance<br/>(aws_instance.app)"]
+![Implicit references create data-flow dependencies, while explicit depends_on edges model hidden ordering requirements.](/content-assets/articles/article-iac-terraform-config-dependencies/dependency-edge-map.png)
 
-    KMS -->|"Implicit Dependency<br/>(kms_key_id ARN)"| DB
-    IAM -.->|"Explicit dependency when boot-time permissions must exist first"| APP
-```
+*Terraform can infer the database dependency from the KMS key ARN, but boot-time permission timing may need an explicit edge.*
 
 The Directed Acyclic Graph is the execution model Terraform uses after parsing configuration. It decouples the human-readable configuration from the machine-level provisioning steps, allowing the engine to calculate a complete map of the infrastructure before a single API request is sent. Every resource is evaluated within the context of the entire graph, ensuring that all upstream changes cascade correctly and all downstream impacts are accounted for. This graph-centric architecture is what allows the provisioning engine to manage thousands of resources across multiple cloud providers with precision and consistency.
 

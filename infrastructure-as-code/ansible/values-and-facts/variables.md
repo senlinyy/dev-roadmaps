@@ -9,174 +9,228 @@ id: article-infrastructure-as-code-ansible-variables
 
 ## Table of Contents
 
-1. [Dynamic Values in Configuration Declarations](#dynamic-values-in-configuration-declarations)
-2. [The Playbook and Variable Preview](#the-playbook-and-variable-preview)
-3. [Role Defaults: Defining the Interface Contract](#role-defaults-defining-the-interface-contract)
-4. [Play-Level Variables: Playbook-Scoped Settings](#play-level-variables-playbook-scoped-settings)
-5. [Command-Line Overrides: Runtime Extra Variables](#command-line-overrides-runtime-extra-variables)
-6. [Jinja2 Interpolation Syntax: Compiling Dynamic Strings](#jinja2-interpolation-syntax-compiling-dynamic-strings)
-7. [Under the Hood: Jinja2 Tokenization and Safe String Rendering](#under-the-hood-jinja2-tokenization-and-safe-string-rendering)
-8. [Putting It All Together](#putting-it-all-together)
-9. [What's Next](#whats-next)
+1. [Values That Change by Context](#values-that-change-by-context)
+2. [Where Variables Come From](#where-variables-come-from)
+3. [Using Variables in Tasks](#using-variables-in-tasks)
+4. [Using Variables in Templates](#using-variables-in-templates)
+5. [Designing Variables for Production](#designing-variables-for-production)
+6. [Runtime Overrides, Secrets, and Verification](#runtime-overrides-secrets-and-verification)
+7. [Putting It All Together](#putting-it-all-together)
+8. [What's Next](#whats-next)
+9. [References](#references)
 
-## Dynamic Values in Configuration Declarations
+## Values That Change by Context
+<!-- section-summary: Variables let one playbook keep the same task logic while values change by environment, host, role, or release. -->
 
-Ansible variables are named values injected into tasks and templates after inventory, playbook, role, and command-line sources are merged.
+An **Ansible variable** is a named value that tasks, templates, and conditions can use during a run. Variables let a playbook describe one workflow while each environment supplies the values that belong to that environment.
 
-A variable is a named placeholder for a value that may change by host, environment, role, or run. Instead of hardcoding concrete strings such as IP addresses, application ports, or filesystem paths directly inside your playbook files, you give those values names and let Ansible look up the correct value for the current host.
+Think about the orders platform from the previous articles. Staging uses `orders-staging.example.com`, a smaller worker count, and a test payment endpoint. Production uses `orders.example.com`, stricter log levels, and a private database hostname. The task list stays mostly the same: install packages, render config, validate config, restart services, and check health.
 
-Example: the same Nginx template can contain `listen {{ app_listening_port }}`. Staging can render port `8080`, production can render port `9000`, and the template file itself stays unchanged. When Ansible runs a task, it retrieves the value assigned to the current host and passes it to Jinja2, the Python-based processor that evaluates `{{ variable_name }}` expressions.
+Without variables, the team would copy the playbook for staging and production. That creates drift because someone will eventually fix one copy and forget the other. With variables, the playbook keeps one set of tasks, and inventory, roles, or runtime inputs provide the values for each host.
 
-To see why separating task logic from configuration data is a critical practice, consider our scenario. You are managing a configuration playbook that deploys a backend application server across staging, preview, and production environments.
+## Where Variables Come From
+<!-- section-summary: Variables can come from inventory, roles, plays, files, facts, registered results, and extra variables. -->
 
-If you hardcode all configuration settings inside your playbooks and templates, you must maintain three separate copies of Nginx configuration files, one for each environment domain, causing massive configuration drift. An update to the Nginx security block then requires manually copying the edit across all three files, multiplying the risk of syntax errors, while secret tokens committed in plaintext violate security standards and block developers from spinning up temporary preview environments with different listening ports.
+Variables have several homes. The right home depends on who owns the value and how often it changes. Inventory usually owns environment and host values. Roles usually own defaults and reusable service behavior. A play can define values that belong only to that play. Runtime inputs can carry release-specific values, such as the application version being deployed.
 
-Ansible solves this by using dynamic variables. The playbook contains the stable structural tasks, configuration templates use variable placeholders, and the inventory or variable files carry the specific environment-specific data. This clean separation ensures that your automation stays dry, reviewable, and highly flexible.
-
-## The Playbook and Variable Preview
-
-Here is an early, comment-free YAML task block and Jinja2 template preview. It demonstrates how to reference variable placeholders inside playbook tasks and evaluate them dynamically inside configuration files:
-
-### File: `playbooks/deploy_app.yml`
-```yaml
-- name: Deploy application environment
-  hosts: app_servers
-  vars:
-    app_log_verbosity: "info"
-  tasks:
-    - name: Render virtual host configuration
-      ansible.builtin.template:
-        src: app.conf.j2
-        dest: /etc/nginx/sites-available/app.conf
-        owner: root
-        group: root
-        mode: "0644"
-```
-
-### File: `templates/app.conf.j2`
-```jinja2
-server {
-    listen {{ app_listening_port }};
-    server_name {{ app_domain_name }};
-
-    location / {
-        proxy_pass http://127.0.0.1:{{ app_backend_port }};
-        proxy_set_header X-Log-Level {{ app_log_verbosity }};
-    }
-}
-```
-
-## Role Defaults: Defining the Interface Contract
-
-Role defaults (defined inside `defaults/main.yml` within an Ansible role directory structure) are the baseline variable values that establish the default interface contract for your automation. They represent the safe, ordinary parameters the role will use if the caller does not provide custom values.
-
-Typical examples of valid role defaults include:
-- Default service port numbers (such as `app_backend_port: 8080`).
-- Non-sensitive file paths (such as `app_log_dir: /var/log/app`).
-- Shared timeouts and verbosity thresholds (such as `app_timeout_seconds: 30`).
-
-You must design role defaults to be highly generic and completely free of production secrets or custom environment values. Think of defaults as a readable API contract: anyone opening the role can read the default variable file to instantly see exactly what parameters the tasks depend on and what baseline values they will receive. Because role defaults occupy the lowest level in Ansible's variable precedence hierarchy, they are incredibly easy for group variables, host variables, or play variables to override, providing maximum flexibility.
-
-## Play-Level Variables: Playbook-Scoped Settings
-
-Play-level variables (declared under the `vars` key directly inside a play block in a playbook) are parameters that apply to every task in that play, regardless of which host is executing them.
+For the orders platform, production inventory might include group variables for every web host. These values describe the production environment rather than the role's reusable defaults.
 
 ```yaml
-- name: Standardize developer workspace
-  hosts: workspaces
-  vars:
-    workspace_timeout: 45
-    workspace_banner_color: "blue"
+orders_api_public_name: orders.example.com
+orders_api_listen_port: 8080
+orders_api_log_level: warn
+orders_api_database_host: orders-db.prod.internal
+orders_api_health_path: /health
 ```
 
-You use play-level variables when the values are tightly bound to the behavior of the play itself and do not belong in the inventory or the role contract. For example, a setting that controls a specific system test limit or a local display color is a reasonable fit for the play.
+A role default can provide values that are safe for most callers. These defaults make the role runnable while still allowing inventory to override real environment details.
 
-The main caveat is that play-level variables are highly rigid. Because they are declared inside the playbook file itself, you cannot easily modify them without changing the playbook. If a staging host needs a different timeout than a production host, defining `workspace_timeout` at the play level will block your inventory from applying host-specific differences, forcing you to write messy conditions. When values change by environment, they belong in inventory scopes.
+```yaml
+orders_api_service_name: orders-api
+orders_api_config_dir: /etc/orders-api
+orders_api_user: orders
+orders_api_group: orders
+```
 
-## Command-Line Overrides: Runtime Extra Variables
-
-Command-line extra variables (passed using the `--extra-vars` or `-e` flag at execution time) are runtime overrides that apply globally to the entire playbook run.
+A release pipeline can provide a value that belongs to one deployment event. The value belongs to the run record because every release can choose a different version.
 
 ```bash
-ansible-playbook -i inventory/hosts.yml playbooks/deploy.yml \
-  -e "app_backend_port=9000 app_log_verbosity=debug"
+ansible-playbook -i inventories/prod/hosts.yml site.yml -e orders_api_release=2026.06.13
 ```
 
-Extra variables are highly powerful because they have the highest precedence among Ansible variables. They can override defaults, group variables, host variables, and play-level variables for the current run.
+Facts and registered results also become variables during a run. Facts come from host discovery, such as operating system family or network interfaces. Registered results come from task output, such as a health check response. Those are live observations, so later articles will treat them carefully.
 
-Be careful with the input format. Simple `key=value` extra variables are easy for quick strings, but JSON or YAML form is safer when you need booleans, lists, dictionaries, or numbers to keep their intended type.
+## Using Variables in Tasks
+<!-- section-summary: Tasks use Jinja2 expression syntax to place variable values into module arguments. -->
 
-Extra variables are well suited to one-time diagnostic runs where a team member needs to raise a service timeout or enable verbose logging without editing any file. CI/CD pipelines also use extra variables to inject dynamic values like build numbers or deployment targets; for example, passing `release_version=v2.1.0` from a pipeline runner at invocation time. For ad-hoc testing, an engineer can override a single variable on the command line to verify behavior without creating a temporary vars file.
-
-You must never use extra variables as the primary home for standard system configurations. Because CLI arguments are not committed to your version control repository, relying on them for routine deployments makes your runs hard to replicate and audit, creating operational uncertainty.
-
-## Jinja2 Interpolation Syntax: Compiling Dynamic Strings
-
-Jinja2 interpolation is the step where Ansible replaces `{{ variable_name }}` placeholders with real values. It exists so one task or template can become different final text for different hosts.
-
-Example: `/var/www/{{ app_name }}/index.html` can render as `/var/www/customer_portal/index.html` on one host and `/var/www/internal_api/index.html` on another. Ansible uses the Jinja2 template engine to evaluate these variables and compile dynamic strings during execution.
+Ansible uses Jinja2 expression syntax for variables. In a task argument, `{{ orders_api_config_dir }}` means "use the value of this variable for the current host." If the whole YAML value is a Jinja2 expression, quote it so YAML parses the line safely.
 
 ```yaml
-dest: /var/www/{{ app_name }}/index.html
+- name: Create orders API config directory
+  ansible.builtin.file:
+    path: "{{ orders_api_config_dir }}"
+    state: directory
+    owner: root
+    group: "{{ orders_api_group }}"
+    mode: "0750"
+
+- name: Install selected orders API release
+  ansible.builtin.package:
+    name: "orders-api-{{ orders_api_release }}"
+    state: present
 ```
 
-When writing these placeholders, you must adhere to several strict naming and syntax rules.
+The same task can now run for staging and production. On staging, `orders_api_config_dir` might still be `/etc/orders-api`, while `orders_api_release` points to a test build. On production, the release value comes from the approved deployment job.
 
-A variable reference inside a task argument must be quoted as a complete string when the argument value starts with curly braces. Writing `dest: {{ app_path }}` triggers a YAML syntax error because YAML treats an unquoted opening brace as the start of an inline dictionary. The correct form is `dest: "{{ app_path }}"`.
+Variables can hold strings, numbers, booleans, lists, and dictionaries. A list is useful for packages or allowed origins. A dictionary is useful for structured application settings. The module receives the final value after Ansible resolves variables for the current host.
 
-Variable names must be written in lowercase with words separated by underscores (snake_case). Short, generic names like `port` or `user` collide immediately when you merge multiple roles into a playbook. You prevent this by prefixing each variable with the service name: `app_listening_port`, `db_listening_port`.
+```yaml
+orders_api_extra_packages:
+  - nginx
+  - orders-api
 
-You must never use names that conflict with Ansible's internal special variables, such as `groups`, `hostvars`, or `play_hosts`. Avoid names that shadow common Python or Jinja2 built-in types such as `list`, `dict`, or `string`, as these can produce silent evaluation errors that are difficult to trace.
-
-## Under the Hood: Jinja2 Tokenization and Safe String Rendering
-
-Tokenization means splitting template text into literal text pieces and variable placeholders. Rendering means replacing those placeholders with values from the current host's variable dictionary.
-
-Example: the string `port: {{ app_port }}` is split into the literal `port: ` and the lookup key `app_port`. If the current host's active value is `8080`, the rendered argument becomes `port: 8080` before the module receives it.
-
-Many Ansible values are rendered in the context of the task and host that use them:
-
-1. **Jinja2 Parsing**: When a task executes, Ansible identifies arguments or template files that contain Jinja2 expressions.
-2. **Lexical Tokenization**: The Jinja2 lexer scans the string, splitting it into literal text tokens and variable placeholders (enclosed by the `{{` and `}}` markers).
-3. **Context Lookup**: The compiler queries the active host's memory namespace dictionary, searching for the key matching the variable name.
-4. **Type Handling**: Ansible keeps native types when values are defined as YAML or JSON structures, while fully rendered strings remain strings.
-5. **Output Redaction**: If the task is flagged with `no_log: true`, Ansible redacts task output from normal logs. This protects console output, but it is not a complete secret-containment boundary for files, external services, custom module behavior, or debug tasks that print values elsewhere.
-
-```mermaid
-flowchart TD
-    subgraph ControlNode["Control Node (Local Memory)"]
-        TaskArg["Task Argument String<br/>(e.g., port: {{ app_port }})"] -->|1. Parse String| JinjaEnv["Jinja2 Environment"]
-        JinjaEnv -->|2. Split Tokens| Lexer["Jinja2 Lexer Parser"]
-        Lexer -->|3. Lookup Key| NamespaceMap[("Host Namespace Dictionary<br/>(app_port: 8080)")]
-        NamespaceMap -->|4. Resolve Value| TypeConverter["Type Conversion Engine"]
-        TypeConverter -->|5. Output Value| ActiveTask["Active Module Task<br/>(port: 8080)"]
-    end
+orders_api_feature_flags:
+  capture_tax: true
+  async_receipts: true
 ```
 
-This runtime rendering lets the same playbook adapt to each host while keeping the value lookup rules visible and debuggable.
+Specific task variables describe meaning. `orders_api_listen_port` tells the reader why the number exists. A name like `port` can collide with other roles and makes debug output harder to understand.
+
+## Using Variables in Templates
+<!-- section-summary: Templates turn variables into host-specific files while the source template stays in the repository. -->
+
+A **template** is a source file processed by Jinja2 before Ansible writes it to a managed host. Templates are one of the most common places where variables become visible. The source template stays in Git, and each host receives a rendered file with its own values.
+
+Here is a small orders API config template. Notice how the file structure is stable while the values come from variables.
+
+```yaml
+service:
+  name: orders-api
+  listen_port: {{ orders_api_listen_port }}
+  log_level: {{ orders_api_log_level }}
+
+database:
+  host: {{ orders_api_database_host }}
+
+health:
+  path: {{ orders_api_health_path }}
+```
+
+The playbook renders that template to the host. The module writes the final file only when the rendered content differs from the remote file.
+
+```yaml
+- name: Render orders API config
+  ansible.builtin.template:
+    src: orders-api.yml.j2
+    dest: "{{ orders_api_config_dir }}/config.yml"
+    owner: root
+    group: "{{ orders_api_group }}"
+    mode: "0640"
+    backup: true
+  notify: Restart orders API
+```
+
+If the rendered content matches the existing remote file, the task reports `ok`. If a variable changes and the rendered content differs, the task reports `changed` and notifies the restart handler. That is how variables connect input changes to operational output.
+
+Templates should avoid unstable values unless the file really needs them. A timestamp inside a config template will make the file change on every run. A stable release value, hostname, port, or feature flag gives the team a clear reason for a change.
+
+## Designing Variables for Production
+<!-- section-summary: Production variables work best when each value has one clear owner, a readable name, and a predictable type. -->
+
+Production variable design is mostly about ownership. A value should live where the team expects to review it. Environment hostnames and database addresses usually belong in inventory. Default service paths belong in a role default. A one-time release version can come from the deployment job. Secrets belong in a secret system rather than plain inventory.
+
+Role defaults make a role easy to use. They should be weak, friendly starting values. Inventory can override them for real environments. For example, the role can default to `orders_api_log_level: info`, while production inventory sets `orders_api_log_level: warn`.
+
+Use role-specific prefixes for role variables. `orders_api_log_level`, `orders_api_public_name`, and `orders_api_health_path` are easy to search and unlikely to collide with another role. Generic names such as `name`, `user`, `port`, and `enabled` become confusing when several roles run in the same play.
+
+Types deserve attention too. A port should behave like a number when compared and like a string when inserted into a file. A boolean should be a real YAML boolean such as `true` or `false`, because quoted values such as `"false"` can behave differently in conditions. A list should stay a list so loops and templates can use it directly.
+
+```yaml
+orders_api_listen_port: 8080
+orders_api_enable_receipts: true
+orders_api_allowed_origins:
+  - https://orders.example.com
+  - https://admin.orders.example.com
+```
+
+When a role needs required values, make that expectation visible. Teams often add an early assertion task or a documented variable table in the role README. In article form, the key idea is the same: the playbook should fail early when a required value is missing, instead of writing a broken config later.
+
+```yaml
+- name: Check required orders API variables
+  ansible.builtin.assert:
+    that:
+      - orders_api_public_name is defined
+      - orders_api_listen_port is defined
+      - orders_api_listen_port | int > 0
+    fail_msg: "orders_api_public_name and a valid orders_api_listen_port are required before rendering config"
+```
+
+That assertion gives the operator a clear error near the start of the run. Without it, the first visible failure might be a broken template, a failed service restart, or a health check that points at the app after the real problem happened in variable setup.
+
+## Runtime Overrides, Secrets, and Verification
+<!-- section-summary: Extra variables are useful for release inputs, while secrets and verification need deliberate handling. -->
+
+Extra variables from `-e` or `--extra-vars` are powerful because they can override many other values. That makes them useful for release-specific inputs such as `orders_api_release`, a temporary maintenance flag, or a one-time rollback value.
+
+```bash
+ansible-playbook -i inventories/prod/hosts.yml site.yml -e @release-vars.yml
+```
+
+A small release variable file is easier to audit than a long inline command. It also keeps related release inputs together.
+
+```yaml
+orders_api_release: "2026.06.13"
+orders_api_deploy_reason: "June checkout fix"
+```
+
+Stable environment settings should usually move back into inventory or role configuration. If production only works because every operator remembers to pass `-e orders_api_database_host=...`, part of production lives outside repository review. A future manual run can miss the override and render the wrong config.
+
+Secrets need a separate habit. Database passwords, API tokens, and private keys should come from Ansible Vault, a controller credential, or an approved secret manager. Debug tasks, verbose logs, and diff output can print values, so secret-handling tasks should avoid unnecessary output and use `no_log: true` when needed.
+
+Verification starts before the playbook changes a host. `ansible-inventory --host` shows the compiled inventory variables for one host, which helps confirm that inventory supplied the expected value.
+
+```bash
+ansible-inventory -i inventories/prod/hosts.yml --host orders-web-01.example.com
+```
+
+A canary check with check and diff mode shows how variables will affect rendered files. The team can inspect the preview before widening the run.
+
+```bash
+ansible-playbook -i inventories/prod/hosts.yml site.yml --limit orders-web-01.example.com --check --diff
+```
+
+For temporary debugging, a tagged debug task can show a non-secret value during a controlled run. The tag keeps this output out of normal deploys.
+
+```yaml
+- name: Show selected orders API release
+  ansible.builtin.debug:
+    var: orders_api_release
+  tags:
+    - debug-values
+```
+
+The operator can call that tag during troubleshooting and leave it out during normal deploys. This keeps value inspection available without turning every run into a log of configuration data.
 
 ## Putting It All Together
+<!-- section-summary: Variables create a clean boundary between reusable task logic and the values each host or environment needs. -->
 
-We started by looking at how hardcoding system environments, domains, and ports directly inside templates and plays limits reuse, triggers configuration drift, and risks secret leaks.
+The orders platform now has one playbook and one role shape. Inventory provides production hostnames, ports, log levels, and database addresses. Role defaults provide stable service paths and users. The deployment job provides the release version for one run. Templates combine those values into files on each host.
 
-Ansible solves these problems by providing a clear, dynamic variable model:
-- **Dry Playbooks**: Playbooks contain stable tasks, templates represent structural blueprints, and variables customize environments dynamically.
-- **Interface Defaults**: We use role defaults in `defaults/main.yml` to define safe baseline parameters and document the role contract.
-- **Scoped Plays**: We restrict play-level variables to rigid, play-scoped settings that do not change by environment.
-- **Runtime Overrides**: We leverage command-line extra variables (`-e`) strictly for temporary, manual overrides and pipeline metadata injection.
-- **Jinja2 Compilation**: Under the hood, the engine tokenizes variables dynamically during task execution, resolving namespaces in memory and enforcing secure log redaction.
+This is the clean boundary that makes Ansible maintainable. The playbook says what work happens. Variables say which values apply to this host in this environment during this run. Verification commands show what Ansible resolved before the team widens a production change.
 
-Following this variable model ensures that your automation stays modular, clean, and secure across all your environments.
+The next problem appears when the same variable name exists in more than one place. Ansible has a defined order for choosing the winner, and production teams need to understand that order before an override surprises them.
 
 ## What's Next
 
-Now that you master variables, role defaults, play-level parameters, and Jinja2 templating, the next article will explore **Variable Precedence**. We will look at the strict hierarchical rules Ansible uses to resolve conflicts when the same variable name is declared in multiple places, showing you exactly how to structure your overrides.
+The next article covers variable precedence. It follows a value such as `orders_api_log_level` through role defaults, inventory, host variables, play variables, and extra variables so the winning value is easier to predict.
 
 ---
 
 **References**
 
-- [Ansible Variables Reference](https://docs.ansible.com/ansible/latest/playbook_guide/playbooks_variables.html) - Official documentation on variable scopes, syntax, and settings.
-- [Jinja2 Template Engine Documentation](https://jinja.palletsprojects.com/en/3.1.x/) - Comprehensive guide to the Python Jinja2 designer syntax.
-- [Creating Reusable Ansible Roles](https://docs.ansible.com/ansible/latest/playbook_guide/playbooks_reuse_roles.html) - Best practices for organizing defaults and variables in roles.
-- [Ansible Special Variables](https://docs.ansible.com/ansible/latest/reference_appendices/special_variables.html) - The official catalog of reserved internal variable names.
+- [Using variables](https://docs.ansible.com/projects/ansible/latest/playbook_guide/playbooks_variables.html) - Official guide to variable syntax, variable sources, registered variables, and extra variables.
+- [Discovering variables: facts and magic variables](https://docs.ansible.com/projects/ansible/latest/playbook_guide/playbooks_vars_facts.html) - Official guide to facts, magic variables, and inspecting available host data.
+- [Templating with Jinja2](https://docs.ansible.com/projects/ansible/latest/playbook_guide/playbooks_templating.html) - Official guide to using Jinja2 templates in Ansible playbooks.
+- [ansible.builtin.template](https://docs.ansible.com/projects/ansible/latest/collections/ansible/builtin/template_module.html) - Official module reference for rendering templates, file ownership, modes, backups, and validation behavior.
+- [Controlling how Ansible behaves: precedence rules](https://docs.ansible.com/projects/ansible/latest/reference_appendices/general_precedence.html) - Official precedence guide for configuration settings, command-line options, playbook keywords, variables, and direct assignment.
+- [ansible-playbook](https://docs.ansible.com/projects/ansible/latest/cli/ansible-playbook.html) - Official CLI reference for `--extra-vars`, limits, check mode, diff mode, and execution options.

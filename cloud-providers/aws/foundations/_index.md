@@ -1,6 +1,6 @@
 ---
 title: "AWS Foundations"
-description: "Understand AWS jobs, account and Region placement, resource identity, and core service families before learning individual services."
-tags: ["aws", "accounts", "regions", "resources", "services"]
+description: "The module opens with core AWS service jobs, then covers account and Region placement plus exact resource identity."
+tags: ["aws", "services", "accounts", "regions", "resources"]
 order: 1
 ---

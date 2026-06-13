@@ -12,219 +12,194 @@ aliases:
 
 ## Table of Contents
 
-1. [The Principle of Idempotency](#the-principle-of-idempotency)
-2. [The Target State Code Preview](#the-target-state-code-preview)
-3. [How Modules Reconcile State Under the Hood](#how-modules-reconcile-state-under-the-hood)
-4. [Evaluating the Second Run Settle](#evaluating-the-second-run-settle)
-5. [Handlers: Binding Restarts to True Changes](#handlers-binding-restarts-to-true-changes)
-6. [Idempotency with Shell and Command Modules](#idempotency-with-shell-and-command-modules)
+1. [Repeated Runs Should Settle](#repeated-runs-should-settle)
+2. [Desired State Modules](#desired-state-modules)
+3. [Command Tasks Need Evidence](#command-tasks-need-evidence)
+4. [Truthful Changed and Failed Status](#truthful-changed-and-failed-status)
+5. [Proving the Second Run](#proving-the-second-run)
+6. [Common Change Noise and Rollback Safety](#common-change-noise-and-rollback-safety)
 7. [Putting It All Together](#putting-it-all-together)
 8. [What's Next](#whats-next)
+9. [References](#references)
 
-## The Principle of Idempotency
+## Repeated Runs Should Settle
+<!-- section-summary: Idempotency means the playbook can run again and leave an already-correct host alone. -->
 
-Idempotency is the property that rerunning the same task leaves an already-correct host unchanged.
+**Idempotency** means an operation can run more than once and still leave the system in the intended final state. In Ansible work, the first run may install packages, write files, and start services. A later run against the same host should usually report `ok` for those tasks because the host already matches the playbook.
 
-Idempotency is the core safety property of a modern configuration management system. An operation is defined as idempotent when executing it multiple times produces the exact same final system state as running it once, without creating duplicate side effects or accumulating unnecessary changes. In Ansible, this means that when a playbook runs against a target server, the tasks should modify the host only if it has drifted from your written goals, and then report a quiet status of no changes on all subsequent runs.
+Use the orders platform from the previous article. The team manages `orders-web-01` and `orders-web-02`, and both hosts need Nginx, an `orders-api` package, a config directory, a rendered config file, and a running service. The first production rollout may change both hosts. A health-repair run the next morning should confirm the same state instead of rewriting files and restarting services for no reason.
 
-To understand why idempotency is a vital operational safeguard, consider our scenario. You are managing the log storage directories, user security settings, and runtime configuration parameters on a fleet of three server machines.
+That settled second run is more than a neat Ansible feature. It is the reason operators trust playbook output during incidents. If a playbook reports `changed` on a host, the team should be able to ask what moved: a package version, a config file, a service state, or a deliberate release value.
 
-If your automation scripts are not idempotent, running the same setup script a second time might append a duplicate user definition line to `/etc/passwd`, corrupting the login database, or fail outright because the log directory already exists, which blocks the rest of the script from executing. Worse, the web server service gets restarted on every single run regardless of whether any configuration changed, dropping active socket connections and causing unnecessary downtime for your users.
+## Desired State Modules
+<!-- section-summary: State-aware modules inspect the host and change only when the current state differs from the requested state. -->
 
-An idempotent playbook changes this behavior completely. Instead of treating tasks as a sequence of aggressive command actions, you describe the target state you want the machines to settle into. The playbook can then be executed continuously (every day, or even every hour) to audit your servers. If a server is perfectly configured, the run executes instantly with zero modifications, keeping your environments completely stable.
-
-## The Target State Code Preview
-
-Here is an early, comment-free YAML preview of an idempotent playbook. This script describes the log directories, user accounts, and configuration states we require, designed to run safely repeatedly without causing drift:
-
-```yaml
-- name: Audit log environment and configuration
-  hosts: loghosts
-  become: true
-  tasks:
-    - name: Ensure system log utility is installed
-      ansible.builtin.apt:
-        name: rsyslog
-        state: present
-
-    - name: Settle application log directory properties
-      ansible.builtin.file:
-        path: /var/log/app_storage
-        state: directory
-        owner: syslog
-        group: adm
-        mode: "0755"
-
-    - name: Maintain application configuration file
-      ansible.builtin.copy:
-        content: "log_format = json"
-        dest: /etc/app_log.conf
-        owner: root
-        group: root
-        mode: "0644"
-```
-
-## How Modules Reconcile State Under the Hood
-
-State reconciliation means comparing the host's current state with the state written in your task, then changing only the parts that differ. This is the practical mechanism behind idempotency.
-
-Example: if your task says `/var/log/app_storage` should exist with mode `0755`, the file module checks the current path first. It creates or fixes the directory only when the existing host state does not match that target. Because Ansible is agentless and executes tasks using temporary module payloads over SSH, each module must carry this read-before-write logic with it.
-
-Here is the low-level systems depth of how different Ansible modules reconcile state under the hood:
-
-### 1. The File Module and Inode Metadata
-Inode metadata is the filesystem record that describes a file or directory, including its type, owner, group, and permission bits. The file module reads this metadata so it can decide whether a path already matches your task.
-
-When you call the `ansible.builtin.file` module to manage a directory path, the temporary Python script executes the low-level `stat()` system call on the target path. The kernel returns a status structure containing the inode metadata: file type, owner user ID (UID), group ID (GID), and permission bitmask. The module compares each of these numeric values against the arguments in your playbook task. If the path is missing entirely, the module issues a `mkdir()` system call to create it and reports `changed`. If the path exists but the permission bits differ, for example, the directory is `0777` while the playbook requires `0755`, the module corrects the attributes through `chmod()` and `chown()` system calls and reports `changed`. If every field already matches, the module returns `ok` and exits without touching the disk.
-
-### 2. The Copy Module and Content Checksums
-A checksum is a short fingerprint calculated from file content. If two files produce the same checksum, Ansible can treat their contents as matching without comparing every line by hand.
-
-When you use `ansible.builtin.copy` to write configuration content to a host, the control node first compiles the final text block and calculates a checksum before transferring anything. The remote Python script then executes a `stat()` call on the destination path to confirm the file exists. If it does, the script reads the existing file and calculates its own checksum. The module compares both strings in memory: when they match, the content is already correct and the module skips the transfer entirely, reporting `ok`. When they differ, the module writes the new content to a temporary file on the managed host, recalculates the checksum of that temporary file to verify integrity, and then issues an atomic `rename()` system call to swap it into place. The atomic rename prevents partial writes from leaving a corrupted configuration file on disk if the network drops mid-transfer.
-
-### 3. The Package Module and System Catalogs
-A package catalog is the operating system's local record of installed software and available package versions. Package modules read that catalog before installing anything, so they do not repeatedly reinstall software that is already present.
-
-When you manage packages using `ansible.builtin.apt`, the remote module queries local package directories and system catalogs by running internal searches equivalent to `dpkg-query -W` on Debian-based hosts. It parses the output to read the installation status and installed version string for the requested package. If the status shows the package is absent, the module invokes the package manager API to download and install it, then reports `changed`. If the status is already correct and the version satisfies the playbook constraint, the module reports `ok` and exits without invoking the package manager at all.
-
-```mermaid
-flowchart TD
-    subgraph Control["Control Node"]
-        TargetSHA["Local File Checksum<br/>(e.g., a1b2c3d4)"]
-    end
-
-    subgraph Managed["Managed Server"]
-        FileExists{"1. File Exist?"}
-        ReadHash["2. Compute Remote File Hash"]
-        Compare{"3. Compare Hashes"}
-        SystemWrite["4. Atomic System Write<br/>(rename temporary file)"]
-        SkipWrite["5. Skip Network Transfer"]
-    end
-
-    TargetSHA -->|Send Hash Over SSH| FileExists
-    FileExists -->|Yes| ReadHash
-    FileExists -->|No| SystemWrite
-    ReadHash --> Compare
-    Compare -->|Hashes Differ| SystemWrite
-    Compare -->|Hashes Match| SkipWrite
-```
-
-This structural verification ensures that your playbooks act as a strict state validator, modifying only the exact operating system parameters that have drifted.
-
-## Evaluating the Second Run Settle
-
-One of the clearest ways to verify that your playbooks are designed correctly is to execute a second run against the same server immediately after a successful initial run.
-
-When you run a playbook against a freshly provisioned host, the first execution may apply many modifications:
-
-```plain
-PLAY RECAP
-server-01 : ok=12 changed=6 unreachable=0 failed=0 skipped=0
-```
-
-This output is completely healthy. A fresh server requires configuration files to be written, packages to be installed, and directories to be created.
-
-However, when you run the exact same playbook command immediately afterward, the second execution should be completely quiet:
-
-```plain
-PLAY RECAP
-server-01 : ok=18 changed=0 unreachable=0 failed=0 skipped=0
-```
-
-This quiet recap is the definition of a settled host. It proves that the playbook inspected all eighteen states, confirmed they were already correct, and took zero active modifications.
-
-If your second run continues to report changes, you have a configuration bug. A non-zero changed count on a settled host indicates that one or more tasks are executing blindly on every run. You must isolate and fix these tasks, because false changes generate constant operational noise and make it impossible to recognize real configuration errors.
-
-## Handlers: Binding Restarts to True Changes
-
-Configuration file changes are almost always paired with service restarts. For example, if you update the configuration parameters in an application file, the application background service must be reloaded to read the new settings.
-
-If you restart the service on every single run, you introduce constant service drops. Ansible solves this using **Handlers**.
-
-A handler is a special type of task that is defined in a separate block at the end of your play. It behaves exactly like a normal task, but it only executes when it is explicitly notified by another task that reports a status of `changed`.
+Many Ansible modules are built around **desired state**. The task says what should be true, and the module checks the host before it acts. The `package` module can see whether a package is present. The `file` module can inspect ownership and permissions. The `template` module can compare rendered content with the file already on the remote host.
 
 ```yaml
-tasks:
-  - name: Maintain application configuration file
-    ansible.builtin.copy:
-      content: "log_format = json"
-      dest: /etc/app_log.conf
-    notify: Restart app service
+- name: Keep orders configuration directory present
+  ansible.builtin.file:
+    path: /etc/orders-api
+    state: directory
+    owner: root
+    group: orders
+    mode: "0750"
 
-handlers:
-  - name: Restart app service
-    ansible.builtin.service:
-      name: app_service
-      state: restarted
+- name: Install orders API package
+  ansible.builtin.package:
+    name: orders-api
+    state: present
+
+- name: Render orders API configuration
+  ansible.builtin.template:
+    src: orders-api.yml.j2
+    dest: /etc/orders-api/config.yml
+    owner: root
+    group: orders
+    mode: "0640"
+  notify: Restart orders API
 ```
 
-The execution flow of a handler is highly structured. If the configuration file already matches the desired content, the copy task reports `ok`, the handler receives no notification, and the application service continues running without interruption. If the file differs, the copy task writes the new content, reports `changed`, and queues a notification for the handler named `Restart app service`. Ansible does not invoke the handler immediately at that point. It completes all remaining tasks in the play first, then executes each notified handler once at the next flush point. If three separate configuration files are updated and all three notify the same restart handler, Ansible restarts the service a single time at that flush, avoiding multiple sequential service reboots.
+These tasks are state-aware. If the directory already has the right owner, group, and mode, the file task reports `ok`. If the package already exists, the package task reports `ok`. If the rendered template matches the remote file byte for byte, the template task reports `ok` and the handler stays quiet.
 
-If a later task fails before handlers run, Ansible may skip the queued handler on that failed host unless you explicitly use handler failure controls such as `force_handlers`. That nuance matters when a changed configuration file must be followed by a reload to keep the running service aligned with the file on disk.
+That last detail matters in production. A config template that reports `changed` every run will notify the restart handler every run. The orders API might survive that restart. The output has become noisy, and a deploy report with constant change makes drift and real releases harder to see.
 
-This deferral mechanic makes change reporting highly critical. If a task falsely reports `changed` on every run, it will trigger your handlers and restart your services continuously. Truthful change reporting is the foundation of rolling deployments.
+## Command Tasks Need Evidence
+<!-- section-summary: Raw commands need guards or custom status rules because arbitrary commands hide their lasting state. -->
 
-## Idempotency with Shell and Command Modules
+The `ansible.builtin.command` and `ansible.builtin.shell` modules are useful for tools without a dedicated Ansible module. They also need extra care because Ansible has no built-in understanding of an arbitrary command's lasting state. A command may read a value, install software, generate a file, restart a service, or perform a mix of all four.
 
-While Ansible's built-in modules are designed to be idempotent out of the box, you will occasionally encounter scenarios where you must run raw commands using the `ansible.builtin.command` or `ansible.builtin.shell` modules.
-
-These modules execute the command you provide, but they do it differently. `ansible.builtin.command` runs a program directly without shell features such as pipes, redirects, or variable expansion. `ansible.builtin.shell` runs through a remote shell when you truly need those shell features. In both cases, Ansible cannot automatically know what system state the command modifies under the hood, so these tasks commonly report `changed` unless you add explicit guards.
-
-To make command and shell tasks safe and idempotent, you must use Ansible's built-in execution guards:
-
-### 1. The `creates` Guard
-If your command's primary purpose is to generate a specific file, you pass the `creates` argument containing the target file path. Ansible will skip the task entirely if the file already exists:
+This task runs an installer every time, so it reports `changed` every time. The recap will stay noisy until the task has a guard.
 
 ```yaml
-- name: Initialize application search database
+- name: Run orders API installer
+  ansible.builtin.command: /opt/orders-api/install.sh
+```
+
+If the installer creates a stable marker file, `creates` turns the command into a one-time operation. Ansible checks the path first and skips the command after the marker exists.
+
+```yaml
+- name: Run orders API installer once
   ansible.builtin.command:
-    cmd: /opt/app/bin/init-db
-    creates: /var/lib/app/database.db
+    cmd: /opt/orders-api/install.sh
+    creates: /opt/orders-api/.installed
 ```
 
-### 2. The `removes` Guard
-Conversely, if your command is designed to clean up or delete a file, you pass the `removes` argument. The task will only execute if the file is still present on the system:
+For cleanup commands, `removes` gives the opposite guard. The command runs only while the target path exists. That is useful for one-time migrations away from old files.
 
 ```yaml
-- name: Clean up temporary installer package
+- name: Remove legacy orders API config once
   ansible.builtin.command:
-    cmd: rm /tmp/installer.sh
-    removes: /tmp/installer.sh
+    cmd: /usr/local/bin/orders-cleanup-old-config
+    removes: /etc/orders-api/legacy.yml
 ```
 
-### 3. The `changed_when` Override
-If your command performs a read-only check (such as verifying a port status or pulling a health check endpoint), it never modifies the system. You instruct Ansible to ignore the change status by setting `changed_when: false`:
+For read-only checks, the task should usually report `ok`. The command still runs, and the result can be registered for later tasks. The `changed_when: false` line keeps the recap honest.
 
 ```yaml
-- name: Check database cluster connection status
-  ansible.builtin.command: pg_isready -h localhost -p 5432
-  register: db_status
+- name: Check orders API version
+  ansible.builtin.command: orders-api --version
+  register: orders_api_version
   changed_when: false
 ```
 
-This override prevents a successful read-only command from reporting `changed`, allowing you to run health checks inside playbooks without triggering downstream handlers. It does not change failure semantics: if the command exits with a non-zero return code, the task can still fail unless you also define the intended failure behavior with `failed_when`.
+The practical rule is simple. A command task should have evidence for its status. That evidence can be a marker file, a removed path, an exact output string, a return code, or a documented JSON field from the tool.
+
+For production commands, prefer evidence the tool promises to keep stable. A JSON field such as `{"changed": true}` or a documented return code is safer than matching a friendly sentence in human output. If the command has its own dry-run or status command, run that first in staging and write the Ansible condition around the documented behavior.
+
+## Truthful Changed and Failed Status
+<!-- section-summary: changed_when and failed_when let command-like tasks report status from stable return codes or output contracts. -->
+
+Some production tools have their own status language. A CLI may return `0` for success and print `updated` only when it actually changed remote state. Another tool may return a special code when it finds drift. Ansible gives you `changed_when` and `failed_when` so the playbook can translate those tool results into Ansible status.
+
+For the orders platform, suppose a policy tool applies routing rules for the API gateway. It prints `updated` when it changes the active policy and `already current` when nothing changed.
+
+```yaml
+- name: Apply orders routing policy
+  ansible.builtin.command: ordersctl routing apply /etc/orders-api/routing.yml
+  register: routing_apply
+  changed_when: "'updated' in routing_apply.stdout"
+  failed_when: routing_apply.rc != 0
+```
+
+Now `changed` means the policy actually moved. That status can safely notify a handler, appear in a deployment report, or trigger a follow-up health check. The return code still controls failure, so the play stops if the CLI reports an error.
+
+Validation commands often use the same pattern. A validation command reads state and should report `ok` when the check passes. It should fail the host when validation fails.
+
+```yaml
+- name: Validate orders API configuration
+  ansible.builtin.command: orders-api --check-config /etc/orders-api/config.yml
+  register: config_validation
+  changed_when: false
+  failed_when: config_validation.rc != 0
+```
+
+These custom rules should come from a stable contract. If the tool has documented return codes or JSON output, use that. If the playbook searches for a vague word in human output, a future CLI message can make the task lie. In production, truthful status is more valuable than clever parsing.
+
+## Proving the Second Run
+<!-- section-summary: Running the same playbook twice against a safe target exposes unstable templates, unguarded commands, and repeated restarts. -->
+
+The most practical idempotency check is a two-run test against a safe target. A canary host or disposable staging host is enough to catch many common mistakes. The first run applies the desired state, and the second run should usually settle with zero changes for configuration tasks.
+
+```bash
+ansible-playbook -i inventories/staging/hosts.yml site.yml --limit orders-web-01.staging.example.com
+ansible-playbook -i inventories/staging/hosts.yml site.yml --limit orders-web-01.staging.example.com
+```
+
+Before the real run, check mode and diff mode can show likely file changes. That preview is especially useful for templates and file edits.
+
+```bash
+ansible-playbook -i inventories/staging/hosts.yml site.yml --limit orders-web-01.staging.example.com --check --diff
+```
+
+Check mode has limits. Some modules lack prediction support, and tasks that depend on registered results from earlier tasks may behave differently in simulation. The two-run test gives stronger evidence because it observes a real host after a real application of the playbook.
+
+When the second run still reports `changed`, the task name points to the next investigation. A template may contain a timestamp such as `{{ ansible_date_time.iso8601 }}` that changes every run. A package task may use `state: latest`, which asks for updates whenever the repository offers a newer package. A service task with `state: restarted` restarts every run. A command task may need `creates`, `removes`, or `changed_when`.
+
+## Common Change Noise and Rollback Safety
+<!-- section-summary: Noisy changes usually come from unstable values, broad package states, unconditional restarts, or unguarded commands. -->
+
+Production playbooks should make noise only when something meaningful changed. The common noise sources are predictable. Dynamic values in templates create a different file on every run. `state: latest` turns package freshness into a moving target. `state: restarted` forces a service restart every run. Raw commands report changed unless the task tells Ansible how to decide.
+
+The safer pattern is to make release inputs explicit. For the orders API, pin the application release through a variable and let the package repository or deployment role use that value. Then the change shows up as a reviewed variable change or a logged runtime override.
+
+```yaml
+orders_api_release: "2026.06.13"
+orders_api_config_checksum: "{{ orders_api_public_name }}:{{ orders_api_listen_port }}"
+```
+
+The second-run review should name the noisy task, its current status rule, and the desired fix. A template with `{{ ansible_date_time.iso8601 }}` should move that timestamp out of the managed file unless the timestamp is part of the real desired state. A package task using `state: latest` should usually become a pinned version for production releases. A service task using `state: restarted` should usually move to a handler notified by a real file or package change.
+
+Rollback uses the same idea. If a release breaks the canary, the team restores the previous release value and runs the playbook through the same narrow path. Normal rollback should use the same reviewed playbook path as rollout.
+
+```bash
+ansible-playbook -i inventories/prod/hosts.yml site.yml --limit orders-web-01.example.com -e orders_api_release=2026.06.12
+```
+
+For configuration files, `ansible.builtin.template` supports a `backup` option that can keep a timestamped copy of the previous file on the target. Many teams prefer Git as the main rollback record and target-side backups as an emergency aid. The safest approach is to test both: revert the repository change in staging, run the playbook, and confirm the service returns to the previous behavior.
+
+Destructive work needs even more care. Removing directories, rotating credentials, and running database migrations should have clear guards, backups, and a tested restore path. Idempotency protects repeated configuration runs, and it should be combined with normal operational safety for changes that can destroy data.
 
 ## Putting It All Together
+<!-- section-summary: Idempotent automation gives the team a reliable signal because changed, ok, and failed each mean something specific. -->
 
-We started by looking at how a non-idempotent automation script can corrupt system files, fail on existing directories, and cause service drops across your log host fleet.
+The orders platform playbook now uses state-aware modules for packages, directories, templates, and services. Command tasks have evidence through `creates`, `removes`, `changed_when`, or `failed_when`. Validation tasks register output and report `ok` when they only read state. Handlers restart services only after a task reports a real change.
 
-Ansible solves these issues by placing the concept of idempotency at the center of its execution model:
-- **Declarative Modules**: Tasks describe desired final states, and built-in modules use low-level calls like `stat()` and checksum comparisons to verify if changes are actually required.
-- **The Second Run Settle**: A healthy playbook should report exactly zero changes on a second run, proving that your host environments are stable.
-- **Handler Orchestration**: Restarts are bound to actual task changes, queueing notifications so each notified handler runs once at the next handler flush point.
-- **Command Guards**: Raw shell executions are made safe and repeatable using `creates`, `removes`, and `changed_when: false` overrides.
+The team can prove the behavior with a canary. The first run may change the host. The second run should settle. If tomorrow's scheduled run reports a new change, the recap now means something: the desired state changed, the host drifted, or a task needs a better status rule.
 
-By building your playbooks around these idempotent behaviors, you transform your automation from a fragile list of instructions into a resilient, continuous auditing utility.
+That trustworthy output prepares the next skill. Once tasks report status honestly, operators can read the playbook output as evidence instead of terminal noise.
 
 ## What's Next
 
-Now that you understand the mechanics of idempotency and how modules reconcile host states, the next article will explore how to read and analyze run results. We will break down the specific return codes, stderr captures, and recap blocks that Ansible outputs, showing you how to diagnose connection failures and task errors.
+The next article focuses on playbook output. It shows how to separate `failed` from `unreachable`, how to read `changed` in context, and how the final recap tells the story of a run across multiple hosts.
 
 ---
 
 **References**
 
-- [Ansible Playbooks: Desired State and Idempotency](https://docs.ansible.com/ansible/latest/playbook_guide/playbooks_intro.html#desired-state-and-idempotency) - Core guide to declarative system management.
-- [Ansible Handlers Documentation](https://docs.ansible.com/ansible/latest/playbook_guide/playbooks_handlers.html) - Official reference for change-triggered notifications and deferred execution.
-- [Open Group POSIX system interfaces - stat()](https://pubs.opengroup.org/onlinepubs/9699919799/functions/stat.html) - The POSIX standard interface used by file modules to inspect inode metadata.
-- [Ansible Command Module Parameters](https://docs.ansible.com/ansible/latest/collections/ansible/builtin/command_module.html) - Reference guide for using creates, removes, and execution overrides.
+- [Ansible playbooks](https://docs.ansible.com/projects/ansible/latest/playbook_guide/playbooks_intro.html) - Official overview of playbook execution, desired state, idempotency, check mode, and verification.
+- [Validating tasks: check mode and diff mode](https://docs.ansible.com/projects/ansible/latest/playbook_guide/playbooks_checkmode.html) - Official details for `--check`, `--diff`, task-level `check_mode`, and diff safety.
+- [ansible.builtin.command](https://docs.ansible.com/projects/ansible/latest/collections/ansible/builtin/command_module.html) - Official module reference for command execution, including `creates` and `removes`.
+- [Error handling in playbooks](https://docs.ansible.com/projects/ansible/latest/playbook_guide/playbooks_error_handling.html) - Official guidance for `changed_when`, `failed_when`, handlers and failure, and error behavior.
+- [Handlers: running operations on change](https://docs.ansible.com/projects/ansible/latest/playbook_guide/playbooks_handlers.html) - Official handler behavior for service reloads and restarts.
+- [ansible-playbook](https://docs.ansible.com/projects/ansible/latest/cli/ansible-playbook.html) - Official CLI reference for limits, syntax checks, check mode, diff mode, and playbook execution options.

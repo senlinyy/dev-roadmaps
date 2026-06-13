@@ -15,186 +15,248 @@ aliases:
 
 ## Table of Contents
 
-1. [The Anatomy of a Playbook](#the-anatomy-of-a-playbook)
-2. [The Playbook Blueprint and Code Preview](#the-playbook-blueprint-and-code-preview)
-3. [Plays: Targeting Host Groups](#plays-targeting-host-groups)
-4. [Tasks: Describing Ordered Machine States](#tasks-describing-ordered-machine-states)
-5. [Modules: The Domain-Aware Workhorses](#modules-the-domain-aware-workhorses)
-6. [Fully Qualified Collection Names](#fully-qualified-collection-names)
-7. [Under the Hood: YAML Tokenization and Module Argument Validation](#under-the-hood-yaml-tokenization-and-module-argument-validation)
-8. [Putting It All Together](#putting-it-all-together)
-9. [What's Next](#whats-next)
+1. [The Shape of a Playbook](#the-shape-of-a-playbook)
+2. [Hosts, Plays, Tasks, and Modules](#hosts-plays-tasks-and-modules)
+3. [A Small Production Web Fleet](#a-small-production-web-fleet)
+4. [Running the Playbook Safely](#running-the-playbook-safely)
+5. [Handlers, Blocks, and Roles](#handlers-blocks-and-roles)
+6. [Common Failures and Safe Rollback](#common-failures-and-safe-rollback)
+7. [Putting It All Together](#putting-it-all-together)
+8. [What's Next](#whats-next)
+9. [References](#references)
 
-## The Anatomy of a Playbook
+## The Shape of a Playbook
+<!-- section-summary: A playbook is a YAML file that connects a group of hosts with an ordered list of automation steps. -->
 
-An Ansible playbook is an ordered YAML automation document that maps target hosts to tasks and modules.
+An **Ansible playbook** is a YAML file that says what should happen to a set of managed machines. It usually lives in source control beside inventory, templates, roles, and release notes, so the team can review infrastructure changes in the same way they review application changes.
 
-An Ansible playbook is a structured text file written in YAML format that maps specific groups of server machines to an ordered list of configuration steps. Instead of writing loose shell scripts that execute arbitrary sequences of command lines, you write a playbook to declare exactly what files, packages, user permissions, and system services should exist on your servers. The playbook is a reviewable infrastructure document, allowing your team to version-control and share operational steps before touching a single server.
+The main pieces have a simple relationship. A **playbook** contains one or more **plays**. A **play** selects hosts and sets shared behavior for those hosts. A **task** is one named step inside the play. Most tasks call an Ansible **module**, which is the small unit of code that inspects or changes something on the managed host.
 
-To understand how a playbook is organized, consider our scenario. You are setting up a local utility server inside your private network to act as a shared developer workspace. This host requires several configurations:
-- A shared utility package (like git) must be present.
-- A dedicated system user account must exist for the team.
-- A local security configuration file must be deployed.
-- A utility background service must be kept active and enabled.
+For a beginner, this is the first important split. The playbook describes the workflow, while modules do the actual work. The `ansible.builtin.package` module manages packages, `ansible.builtin.template` renders files, and `ansible.builtin.service` controls services. The playbook gives those modules arguments and decides which hosts receive them.
 
-If you configure this workspace by hand, you must remember the commands, package names, directory paths, and permission octals. A playbook records these details in a highly structured hierarchy. A playbook contains one or more plays; each play targets a set of hosts and holds an ordered list of tasks.
+We will use one production-style story for the rest of the article. A small orders platform has two web servers behind a load balancer and one background worker. The web servers run Nginx and an `orders-api` systemd service. The worker server runs `orders-worker`. The team wants one reviewed automation path for staging and production instead of a set of private SSH notes.
 
-## The Playbook Blueprint and Code Preview
+The pieces connect like this. Inventory chooses `orders_web`. The play selects that group. Each task calls one module. The module inspects the remote host, changes only what it needs to change, and returns a result. The playbook output becomes useful because every task has a name and every module reports a status.
 
-Here is an early, comment-free playbook preview that standardizes the developer workspace server described in our scenario. This blueprint maps our target host group to the exact list of configurations we require:
+## Hosts, Plays, Tasks, and Modules
+<!-- section-summary: Plays choose host groups, tasks express individual operations, and modules report whether each operation changed the host. -->
+
+Ansible starts from **inventory**, which is the list of managed hosts and groups. A play can target a group such as `orders_web`, and inventory decides which hosts belong to that group for staging or production. That keeps host membership in one reviewed place instead of scattering server names through every playbook.
 
 ```yaml
-- name: Standardize developer utility workspace
-  hosts: workspaces
+all:
+  children:
+    orders_web:
+      hosts:
+        orders-web-01.example.com:
+        orders-web-02.example.com:
+    orders_worker:
+      hosts:
+        orders-worker-01.example.com:
+```
+
+A play then connects that group to work. This first play targets only the web hosts, uses privilege escalation through `become`, and runs tasks in order. The task names matter because they become the labels operators read during a live run.
+
+```yaml
+- name: Configure orders web hosts
+  hosts: orders_web
+  become: true
+  gather_facts: true
+  tasks:
+    - name: Install web server packages
+      ansible.builtin.package:
+        name:
+          - nginx
+          - orders-api
+        state: present
+
+    - name: Create orders configuration directory
+      ansible.builtin.file:
+        path: /etc/orders-api
+        state: directory
+        owner: root
+        group: orders
+        mode: "0750"
+
+    - name: Render orders API configuration
+      ansible.builtin.template:
+        src: orders-api.yml.j2
+        dest: /etc/orders-api/config.yml
+        owner: root
+        group: orders
+        mode: "0640"
+      notify: Restart orders API
+
+  handlers:
+    - name: Restart orders API
+      ansible.builtin.service:
+        name: orders-api
+        state: restarted
+```
+
+Each task gives Ansible a focused instruction. The package task makes sure the software exists. The file task makes sure the directory exists with the right ownership and mode. The template task renders a configuration file from source control to the host. The handler restarts the service only after the template task reports a real change.
+
+This structure is more explicit than a long shell script. Instead of relying on `mkdir -p` plus follow-up commands, the task states the desired directory, owner, group, and mode together. The module checks the remote host before changing it, which is why playbook output can say `ok`, `changed`, `failed`, or `unreachable` per host and per task.
+
+Behind the scenes, Ansible sends module work to each selected host through the configured connection. For many Linux modules, that means a small Python module runs on the managed host and returns structured data. That is why a host can accept SSH and still fail a task if Python discovery, temporary directories, or sudo rules are broken. The playbook structure stays simple, while the result tells the operator which layer failed.
+
+## A Small Production Web Fleet
+<!-- section-summary: A production playbook usually combines inventory, variables, templates, handlers, and separate plays for separate host groups. -->
+
+Real teams usually keep the playbook as the orchestration layer. The playbook chooses the host group, the tasks or roles to run, and the order of operations. Inventory and variable files carry environment-specific values such as ports, hostnames, package versions, and feature flags.
+
+For the orders platform, production variables might look like this. The file stays small because it carries environment values rather than repeating task logic.
+
+```yaml
+orders_api_listen_port: 8080
+orders_api_public_name: orders.example.com
+orders_api_database_host: orders-db.internal.example.com
+orders_api_release: "2026.06.13"
+```
+
+The Nginx template can use those values without copying the whole playbook for each environment. The same template works in staging when inventory provides different names and ports.
+
+```nginx
+server {
+    listen 80;
+    server_name {{ orders_api_public_name }};
+
+    location / {
+        proxy_pass http://127.0.0.1:{{ orders_api_listen_port }};
+        proxy_set_header Host $host;
+        proxy_set_header X-Request-ID $request_id;
+    }
+}
+```
+
+The playbook can also separate the worker host from the web hosts. That separation keeps a web change from accidentally restarting background jobs. It also lets an operator limit a run to one group during a canary deployment.
+
+```yaml
+- name: Configure orders worker hosts
+  hosts: orders_worker
   become: true
   tasks:
-    - name: Ensure git package is installed
-      ansible.builtin.apt:
-        name: git
+    - name: Install orders worker package
+      ansible.builtin.package:
+        name: orders-worker
         state: present
 
-    - name: Create local developer system user
-      ansible.builtin.user:
-        name: devuser
-        comment: "Shared Developer Account"
-        shell: /bin/bash
-        state: present
-
-    - name: Configure developer utilities banner
-      ansible.builtin.copy:
-        content: "Welcome to the shared developer workspace."
-        dest: /etc/motd
-        owner: root
-        group: root
-        mode: "0644"
-
-    - name: Keep system cron service active
+    - name: Keep orders worker running
       ansible.builtin.service:
-        name: cron
+        name: orders-worker
         state: started
         enabled: true
 ```
 
-## Plays: Targeting Host Groups
+That gives the team one `site.yml` entry point with separate plays for separate parts of the system. A reviewer can see which hosts receive Nginx, which hosts receive the worker service, and where service restarts can happen. The structure also supports progressive rollout because the operator can target one host, one group, or the full inventory.
 
-A play is the top-level block inside an Ansible playbook file. Its primary purpose is to define a scope of work by linking a specific group of servers (from your host catalog) to a list of tasks. A playbook can contain multiple plays, allowing you to orchestrate complex deployment phases across different clusters of servers in a single run.
+## Running the Playbook Safely
+<!-- section-summary: Safe execution starts with syntax checks, target checks, check mode, diff mode, and small limits before a full production run. -->
 
-For example, a multi-play playbook might target database servers in the first play to run storage setup tasks, and then target web application servers in the second play to reload configuration files.
+The first safety step happens before Ansible touches a production host. A syntax check catches YAML and playbook parsing mistakes. It proves the playbook can be parsed and catches broken indentation, missing colons, and invalid playbook shape early.
 
-When you declare a play, you define several key parameters:
-- **`hosts`**: The name of the host group or pattern to target (such as `workspaces`).
-- **`become`**: A boolean flag (set to `true` or `false`) that indicates whether tasks in this play require privilege escalation (usually administrative access via sudo) to execute.
-- **`remote_user`**: The specific SSH user name Ansible should use when logging into the servers for this play.
-
-Keeping your plays focused makes your automation cleaner. Instead of targeting all your servers in a single play and using complex conditions to skip tasks on specific hosts, you write separate plays. This ensures that anyone reading the playbook immediately understands which host group receives what configuration.
-
-## Tasks: Describing Ordered Machine States
-
-A task is an individual, named step inside a play's task block. Every task focuses on a single logical goal (like "Ensure git package is installed") and calls a specific module with arguments to achieve that goal.
-
-When Ansible executes a play with the default linear strategy, it processes tasks in the exact order you wrote them in the playbook. The default execution order across multiple hosts is a common source of surprise for beginners: Ansible runs a single task across *all* targeted hosts in the play before proceeding to the next task in the list. Strategies, forks, and `serial` settings can change the batching behavior, but this horizontal task-by-task model is the baseline to learn first.
-
-Consider a play targeting two utility servers (`workspace-01` and `workspace-02`). The task list contains three steps:
-1. Install git.
-2. Create the user.
-3. Configure the banner.
-
-Instead of completing all three tasks on `workspace-01` before starting on `workspace-02`, the task pipeline executes like this:
-
-| Step | Target Host | Active Task |
-| :--- | :--- | :--- |
-| **1** | `workspace-01` | Install git |
-| **2** | `workspace-02` | Install git |
-| **3** | `workspace-01` | Create the user |
-| **4** | `workspace-02` | Create the user |
-| **5** | `workspace-01` | Configure the banner |
-| **6** | `workspace-02` | Configure the banner |
-
-This horizontal step execution is highly beneficial because it keeps your hosts synchronized during complex deployments. If a task fails on a specific host (for example, if `workspace-02` runs out of disk space during the package installation task), Ansible automatically removes that broken host from the active run pool. The remaining healthy hosts continue to receive subsequent tasks, keeping your operational status clear.
-
-## Modules: The Domain-Aware Workhorses
-
-An Ansible module is the small program that knows how to manage one kind of system object. A task names the desired result, and the module performs the read, compare, and write logic needed for that object.
-
-Example: `ansible.builtin.apt` knows how to inspect Debian package status and install `git` only when it is missing. `ansible.builtin.user` knows how to inspect local accounts and create `devuser` only when that account does not already exist. While a task represents the human-readable step in a playbook, the module is the underlying code that does the actual work on your servers.
-
-Ansible ships with thousands of built-in modules, covering everything from files and packages to services, users, and cloud providers. The major benefit of using these modules over raw shell commands is that modules are state-aware:
-
-When a module runs, it first performs a read operation to determine the current state of the resource: querying a package manager, reading file metadata, or inspecting a service status. It then compares the observed state against the declared desired state in the task arguments. Only when the two differ does the module issue a write operation. This read-before-write discipline is what makes every module invocation idempotent by default.
-
-If you write shell commands to modify configuration files, you must write complicated search-and-replace logic to prevent duplicating text lines on subsequent runs. An Ansible file module (like `lineinfile`) handles this check automatically, searching for target expressions and only modifying the file if the line is missing or incorrect.
-
-## Fully Qualified Collection Names
-
-In modern Ansible, a collection is a package of related modules, plugins, and helper code. A Fully Qualified Collection Name (FQCN) is the full dotted path to one module inside one collection, so Ansible can find the exact code you meant.
-
-Example: `ansible.builtin.copy` means "use the `copy` module from Ansible's built-in collection," not a third-party module that happens to share the short name `copy`. In modern Ansible, using FQCNs keeps module resolution predictable across laptops, CI runners, and shared control nodes.
-
-An FQCN is a structured, dot-separated string containing three distinct parts:
-
-```mermaid
-flowchart LR
-    A["ansible"] -->|namespace| B["builtin"]
-    B -->|collection| C["apt"]
-    C -->|module| D["ansible.builtin.apt"]
+```bash
+ansible-playbook -i inventories/prod/hosts.yml site.yml --syntax-check
 ```
 
-The FQCN follows a three-part dotted path. The first segment is the namespace, which identifies the organization or individual that maintains the collection. The second segment is the collection name, grouping modules that serve a common purpose. The third segment is the module name itself.
+The next check proves the host pattern matches the intended machines. This matters because a typo in inventory or a broad host pattern can send a play to the wrong group. For a canary web deploy, the operator can list the targets before the real run.
 
-Using the full FQCN (like `ansible.builtin.copy` instead of the short name `copy`) keeps your playbooks more stable. If a third-party collection introduces a custom module also named `copy`, the FQCN tells Ansible to run the built-in core module you intended, preventing module-name ambiguity.
-
-## Under the Hood: YAML Parsing and Module Execution
-
-Playbook execution has two phases: Ansible first parses the YAML file on the control node, then it runs module work against the selected hosts. This split matters because some mistakes are caught before any connection opens, while other mistakes appear only when a real module receives real host data.
-
-Example: a broken indentation level in `playbooks/site.yml` fails immediately during parsing, but an invalid package name like `gti` instead of `git` may only fail when the package module checks the target host's repositories.
-
-When you run `ansible-playbook`, the control node executes several local steps before the first task runs:
-
-1. **YAML Parsing**: The Ansible engine reads your playbook file and converts the text structure into native data structures. If your playbook has indentation errors or invalid characters, the YAML parser fails immediately with a syntax error.
-2. **Keyword Mapping**: Ansible maps the top-level keys in the parsed dictionary (such as `hosts`, `become`, and `tasks`) to specific execution classes in the control engine.
-3. **Task Planning**: Ansible identifies which modules, connection settings, variables, and host groups are needed for each task.
-4. **Module Execution and Validation**: Module-specific argument validation happens when the module or its action plugin executes. Many bad parameters fail early in the task, but the module still usually runs through Ansible's normal execution path rather than being fully proven before any connection is opened.
-
-```mermaid
-flowchart TD
-    subgraph ControlNode["Control Node (Your Computer)"]
-        PlaybookFile["Playbook File<br/>(playbook.yml)"] -->|1. Parse Text| YAMLParser["YAML Parser"]
-        YAMLParser -->|2. Data Objects| KeyMapper["Keyword Mapping Engine"]
-        KeyMapper -->|3. Build Task Plan| TaskPlan["Task Execution Plan"]
-        TaskPlan -->|4. Start Task| ConnectionEngine["Connection Manager"]
-        YAMLParser -->|Syntax Problem| Rejection["Immediate Syntax Error"]
-    end
-
-    subgraph ManagedNode["Managed Node"]
-        ConnectionEngine -->|5. Run Module Payload| SSHD["SSH Daemon (sshd)"]
-    end
+```bash
+ansible-playbook -i inventories/prod/hosts.yml site.yml --limit orders-web-01.example.com --list-hosts
 ```
 
-This local parsing still catches many simple mistakes before a run reaches your hosts, especially broken YAML structure. It does not prove every module argument or runtime condition in advance, so production workflows still need syntax checks, check mode where supported, canary runs, and careful recap reading.
+For file and package changes, check mode and diff mode give useful rehearsal output. Check mode asks supported modules what they would change. Diff mode shows before-and-after details for modules that support diffs, especially file and template modules.
+
+```bash
+ansible-playbook -i inventories/prod/hosts.yml site.yml --limit orders-web-01.example.com --check --diff
+```
+
+After those checks, the canary run applies the playbook to one host. If the service passes health checks, the team can run the same playbook against the rest of the group. The important habit is keeping the command narrow until the evidence says the change is safe to widen.
+
+```bash
+ansible-playbook -i inventories/prod/hosts.yml site.yml --limit orders-web-01.example.com
+ansible-playbook -i inventories/prod/hosts.yml site.yml --limit orders_web
+```
+
+In Red Hat Ansible Automation Platform or another controller, the same ideas usually become job templates, inventories, credentials, survey inputs, and approval flows. The underlying playbook shape stays the same. The controller adds audit records, scheduling, role-based access, and a central place to review output.
+
+## Handlers, Blocks, and Roles
+<!-- section-summary: Larger playbooks use handlers for delayed service actions, blocks for grouped control, and roles for reusable service structure. -->
+
+A **handler** is a task that runs after another task notifies it. Handlers are commonly used for service reloads and restarts because they prevent repeated restarts during one play. If three template tasks notify the same handler, Ansible can run that handler once at the end of the play.
+
+That behavior helps the orders API. The service should restart after its configuration changes. It should stay quiet when the rendered file already matches the host. A handler ties the restart to the changed signal from the template task, so the playbook output stays meaningful.
+
+A **block** groups related tasks and lets the playbook apply shared options or error handling to the group. For example, a deploy block can render config, validate it, and reload the service. A `rescue` section can collect logs or restore a previous file when validation fails.
+
+```yaml
+- name: Deploy orders API configuration
+  block:
+    - name: Render candidate orders API configuration
+      ansible.builtin.template:
+        src: orders-api.yml.j2
+        dest: /etc/orders-api/config.yml
+        mode: "0640"
+      notify: Restart orders API
+
+    - name: Validate orders API configuration
+      ansible.builtin.command: orders-api --check-config /etc/orders-api/config.yml
+      changed_when: false
+  rescue:
+    - name: Show recent orders API logs after validation failure
+      ansible.builtin.command: journalctl -u orders-api -n 50 --no-pager
+      changed_when: false
+```
+
+The rescue section should gather safe evidence and take narrow recovery actions. It can collect logs, restore a backup file, or leave the host out of a load balancer pool. It should avoid hiding the failure. A rescued task still needs a human or pipeline decision about whether the rollout should continue.
+
+A **role** packages tasks, defaults, templates, files, and handlers into a reusable directory. A team might start with one playbook file while learning. As the orders API grows, moving the web setup into a role gives the playbook a smaller surface:
+
+```yaml
+- name: Configure orders web hosts
+  hosts: orders_web
+  become: true
+  roles:
+    - role: orders_api_web
+```
+
+The role can carry the install tasks, templates, handlers, and default variables. The playbook still answers the operational question: which hosts receive this role, and in what order does the rollout happen.
+
+## Common Failures and Safe Rollback
+<!-- section-summary: Operators debug playbooks by separating parse errors, target mistakes, connection failures, module failures, and application rollback. -->
+
+Playbook failures usually fall into a few plain categories. A syntax error means YAML or playbook parsing failed. A target mistake means the host pattern matched zero hosts or more hosts than expected. A connection failure appears as `unreachable`, which points to SSH, credentials, host keys, DNS, network paths, or inventory addresses. A module failure means Ansible reached the host and the task logic failed there.
+
+For the orders platform, a failed package task might point to a repository problem. A failed template task might point to a missing variable or a file permission problem. A failed validation command might point to a bad application config. Those are different repairs, so the operator should start from the failed task name and the host status instead of treating the whole run as one generic error.
+
+Rollback should be planned before the first production run. Ansible applies the state described in the current repository checkout, so a common rollback is to revert the template, variables, or role change in Git and run the playbook again against a canary host. For application releases, keep the release version in a variable such as `orders_api_release`, then roll back by passing or restoring the previous approved version through the same playbook path.
+
+```bash
+ansible-playbook -i inventories/prod/hosts.yml site.yml --limit orders-web-01.example.com -e orders_api_release=2026.06.12
+```
+
+Some changes need extra care. Database migrations, destructive file removal, and firewall changes may need backups, maintenance windows, or separate approval. A playbook can automate those operations, and the team still needs a recovery path that has been tested on staging.
 
 ## Putting It All Together
+<!-- section-summary: A healthy playbook keeps host selection, task intent, module behavior, and operational safety visible in one reviewed file. -->
 
-We started by looking at how an Ansible playbook standardizes a developer utility workspace, organizing machine configurations into clear, readable, and versionable files.
+The orders platform now has a clear Ansible shape. Inventory names the web and worker hosts. Plays select those groups. Tasks call modules with structured arguments. Templates turn variables into service configuration. Handlers restart services only after meaningful changes. Roles can package the repeated service setup when the playbook grows.
 
-By dividing these files into a logical hierarchy, you ensure complete operational clarity:
-- **Playbooks** organize your entire deployment blueprint into lists of plays.
-- **Plays** target specific host groups and configure privilege boundaries like `become: true`.
-- **Tasks** define the ordered sequence of configuration steps, executing horizontally across all target hosts in the play.
-- **Modules** provide the state-aware system intelligence, accessed safely using Fully Qualified Collection Names (FQCNs) like `ansible.builtin.copy` to inspect and reconcile remote files, packages, and users.
-- **Under-the-Hood Parsing**: The control plane parses YAML and builds a task plan locally, while module-specific validation happens as each task is executed.
+This structure gives operators a practical workflow. They can check syntax, list target hosts, rehearse with check and diff mode, run a canary, review output, and then widen the run. If something fails, the task name and host status point to the right layer of the problem.
 
-This structural separation ensures that your automation is easy to read, simple to maintain, and highly predictable.
+Playbooks are the part people review and run, so they should read like a careful operations plan. The next article focuses on the behavior that makes repeated runs safe: idempotency.
 
 ## What's Next
 
-Now that you understand the structure of playbooks, plays, tasks, and modules, the next article will explore the core behavioral mechanic of Ansible: **Idempotency**. We will look at how state-aware modules achieve this safety property under the hood, how they compare local and remote states, and how you write playbooks that run safely repeatedly without causing configuration drift.
+The next article follows the same orders platform and looks at repeated runs. It explains why `changed` should mean the host actually moved, why command tasks need guards, and how a second run can prove that the playbook has settled.
 
 ---
 
 **References**
 
-- [Ansible Playbook Syntax Guide](https://docs.ansible.com/ansible/latest/playbook_guide/playbooks_intro.html) - Official reference for YAML syntax and play structure rules.
-- [Ansible Built-in Module Index](https://docs.ansible.com/ansible/latest/collections/ansible/builtin/index.html) - Documentation for the core built-in modules and FQCN mappings.
-- [YAML 1.2 Specification](https://yaml.org/spec/1.2.2/) - The official YAML language standard used by playbook parsers.
-- [Ansible Error Handling and Validation](https://docs.ansible.com/ansible/latest/playbook_guide/playbooks_error_handling.html) - Best practices for debugging playbook schema and syntax failures.
+- [Ansible playbooks](https://docs.ansible.com/projects/ansible/latest/playbook_guide/playbooks_intro.html) - Official introduction to playbook structure, plays, tasks, execution order, FQCN guidance, check mode, and verification options.
+- [Working with playbooks](https://docs.ansible.com/projects/ansible/latest/playbook_guide/playbooks.html) - Official guide for templates, handlers, blocks, conditionals, roles, and other playbook features.
+- [Reusing Ansible artifacts](https://docs.ansible.com/projects/ansible/latest/playbook_guide/playbooks_reuse.html) - Official guidance on roles, task files, playbook imports, includes, and reusable automation structure.
+- [Handlers: running operations on change](https://docs.ansible.com/projects/ansible/latest/playbook_guide/playbooks_handlers.html) - Official handler behavior and notification guidance.
+- [Validating tasks: check mode and diff mode](https://docs.ansible.com/projects/ansible/latest/playbook_guide/playbooks_checkmode.html) - Official details for `--check`, `--diff`, and task-level check or diff behavior.
+- [ansible-playbook](https://docs.ansible.com/projects/ansible/latest/cli/ansible-playbook.html) - Official CLI reference for playbook execution, listing, limiting, syntax checks, and verbosity.

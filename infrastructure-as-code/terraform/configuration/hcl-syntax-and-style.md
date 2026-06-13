@@ -78,31 +78,9 @@ Once the lexer completes the tokenization phase, it hands the token stream to th
 
 The next diagram illustrates the complete data pipeline from the raw text file on disk down to the active dependency graph constructed by the deployment engine.
 
-```mermaid
-flowchart TD
-    SourceFile["Source File<br/>(hcl-syntax-and-style.tf)"]
+![Terraform turns HCL source into tokens, a syntax tree, resolved variables, a dependency graph, and provider operations.](/content-assets/articles/article-iac-terraform-config-hcl-syntax/hcl-parser-to-graph.png)
 
-    subgraph Frontend["HCL2 Parser Frontend"]
-        Lexer["Lexer / Tokenizer<br/>(Byte-to-Token Scan Loop)"]
-        TokenStream["Token Stream<br/>(Identifiers & Operators)"]
-        Parser["AST Parser<br/>(Grammar Rules Evaluation)"]
-        SyntaxTree["Abstract Syntax Tree<br/>(In-Memory Node Graph)"]
-    end
-
-    subgraph Backend["Terraform Evaluation Backend"]
-        VariableResolver["Variable Resolver<br/>(Scope & Interpolation)"]
-        DependencyGraph["Dependency Graph<br/>(Directed Acyclic Graph)"]
-        ProviderBridge["Provider Bridge<br/>(gRPC Schema Mapping)"]
-    end
-
-    SourceFile --> Lexer
-    Lexer --> TokenStream
-    TokenStream --> Parser
-    Parser --> SyntaxTree
-    SyntaxTree --> VariableResolver
-    VariableResolver --> DependencyGraph
-    DependencyGraph --> ProviderBridge
-```
+*Terraform can validate and format HCL because source text becomes structured data before planning starts.*
 
 During AST construction, the engine maps nodes directly to core syntax structures. If a syntax error is encountered, such as a missing closing brace or a stray assignment operator, the parser generates a diagnostic object containing the precise byte offsets, line numbers, and file paths. This metadata is returned to your terminal, allowing you to locate and fix syntax issues before any API calls are made.
 

@@ -1,8 +1,8 @@
 ---
 title: "Pipelines, Runners, and Artifacts"
-description: "Master the mechanics of pipeline orchestrations, split-brain executions, container contexts, ephemeral database services, and dependency caches."
-overview: "CI/CD pipelines operate as distributed computing systems. This article details Directed Acyclic Graph dependencies, split-brain runner fleets, Docker service containers, and cryptographic cache configurations."
-tags: ["runners", "artifacts", "caching", "docker", "dags"]
+description: "Understand how CI/CD pipelines turn a code change into jobs, how runners execute those jobs, and how artifacts and caches move files through the workflow."
+overview: "A pipeline is the delivery path your code follows after someone pushes a change. This article follows one pull request through jobs, runners, workspaces, service containers, artifacts, and caches so the moving pieces feel connected instead of mysterious."
+tags: ["pipelines", "runners", "artifacts", "caching", "ci-cd"]
 order: 2
 id: article-cicd-fundamentals-pipelines-runners-and-artifacts
 aliases:
@@ -16,132 +16,171 @@ aliases:
 
 ## Table of Contents
 
-1. [Pipelines as Distributed Computing Systems](#pipelines-as-distributed-computing-systems)
-2. [The Split-Brain Architecture: Controller vs. Runner](#the-split-brain-architecture-controller-vs-runner)
-3. [Hosted Cloud Runners vs. Self-Hosted Fleets](#hosted-cloud-runners-vs-self-hosted-fleets)
-4. [Anatomy of the Runner Job Workspace](#anatomy-of-the-runner-job-workspace)
-5. [Execution Contexts: Shell vs. Container](#execution-contexts-shell-vs-container)
-6. [Managing State: The Ephemeral Database Pattern](#managing-state-the-ephemeral-database-pattern)
-7. [The Persistence Split: Caching vs. Artifacts](#the-persistence-split-caching-vs-artifacts)
-8. [Cache Invalidation: Cryptographic Hashing and Keys](#cache-invalidation-cryptographic-hashing-and-keys)
-9. [Common Failure Mode 1: Disk Space Exhaustion](#common-failure-mode-1-disk-space-exhaustion)
-10. [Common Failure Mode 2: Zombie Background Processes](#common-failure-mode-2-zombie-background-processes)
-11. [Putting It All Together](#putting-it-all-together)
-12. [What's Next](#whats-next)
+1. [The Delivery Path at a Glance](#the-delivery-path-at-a-glance)
+2. [Pipelines, Jobs, Stages, and Steps](#pipelines-jobs-stages-and-steps)
+3. [Runners and the Controller](#runners-and-the-controller)
+4. [Hosted Runners and Self-Hosted Runners](#hosted-runners-and-self-hosted-runners)
+5. [The Job Workspace](#the-job-workspace)
+6. [Shell Jobs, Container Jobs, and Service Containers](#shell-jobs-container-jobs-and-service-containers)
+7. [Artifacts](#artifacts)
+8. [Caches](#caches)
+9. [Passing Evidence Between Jobs](#passing-evidence-between-jobs)
+10. [Common Failure Mode: Missing Files Between Jobs](#common-failure-mode-missing-files-between-jobs)
+11. [Common Failure Mode: Dirty Self-Hosted Runners](#common-failure-mode-dirty-self-hosted-runners)
+12. [Putting It All Together](#putting-it-all-together)
+13. [What's Next](#whats-next)
 
-## Pipelines as Distributed Computing Systems
+## The Delivery Path at a Glance
+<!-- section-summary: A pipeline connects a code change to repeatable checks, package outputs, and later release decisions. -->
 
-When developers say "the pipeline failed," they are describing the execution of an automated sequence. Technically and structurally, a pipeline is a Directed Acyclic Graph (DAG). 
+A small team is working on a service called `checkout-api`. Mira changes the code that calculates tax, opens a pull request, and waits for the green check before anyone reviews the change. Behind that little green check, the CI/CD system has to clone the repository, install packages, run tests, start a temporary database, build a deployable package, and keep enough evidence for the team to trust the result.
 
-A DAG is a mathematical model representing a collection of vertices (jobs) connected by directional edges (dependencies) with no loops. This graph-based structure allows modern CI/CD engines to build parallel paths, fan out workloads, and fan them back in, guaranteeing that a job never depends on itself or creates an infinite loop.
+A **pipeline** is that automated path. It is the set of checks and packaging work that runs after a trigger, such as a push, pull request, tag, manual button click, or scheduled time. A pipeline gives the team the same answer every time: this exact version of the code passed these exact steps on a clean machine, or it failed with these logs.
 
-Consider a pipeline consisting of four jobs:
+This article connects the main pieces in the order they appear during a real run. First the controller reads the pipeline file and turns it into jobs. Then runners pick up those jobs and execute commands. Each job gets a workspace on disk, and some jobs run inside containers or start temporary service containers. After that, artifacts and caches decide which files survive after the runner disappears.
 
-First, `Lint`.
+That `checkout-api` pull request will stay as the thread through the article. The team wants fast feedback on every change, but they also want a build package they can deploy later. Those two goals create the need for jobs, runners, artifacts, and caches.
 
-Second, `Unit Tests`.
+## Pipelines, Jobs, Stages, and Steps
+<!-- section-summary: A pipeline is made from jobs, jobs contain steps, and dependencies decide which jobs can run together. -->
 
-Third, `Integration Tests` (depends on `Lint` and `Unit Tests`).
+A **job** is one unit of work in a pipeline. In GitHub Actions, a workflow contains one or more jobs. In GitLab CI/CD, jobs are the fundamental pieces of a pipeline. In Jenkins, a Pipeline often organizes work into stages and steps. The names move around a little by platform, but the idea stays the same: each unit has commands to run and a result to report.
 
-Fourth, `Build Docker Image` (depends on `Integration Tests`).
+A **step** is one action inside a job. A step might check out the repository, install Node.js packages, run `npm test`, upload a file, or print a diagnostic command. Steps inside one job usually run in order on the same runner workspace, so a file created by one step can be read by a later step in that same job.
 
-```mermaid
-flowchart TD
-    Lint["1. Lint<br/>(Parallel Node)"] --> Integration["3. Integration Tests<br/>(Dependency Gate)"]
-    Unit["2. Unit Tests<br/>(Parallel Node)"] --> Integration
-    Integration --> Build["4. Build Image<br/>(Artifact Target)"]
+A **stage** is a named group in many CI/CD tools. Teams use stages to make the pipeline readable: `validate`, `test`, `build`, `package`, and `deploy`. Some platforms treat stages as strict ordering rules, while others use explicit job dependencies like `needs`. Either way, the stage names should tell a human what kind of work is happening.
+
+For `checkout-api`, a beginner-friendly pipeline might have three jobs. The `lint` job checks formatting and obvious code problems. The `test` job runs the unit and integration tests. The `package` job builds a Docker image tarball or a compiled archive only after the checks pass.
+
+```yaml
+name: checkout-api
+
+on:
+  pull_request:
+    branches: ["main"]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - run: npm ci
+      - run: npm run lint
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - run: npm ci
+      - run: npm test
+
+  package:
+    runs-on: ubuntu-latest
+    needs: [lint, test]
+    steps:
+      - uses: actions/checkout@v4
+      - run: npm ci
+      - run: npm run build
 ```
 
-When a commit triggers the pipeline, the controller parses this DAG. It identifies that `Lint` and `Unit Tests` have no prerequisite dependencies and immediately dispatches them to run in parallel on separate runners. 
+The important line is `needs: [lint, test]`. This tells the controller that `package` should wait until both earlier jobs finish successfully. `lint` and `test` can run at the same time because neither one waits for the other. That parallel shape gives fast feedback without letting packaging happen after broken checks.
 
-Once both finish successfully, the controller schedules `Integration Tests`. If `Unit Tests` fails, the execution tree halts. The controller cancels `Integration Tests` and `Build Docker Image`, marking them as skipped. 
+People sometimes call this dependency shape a **DAG**, which means directed acyclic graph. In plain English, it is a map of which jobs must happen before other jobs, with no circular waiting. `package` can wait for `test`, but `test` cannot also wait for `package`, because then both jobs would wait forever.
 
-Understanding pipelines as a DAG is the key to pipeline optimization. By separating monolithic test sequences into independent, parallel jobs, you reduce the total build duration.
+![Pipeline job graph showing a pull request fan out to lint and test jobs, then a package job waiting for both](/content-assets/articles/article-cicd-fundamentals-pipelines-runners-and-artifacts/pipeline-job-graph.png)
 
-## The Split-Brain Architecture: Controller vs. Runner
+*A job graph lets independent checks run together while later jobs wait for the exact prerequisites they need.*
 
-A common misconception is that the server displaying the pipeline dashboard is the same machine executing the terminal build commands. Modern CI/CD platforms separate execution into a split-brain architecture: the **Controller** and the **Runner**.
+Now the controller knows the plan. The next question is where those commands actually run, because the web page showing the pipeline is usually not the machine running `npm test`.
 
-The **Controller** (also known as the Control Plane, Coordinator, or Server) represents the brain of the platform. It is responsible for:
-* Receiving Git webhooks notifying it of new commits.
-* Parsing YAML files to build the job dependency DAG.
-* Validating billing limits, repository permissions, and developer roles.
-* Dispatching jobs to waiting executors in the runner fleet.
-* Rendering the live logs and progress graphs in the web dashboard.
+## Runners and the Controller
+<!-- section-summary: The controller plans and tracks the pipeline, while runners execute the commands on real compute. -->
 
-The **Runner** (also known as the Agent, Worker, or Executor) represents the muscle. It is a sterile system that runs in isolation. Its only responsibility is to poll the controller for work, receive a list of shell commands, execute them, stream the text outputs back to the controller, and return the final exit code.
+The **controller** is the CI/CD service that receives the event, reads the pipeline file, schedules jobs, stores logs, and reports status back to the pull request. In GitHub Actions, GitHub provides that orchestration layer. In GitLab, the GitLab instance coordinates pipelines and sends jobs to runners. In Jenkins, the controller manages the build queue and the Pipeline state.
 
-This separation is a critical security requirement. If the controller executed the user's shell scripts directly, a developer could push a malicious pipeline that accesses the shared cluster database, steals neighbor secrets, or compromises the control plane. Pushing execution to isolated, short-lived runners isolates the controller.
+A **runner** is the machine or container environment that executes a job. The runner checks out code, runs shell commands, starts containers if the job needs them, streams logs back to the controller, and returns an exit code. A successful command usually exits with code `0`; a failed command returns a non-zero code, and the controller marks the job as failed.
 
-## Hosted Cloud Runners vs. Self-Hosted Fleets
+This split matters because a pipeline can run untrusted or partly trusted code. A pull request can change build scripts, package scripts, and test commands. The CI/CD system reduces the blast radius by sending those commands to isolated runners instead of running them directly on the controller that stores repository metadata, secrets, users, billing, and pipeline history.
 
-When a job is scheduled, the runner must execute on physical or virtual hardware. You have two choices:
+For `checkout-api`, the controller sees Mira's pull request and creates the `lint`, `test`, and `package` jobs. Two runners may pick up `lint` and `test` at the same time. Each runner gets a job payload, prepares a workspace, runs the steps, and sends logs back so Mira can see exactly where the pull request passed or failed.
 
-**Hosted Runners** are provisioned and maintained by the CI provider. When a job starts, the provider requests a fresh virtual machine from its cloud pool, executes your steps, streams the logs, and destroys the VM. 
-* *Advantages*: Zero system maintenance. No disk cleanups or operating system patching. pristine isolation guarantees no state leaks between builds.
-* *Disadvantages*: Cost is billed by the minute. CPU and memory specs are low (typically 2 vCPUs and 7GB of RAM). The virtual machines reside in the provider's cloud, meaning they cannot query databases located inside your private network.
+The runner is also where many beginner surprises happen. If the runner lacks the right language version, the job fails. If the workspace has no repository files because checkout never happened, the job fails. If two jobs run on two different runners, files created in one job do not magically appear in the other one. Those surprises all connect to the first runner design choice: the runner can be hosted by the CI/CD provider, or it can run on infrastructure your team owns.
 
-**Self-Hosted Runners** are systems that you provision, host, and maintain. You install a small agent daemon on an virtual machine (such as an AWS EC2 instance), a local server, or a Kubernetes cluster, and register it with the controller.
-* *Advantages*: Cost-effective for organizations running thousands of daily builds. You can provision high-performance hardware (such as 64-core compute-optimized systems) to speed up heavy compilations. The systems reside inside your private network, allowing integration tests to connect directly to internal databases or private APIs.
-* *Disadvantages*: Operational overhead. If a build downloads massive assets and fails to clean them up, the next build will crash due to disk exhaustion. If a malicious script escapes the runner container, it gains access to your private subnet.
+## Hosted Runners and Self-Hosted Runners
+<!-- section-summary: Hosted runners reduce maintenance, while self-hosted runners give control over hardware, network access, and installed tools. -->
 
-Self-hosted runners communicate with the controller via **Long Polling**. The runner opens an outbound HTTPS connection to the controller and holds it open, repeatedly asking if a job is ready. 
+A **hosted runner** is compute provided and maintained by the CI/CD platform. GitHub-hosted runners, for example, are machines GitHub provides to execute jobs. The provider maintains the base images, preinstalled tools, runner software, and cleanup process. For many teams, hosted runners are the easiest way to start because the team writes YAML instead of operating build machines.
 
-Because the runner initiates the connection, the platform team does not have to open any inbound ports on the company's firewall. The controller remains unable to connect directly to the runner; it simply drops job payloads onto the open outbound polling requests.
+Hosted runners fit the early `checkout-api` team well. Their Node.js service needs ordinary Linux tools, public npm packages, and a temporary PostgreSQL container for tests. The team can ask for `ubuntu-latest`, set up Node.js in the job, run the tests, and let the provider throw away the runner after the job finishes.
 
-## Anatomy of the Runner Job Workspace
+A **self-hosted runner** is compute your team deploys and connects to the CI/CD platform. It might be an EC2 instance, a virtual machine in a private data center, a Kubernetes pod, or a powerful workstation with specialized hardware. The runner application connects to the controller, receives jobs, executes them, and reports the result.
 
-When a runner accepts a job, it constructs a temporary workspace. Understanding the state of the local disk during the first few seconds of a job is critical for debugging.
+Self-hosted runners become useful when the pipeline needs something hosted runners cannot provide. A mobile app team might need macOS machines with a specific Xcode setup. A data platform team might need private network access to an internal package mirror. A machine learning team might need GPUs. A monorepo team might want large runners with more CPU, memory, or disk than the default hosted machines.
 
-The execution sequence follows these steps:
+The tradeoff is operational responsibility. The team now owns patching, disk cleanup, runner registration, network rules, tool versions, and isolation between jobs. GitHub warns teams to be careful with self-hosted runners and public repositories because pull requests from forks can run dangerous code on the runner machine. That warning is a good practical rule for every platform: self-hosted runners are powerful, so they need tighter trust boundaries.
 
-First, **Initialization**. The runner software creates a fresh working directory on the host disk (such as `/home/runner/work/orders-api`).
+For `checkout-api`, the team can start on hosted runners and move only specific jobs to self-hosted runners later. For example, normal pull request checks can stay hosted, while a nightly performance test can run on a self-hosted runner inside the company's private network. The pipeline can use labels or tags to route each job to the right kind of runner.
 
-Second, **Environment Injection**. The runner receives encrypted secrets and environment variables from the controller and injects them into the local process memory.
+Now that a job has landed on a runner, the next thing to understand is the job workspace. Most "my file is missing" pipeline bugs come from misunderstanding that workspace.
 
-Third, **Checkout**. The runner executes `git clone` or `git fetch` to download the specific commit hash that triggered the DAG into the working directory.
+## The Job Workspace
+<!-- section-summary: A job workspace is the temporary directory where the runner checks out code and runs the job steps. -->
 
-Fourth, **Execution**. The runner walks through your YAML-declared steps sequentially inside the working directory.
+A **workspace** is the directory on the runner where the job works with files. The runner starts with a clean place to run commands, then a checkout step downloads the repository at the exact commit that triggered the pipeline. After checkout, the job steps run from that directory unless the pipeline config chooses another working directory.
 
-If a pipeline crashes during the first step with a "file not found" error, it is almost always because the checkout step was omitted. The runner boots as an empty workspace; it only downloads your repository files when you explicitly declare the checkout action.
+The checkout step matters because a runner does not automatically know your source code. In GitHub Actions, teams usually use `actions/checkout`. In GitLab, the runner normally fetches the repository as part of the job setup unless configuration changes that behavior. In Jenkins, a Pipeline often uses `checkout scm` or another source checkout step.
 
-## Execution Contexts: Shell vs. Container
+For `checkout-api`, the workspace is where `package.json`, `package-lock.json`, `src/`, and `tests/` appear. When `npm ci` runs, the dependency manager reads the lockfile from the workspace and creates files like `node_modules/`. When `npm test` runs, the test framework reads application code and test files from that same workspace.
 
-When a pipeline executes a `run` step, it requires an execution context.
+Many teams add a small diagnostic step while learning a pipeline. The output shows what the runner can see before the real build commands run.
 
-The default context is the **Shell Context**. The runner executes the commands directly on the host machine's shell (such as `bash` on Linux or `PowerShell` on Windows). This leaves the build at the mercy of the software pre-installed on the runner's operating system. If your application requires Node.js 20 but the host machine only has Node.js 16 installed, the build fails.
+```yaml
+- name: Show workspace
+  run: |
+    pwd
+    ls -la
+    node --version
+    npm --version
+```
 
-To solve this dependency drift, modern pipelines support **Container Contexts**. Instead of executing commands on the host runner OS, the runner boots a specific Docker container image, mounts the temporary workspace directory into it, and executes all pipeline steps inside the container.
+This step prints the current directory, the files in it, and the installed runtime versions. It gives beginners a concrete view of the runner instead of guessing. If `ls -la` does not show the repository files, the checkout step is missing or the job is running in a different directory.
+
+The workspace belongs to one job. Another job gets another workspace, often on another runner. If `test` creates `coverage/coverage.xml`, the `package` job cannot read it unless the pipeline uploads it somewhere after `test` and downloads it again in `package`. That is why artifacts exist, and we will get there soon.
+
+Before files leave the workspace, the team has one more execution choice. Commands can run directly on the runner's shell, or they can run inside a container with a pinned toolchain.
+
+## Shell Jobs, Container Jobs, and Service Containers
+<!-- section-summary: Shell jobs use the runner host directly, container jobs pin the job environment, and service containers provide temporary dependencies. -->
+
+A **shell job** runs commands directly on the runner host. On Linux, that usually means Bash or another shell. On Windows, it may mean PowerShell. Shell jobs are simple and fast, but they depend on what the runner image has installed or what the job installs before running the application commands.
+
+For `checkout-api`, a shell job works fine if the pipeline sets up Node.js first. The runner might start as a generic Ubuntu machine, then `actions/setup-node` installs the requested Node.js version. After that, `npm ci`, `npm test`, and `npm run build` use the version the job configured.
+
+A **container job** runs the job steps inside a Docker container. The runner host still exists, but the commands execute inside an image such as `node:20-bookworm` or `python:3.12-slim`. This helps when the team wants the CI environment to match a known image instead of depending on the hosted runner's preinstalled tools.
 
 ```yaml
 jobs:
-  build:
+  test:
     runs-on: ubuntu-latest
-    container: node:20-alpine
+    container: node:20-bookworm
     steps:
       - uses: actions/checkout@v4
       - run: node --version
+      - run: npm ci
+      - run: npm test
 ```
 
-Even though the host runner is running a standard Ubuntu OS, the checkout and node version commands execute inside a lightweight Alpine Linux container with Node.js 20 guaranteed to be present. This isolates your pipeline dependencies from the host machine's configuration.
+This job still uses an Ubuntu runner, but the Node.js commands run inside the `node:20-bookworm` container. The repository workspace is mounted into the container, so the commands can read the checked-out files. The team gets a repeatable Node.js environment without manually installing Node.js in every run.
 
-## Managing State: The Ephemeral Database Pattern
+A **service container** is a helper container that runs beside the job for the duration of the job. Databases, queues, caches, and fake external services often run this way. The service exists only for the job, which keeps test data isolated between pull requests.
 
-A common challenge in integration testing is database state management. If your backend application needs to run tests against a PostgreSQL database, how do you provide that database?
-
-A common mistake is pointing the CI pipeline to a persistent "staging" database shared by the entire team. If two developers open pull requests at the same time, the controller launches two pipelines in parallel. Both connect to the same staging database, insert conflicting test records, and cause both test suites to fail randomly.
-
-```mermaid
-flowchart TD
-    PR1["PR 1 Test Run"] --> DB1["Postgres Container 1<br/>(ephemeral DB)"]
-    PR2["PR 2 Test Run"] --> DB2["Postgres Container 2<br/>(ephemeral DB)"]
-    DB1 --> Safe1["Isolated Test Queries"]
-    DB2 --> Safe2["Isolated Test Queries"]
-```
-
-We solve this using the **Ephemeral Database Pattern**. Because the runner is a sterile environment, we can instruct it to boot a clean database inside a background container solely for the duration of the test.
-
-In GitHub Actions, we achieve this using a `services` declaration:
+The `checkout-api` service needs PostgreSQL for integration tests. Connecting every pull request to one shared staging database would create random failures because two test runs could modify the same rows at the same time. A service container gives each job its own clean database.
 
 ```yaml
 jobs:
@@ -149,150 +188,234 @@ jobs:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: postgres:15
+        image: postgres:16
         env:
-          POSTGRES_PASSWORD: testpassword
-          POSTGRES_DB: testdb
+          POSTGRES_DB: checkout_test
+          POSTGRES_PASSWORD: postgres
         ports:
           - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
       - run: npm ci
       - run: npm test
         env:
-          DATABASE_URL: postgres://postgres:testpassword@localhost:5432/testdb
+          DATABASE_URL: postgres://postgres:postgres@localhost:5432/checkout_test
 ```
 
-When this pipeline boots, the runner starts a PostgreSQL Docker container in the background, maps port 5432, and then executes the steps. The application connects to `localhost:5432`, runs its migrations and integration tests against a clean, isolated database, and exits. 
+The test job now has a private PostgreSQL instance listening on `localhost:5432`. The health check gives the database time to become ready before tests try to connect. When the job finishes, the runner cleanup removes the service container and the test data disappears with it.
 
-Once the job completes, the runner destroys the entire VM, terminating the PostgreSQL container. No test data is preserved, and no parallel runs collide.
+![Runner execution boundary showing workspace, host shell, container job, service container, and cleanup](/content-assets/articles/article-cicd-fundamentals-pipelines-runners-and-artifacts/runner-execution-boundary.png)
 
-## The Persistence Split: Caching vs. Artifacts
+*A job can run directly on the host shell, inside a pinned container image, or beside a temporary service container while sharing one job workspace.*
 
-Because the runner environment is destroyed after every job, we must persist files when we need to reuse inputs or deliver outputs. CI/CD systems provide two distinct persistence systems: **Caching** and **Artifacts**.
+At this point, the job can run real checks. The next problem is what to do with files produced by those checks, because the runner will not keep them forever.
 
-We separate their purposes based on the direction of the files:
-* **Caching**:
-  * Direct Purpose: Persists *inputs* (dependencies, intermediate libraries) from previous builds to speed up the current build.
-  * Lifetime: Short-term; managed by invalidation keys.
-  * Run Binding: Bound globally across the repository; reused by any pipeline branch.
-* **Artifacts**:
-  * Direct Purpose: Persists the *outputs* (compiled binaries, minified packages, test logs) produced by this specific run.
-  * Lifetime: Permanent until the retention threshold (typically 90 days) is reached.
-  * Run Binding: Bound strictly to the specific pipeline run ID that compiled them.
+## Artifacts
+<!-- section-summary: Artifacts preserve files produced by a specific pipeline run so later jobs and humans can use them. -->
 
-If your job compiles a Go binary, you upload the binary as an **Artifact** so that developers can download it for debugging, or so a subsequent deployment job can promote it. 
+An **artifact** is an output file saved from a job. Build archives, compiled binaries, coverage reports, screenshots, test logs, packaged Terraform plans, and Docker image tarballs can all be artifacts. The key idea is that artifacts belong to a specific pipeline run and explain what that run produced.
 
-If your job downloads 1,500 packages from npm, you save the node modules directory to the **Cache** so that the next run does not waste time downloading the exact same files from the internet.
-
-## Cache Invalidation: Cryptographic Hashing and Keys
-
-A cache is a key-value store where the value is a compressed archive of your files and the key is a string you define. If you use a static key like `node-dependencies`, the runner will restore the exact same dependencies on every run.
-
-However, application dependencies change. When a developer adds a new package to `package.json`, a static key will restore the old cache, and the build will fail because the new package is missing. We solve this using **Cache Invalidation** driven by cryptographic hashing.
+For `checkout-api`, the `test` job can upload a coverage report when tests finish. A reviewer can download that report from the pipeline page, or another job can download it to publish a combined coverage summary. The file started inside one runner workspace, then the artifact system moved it into CI/CD storage.
 
 ```yaml
-      - name: Cache Node Dependencies
-        uses: actions/cache@v4
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - run: npm ci
+      - run: npm test -- --coverage
+      - uses: actions/upload-artifact@v4
+        with:
+          name: checkout-coverage
+          path: coverage/
+          retention-days: 14
+```
+
+This artifact has a name, a path, and a retention period. The name tells humans and later jobs what to request. The path tells the upload step which files to preserve. The retention period says how long the platform should keep the files before automatic cleanup.
+
+Artifacts also help separate **validation** from **promotion**. A build job can create one package and upload it as an artifact. Later jobs can deploy that exact package to development, staging, and production. This avoids rebuilding three slightly different packages and pretending they are the same release.
+
+There is a simple rule here: artifacts are evidence and outputs. They answer questions like "What did this run build?", "What logs did this failed test produce?", and "Which package should the next job deploy?" They should be named clearly because humans often inspect them during an incident or release review.
+
+The team also wants fast pipelines. Downloading every package from the internet on every run wastes time, and that problem needs a different storage tool.
+
+## Caches
+<!-- section-summary: Caches preserve reusable inputs such as dependency downloads so later jobs can run faster. -->
+
+A **cache** is reusable storage for files that speed up future jobs. Dependency downloads are the classic example: npm packages, Gradle modules, Maven files, pip wheels, Rust crates, Go module downloads, and package manager indexes. A cache usually works across runs, while an artifact explains one specific run.
+
+GitLab's documentation makes this distinction very directly: caches are for dependencies, while artifacts pass build results between stages. That distinction is useful even outside GitLab. If the file came from the internet and can be recreated, it probably belongs in a cache. If the file was produced by this run and proves what happened, it probably belongs in an artifact.
+
+For `checkout-api`, caching the npm download folder can save time. The job still runs `npm ci`, which creates a clean `node_modules/` from the lockfile. The cache speeds up the package downloads that `npm ci` needs.
+
+```yaml
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - uses: actions/cache@v4
         with:
           path: ~/.npm
-          key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
+          key: npm-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            npm-${{ runner.os }}-
+      - run: npm ci
+      - run: npm test
 ```
 
-This configuration generates a dynamic key (such as `Linux-node-7a9f26e4`). The runner executes a cryptographic SHA-256 hash of the `package-lock.json` file. 
-* **Cache Hit**: If the lockfile has not changed, the generated hash matches an existing key in the cache store. The runner downloads the compressed archive, restores it to `~/.npm`, and `npm ci` completes in seconds using local files.
-* **Cache Miss**: If a developer adds a dependency, the lockfile changes, generating a new hash (such as `Linux-node-31b7c0a9`). The runner finds no matching key in the cache store, downloads the dependencies from the internet, and saves the new archive under the new key at the end of the job.
+The cache key includes the operating system and a hash of `package-lock.json`. A **hash** is a fingerprint of a file's contents. When the lockfile changes, the hash changes, and the pipeline naturally creates a new cache instead of reusing packages for an old dependency tree.
 
-If a cache is incorrectly configured and restores stale files that interfere with the build, it is called a **Poisoned Cache**. The diagnostic fix is to change the namespace prefix of the key (such as `node-v2`) in the YAML config, which forces a clean cache miss and rebuilds the dependency chain from scratch.
+The `restore-keys` line gives the cache action a fallback prefix. If the exact key does not exist, the action can look for a nearby cache, such as the most recent npm cache for the same operating system. That fallback can help a first run on a new branch, but it also means the job should still run the package manager command afterward so the workspace becomes correct.
 
-## Common Failure Mode 1: Disk Space Exhaustion
+Caches are helpful, but they should never become the only source of truth. A correct pipeline can survive a cache miss because it can download dependencies again. If deleting the cache breaks the build permanently, the pipeline is relying on hidden state, and the dependency setup needs to be fixed.
 
-A common failure mode that affects self-hosted runners and large monorepo builds is disk space exhaustion.
+Now we can connect artifacts and caches to job boundaries. The most practical pipeline design skill is knowing which files need to move forward and which files can be recreated.
 
-During a complex build, a step crashes with a filesystem write failure:
+## Passing Evidence Between Jobs
+<!-- section-summary: Jobs do not share workspaces, so teams pass run outputs forward with artifacts and recreate inputs with caches. -->
 
-```text
-> docker build -t orders-api-stage .
+The `checkout-api` pipeline now needs a more realistic release path. The `test` job produces coverage and test logs. The `build` job produces a compiled package. The `deploy-preview` job should deploy the exact package from `build`, not rebuild from scratch with a slightly different environment.
 
-Step 1/12 : FROM node:20-alpine
- ---> 8b212f451000
-Step 2/12 : WORKDIR /app
- ---> Running in a2c83ff5a6b0
-Step 3/12 : COPY . .
-failed to copy files: failed to copy directory: write /var/lib/docker/overlay2/temp/file: no space left on device
-Error: Process completed with exit code 1.
-```
-
-The error is `no space left on device`. CI/CD workloads generate massive amounts of temporary data: cloned Git repositories, dependency folders, intermediate binaries, and Docker layers.
-
-On **Hosted Runners**, the cloud provider wipes the disk clean after every job. However, standard hosted runners often have limited local storage (such as 14GB). If a job compiles a massive application and pulls multiple base images, it can fill the disk mid-build. The fix is to selectively delete pre-installed developer tools at the start of the steps to free up space.
-
-On **Self-Hosted Runners**, the disk is persistent and shared across successive jobs. Every container build leaves behind unused layers and volumes. Without an automated cleanup script (such as a cron job executing `docker system prune -af --volumes` nightly), the disk will slowly fill up over weeks until a random job crashes.
-
-## Common Failure Mode 2: Zombie Background Processes
-
-The second major failure mode on persistent self-hosted runners involves the leakage of background processes.
-
-Consider a pipeline step that starts an application server in the background to execute integration tests:
+That means the package should be an artifact. The package came from this exact pipeline run, and later jobs need that exact output. The npm download folder should stay a cache because it only speeds up installation and can be recreated from the lockfile.
 
 ```yaml
-      - name: Start Application Server
-        run: npm run start &
-      - name: Execute Integration Tests
-        run: npm run test-integration
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - run: npm ci
+      - run: npm run build
+      - run: tar -czf checkout-api.tar.gz dist package.json package-lock.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: checkout-api-package
+          path: checkout-api.tar.gz
+
+  deploy-preview:
+    runs-on: ubuntu-latest
+    needs: [build]
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: checkout-api-package
+      - run: ls -la
+      - run: ./scripts/deploy-preview.sh checkout-api.tar.gz
 ```
 
-If a developer manually cancels the pipeline while the tests are running, the controller sends a `SIGTERM` signal to the runner process. The runner terminates the active step execution. 
+The `deploy-preview` job does not depend on the build workspace. It downloads the artifact by name and deploys that downloaded file. This is the basic pattern behind reliable promotion: one job builds a thing, later jobs move that same thing through environments.
 
-However, because the application server was launched in the background, it does not receive the termination signal. It becomes a **Zombie Process**, running silently on the host machine.
+The same idea applies to test evidence. If Playwright creates screenshots for failed browser tests, the job can upload those screenshots as artifacts even when the test step fails. If a security scanner creates a SARIF or JSON report, the job can upload it for later review. If a Terraform plan job creates a plan summary for reviewers, the job can upload that plan as an artifact before any apply step happens.
 
-When the runner accepts the next job and attempts to execute the startup command, the build crashes:
+Artifacts should be scoped and intentional. Uploading the whole repository, the whole home directory, or every dependency folder creates storage cost and makes downloads slow. A good artifact has a clear name, a clear path, and a reason a person or later job will need it.
 
-```text
-> orders-api@1.18.0 start
-> node server.js
+This is where many first pipeline bugs happen. A file exists in one job, then the next job cannot find it. The file did exist, but it lived in the previous runner workspace.
 
-Error: listen EADDRINUSE: address already in use :::8080
-    at Server.setupEstablishedConnection (node:net:1897:16)
-    at Server.listen (node:net:1985:10)
-    at Object.<anonymous> (src/server.js:42:8)
+## Common Failure Mode: Missing Files Between Jobs
+<!-- section-summary: Files created inside one job disappear unless the pipeline uploads them as artifacts or recreates them later. -->
 
+Mira's team sees a failure in `deploy-preview`. The log points at the package file the job expected to deploy.
+
+```console
+./scripts/deploy-preview.sh: line 12: checkout-api.tar.gz: No such file or directory
 Error: Process completed with exit code 1.
 ```
 
-The EADDRINUSE error occurs because the zombie process from the previous run is still listening on port 8080. 
+The build logs show that `checkout-api.tar.gz` was created successfully in the `build` job. The deploy logs show a different runner, a fresh workspace, and no package file. Both logs are true because each job has its own workspace.
 
-This illustrates the risk of persistent self-hosted environments. Unlike sterile VMs, background services, mutated host networks, and temp files persist across jobs. The platform team must configure post-job cleanup scripts that forcefully terminate leaked process groups.
+The fix is to decide what kind of file `checkout-api.tar.gz` is. It is a run output, so it should be uploaded as an artifact by `build` and downloaded by `deploy-preview`. Adding `needs: [build]` controls job order, but it does not move files. The artifact upload and download steps move the file.
+
+The same bug appears with coverage reports, generated OpenAPI files, packaged Helm charts, and built frontend assets. A later job can only read files that it checks out, downloads as artifacts, creates again, or receives from another explicit storage system. Job dependencies control timing; artifacts control file transfer.
+
+A practical debugging pattern is to print the working directory and list files at the start of the failing job. If the file is missing, the next question becomes simple: should this job recreate the file, or should an earlier job upload it as an artifact? That question usually points straight to the fix. Once file movement makes sense, the other common pain comes from self-hosted runners that keep too much state between jobs.
+
+## Common Failure Mode: Dirty Self-Hosted Runners
+<!-- section-summary: Persistent runners need cleanup because old files, containers, processes, and credentials can affect later jobs. -->
+
+A **dirty runner** is a runner whose old state leaks into a new job. This mostly affects self-hosted runners because they are often long-lived machines. Hosted runners usually give each job a fresh virtual machine or container environment, so old Docker layers, background processes, and temporary files vanish more predictably.
+
+The first dirty-runner problem is disk space. A Docker build can leave layers behind. A test job can create large screenshots, coverage folders, or database dumps. A monorepo can create gigabytes of dependencies and build output. After enough jobs, a later pipeline fails with `no space left on device` even though the code change has nothing to do with disk usage.
+
+```console
+failed to copy files: write /var/lib/docker/overlay2/temp/file: no space left on device
+Error: Process completed with exit code 1.
+```
+
+The fix is operational rather than YAML-only. Self-hosted runner owners usually add cleanup between jobs, scheduled pruning for Docker resources, disk monitoring, and alerts before the disk reaches a dangerous level. Some teams run each job in a disposable virtual machine or Kubernetes pod so cleanup comes from destroying the environment instead of trusting every job script.
+
+The second dirty-runner problem is leftover processes. A test script might start a local server with `npm run start &`, run browser tests, and then fail before stopping the server. On a persistent runner, that server can keep running and hold port `3000`. The next job tries to start its own server on the same port and fails with an address-in-use error.
+
+The safer pattern is to make cleanup part of the script lifecycle. In Bash, teams often use `trap` so the cleanup command runs when the script exits, including failure exits. The exact script depends on the stack, but the idea is consistent: start the background process, remember its process id, and stop it before the job ends.
+
+```bash
+npm run start &
+APP_PID=$!
+
+cleanup() {
+  kill "$APP_PID"
+}
+
+trap cleanup EXIT
+npm run test:e2e
+```
+
+Dirty runners can also leak credentials and network access. A self-hosted runner inside a private subnet may reach internal databases, deployment targets, package registries, and cloud metadata endpoints. That power is useful for trusted deployment jobs, but it is risky for untrusted pull request code. Runner groups, labels, protected branches, environment gates, and separate runner pools help keep high-trust jobs away from low-trust code.
+
+This is why hosted runners are a good default for ordinary pull request validation. Self-hosted runners are valuable, but they behave like production infrastructure. They need ownership, monitoring, patching, cleanup, and a clear answer to which repositories and branches may run on them.
 
 ## Putting It All Together
+<!-- section-summary: A reliable pipeline plans jobs clearly, runs them on suitable runners, and treats artifacts and caches as different kinds of storage. -->
 
-Pipeline platforms operate as distributed computing networks. By mapping jobs to Directed Acyclic Graphs (DAGs), enforcing strict runner isolation, configuring container contexts, provisioning ephemeral service databases, and securing cache keys, platform engineers design high-speed, reliable, and secure delivery systems.
+The full `checkout-api` pull request now has a clear path from commit to package. Mira opens a pull request, and the controller reads the pipeline file. It sees `lint`, `test`, and `build` jobs. The dependency rules allow `lint` and `test` to run together, while `build` waits for both.
 
-When configuring and auditing your runner fleets and pipelines, ensure you enforce these five core practices:
+The controller sends the jobs to runners. Hosted runners are enough for the pull request checks, so the team avoids maintaining machines for everyday validation. Each runner prepares a workspace, checks out the exact commit, installs Node.js, restores dependency caches where possible, and runs the declared steps.
 
-First, optimize the pipeline DAG. Design jobs to run in parallel, avoiding long sequential chains unless a strict dependency gate is required.
+The `test` job starts a PostgreSQL service container so integration tests get a clean database. It uploads coverage and failed-test evidence as artifacts. The `build` job creates `checkout-api.tar.gz` and uploads that package as an artifact so later jobs can deploy the same output.
 
-Second, protect the controller boundary. Treat runners as disposable executors of untrusted code, never granting them direct access to the control plane.
+The cache and artifact choices are now clear. The npm cache speeds up future installs and can be recreated after a miss. The package artifact belongs to this pipeline run and moves forward into preview or release jobs. One storage system improves speed; the other preserves evidence and outputs.
 
-Third, isolate your execution contexts. Prefer container execution over host shell contexts to prevent pre-installed system configurations from drifting.
+The runner choice is also clear. Hosted runners fit public pull request checks and low-maintenance validation. Self-hosted runners fit trusted jobs that need private network access, special hardware, or custom environments. The more powerful the runner, the more carefully the team controls who can send work to it.
 
-Fourth, manage database state dynamically. Avoid shared staging databases; implement the ephemeral database pattern using Docker service containers.
+![Pipeline storage summary comparing artifacts as run outputs with caches as reusable inputs across separate job workspaces](/content-assets/articles/article-cicd-fundamentals-pipelines-runners-and-artifacts/pipeline-storage-summary.png)
 
-Fifth, enforce clean cache invalidation. Pair cache keys with cryptographic lockfile hashes to guarantee dependencies remain synchronized without state corruption.
+*Artifacts move evidence and packages from one job to another, while caches speed up repeated inputs that the pipeline can recreate.*
+
+That is the practical foundation for CI/CD pipeline mechanics. The pieces form a small distributed workflow: the controller plans, runners execute, workspaces hold temporary files, containers shape the runtime, artifacts preserve outputs, and caches make repeatable work faster.
 
 ## What's Next
 
-Securing pipeline orchestrations and runners ensures that our packages are built inside safe boundaries. But once these artifacts are compiled, we must deploy them to our servers without manual mistakes. In the next chapter, **Continuous Delivery**, we will explore the golden rule of building once and deploying everywhere, manage stateless configurations, isolate environments, and design automated rollbacks.
-
-![Pipeline runtime summary showing scheduler, runner, workspace, services, cache, and artifacts](/content-assets/articles/article-cicd-fundamentals-pipelines-runners-and-artifacts/pipeline-runtime-summary.png)
-
-*Use this as the pipeline-runtime checklist: know who schedules work, where it runs, what the workspace contains, when services are temporary, and what persists as cache or artifact.*
+Pipelines, runners, artifacts, and caches explain how automated work runs. The next article moves from validation to delivery and deployment, where those pipeline outputs become releases moving through development, staging, and production.
 
 ---
 
 **References**
 
-- [GitHub Actions Cache Action](https://github.com/actions/cache) - Technical guide on configuring cache paths, keys, and restore-key fallbacks.
-- [Kubernetes Device Plugins for GPU and Hardware Allocations](https://kubernetes.io/docs/concepts/extend-kubernetes/compute-storage-net/device-plugins/) - Explains the underlying system mechanics of provisioning hardware pools in container clusters.
-- [NVIDIA DCGM-Exporter for Accelerator Telemetry](https://docs.nvidia.com/datacenter/dcgm/latest/gpu-telemetry/dcgm-exporter.html) - Telemetry systems for monitoring runner resources.
-- [POSIX Signal Specifications](https://man7.org/linux/man-pages/man7/signal.7.html) - Linux standards governing signal delivery, process groups, and background daemon lifecycles.
+- [Workflow syntax for GitHub Actions](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax) - Defines workflows as automated processes made of jobs and documents job dependencies, containers, services, and steps.
+- [GitHub-hosted runners](https://docs.github.com/en/actions/concepts/runners/github-hosted-runners) - Explains hosted runner machines, runner images, operating systems, and maintenance responsibilities.
+- [Adding self-hosted runners](https://docs.github.com/en/actions/how-tos/manage-runners/self-hosted-runners/add-runners) - Documents self-hosted runner setup and warns about dangerous code from forked public pull requests.
+- [Running jobs in a container](https://docs.github.com/en/actions/using-jobs/running-jobs-in-a-container) - Shows how GitHub Actions jobs can run inside a Docker container with the workspace mounted into the container.
+- [Communicating with Docker service containers](https://docs.github.com/en/actions/tutorials/communicating-with-docker-service-containers) - Describes service containers for databases, caches, and other helper services in workflows.
+- [Store and share data with workflow artifacts](https://docs.github.com/en/actions/tutorials/store-and-share-data) - Documents artifact upload, download, retention, and passing data between workflow jobs.
+- [Dependency caching reference](https://docs.github.com/en/actions/reference/workflows-and-actions/dependency-caching) - Explains cache keys, restore keys, cache hits, cache misses, and cache matching behavior.
+- [GitLab Runner](https://docs.gitlab.com/runner/) - Defines GitLab Runner as the application that executes CI/CD jobs and reports results back to GitLab.
+- [Caching in GitLab CI/CD](https://docs.gitlab.com/ci/caching/) - Distinguishes caches from artifacts and documents cache key strategies and artifact behavior.
+- [Recording tests and artifacts in Jenkins](https://www.jenkins.io/doc/pipeline/tour/tests-and-artifacts/) - Shows how Jenkins records test results and archives build artifacts from a Pipeline.

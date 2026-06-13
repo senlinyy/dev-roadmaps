@@ -64,6 +64,10 @@ Naming the cost shape matters because the fix depends on the shape. A large App 
 | **Data movement** | Network traffic that crosses billable boundaries. | Internet egress, cross-region replication traffic, CDN outbound data. | Does the architecture move data farther or more often than the user flow requires? |
 | **Safety copies** | Extra copies kept for durability, restore, or audit. | Backups, blob versions, soft delete retention, snapshots, geo-replicated storage. | Which failure or mistake does this copy help the team recover from? |
 
+![Azure cost shapes infographic showing a ticketing service connected to always-on capacity, usage-based work, stored data, data movement, and safety copies](/content-assets/articles/article-cloud-providers-azure-cost-resilience-mental-model/azure-cost-shapes.png)
+
+*The image turns the bill into five cost shapes, so a team can ask which workflow pays for each meter before deciding whether the spend is waste or protection.*
+
 **Always-on capacity** feels simple because the bill grows with the size and number of running resources. In the ticketing service, the App Service plan might run all day even if the site receives most traffic on Friday evenings. That can be exactly right for a checkout API that needs low latency during a sale, or it can be waste for a staging environment that sits idle most nights.
 
 **Usage-based work** grows with activity. The receipt email Function may cost very little on quiet days and more during an event launch. That shape can be attractive because the team pays near the workload's activity pattern, but it can still surprise people if a retry loop, duplicate message, or chatty storage pattern creates repeated work.
@@ -90,6 +94,10 @@ The ticketing service gives us five common failure shapes. These are the same sh
 | **Data deletion** | A person, script, or tool deletes data the business still needs. | A cleanup job deletes receipt PDFs from Blob Storage. | Soft delete, versioning, immutability policies, backups, access control. |
 | **Bad database write** | The app writes incorrect state that needs repair. | A release marks paid tickets as unpaid for 20 minutes. | Point-in-time restore, transaction logs, repair scripts, deployment rollback. |
 | **Regional outage** | A broad problem affects the primary Azure region. | The region hosting checkout and SQL becomes unavailable. | Multi-region design, geo-redundant data, traffic failover, tested recovery plans. |
+
+![Azure failure shape protection map matching instance crashes, zone outages, deleted receipts, bad SQL writes, and regional outages to the right protection choices](/content-assets/articles/article-cloud-providers-azure-cost-resilience-mental-model/failure-shape-protection-map.png)
+
+*The image shows why one reliability feature cannot cover every incident: each failure shape needs a matching protection or recovery path.*
 
 **Instance failure** usually needs extra running capacity and routing. If the checkout API runs on one instance and that instance crashes, users feel it right away. If it runs on multiple healthy instances, the platform can stop sending traffic to the broken one while the others continue serving requests.
 
@@ -206,6 +214,10 @@ Then the team matched those spend lines to failure shapes. Extra API instances h
 The important part is the service promise. Checkout, receipts, email, admin, and finance export all deserve different levels of protection. The team saves money where the workflow can tolerate delay, simpler recovery, or lower capacity. The team spends money where the business promise needs fast recovery, low data loss, or stronger availability.
 
 This is why cost and resilience belong in the same review. A resource can be waste, protection, or both depending on the workflow. A quiet standby database might be waste for a development dashboard and a necessary recovery path for a payment system. A shorter retention period might be sensible for debug logs and risky for security evidence. The architecture review has to keep those differences visible.
+
+![Azure cost and resilience review flow showing spend line, owner, workflow, cost shape, failure shape, service promise, and rollback plan before a safe decision](/content-assets/articles/article-cloud-providers-azure-cost-resilience-mental-model/cost-resilience-review-flow.png)
+
+*The image summarises the review loop: name the spend line, owner, workflow, failure, promise, and rollback plan before changing production resources.*
 
 For beginners, the practical habit is simple to remember: every Azure cost change answers three questions. What cost shape are we changing? What failure shape or service promise does it touch? What evidence tells us the change is safe for this workflow? Those three answers turn cost work from random cleanup into careful production engineering.
 

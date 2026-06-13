@@ -51,16 +51,9 @@ When you need to use AWS, you declare the AWS provider in your configuration. Wh
 
 This separation is why Terraform can support so many different platforms. HashiCorp builds and maintains Core. Individual teams, HashiCorp themselves, cloud providers like AWS and Google, and the open-source community, build and maintain providers. There are providers for hundreds of services. If you need to manage a resource type that does not have a provider, you can write your own.
 
-```mermaid
-flowchart LR
-    Config["Configuration Files\n(.tf)"] --> Core["Terraform Core"]
-    Core --> AWS["AWS Provider Plugin"]
-    Core --> GCP["GCP Provider Plugin"]
-    Core --> GitHub["GitHub Provider Plugin"]
-    AWS --> AWSAPI["AWS API"]
-    GCP --> GCPAPI["GCP API"]
-    GitHub --> GitHubAPI["GitHub API"]
-```
+![Terraform Core builds the plan and graph, while provider plugins translate work into each platform's API calls.](/content-assets/articles/article-iac-terraform-foundations-what-is-terraform/core-provider-architecture.png)
+
+*Terraform Core stays provider-neutral, while provider plugins know how to call AWS, GCP, GitHub, and other platform APIs.*
 
 ## The Three Commands You Use Every Time
 

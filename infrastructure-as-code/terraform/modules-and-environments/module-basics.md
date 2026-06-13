@@ -1,7 +1,7 @@
 ---
 title: "Module Basics"
 description: "Learn what Terraform modules are, why they exist, and how to create and use your first reusable module."
-overview: "Terraform modules let you group related resources into a named, reusable unit with a defined interface. This article explains the problem they solve, how they are structured on disk, and how to call one from another configuration."
+overview: "Terraform modules let teams package related resources into a reusable unit with clear inputs and outputs. This article follows one platform team as it turns repeated infrastructure code into a shared module that still keeps each environment separate."
 tags: ["modules", "reuse", "terraform", "hcl"]
 order: 1
 id: article-iac-terraform-modules-basics
@@ -11,249 +11,243 @@ id: article-iac-terraform-modules-basics
 
 1. [The Problem Modules Solve](#the-problem-modules-solve)
 2. [What a Module Actually Is](#what-a-module-actually-is)
-3. [Your First Module: A Shared Network](#your-first-module-a-shared-network)
-4. [Calling a Module From Your Root Configuration](#calling-a-module-from-your-root-configuration)
+3. [Your First Module: A Private Bucket](#your-first-module-a-private-bucket)
+4. [Calling a Module From the Root Configuration](#calling-a-module-from-the-root-configuration)
 5. [How Terraform Resolves a Module Call](#how-terraform-resolves-a-module-call)
 6. [The Root Module and Child Modules](#the-root-module-and-child-modules)
-7. [What Gets Isolated Inside a Module](#what-gets-isolated-inside-a-module)
+7. [What a Module Boundary Hides](#what-a-module-boundary-hides)
 8. [Putting It All Together](#putting-it-all-together)
 9. [What's Next](#whats-next)
 
 ## The Problem Modules Solve
+<!-- section-summary: Modules remove repeated infrastructure code by letting several root configurations call the same reusable resource pattern. -->
 
-A Terraform module is a directory of `.tf` files used as a reusable configuration unit with its own inputs, resources, and outputs.
+A **Terraform module** is a directory of Terraform configuration files that Terraform can load as one reusable unit. It can declare inputs, create resources, and return outputs to the configuration that called it. The simplest way to think about it is a reusable infrastructure recipe: the recipe stays in one place, and each environment gives it different ingredients.
 
-Imagine your team manages three separate environments: a development environment that engineers use every day, a staging environment where you test releases before they go live, and a production environment where real customers log in. Each environment needs a private network, a handful of virtual servers, a database, and firewall rules to connect them. In total, you are describing the same logical structure three times.
+Imagine the DevPolaris Orders team has three environments: development, staging, and production. Each environment needs the same kind of private artifact bucket for build outputs, invoice exports, and deployment packages. The names differ, the tags differ, and production keeps data for longer, but the core shape stays the same: one S3 bucket, versioning, encryption, and a public access block.
 
-Without any way to share that structure, your Terraform files become three separate copies of the same resource blocks. A developer on your team changes a firewall rule in the development configuration to fix a networking bug. Two weeks later the same bug appears in staging. Someone else patches staging. A month later it surfaces in production. Each copy quietly drifts from the others, and tracking down the differences requires reading hundreds of lines spread across three directories.
+The first version often starts as copy and paste. Someone writes the bucket resources in `envs/dev`, copies them into `envs/staging`, and copies them again into `envs/prod`. A security review then asks every bucket to enable the same encryption rule. The team updates production, forgets staging, and leaves development with the old setting. Nobody wanted drift, but three copies created three places to miss.
 
-Modules eliminate this copying. You write the network, server, and database blocks once in a dedicated directory. Then your development, staging, and production configurations each reference that single directory as a module, passing different values, different region names, different server sizes, different IP address ranges, as inputs. When you fix a bug in the module, every environment picks up the fix the next time you run `terraform apply`. There is no second or third copy to forget.
+Modules solve that kind of repetition. The platform team writes the private bucket pattern once in `modules/private-bucket`. Each environment calls that module and passes its own bucket name, tags, and retention settings. A future security fix happens in the module once, and every environment sees the same proposed change the next time it runs `terraform plan`.
 
-The pattern is exactly what you do in a programming language when you extract repeated logic into a function. You write the function once, call it from multiple places, pass different arguments each time, and get consistent results everywhere. Terraform modules are that same idea applied to infrastructure resources.
+This is the first important habit with modules: **reuse the structure, vary the values**. The module owns the common resource pattern. The root configuration owns the environment-specific decisions.
 
 ## What a Module Actually Is
+<!-- section-summary: A module is just a Terraform directory with a public interface around the files inside it. -->
 
-A module is a Terraform configuration directory with a boundary around it. The boundary gives the directory its own inputs, resources, locals, and outputs. Example: `modules/network/` can contain the VPC and subnet resources, while callers only provide CIDR ranges and read subnet IDs back.
+A module starts as a normal directory with `.tf` files. Terraform treats every configuration directory as a module, including the directory where the team runs `terraform plan` and `terraform apply`. That command directory is the **root module**, and any module it calls is a **child module**.
 
-If a directory contains one or more Terraform configuration files, it is a module. You can give that directory any name you want. Terraform does not care whether it is called `network`, `vpc`, `base-infra`, or anything else.
+Inside a module, teams usually use three conventional files. `main.tf` holds resources and data sources. `variables.tf` declares the input values callers may provide. `outputs.tf` declares the selected values callers may read after the module has done its work. Terraform accepts any `.tf` filename, and the convention helps reviewers find the interface quickly.
 
-![A module call passes inputs into a child module boundary and receives selected outputs back.](/content-assets/articles/article-iac-terraform-modules-basics/module-call-boundary.png)
+![A Terraform module accepts caller inputs, creates resources inside a boundary, and exposes selected outputs.](/content-assets/articles/article-iac-terraform-modules-basics/module-reuse-flow.png)
 
-What matters is what is inside the directory. A typical module contains three files, each with a conventional but not mandatory name. The first is `main.tf`, which holds the actual resource blocks that the module manages. The second is `variables.tf`, which declares what values the caller must provide (similar to function parameters). The third is `outputs.tf`, which declares what information the module exposes back to the caller (similar to a function's return value). You can put everything in one file if you like, but separating these three concerns makes the module much easier to read and maintain.
+*The module boundary keeps the repeated resource pattern in one place while callers pass only the values that change.*
 
-Here is what a minimal module directory looks like on disk:
+Here is the private bucket module on disk:
 
 ```
 modules/
-  network/
+  private-bucket/
     main.tf
     variables.tf
     outputs.tf
 ```
 
-That is all a module is: a directory with some `.tf` files in it. The power comes from how Terraform loads them and how you reference them from another configuration.
+That directory becomes useful because it has a clear boundary. Callers can work from the inputs the module asks for and the outputs it gives back. A good module turns several low-level provider resources into one reviewed team pattern, so every caller avoids relearning which internal resource enables versioning or which resource blocks public access.
 
-## Your First Module: A Shared Network
+## Your First Module: A Private Bucket
+<!-- section-summary: A small private bucket module shows how variables feed resources and outputs return the useful result. -->
 
-A shared network module is a reusable directory that creates the standard network pieces other stacks need. It exists so every environment can create the same network shape without copying the VPC and subnet blocks. Example: development can pass `10.0.0.0/16`, while staging passes `10.1.0.0/16`, and both get the same module structure.
+The Orders team starts with a small module because small modules are easier to trust. The module creates a private S3 bucket for artifacts and exports. It also adds versioning and server-side encryption, because the team wants those controls on every bucket of this kind.
 
-To make this concrete, suppose you are building that shared network module. The network needs a virtual private cloud (a VPC, which is a logically isolated section of the cloud provider's network), two subnets inside it, one for web servers and one for databases, and an internet gateway plus route table entries for public outbound traffic. An internet gateway by itself is only an attached doorway; a subnet becomes public only when its route table sends internet-bound traffic to that gateway, and instances still need a public IPv4 address or Elastic IP for direct public IPv4 access.
+The module uses variables for the values that differ between environments. Development can pass `dp-orders-artifacts-dev`, production can pass `dp-orders-artifacts-prod`, and both environments still receive the same privacy and encryption pattern.
 
-Here is the `main.tf` inside the `modules/network` directory:
+`variables.tf`:
 
 ```hcl
-resource "aws_vpc" "this" {
-  cidr_block           = var.cidr_block
-  enable_dns_hostnames = true
+variable "bucket_name" {
+  type        = string
+  description = "Globally unique name for the private artifact bucket."
 }
 
-resource "aws_subnet" "web" {
-  vpc_id            = aws_vpc.this.id
-  cidr_block        = var.web_subnet_cidr
-  availability_zone = var.web_availability_zone
+variable "environment" {
+  type        = string
+  description = "Environment name used for tagging and review."
 }
 
-resource "aws_subnet" "db" {
-  vpc_id            = aws_vpc.this.id
-  cidr_block        = var.db_subnet_cidr
-  availability_zone = var.db_availability_zone
+variable "tags" {
+  type        = map(string)
+  description = "Extra tags applied to every resource created by this module."
+  default     = {}
+}
+```
+
+`main.tf`:
+
+```hcl
+resource "aws_s3_bucket" "this" {
+  bucket = var.bucket_name
+
+  tags = merge(
+    {
+      service     = "devpolaris-orders"
+      environment = var.environment
+      managed_by  = "terraform"
+    },
+    var.tags
+  )
 }
 
-resource "aws_internet_gateway" "this" {
-  vpc_id = aws_vpc.this.id
+resource "aws_s3_bucket_public_access_block" "this" {
+  bucket = aws_s3_bucket.this.id
+
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
 }
 
-resource "aws_route_table" "web" {
-  vpc_id = aws_vpc.this.id
+resource "aws_s3_bucket_versioning" "this" {
+  bucket = aws_s3_bucket.this.id
 
-  route {
-    cidr_block = "0.0.0.0/0"
-    gateway_id = aws_internet_gateway.this.id
+  versioning_configuration {
+    status = "Enabled"
   }
 }
 
-resource "aws_route_table_association" "web" {
-  subnet_id      = aws_subnet.web.id
-  route_table_id = aws_route_table.web.id
+resource "aws_s3_bucket_server_side_encryption_configuration" "this" {
+  bucket = aws_s3_bucket.this.id
+
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm = "AES256"
+    }
+  }
 }
 ```
 
-The resource blocks reference variables with the `var.` prefix. Those variables are declared in `variables.tf`:
+`outputs.tf`:
 
 ```hcl
-variable "web_availability_zone" {
-  type        = string
-  description = "Availability zone for the web subnet, for example us-east-1a."
+output "bucket_name" {
+  value       = aws_s3_bucket.this.bucket
+  description = "Name of the private bucket created by the module."
 }
 
-variable "db_availability_zone" {
-  type        = string
-  description = "Availability zone for the database subnet, for example us-east-1b."
-}
-
-variable "cidr_block" {
-  type        = string
-  description = "The IP address range for the entire VPC, in CIDR notation."
-}
-
-variable "web_subnet_cidr" {
-  type        = string
-  description = "IP range for the web server subnet."
-}
-
-variable "db_subnet_cidr" {
-  type        = string
-  description = "IP range for the database subnet."
+output "bucket_arn" {
+  value       = aws_s3_bucket.this.arn
+  description = "ARN of the private bucket, useful for IAM policies."
 }
 ```
 
-And `outputs.tf` exposes the identifiers that a caller will need to attach other resources to this network:
+Notice how the module speaks in business terms at the edge. The caller provides a bucket name and an environment. The internals translate those values into several AWS resources. That is the practical value of a module: it gives the team one reviewed way to create a private bucket instead of asking every environment owner to remember each supporting resource.
+
+## Calling a Module From the Root Configuration
+<!-- section-summary: A module block points at the module source and supplies the values declared in the child module's variables. -->
+
+A **module call** is a `module` block in the root configuration. It tells Terraform where the child module lives and which input values this specific call should use. The label after `module`, such as `"artifact_bucket"`, becomes the local name callers use to reference outputs.
+
+The production root configuration might call the private bucket module like this:
 
 ```hcl
-output "vpc_id" {
-  value       = aws_vpc.this.id
-  description = "The ID of the VPC created by this module."
-}
+module "artifact_bucket" {
+  source = "../../modules/private-bucket"
 
-output "web_subnet_id" {
-  value       = aws_subnet.web.id
-  description = "The ID of the web-tier subnet."
-}
+  bucket_name = "dp-orders-artifacts-prod"
+  environment = "prod"
 
-output "db_subnet_id" {
-  value       = aws_subnet.db.id
-  description = "The ID of the database-tier subnet."
+  tags = {
+    owner       = "platform"
+    cost_center = "orders"
+  }
 }
 ```
 
-The module does not know anything about the environment it will be used in. It does not know whether it is running in development or production. It does not know the actual IP addresses. All of that comes in through the variables when a caller invokes the module. This separation is what makes the module reusable.
+The `source` argument points to the module code. A local path such as `../../modules/private-bucket` tells Terraform to read files from the repository checkout. The other arguments match variables in the child module. Terraform checks those names during planning, so a misspelled input becomes a clear error before any cloud API call happens.
 
-## Calling a Module From Your Root Configuration
-
-A module call is a block in the root configuration that points to a module source and supplies values for that module's variables. It is similar to calling a function with arguments. Example: `module "network" { source = "./modules/network" ... }` tells Terraform to load the network module and pass in the VPC and subnet CIDR ranges.
-
-The configuration directory where you run `terraform apply` is called the root module. That is where you wire everything together. To use your network module, you write a `module` block in your root configuration:
+The root can then use the child module outputs with `module.<name>.<output>`. If the deployment role needs permission to write artifacts into the bucket, the IAM policy can reference `module.artifact_bucket.bucket_arn` instead of copying a bucket ARN string by hand.
 
 ```hcl
-module "network" {
-  source = "./modules/network"
+resource "aws_iam_policy" "artifact_writer" {
+  name = "orders-artifact-writer"
 
-  web_availability_zone = "us-east-1a"
-  db_availability_zone  = "us-east-1b"
-  cidr_block      = "10.0.0.0/16"
-  web_subnet_cidr = "10.0.1.0/24"
-  db_subnet_cidr  = "10.0.2.0/24"
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Action = [
+        "s3:PutObject",
+        "s3:GetObject"
+      ]
+      Resource = "${module.artifact_bucket.bucket_arn}/*"
+    }]
+  })
 }
 ```
 
-The `source` argument tells Terraform where to find the module's directory. Here it is a relative path (`./modules/network`), which means Terraform looks for that directory starting from the root configuration's location. The remaining arguments, `cidr_block`, `web_subnet_cidr`, `db_subnet_cidr`, `web_availability_zone`, and `db_availability_zone`, correspond exactly to the variables declared in the module's `variables.tf`. If you pass an argument that has no matching variable, Terraform throws an error. If you forget a required variable (one with no default value), Terraform also throws an error before doing anything.
-
-To refer to the outputs that the module exposes, you use the pattern `module.<name>.<output_name>`. For example, if you want to place an EC2 instance inside the web subnet created by this module, you can write:
-
-```hcl
-resource "aws_instance" "app_server" {
-  ami           = "ami-0c55b159cbfafe1f0"
-  instance_type = "t3.small"
-  subnet_id     = module.network.web_subnet_id
-}
-```
-
-`module.network.web_subnet_id` reaches into the module and retrieves the subnet ID that was declared in the module's `outputs.tf`. The EC2 instance does not need to know how the subnet was created or what VPC it belongs to. It just receives an ID and attaches.
-
-For staging, you create another root configuration in a different directory and call the same module with different inputs:
-
-```hcl
-module "network" {
-  source = "../../modules/network"
-
-  web_availability_zone = "us-west-2a"
-  db_availability_zone  = "us-west-2b"
-  cidr_block      = "10.1.0.0/16"
-  web_subnet_cidr = "10.1.1.0/24"
-  db_subnet_cidr  = "10.1.2.0/24"
-}
-```
-
-One module definition. Two callers. Different inputs. Each environment gets its own isolated set of resources, but the logic for creating those resources lives in exactly one place.
+This reference creates a real dependency. Terraform understands that the policy needs the bucket ARN, so it evaluates the module output before it finishes the policy. The team gets wiring, ordering, and review evidence from one expression.
 
 ## How Terraform Resolves a Module Call
+<!-- section-summary: Terraform finds local modules directly and downloads remote modules during init, then gives every child resource a module-scoped address. -->
 
-Resolving a module call means finding the module source code Terraform should use for that call. Local sources are read from the filesystem, while remote sources are downloaded during `terraform init`. Example: `source = "./modules/network"` uses your local directory, but a Registry or Git source is copied into `.terraform/modules/`.
+Terraform resolves a module call by finding the source code for the module. Local paths such as `./modules/private-bucket` and `../shared/private-bucket` come from the filesystem. Registry, Git, HTTP archive, and other remote sources are installed during `terraform init`.
 
-When you run `terraform init` in a directory that contains module blocks, Terraform reads all the `module` blocks and resolves the `source` paths. For local path sources, those starting with `./` or `../`, Terraform reads the module directly from that local directory. If you later edit the source files in `modules/network/`, you do not need to re-run `terraform init` just because the local module content changed.
+For a local module, the team usually edits the module files in the same repository as the root configuration. Terraform reads the latest local files during planning, so a change in `modules/private-bucket/main.tf` appears in the next plan for any environment that calls it. The team still runs `terraform init` when it adds a new module call or changes the `source` address, because Terraform has to refresh its module installation metadata.
 
-For remote sources, such as modules hosted on the Terraform Registry, in a Git repository, or in an S3 bucket, `terraform init` performs a real download and stores the files in `.terraform/modules/`. Those downloaded files are a local copy of the selected module package. That is why you need to re-run `terraform init` whenever you add a new remote module source or change a version constraint.
+For a remote module, Terraform downloads a copy into `.terraform/modules/` during `terraform init`. A Registry module can use a `version` argument, and a Git module can use a `ref` query parameter. Those choices matter because the root configuration depends on the downloaded code, just like an application depends on a library package.
 
-After the init step, when you run `terraform plan`, Terraform evaluates every module block by loading its source files and processing the variable inputs. Each resource inside the module gets a unique address in Terraform's internal graph that includes the module path. For example, the VPC resource inside the `network` module gets the address `module.network.aws_vpc.this`. This namespacing means two different module calls can both contain an `aws_vpc` resource named `this` without colliding.
+After Terraform loads the module, it gives each internal resource a full address that includes the module path. The bucket resource inside the production call becomes `module.artifact_bucket.aws_s3_bucket.this`. Another module call could also contain an `aws_s3_bucket.this` resource, and the addresses stay separate because the module path scopes them.
+
+This address shows up in plans, state, and error messages. When a production plan says `module.artifact_bucket.aws_s3_bucket_public_access_block.this` will change, the reviewer can trace the change back to the module call and the internal resource that produced it.
 
 ## The Root Module and Child Modules
+<!-- section-summary: The root module owns the run, backend, and state boundary, while child modules contribute resources to that same run. -->
 
-The root module is the directory where you run Terraform commands. A child module is any module called from that root module. Example: `environments/prod` can be the root module, and `module.network` plus `module.database` are child modules inside that production run.
+The **root module** is the directory where the team runs Terraform commands. It owns the backend configuration, the provider configuration, and the state boundary for that run. The **child modules** contribute resources to the root module's graph and share that root state file by default.
 
-Terraform always has exactly one root module. A child module can itself call other child modules, creating a tree of modules. There is no limit to how deep this tree can go, but in practice most teams keep it shallow, one or two levels, because deeply nested modules become harder to understand and debug.
+![The root module owns the Terraform run and state file while child modules contribute namespaced resources.](/content-assets/articles/article-iac-terraform-modules-basics/root-child-state-boundary.png)
 
-![The root module orchestrates child modules while each child keeps its resources encapsulated.](/content-assets/articles/article-iac-terraform-modules-basics/root-child-module-flow.png)
+*Child modules keep resource names scoped, while the root module still controls the shared state and apply boundary.*
 
-The root module is special in one concrete way: it is where Terraform stores the state file by default, and it is where the backend configuration (which tells Terraform where to store state remotely) must be declared. Child modules do not have their own state files. All resources managed by all modules in a single `terraform apply` run go into the same state file, regardless of which module created them. This is what allows resources in different modules to reference each other's outputs.
+This distinction matters in production. If `envs/prod` calls `module.artifact_bucket`, that bucket lands in the production state for `envs/prod`. If `envs/dev` calls the same module source with different inputs, the development bucket lands in the development state for `envs/dev`. The module code can be shared, while the managed infrastructure stays separated by root module and backend.
 
-Because all resources share one state file, destroying the root module, running `terraform destroy`, destroys everything, including all resources created by all child modules. This is intentional: a root module represents a complete, coherent piece of infrastructure.
+Provider configuration also starts at the root. If the root configures the AWS provider for `eu-west-2`, child modules that use the default AWS provider inherit that configuration. Provider aliases can pass different provider configurations to child modules, but the root still decides that wiring.
 
-## What Gets Isolated Inside a Module
+This is why modules and environments solve different problems. Modules reduce repeated code. Root modules and backends draw operational boundaries. A shared module can create the same resource pattern in several environments, but each environment needs its own root run and state if the team wants separate blast radius.
 
-A module namespace is the private naming area for the module's resources and locals. Callers cannot reach into it unless the module exposes a value through an output. Example: `modules/network` can create a route table internally, but the root module cannot reference it unless the network module declares an output for it.
+## What a Module Boundary Hides
+<!-- section-summary: Modules hide internal resources from callers, but they still share provider credentials and state through the root run. -->
 
-Resources defined inside a module are not visible to the root module or to sibling modules unless they are explicitly published through an `output` block. If the `modules/network` module creates a route table internally to manage traffic routing but does not expose it as an output, the caller has no way to reference that route table. The caller only sees what the module intentionally exposes.
+A module boundary hides internal resource names and implementation details. The root configuration reaches child module values through outputs. The module author exposes the bucket ARN with an output such as `bucket_arn`, and the root reads it through `module.artifact_bucket.bucket_arn`.
 
-This isolation is a deliberate design choice. It lets the module author change internal implementation details, perhaps switching from a single route table to multiple route tables for better traffic control, without breaking any caller. As long as the module's variables and outputs stay the same, every configuration that calls the module continues working without any changes. This is the same principle as a function with a stable interface: callers depend on the contract, not the internals.
+That output rule protects callers from internal refactors. The module author can add lifecycle rules, switch encryption configuration, or split one internal resource into several resource blocks. Callers keep working as long as the input and output contract stays stable.
 
-There are limits to what modules isolate. Modules share the same provider configuration as their caller. If you configure the AWS provider with a specific region and access credentials in your root module, every child module that uses AWS resources also uses that same configuration by default. A module can accept an alternative provider configuration through a mechanism called provider aliases, but by default providers flow down from the root without any extra setup.
+The boundary also has limits. A Terraform module organizes configuration, while provider credentials still come from the root run. The child module uses the provider configuration and credentials that the root gives it. A data source inside the module can read whatever the active provider identity has permission to read.
 
-Modules also share Terraform's data sources. A `data` block inside a module can query any AWS resource it has permission to read, using the same provider credentials as a `data` block in the root module. A module does not receive an isolated credential boundary by default. It runs with the same credentials and the same level of access as everything else in the configuration.
+In real teams, this means module review should include two questions. First, does the module expose only the outputs callers genuinely need? Second, does the module avoid surprising provider behavior, such as reading a shared resource by a hardcoded name? Those questions keep modules reusable instead of turning them into hidden bundles of assumptions.
 
 ## Putting It All Together
+<!-- section-summary: A useful module gives teams one reviewed resource pattern while each root configuration keeps its own values, state, and review flow. -->
 
-Return to the original problem: three environments, each needing the same network and server structure. With a module, the shape of the problem changes completely.
+The Orders team now has a small but useful module. `modules/private-bucket` owns the repeated resource pattern: bucket, public access block, versioning, encryption, tags, and outputs. `envs/dev`, `envs/staging`, and `envs/prod` each call that module with their own values.
 
-The `modules/network` directory contains the authoritative definition of what a network looks like in your organization. It declares variables for the VPC address range, the web and database subnet ranges, and the availability zones for each subnet. It creates one VPC, two subnets, an internet gateway, and the route table wiring that makes the web subnet's internet path explicit. It exposes three outputs: the VPC ID, the web subnet ID, and the database subnet ID.
+![Terraform module basics summary showing repeated roots calling one shared private bucket module with separate state.](/content-assets/articles/article-iac-terraform-modules-basics/module-basics-field-guide.png)
 
-Your `environments/dev/` directory contains a `main.tf` that calls this module with development-specific inputs. Your `environments/staging/` and `environments/prod/` directories do the same with different inputs. Each environment directory has its own state file, so a `terraform apply` in `environments/dev/` never touches production resources.
+*A module removes copied resource code, while separate root modules keep dev, staging, and production runs independent.*
 
-When someone finds a misconfiguration in the network, say the internet gateway is missing a route, they fix it once in `modules/network/main.tf`. The next time someone runs `terraform plan` in any of the three environment directories, Terraform detects the difference between what exists and what the updated module describes. Three environments, one fix, zero copying.
+When the platform team improves the module, every environment sees the same proposed change through its own plan. Development can apply first, staging can follow after verification, and production can wait for normal approval. The module gives consistency, and the root modules preserve control.
 
-The same logic applies to the servers, the databases, and the firewall rules. Each piece of the infrastructure can live in its own module, tested independently and composed freely.
+The big idea is simple enough to keep using everywhere: **common structure belongs in a module, environment decisions belong in the root configuration**. That split gives Terraform code a shape that reviewers can read and teams can reuse.
 
 ## What's Next
 
-You now understand what a module is, how to write one, and how to call it with different inputs for different environments. The next article covers module inputs and outputs in depth, the full set of variable types, default values, validation rules, and the different ways to pass complex data structures like maps and lists into a module and receive structured results back out.
-
-
-![Module basics summary: reuse structure, pass inputs, hide internals, and return outputs.](/content-assets/articles/article-iac-terraform-modules-basics/module-basics-summary.png)
+The next article goes deeper into the module contract: input types, validation rules, sensitive values, outputs, and how one module output becomes another module's input without coupling the modules together.
 
 ---
 
 **References**
 
-- [Modules Overview (HashiCorp Documentation)](https://developer.hashicorp.com/terraform/language/modules), Official reference for module syntax, sources, and the init/plan/apply lifecycle.
-- [Module Blocks (HashiCorp Documentation)](https://developer.hashicorp.com/terraform/language/modules/syntax), Detailed syntax reference for the `module` block, including meta-arguments like `count` and `for_each`.
-- [Enable Internet Access with an Internet Gateway (AWS Documentation)](https://docs.aws.amazon.com/vpc/latest/userguide/VPC_Internet_Gateway.html), AWS explanation of the required route table and public-address conditions for internet access.
-- [Terraform Up & Running, 3rd Edition (Yevgeniy Brikman)](https://www.terraformupandrunning.com), The definitive practical guide to structuring Terraform projects, with extensive coverage of module patterns and real-world use cases.
+- [Modules Overview (HashiCorp Documentation)](https://developer.hashicorp.com/terraform/language/modules), Official overview of root modules, child modules, module sources, and common module workflows.
+- [Module Block Reference (HashiCorp Documentation)](https://developer.hashicorp.com/terraform/language/block/module), Reference for `module` block syntax, `source`, `version`, providers, `count`, `for_each`, and module output references.
+- [Standard Module Structure (HashiCorp Documentation)](https://developer.hashicorp.com/terraform/language/modules/develop/structure), Guidance on common module file layout and reusable module packaging.
+- [Module Sources (HashiCorp Documentation)](https://developer.hashicorp.com/terraform/language/modules/configuration), Details on local, Registry, Git, and other module source types.

@@ -138,35 +138,9 @@ If the graph is valid but contains inputs that depend on outputs of a managed re
 
 Any downstream resource that references these deferred data source attributes is also marked as computed. During the planning run, no API calls are sent for the deferred data source. The engine compiles the plan using these placeholder sentinels, verifying the schema validation of the configuration without asserting the physical presence of the queried values.
 
-```mermaid
-flowchart TD
-    subgraph PlanPhase["1. Plan Phase Evaluation"]
-        StaticQuery["Static Data Source with static inputs"]
-        EarlyAPI["Early API Call to DescribeVpcs"]
-        InState["Resolved in State and available downstream"]
+![Terraform data sources can read during plan when filters are known, or wait until apply when filters depend on newly created resources.](/content-assets/articles/article-iac-terraform-config-data-sources/data-source-timing-paths.png)
 
-        StaticQuery --> EarlyAPI
-        EarlyAPI --> InState
-    end
-
-    subgraph PlanPhaseComputed["2. Computed Dependency Path"]
-        NewDB["New Database Resource with create pending"]
-        DepQuery["Dependent Data Source relying on database output"]
-        UnknownVal["Unknown Value known after apply"]
-
-        NewDB --> DepQuery
-        DepQuery --> UnknownVal
-    end
-
-    subgraph ApplyPhase["3. Apply Phase Execution"]
-        CreateDB["Create Database via API Write"]
-        LateQuery["Deferred Data Query via API Read"]
-        BindTask["Bind Compute Node and launch task"]
-
-        CreateDB --> LateQuery
-        LateQuery --> BindTask
-    end
-```
+*Known filters can be queried during planning; filters that rely on pending resources produce known-after-apply values until the apply creates the upstream object.*
 
 The flowchart diagram above visualizes this execution lifecycle. The plan phase handles static queries immediately, saving their resolved states, while computed dependencies are deferred. Once the execution transition occurs during the apply phase, Terraform executes the API write operations to create the upstream database. The database controller returns the concrete physical attributes upon completion.
 

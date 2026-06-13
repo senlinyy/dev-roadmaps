@@ -1,7 +1,7 @@
 ---
 title: "Commands and Env"
 description: "Understand how Docker combines image defaults, ENTRYPOINT, CMD, runtime arguments, working directories, users, and environment variables."
-overview: "A container starts one command, but that command can come from several places. This article follows image defaults and runtime overrides so startup behavior becomes predictable."
+overview: "A container starts one command, and that command can come from several places. This article follows image defaults and runtime overrides so startup behavior becomes predictable."
 tags: ["docker", "cmd", "entrypoint", "environment"]
 order: 3
 id: article-containers-orchestration-docker-commands-entrypoints-and-environment
@@ -9,165 +9,124 @@ id: article-containers-orchestration-docker-commands-entrypoints-and-environment
 
 ## Table of Contents
 
-1. [Why Startup Defaults Matter](#why-startup-defaults-matter)
-2. [The Mental Model](#the-mental-model)
-3. [CMD](#cmd)
-4. [ENTRYPOINT](#entrypoint)
-5. [Runtime Arguments](#runtime-arguments)
-6. [Environment](#environment)
-7. [Working Directory and User](#working-directory-and-user)
-8. [Where Startup Breaks](#where-startup-breaks)
-9. [Putting It All Together](#putting-it-all-together)
+1. [The Startup Contract](#the-startup-contract)
+2. [CMD Gives the Default Command](#cmd-gives-the-default-command)
+3. [ENTRYPOINT Gives the Main Executable](#entrypoint-gives-the-main-executable)
+4. [Exec Form and Shell Form Change Signal Behavior](#exec-form-and-shell-form-change-signal-behavior)
+5. [Runtime Arguments Change One Container](#runtime-arguments-change-one-container)
+6. [Environment Variables Carry Runtime Settings](#environment-variables-carry-runtime-settings)
+7. [Working Directory and User Shape the Process](#working-directory-and-user-shape-the-process)
+8. [A Practical Startup Design](#a-practical-startup-design)
+9. [Where Startup Usually Breaks](#where-startup-usually-breaks)
 10. [What's Next](#whats-next)
 
-## Why Startup Defaults Matter
+## The Startup Contract
+<!-- section-summary: Docker starts one main process by combining image defaults with runtime overrides. -->
 
-Startup defaults are the image metadata and runtime overrides Docker resolves into the one command that becomes the container's main process.
+In the previous article about state, logs, and exec, we watched the `tickets-api` container exit because `DATABASE_URL` was missing. Now we need to move one step earlier and ask how Docker chose the process and settings that produced those logs. This is where **CMD**, **ENTRYPOINT**, **runtime arguments**, **environment variables**, **WORKDIR**, and **USER** all meet.
 
-The orders API image looks simple. It contains application files and a default command. Then three runs behave differently:
+A container has one main process. Docker builds that process from two places: defaults stored in the image and values passed when the container starts. The image should describe the normal way to start the application, while the container run supplies local or environment-specific settings.
 
-```bash
-docker run devpolaris/orders-api:local
-docker run devpolaris/orders-api:local npm test
-docker run --entrypoint sh devpolaris/orders-api:local
-```
+For our ticketing service, the image might say, "Run the Node API from `/app` as the `node` user." The runtime might say, "Use the development database URL, publish the API on host port `8080`, and call this container `tickets-api`." Those choices belong together, and they come from different layers.
 
-The first starts the API. The second might run tests. The third opens a shell. No rebuild happened between those commands. Docker changed the process it started by combining image defaults with runtime input.
+The startup contract has a few pieces that show up in image metadata, run commands, and Compose files. Each row names one part of that contract and ties it to the ticketing API:
 
-This is where many Docker mistakes begin. A developer thinks they changed the image, but they only overrode the command for one container. Another developer passes a new argument and accidentally appends it to an entrypoint. Someone bakes a staging database URL into the image because it made a local run pass. The container starts, but the repeatable startup path is now blurred.
+| Piece | Simple meaning | Ticketing API example |
+|---|---|---|
+| **CMD** | Default command or default arguments | `["node", "dist/server.js"]` |
+| **ENTRYPOINT** | Main executable Docker should start | `["./docker-entrypoint.sh"]` |
+| **Runtime command** | One-run command after the image name | `npm test` |
+| **Environment** | Key-value settings for the process | `DATABASE_URL=...` |
+| **WORKDIR** | Directory where commands run | `/app` |
+| **USER** | Linux user for the process | `node` |
 
-## The Mental Model
+We will walk through those pieces in the order Docker makes them matter. That way, a surprising `docker ps` command column or startup log becomes easier to explain from the image and the run command.
 
-A Docker image can carry startup defaults. A container run can override some of them. Docker resolves those pieces into one process.
+## CMD Gives the Default Command
+<!-- section-summary: CMD supplies the image's default command or default arguments for a container run. -->
 
-Example: an image might define `ENTRYPOINT ["node"]` and `CMD ["dist/server.js"]`. Running the image plainly starts the server, while running it with `--version` passes that argument to Node instead of replacing the executable.
-
-```mermaid
-flowchart TD
-    Image["Image defaults"]
-    Entrypoint["ENTRYPOINT<br/>(executable)"]
-    Cmd["CMD<br/>(default args or command)"]
-    Runtime["docker run input<br/>(env, args, user, workdir)"]
-    Process["Container process"]
-
-    Image --> Entrypoint
-    Image --> Cmd
-    Runtime --> Process
-    Entrypoint --> Process
-    Cmd --> Process
-```
-
-The clean rule is to put stable behavior in the image and environment-specific behavior in runtime configuration. The image should know how to start the application. The container run should say which environment it is running in, which database it should use, which port is published, and which user or working directory needs an override.
-
-## CMD
-
-`CMD` is the image's default command or default argument list for a container run.
-
-`CMD` provides the default command for a container. A Node API image might end with:
+**CMD** is the image's default command or default argument list. For an application image, it often names the server process. If the ticketing API image should start the Node server by default, the Dockerfile can end like this:
 
 ```dockerfile
 CMD ["node", "dist/server.js"]
 ```
 
-When you run the image without an extra command, Docker uses that default:
+Then a plain run uses that default. Docker gets the command from the image because the run command leaves the image command in place:
 
 ```bash
-docker run devpolaris/orders-api:local
+docker run --name tickets-api devpolaris/tickets-api:local
 ```
 
-If you add a command after the image name, Docker uses the new command instead:
+Docker starts `node dist/server.js` because the image provided that command. The container still needs runtime settings such as `DATABASE_URL`, and the image knows the normal application entry command. That split keeps the image reusable across local development, CI, staging, and production.
+
+A command after the image name changes the command for that one container. This is useful for checks, tests, and small maintenance tasks:
 
 ```bash
-docker run --rm devpolaris/orders-api:local node --version
+docker run --rm devpolaris/tickets-api:local node --version
+docker run --rm devpolaris/tickets-api:local npm test
 ```
 
-That override is useful for one-off checks, migrations, tests, and troubleshooting. It is also temporary. The image still has the original `CMD`. Another container created without the override will start the API again.
+Those runs use the same image filesystem and packages. The first prints the Node version, and the second runs tests. Another plain run later will still use the image's original `CMD`, because the override belonged only to that container creation request.
 
-Only one `CMD` takes effect in a Dockerfile. If a Dockerfile has several, the last one wins. That is not a merge. It is replacement, which is why hidden base-image defaults can surprise you when your final stage does not set the command you expected.
+Docker uses the last effective `CMD` in a Dockerfile stage. A base image may already have a `CMD`, and a later `CMD` in your final stage replaces it. That matters in multi-stage builds because the final stage should declare the command you want people to get by default.
 
-## ENTRYPOINT
+## ENTRYPOINT Gives the Main Executable
+<!-- section-summary: ENTRYPOINT sets the executable Docker runs, while CMD often supplies its default arguments. -->
 
-`ENTRYPOINT` is the image's configured executable, with `CMD` often acting as its default arguments.
+**ENTRYPOINT** sets the executable Docker treats as the image's main program. `CMD` can then provide default arguments to that executable. This pair works well for images that behave like a tool or for apps that need a tiny startup script before the server starts.
 
-
-![Diagram showing image ENTRYPOINT and CMD defaults combined with docker run arguments into the final PID 1 command](/content-assets/articles/article-containers-orchestration-docker-commands-entrypoints-and-environment/cmd-entrypoint-resolution.png)
-
-*Startup behavior becomes clearer when you trace image defaults, runtime overrides, and the final process command separately.*
-
-`ENTRYPOINT` describes the executable Docker should treat as the container's main program. `CMD` can then provide default arguments to that executable.
-
-For a purpose-built CLI image, that can be useful:
+For a tool image, the design can be simple. The executable lives in `ENTRYPOINT`, and the default argument lives in `CMD`:
 
 ```dockerfile
-ENTRYPOINT ["terraform"]
-CMD ["--help"]
+ENTRYPOINT ["node"]
+CMD ["dist/server.js"]
 ```
 
-Now this run:
+With that image, a plain run starts `node dist/server.js`. A runtime argument after the image name becomes an argument to `node`, which changes the one container command:
 
 ```bash
-docker run hashicorp/terraform -version
+docker run --rm devpolaris/tickets-api:local --version
 ```
 
-passes `-version` to the `terraform` entrypoint. The image exposes the Terraform binary as its command interface. That is a good fit for tool images.
+That command runs `node --version`. The runtime argument replaced the `CMD` part, while the `ENTRYPOINT` stayed as `node`. This is helpful for tool-style images and sometimes surprising for application images.
 
-For web applications, `ENTRYPOINT` is often a small wrapper script that prepares the environment and then uses `exec` to replace itself with the real server process. The `exec` detail matters because the final server should receive signals as PID 1. If a shell wrapper starts the server as a child and never forwards signals, `docker stop` can become slow or messy.
+Many web application images use an entrypoint script for setup. The script might validate environment variables, wait for a local dependency during development, run a small migration check, and then start the real server. The last step should hand control to the server process so Docker can deliver stop signals cleanly.
 
-You can override the entrypoint when you need to bypass it:
+```dockerfile
+ENTRYPOINT ["./docker-entrypoint.sh"]
+CMD ["node", "dist/server.js"]
+```
+
+The script receives the `CMD` as its arguments. A common final line in the script hands control to the real server:
 
 ```bash
-docker run --rm --entrypoint sh devpolaris/orders-api:local
+exec "$@"
 ```
 
-That creates a new container whose main command is `sh`. It is not a change to the image.
+That line replaces the shell script with the real server process. Docker then sees the server as the main process, and `docker stop` can signal it directly. Without that handoff, the shell can become the process Docker watches while the server runs as a child, which makes shutdown behavior less predictable.
 
-## Runtime Arguments
+## Exec Form and Shell Form Change Signal Behavior
+<!-- section-summary: Exec form starts the process directly, while shell form runs through a shell and changes argument and signal handling. -->
 
-Runtime arguments are the words after the image name, and Docker interprets them differently depending on whether the image uses `CMD`, `ENTRYPOINT`, or both.
+Dockerfile commands have two common shapes. **Exec form** uses a JSON array, such as `["node", "dist/server.js"]`. **Shell form** uses a plain string, such as `node dist/server.js`. Both can start a process, and they behave differently around shell expansion, arguments, and signals.
 
-The practical starting point is to ask whether the image exposes a default command or a fixed executable. The same words after the image name can replace the command in one image and become arguments in another.
+Exec form starts the executable directly. Docker receives a list where each item is one argument:
 
-The exact interaction depends on whether the image has only `CMD` or both `ENTRYPOINT` and `CMD`.
-
-| Image defaults | Runtime command after image | Result |
-| --- | --- | --- |
-| `CMD ["node", "dist/server.js"]` | `node --version` | Replaces `CMD` |
-| `ENTRYPOINT ["node"]` and `CMD ["dist/server.js"]` | `--version` | Appends as arguments to `ENTRYPOINT` |
-| `ENTRYPOINT ["./start.sh"]` | `npm test` | Passes arguments to entrypoint unless entrypoint is overridden |
-
-This is why a command that looks obvious can behave strangely. If the image has an entrypoint, the words after the image name are often arguments, not a full command replacement. When you want a completely different executable, use `--entrypoint`.
-
-The best images make the normal case boring. A web service image should start the service when run plainly. A tool image should behave like the tool. Special commands should be explicit enough that the next person can see whether they are replacing the command or passing arguments.
-
-## Environment
-
-Environment variables are container-start inputs that configure one run without changing the image artifact.
-
-Example: the same `orders-api:local` image can run against a local database with `DATABASE_URL=postgres://orders:orders@db:5432/orders` or against a staging database with a different value. The image stays the same; the container run changes.
-
-Environment variables are runtime input. They let the same image run in different places:
-
-```bash
-docker run \
-  -e NODE_ENV=development \
-  -e DATABASE_URL=postgres://orders:orders@db:5432/orders \
-  devpolaris/orders-api:local
+```dockerfile
+CMD ["node", "dist/server.js"]
 ```
 
-Those values are part of the container configuration. They do not rebuild the image. They also are not a perfect secret boundary. Environment values can appear in shell history, Compose files, process inspection, application logs, and Docker metadata. They are convenient for local configuration and many platform integrations, but sensitive production secrets need deliberate handling.
+This form keeps Docker connected to the executable instead of a hidden shell. It also keeps each argument separate, so Docker can pass the argument list straight to the process. Most application images use exec form for `CMD` and `ENTRYPOINT` because the final process receives signals more directly.
 
-There is also a timing boundary. `ARG` in a Dockerfile is build-time input. `ENV` in an image creates an image default. `docker run -e` sets or overrides a value for the container. If changing a value should not require rebuilding the image, it belongs at runtime.
+Shell form runs through `/bin/sh -c`. The shell receives the command string and handles shell features:
 
-## Working Directory and User
+```dockerfile
+CMD node dist/server.js
+```
 
-Working directory and user settings define the process's filesystem starting point and Linux identity inside the container.
+Shell form gives you shell features such as variable substitution and command chaining. Those features can be useful in small cases, and they add another process and another parsing layer. Docker's Dockerfile reference calls out this difference for `ENTRYPOINT` and shows `exec` in shell-form entrypoints so long-running executables receive stop signals correctly.
 
-
-![Diagram showing environment variables, working directory, and user identity around the container main process](/content-assets/articles/article-containers-orchestration-docker-commands-entrypoints-and-environment/env-working-user-boundary.png)
-
-*The command runs inside a runtime envelope, so environment, directory, and UID can change the same binary behavior.*
-
-The image can define a working directory and user:
+For the ticketing API, exec form keeps the container startup plain. The Dockerfile can describe the working directory, user, and final server command directly:
 
 ```dockerfile
 WORKDIR /app
@@ -175,48 +134,157 @@ USER node
 CMD ["node", "dist/server.js"]
 ```
 
-The working directory decides where relative paths are resolved. The user decides which numeric uid and gid run the process. Both can be overridden at runtime:
+If the app needs setup logic, a small entrypoint script can handle that setup and then run `exec "$@"`. The script should stay small because every future operator will depend on it during startup, shutdown, logs, and debugging.
+
+## Runtime Arguments Change One Container
+<!-- section-summary: Runtime command arguments after the image name override CMD for that container creation request. -->
+
+Runtime arguments are the command and arguments you put after the image name in `docker run`. They change what Docker starts for that one container. This is useful when the image contains everything needed for several related tasks.
+
+Here are three runs from the same ticketing API image. The image stays reusable while each container creation request chooses its own process:
 
 ```bash
-docker run --workdir /app/scripts --user 1000:1000 devpolaris/orders-api:local node seed.js
+docker run --rm devpolaris/tickets-api:local
+docker run --rm devpolaris/tickets-api:local npm test
+docker run --rm devpolaris/tickets-api:local node scripts/seed-dev-data.js
 ```
 
-These settings are not decorative. A wrong working directory can make a relative script path fail even though the file exists. A wrong user can make a mounted directory unwritable. A process running as root can create root-owned files in a bind mount and make the host editor unhappy. The runtime-boundaries article on users and limits goes deeper into that.
+The first run starts the default API command. The second run starts the test command. The third run starts a seed script. These runs share the image and diverge only at container creation time.
 
-## Where Startup Breaks
+The exact behavior depends on whether the image has `ENTRYPOINT`. With only `CMD`, the runtime command replaces the default command. With `ENTRYPOINT` plus `CMD`, the runtime command usually replaces the `CMD` arguments and keeps the entrypoint executable. That is why a tool image can expose one executable while still accepting different command-line arguments.
 
-Startup breaks when the command source is unclear. A container exits with `file not found`, but the missing file is not missing from the image. The container was started with a different working directory or a bind mount hid the path.
+You can override the entrypoint too. This helps when the normal entrypoint blocks the troubleshooting path:
 
-It breaks when arguments are passed to an entrypoint by accident. The user expected `npm test` to replace the server command, but the image's entrypoint treated `npm` and `test` as arguments to something else.
+```bash
+docker run --rm --entrypoint sh devpolaris/tickets-api:local
+```
 
-It breaks when environment values are put in the wrong layer. A value baked into the image works on one laptop and fails in CI. A value changed inside an `exec` shell makes one running container work and leaves the repeatable run command broken.
+This kind of override helps when an entrypoint script fails before you can inspect the image. It also helps when you want a troubleshooting shell. It belongs in debugging and special workflows, while the normal application run should stay boring and repeatable.
 
-It breaks when wrapper scripts do not hand off signals. The app appears to stop only after Docker's grace period because PID 1 is a shell that never forwards the termination signal cleanly.
+## Environment Variables Carry Runtime Settings
+<!-- section-summary: Environment variables pass configuration into the process at container creation time while the image stays reusable. -->
 
-## Putting It All Together
+**Environment variables** are key-value strings available to the process inside the container. They fit settings that change between environments: database URL, log level, feature flag, service URL, port, region, or public mode switch. The same image can move from a laptop to CI to staging because those values arrive at runtime.
 
-The startup path has a clear order:
+The ticketing API can receive its local database URL like this. The image stays the same, and the container receives the local value at creation time:
 
-- The image supplies stable defaults: filesystem, `WORKDIR`, `USER`, `ENTRYPOINT`, and `CMD`.
-- The run command supplies environment-specific input and optional overrides.
-- Extra words after the image replace `CMD` or become entrypoint arguments, depending on the image.
-- `--entrypoint` is the explicit escape hatch for a different executable.
-- Environment values belong to the container run when they change per environment.
+```bash
+docker run -d \
+  --name tickets-api \
+  -e NODE_ENV=development \
+  -e DATABASE_URL=postgres://tickets:tickets@host.docker.internal:5432/tickets \
+  -p 8080:3000 \
+  devpolaris/tickets-api:local
+```
 
-The safest Docker images are predictable. Run them plainly and they do the main job. Override them deliberately and the change is visible in the command that created the container.
+An env file can keep local runs shorter. The file holds the local key-value settings while the command stays readable:
+
+```bash
+docker run -d \
+  --name tickets-api \
+  --env-file .env.local \
+  -p 8080:3000 \
+  devpolaris/tickets-api:local
+```
+
+The image can also declare default environment variables with Dockerfile `ENV`. Those defaults become part of the image configuration and appear in inspection output. Runtime `-e` values can provide the environment-specific values for a container.
+
+```dockerfile
+ENV NODE_ENV=production
+```
+
+Secrets need more care. Environment variables can show up in inspect output, local shell history, process listings, CI logs, and crash reports. Production passwords and tokens usually belong in a secret manager or orchestrator secret feature, while local throwaway values can still use env files with careful `.gitignore` rules.
+
+## Working Directory and User Shape the Process
+<!-- section-summary: WORKDIR chooses where commands run, and USER chooses the Linux identity that runs them. -->
+
+**WORKDIR** sets the default directory for `RUN`, `CMD`, `ENTRYPOINT`, `COPY`, and `ADD` instructions that follow it in the Dockerfile. It also shapes the runtime directory for the container's default command. For the ticketing API, `/app` is a natural working directory because the compiled server and package files live there.
+
+```dockerfile
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci --omit=dev
+COPY dist ./dist
+CMD ["node", "dist/server.js"]
+```
+
+With that setup, `node dist/server.js` resolves from `/app`. If the working directory points somewhere else, the same command might fail because `dist/server.js` sits in a different place. `docker inspect` can show the configured working directory under `Config.WorkingDir`.
+
+**USER** sets the Linux user and group for later build instructions and for runtime commands. Running as a non-root user limits what the app can write or change inside the container filesystem. A Node image might create or use a `node` user and switch to it before the final command.
+
+```dockerfile
+USER node
+CMD ["node", "dist/server.js"]
+```
+
+This choice can reveal file-permission bugs during local testing. If the app needs to write to `/app/uploads`, that directory must allow the runtime user to write there. Changing the runtime user to root hides the permission issue during development and brings it back later in production.
+
+## A Practical Startup Design
+<!-- section-summary: A good application image keeps the normal command in the image and passes environment-specific settings at runtime. -->
+
+For the ticketing API, a practical Dockerfile startup section might look like this. The image carries the stable application startup path:
+
+```dockerfile
+FROM node:24-alpine
+
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci --omit=dev
+COPY dist ./dist
+
+ENV NODE_ENV=production
+USER node
+CMD ["node", "dist/server.js"]
+```
+
+This image says, "The normal way to start the app is the Node server from `/app` as the `node` user." It keeps the command stable and leaves the environment-specific values outside the image. Local development, CI, and production can all use the same image tag with different runtime settings.
+
+A local run can add those settings. The values describe the local environment rather than the image build:
+
+```bash
+docker run -d \
+  --name tickets-api \
+  -e DATABASE_URL=postgres://tickets:tickets@host.docker.internal:5432/tickets \
+  -e LOG_LEVEL=debug \
+  -p 8080:3000 \
+  devpolaris/tickets-api:local
+```
+
+A one-off test run can reuse the same image. The runtime command changes the process for this container only:
+
+```bash
+docker run --rm \
+  -e DATABASE_URL=postgres://tickets:tickets@host.docker.internal:5432/tickets \
+  devpolaris/tickets-api:local npm test
+```
+
+That is the practical balance. The image carries the code and normal startup shape. The runtime carries the environment values and special one-run commands. Debugging then lines up with the evidence from the previous article because Docker can show exactly what command, working directory, user, and environment it used.
+
+## Where Startup Usually Breaks
+<!-- section-summary: Startup problems usually come from command replacement, entrypoint argument surprises, missing environment, working-directory mistakes, or runtime user permissions. -->
+
+The first common problem is **accidental command replacement**. A developer adds `npm test` after the image name to run tests, then expects the API to stay up. Docker started the requested test command, and the container exited after the tests completed.
+
+The second problem is **entrypoint argument surprise**. With an `ENTRYPOINT`, runtime arguments often replace `CMD` while keeping the entrypoint. A command that looks like it should replace everything may become arguments to the existing executable. `docker inspect` and the `COMMAND` column in `docker ps -a` can show what Docker actually started.
+
+The third problem is **missing runtime environment**. A server image can be perfectly built and still fail because `DATABASE_URL` or another required setting arrived empty. Logs identify the missing value, and inspect confirms whether Docker passed it into the container.
+
+The fourth problem is **working-directory drift**. A command such as `node dist/server.js` depends on the current directory. If `WORKDIR` changes during a refactor or a later stage skips it, the same command can fail with a file path error.
+
+The fifth problem is **runtime user permissions**. A non-root user improves the container's safety profile, and it also requires writable paths to have the right ownership or permissions. A startup log that mentions `EACCES` or permission denied usually points at the filesystem path and the configured `USER` together.
 
 ## What's Next
 
-The next article covers health checks and restart policies. Once Docker knows how to start a process, the next question is how it decides whether that process is useful and what to do when it exits.
+You now know how Docker chooses the process before state and logs appear. `CMD` gives a default, `ENTRYPOINT` gives a main executable, runtime arguments change one container, environment variables carry settings, and `WORKDIR` plus `USER` shape where and how the process runs.
 
-![Summary infographic for Docker ENTRYPOINT, CMD, run arguments, environment, WORKDIR, and USER](/content-assets/articles/article-containers-orchestration-docker-commands-entrypoints-and-environment/commands-env-summary.png)
-
-*The startup summary keeps the four practical levers together: command, environment, directory, and user.*
+The final article in this container group adds two more runtime signals. Health checks tell us whether a running process can actually serve callers, and restart policies tell Docker what to do after the main process exits.
 
 ---
 
 **References**
 
-- [Docker Docs: Dockerfile reference](https://docs.docker.com/reference/dockerfile/) - Official reference for `CMD`, `ENTRYPOINT`, `ENV`, `WORKDIR`, `USER`, and health check instructions.
-- [Docker Docs: Running containers](https://docs.docker.com/engine/containers/run/) - Official guide to overriding image defaults and supplying runtime options with `docker run`.
-- [Docker Docs: docker container run](https://docs.docker.com/reference/cli/docker/container/run/) - CLI reference for command overrides, environment flags, users, working directories, and entrypoints.
+- [Dockerfile reference](https://docs.docker.com/reference/dockerfile/) - Documents `CMD`, `ENTRYPOINT`, `ENV`, `WORKDIR`, `USER`, shell form, exec form, and signal-related entrypoint guidance.
+- [Docker run CLI reference](https://docs.docker.com/reference/cli/docker/container/run/) - Documents command overrides, `--entrypoint`, `--env`, `--env-file`, working-directory, and user flags.
+- [Running containers](https://docs.docker.com/engine/containers/run/) - Shows the `docker run [OPTIONS] IMAGE [COMMAND] [ARG...]` form and describes foreground, detached, command, and argument behavior.
+- [Docker exec CLI reference](https://docs.docker.com/reference/cli/docker/container/exec/) - Documents runtime exec behavior, environment options, and working-directory options for commands run in a live container.
+- [Docker inspect CLI reference](https://docs.docker.com/reference/cli/docker/inspect/) - Documents low-level metadata output used to verify command, environment, working directory, user, and host configuration.

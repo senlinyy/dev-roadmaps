@@ -1,7 +1,7 @@
 ---
 title: "Designing Composable Modules"
 description: "Learn how to structure Terraform modules so they are easy to combine, test in isolation, and reuse without creating hidden dependencies."
-overview: "A module that does too much is just as harmful as no module at all. This article covers the principles of composability: keeping modules focused, avoiding hidden state coupling, using outputs as the only public interface, and building a flat module hierarchy that scales."
+overview: "Composable Terraform modules have one clear job, an explicit interface, and no hidden dependency on names or state outside the module. This article shows how to design those modules so the root configuration can assemble infrastructure from small, reviewable pieces."
 tags: ["modules", "design", "composability", "terraform", "architecture"]
 order: 4
 id: article-iac-terraform-modules-composable
@@ -10,86 +10,90 @@ id: article-iac-terraform-modules-composable
 ## Table of Contents
 
 1. [What Composability Means](#what-composability-means)
-2. [The Single-Responsibility Principle for Modules](#the-single-responsibility-principle-for-modules)
+2. [One Job Per Module](#one-job-per-module)
 3. [Avoiding Leaky Modules](#avoiding-leaky-modules)
-4. [Outputs as the Only Public Interface](#outputs-as-the-only-public-interface)
-5. [Flat Over Deep: Module Hierarchy](#flat-over-deep-module-hierarchy)
+4. [Outputs as the Public Interface](#outputs-as-the-public-interface)
+5. [Flat Over Deep Module Hierarchy](#flat-over-deep-module-hierarchy)
 6. [Data Sources Inside Modules](#data-sources-inside-modules)
 7. [A Composable Module in Practice](#a-composable-module-in-practice)
 8. [Testing Modules in Isolation](#testing-modules-in-isolation)
 9. [Putting It All Together](#putting-it-all-together)
-10. [What's Next](#whats-next)
 
 ## What Composability Means
+<!-- section-summary: A composable module has a focused responsibility, explicit dependencies, and outputs that let the root assemble it with other modules. -->
 
-A composable Terraform module is a focused configuration unit with a narrow responsibility, explicit inputs, and outputs that other modules can consume.
+A **composable Terraform module** is a module that works as a clean building block. It has one clear responsibility, receives outside facts through variables, and exposes selected results through outputs. The root configuration can combine it with other modules without editing the module internals.
 
-Composability is the quality of being easy to combine. A composable module is one that works correctly on its own, in combination with other modules it has never been paired with before, without requiring changes to either one. Building composable modules is the difference between a module library that grows with your organization and one that becomes a tangled mess after six months.
+The Orders platform team already has a private bucket module and a load balancer module. Now the team wants a reusable service stack made from several pieces: network, database, compute, load balancer, DNS, and monitoring. The easiest way to keep that stack reviewable is to keep each piece small enough to understand.
 
-![Composable modules keep small responsibilities and let the root layer connect their outputs deliberately.](/content-assets/articles/article-iac-terraform-modules-composable/composition-layers.png)
+![A composable Terraform design keeps focused child modules independent while the root configuration wires their outputs together.](/content-assets/articles/article-iac-terraform-modules-composable/composable-root-wiring.png)
 
-The way to think about it is in terms of surfaces. Every module has two surfaces: its inputs and its outputs. Everything that flows in goes through variables. Everything that flows out goes through outputs. Composable modules keep these surfaces small, clear, and stable. They hide everything else. When you change the internal implementation of a composable module, callers notice nothing, because they only depend on the surface.
+*Composable modules stay small and independent. The root layer shows how the service pieces connect.*
 
-Non-composable modules have large surfaces, they reach out to external state, they depend on resources that must exist outside their directory, they assume a specific naming convention in another part of the configuration. These implicit dependencies are what make modules fragile. Composable modules make all dependencies explicit by requiring them as variable inputs.
+The root configuration becomes the place where infrastructure is assembled. The network module returns subnet IDs. The database module returns an endpoint. The compute module receives both values and returns a target group ARN. The load balancer module receives that target group ARN and exposes a DNS name. Each module has a narrow job, and the root shows the whole story.
 
-## The Single-Responsibility Principle for Modules
+This design helps the team grow the platform. A batch processing service can reuse the network and database modules while skipping the load balancer. A public API can reuse the load balancer and monitoring modules while choosing its own database pattern. Composability gives teams reusable parts rather than one giant preset.
 
-A single-responsibility module has one clear job. It should be possible to describe the module in a short phrase such as "creates a VPC and subnets" or "creates an application load balancer." Example: a database module should not also create DNS records, alerting rules, and the public web tier unless those are truly inseparable from the database.
+## One Job Per Module
+<!-- section-summary: A module with one clear job is easier to review, test, reuse, and safely change. -->
 
-The most common mistake with Terraform modules is making them too big. A "complete application stack" module that creates the network, the servers, the database, the load balancer, the DNS records, the monitoring dashboards, and the alerting rules might seem convenient at first. But it is almost impossible to reuse. Every project that calls it needs all of those pieces. Every change to any of those pieces potentially breaks every caller. Testing it requires building the entire stack.
+A strong module should be easy to describe in one plain phrase: "creates a private S3 bucket," "creates a VPC and subnets," "creates an application load balancer," or "creates an RDS database." That short phrase matters because it tells callers what kind of responsibility they are accepting.
 
-![A module boundary should expose a small public interface while hiding implementation details inside.](/content-assets/articles/article-iac-terraform-modules-composable/module-responsibility-boundary.png)
+The common mistake is a module called `application_stack` that creates everything: network, database, compute, DNS, monitoring, alarms, dashboards, and IAM roles. It feels convenient during the first project because one module call creates the whole stack. It becomes painful when the next project wants the database and compute pattern but already has its own network. The giant module forces callers to accept decisions outside their needs.
 
-A better approach is to give each module one clear job. A network module creates the VPC and subnets. A database module creates the RDS instance and its security group. A compute module creates the auto-scaling group and its launch template. A load balancer module creates the ALB and the target groups. Each module has a handful of inputs and a handful of outputs. Each can be tested independently by deploying just that module in isolation.
+A focused module gives callers a better contract. A database module can own the RDS instance, subnet group, parameter group, and database security group because those resources change together. DNS records for the application might belong in a separate DNS module because DNS ownership and release timing often differ from database changes.
 
-When a project needs the full stack, the root configuration assembles the pieces:
+Here is how the Orders root can assemble focused modules:
 
 ```hcl
 module "network" {
   source = "./modules/network"
 
-  region     = var.region
-  cidr_block = var.cidr_block
+  environment = var.environment
+  cidr_block  = var.cidr_block
 }
 
 module "database" {
   source = "./modules/database"
 
-  vpc_id    = module.network.vpc_id
-  subnet_id = module.network.db_subnet_id
-  password  = var.db_password
+  subnet_ids            = module.network.private_subnet_ids
+  database_password     = var.database_password
+  backup_retention_days = 14
 }
 
 module "compute" {
   source = "./modules/compute"
 
-  vpc_id        = module.network.vpc_id
-  subnet_id     = module.network.web_subnet_id
-  db_endpoint   = module.database.endpoint
+  subnet_ids        = module.network.private_subnet_ids
+  database_endpoint = module.database.endpoint
+  image_id          = var.orders_image_id
 }
 
 module "load_balancer" {
   source = "./modules/load-balancer"
 
-  vpc_id     = module.network.vpc_id
-  subnet_ids = [module.network.web_subnet_id]
-  target_arn = module.compute.target_group_arn
+  subnet_ids        = module.network.public_subnet_ids
+  target_group_arn  = module.compute.target_group_arn
+  certificate_arn   = var.certificate_arn
 }
 ```
 
-Four focused modules. Each does one thing. Each has a clear input surface and a clear output surface. A team that needs the same database module in a different project, say a batch processing pipeline that has no web servers or load balancer, can pull in just the database module and the network module without dragging in anything else.
+Security group rules that connect compute to the database often live in the root configuration or a small network-security module. That keeps the database module focused on the database and keeps the compute module focused on runtime capacity. The root can then review connection policy as wiring instead of hiding it inside either module.
 
-The rule is simple: if you cannot describe what a module does in one short sentence without using the word "and," the module probably does too much.
+That kind of review becomes possible because the modules are small. Reviewers can see which module owns which decision and where the wiring creates risk.
 
 ## Avoiding Leaky Modules
+<!-- section-summary: A leaky module hides a real dependency instead of declaring it as an input. -->
 
-A leaky module hides one of its real dependencies from the caller. The caller has to know an internal naming convention, existing resource, or external state detail that is not declared as an input. Example: a compute module that silently looks up a security group named `shared-web-sg` will fail in any account where that name is different.
+A **leaky module** is a module that secretly depends on something outside its interface. The caller reads `variables.tf` and thinks the module needs only `subnet_id` and `ami_id`, but the resources inside the module quietly look up a security group by name, read a remote state file, or assume a tag convention in the account.
 
-The most common form of leakage is expecting an external resource to exist before the module runs, without declaring that expectation as a variable.
-
-Imagine a module that creates an application server and hardcodes a security group name:
+Here is a leaky compute module:
 
 ```hcl
+data "aws_security_group" "shared_web" {
+  name = "orders-shared-web"
+}
+
 resource "aws_instance" "app" {
   ami           = var.ami_id
   instance_type = var.instance_type
@@ -97,160 +101,159 @@ resource "aws_instance" "app" {
 
   vpc_security_group_ids = [data.aws_security_group.shared_web.id]
 }
-
-data "aws_security_group" "shared_web" {
-  name = "shared-web-sg"
-}
 ```
 
-This module silently requires that a security group named `shared-web-sg` already exists in the account. It does not ask for it as an input, it reaches out and looks it up. If any caller deploys this module into an account where the security group has a different name, the deployment fails. The caller has no way to know from the module's variable interface alone that this dependency exists.
+The module depends on a security group named `orders-shared-web`, but the interface never says so. The module may work in one AWS account and fail in another account where the shared group has a different name. A new caller has to read the internals to discover the real dependency.
 
 The fix is to make the dependency explicit:
 
 ```hcl
 variable "security_group_ids" {
   type        = list(string)
-  description = "List of security group IDs to attach to the application server."
+  description = "Security group IDs attached to each application instance."
 }
 
 resource "aws_instance" "app" {
-  ami                    = var.ami_id
-  instance_type          = var.instance_type
-  subnet_id              = var.subnet_id
+  ami           = var.ami_id
+  instance_type = var.instance_type
+  subnet_id     = var.subnet_id
+
   vpc_security_group_ids = var.security_group_ids
 }
 ```
 
-Now the module cannot be used without the caller explicitly providing security group IDs. If the caller does not have the right security group, the error is clear: a required variable is missing. The module is honest about what it needs.
+Now the caller chooses the security group and the module declares that requirement honestly. If the root configuration lacks a suitable security group, Terraform reports a missing required input instead of failing during a hidden lookup.
 
-This principle extends to any external information the module relies on: account IDs, region names, existing resource IDs, external secrets. If the module needs it, it should be a variable.
+![A leaky module hides dependencies like names, remote state, or shared resources, while a composable module receives them as inputs.](/content-assets/articles/article-iac-terraform-modules-composable/module-leak-check.png)
 
-## Outputs as the Only Public Interface
+*Good module design turns outside dependencies into visible inputs so callers can review them before apply.*
 
-A module's public interface should be its inputs and outputs. Inputs declare what the module needs, and outputs declare what callers may use afterward. Example: a compute module can output `target_group_arn` and `autoscaling_group_name`, while keeping its launch template ID internal.
+This pattern applies to account IDs, VPC IDs, secret ARNs, hosted zone IDs, KMS key ARNs, and shared security groups. If the module needs a specific outside object, the caller should pass the stable identifier in. Hidden names make modules fragile; explicit IDs make the contract honest.
 
-Just as a module should declare all its needs as inputs, it should share information only through outputs. Internal resources, security groups, IAM roles, CloudWatch log groups, that the module creates for its own use should stay invisible to the caller unless there is a specific reason to expose them.
+## Outputs as the Public Interface
+<!-- section-summary: Outputs are the only supported public exit points from a child module, so they should stay useful and small. -->
 
-Exposing too much is just as harmful as requiring too much. If a module outputs every single resource attribute it creates, callers might start depending on those attributes directly. When you later refactor the module, splitting one resource into two, or renaming an internal resource, any caller that referenced those extra outputs breaks.
+Outputs tell callers which results they may use. A compute module might expose `target_group_arn`, `security_group_id`, and `autoscaling_group_name`. It might keep the launch template ID, user data, IAM instance profile, and CloudWatch log group internal.
 
-Decide on a minimal output surface. For the compute module in the example above, the essential outputs are:
+This selective interface keeps refactors possible. The module author can replace EC2 with ECS, change the launch template shape, or split the log group configuration into a separate resource. Callers keep working as long as the exposed outputs keep the same meaning.
 
 ```hcl
 output "target_group_arn" {
   value       = aws_lb_target_group.app.arn
-  description = "ARN of the target group. Pass this to the load balancer module."
+  description = "Target group ARN used by the load balancer module."
+}
+
+output "security_group_id" {
+  value       = aws_security_group.app.id
+  description = "Security group ID for database ingress rules."
 }
 
 output "autoscaling_group_name" {
   value       = aws_autoscaling_group.app.name
-  description = "Name of the auto-scaling group, for use in scaling policies or monitoring."
+  description = "Auto Scaling group name for alarms and deployment checks."
 }
 ```
 
-The IAM instance profile, the launch template ID, the CloudWatch log group ARN, these are all internal. Callers do not need them. If a future use case requires an output that does not currently exist, add it then. Start with less and add more as needed rather than exposing everything upfront.
+Too many outputs can become a trap. If a module exposes every internal resource attribute, callers will eventually depend on details the module author wanted to keep private. A later cleanup then becomes a breaking change. The safer pattern is to expose the values another module or operator genuinely needs and add new outputs only when a real caller has a real use case.
 
-This conservative approach to outputs is what makes refactoring safe. You can completely rewrite the internals of a module, replace the auto-scaling group with an ECS service, or swap the target group for a different load balancer type, as long as the output surface stays the same. Every caller continues working without any changes.
+This is how mature module libraries stay maintainable. The public interface grows slowly, and the internals can improve quickly.
 
-## Flat Over Deep: Module Hierarchy
+## Flat Over Deep Module Hierarchy
+<!-- section-summary: A flat hierarchy keeps module wiring visible in the root and keeps plan addresses easier to trace. -->
 
-A flat module hierarchy means the root module calls most child modules directly. This keeps wiring visible in one place and makes errors easier to trace. Example: the root can call `module.network`, `module.database`, and `module.compute` directly instead of hiding them behind several layers of nested module calls.
+Terraform allows a module to call another module, which can call another module. That can be useful for packaging a complex subsystem, but deep hierarchies make plans harder to read. A resource address such as `module.platform.module.network.module.subnets.aws_subnet.private[0]` sends reviewers through several directories before they find the resource.
 
-Terraform supports modules calling other modules. A network module could call a subnet module which calls a route table module. This nesting creates a hierarchy: the root calls the network module, which calls the subnet module, which calls the route table module.
-
-In practice, deep hierarchies create more problems than they solve. When something goes wrong during an apply, the error address includes the full nesting path: `module.network.module.subnet.module.route_table.aws_route_table.this`. Tracing that back to the source requires navigating multiple directories. Testing any individual piece requires understanding the entire chain above it. Refactoring any level of the hierarchy risks breaking the levels above it.
-
-The recommendation for most teams is to keep module hierarchies flat. The root configuration should call the major building-block modules directly so the wiring is visible in one place. Modules can call other modules, but deep nesting should be the exception rather than the default.
+Most service roots benefit from a flatter layout:
 
 ```
-root configuration
-├── module "network"      (leaf)
-├── module "database"     (leaf)
-├── module "compute"      (leaf)
-└── module "load-balancer" (leaf)
+root
+  module.network
+  module.database
+  module.compute
+  module.load_balancer
+  module.dns
+  module.monitoring
 ```
 
-There are legitimate exceptions to this rule. A module that manages a complex, self-contained subsystem, like a Kubernetes cluster with several related components, might reasonably call sub-modules for its internal pieces. But even then, those sub-modules should be private to the parent module where possible, and the nesting should stay shallow enough that a plan address is still easy to trace.
+The root then shows the integration story in one place. Reviewers can see which output feeds which input. When a plan shows a change under `module.database`, they can jump straight to the database module call and the database module source.
 
-If you find yourself building a hierarchy deeper than two levels, the configuration has likely grown beyond what a module structure can manage cleanly. That is usually a signal to split it into multiple independent root configurations with their own state files, sharing information through data sources or remote state lookups.
+Nested modules still have a place. A Kubernetes cluster module might call private internal modules for node pools, cluster add-ons, and identity wiring because those pieces form one larger subsystem. Even then, the parent module should expose a small interface and keep the nesting shallow enough that errors remain traceable.
+
+When a module hierarchy starts to hide environment boundaries or team ownership boundaries, the team should consider separate root modules with separate state. Modules organize code. Root modules and backends organize operational blast radius.
 
 ## Data Sources Inside Modules
+<!-- section-summary: Data sources inside modules are useful for provider facts, but risky when they hide dependencies on external resource names. -->
 
-A data source inside a module is a read-only lookup the module performs while it runs. It is safe when the lookup reads facts from the active provider identity, but risky when it hides a dependency on a specific external resource name. Example: looking up the current AWS account ID is usually fine, while looking up `shared-web-sg` by name makes the module less reusable.
+A **data source** is a read-only provider lookup. Inside a module, data sources can be helpful when they read facts from the current provider context. They become risky when they hide a dependency on a specific external resource.
 
-Data sources are read-only queries to the cloud provider's API. They let you look up information about existing resources, resources that were created outside of Terraform, or by a different Terraform configuration, without managing those resources directly.
-
-Used carefully, data sources are a clean way for a module to query for information it cannot reasonably require as a variable. For example, a compute module that needs the current AWS region and account ID to construct a CloudWatch Logs ARN can use data sources for that:
+Reading the current region and account ID is usually reasonable:
 
 ```hcl
 data "aws_region" "current" {}
 data "aws_caller_identity" "current" {}
 
-resource "aws_iam_role_policy" "app" {
-  name = "app-policy"
-  role = aws_iam_role.app.id
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Effect   = "Allow"
-      Action   = ["logs:PutLogEvents"]
-      Resource = "arn:aws:logs:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:log-group:/aws/app/*"
-    }]
-  })
+locals {
+  log_group_arn = "arn:aws:logs:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:log-group:/aws/orders/*"
 }
 ```
 
-Here the region and account ID are inferred automatically rather than required as variables, which reduces the caller's input surface for values that can be queried reliably from the active provider identity.
+The provider identity already knows the current AWS account ID, so the caller can leave that value out of the interface. The data source makes the module easier to call without creating a hidden dependency on a named object.
 
-Be careful about using data sources to look up resources by name or tag rather than by ID. Name-based lookups are fragile: they fail if the resource does not exist or if multiple resources match the filter. A module that does `data "aws_security_group" "shared" { name = "shared-web-sg" }` internally is the leaky module pattern discussed earlier, it has an implicit dependency on a specific naming convention.
+Looking up a shared resource by name is a different story:
 
-The safer approach is to pass IDs as variables when the module needs to reference externally-managed resources. IDs are stable and unique; names are neither.
+```hcl
+data "aws_kms_key" "shared" {
+  key_id = "alias/orders-shared"
+}
+```
+
+That lookup assumes the alias exists in every account where the module runs. If the KMS key is part of the caller's architecture, the caller should pass `kms_key_arn` or `kms_key_id` as an input. The module can still use a default for development if the team wants, but the production dependency should be visible in the interface.
+
+The practical rule is this: **provider context can often be read, architecture dependencies should be passed**. Region and caller identity are context. VPCs, security groups, hosted zones, KMS keys, and secret ARNs are architecture.
 
 ## A Composable Module in Practice
+<!-- section-summary: A composable compute module declares every outside dependency as an input and exposes only the values the root needs. -->
 
-A composable module makes every outside dependency visible as an input and exposes only useful results as outputs. The caller should be able to read `variables.tf` and know what must already exist. Example: a compute module can require `vpc_id`, `subnet_id`, `security_group_ids`, and `ami_id`, then return only the target group ARN and auto-scaling group name.
-
-Here is what the full compute module looks like when designed for composability. Variables declare all external dependencies. Resources use only those variables and internal data. Outputs expose only what callers need.
+Here is a compute module shaped for composition. It receives the network, security, image, and sizing decisions from the caller. It creates the application runtime pieces internally. It exposes only the values other modules and operators need.
 
 `variables.tf`:
 
 ```hcl
-variable "vpc_id" {
-  type        = string
-  description = "ID of the VPC where the compute resources will be deployed."
+variable "subnet_ids" {
+  type        = list(string)
+  description = "Private subnet IDs where application instances run."
 }
 
-variable "subnet_id" {
+variable "vpc_id" {
   type        = string
-  description = "ID of the subnet for the auto-scaling group instances."
+  description = "VPC ID where the target group receives traffic."
 }
 
 variable "security_group_ids" {
   type        = list(string)
-  description = "Security group IDs to attach to each instance."
+  description = "Security group IDs attached to each instance."
+}
+
+variable "image_id" {
+  type        = string
+  description = "Machine image ID for the Orders application."
 }
 
 variable "instance_type" {
   type        = string
+  description = "Instance type for application servers."
   default     = "t3.small"
-  description = "EC2 instance type for the application servers."
 }
 
-variable "min_size" {
+variable "desired_capacity" {
   type        = number
-  default     = 1
-  description = "Minimum number of instances in the auto-scaling group."
-}
+  description = "Desired number of application instances."
+  default     = 2
 
-variable "max_size" {
-  type        = number
-  default     = 4
-  description = "Maximum number of instances in the auto-scaling group."
-}
-
-variable "ami_id" {
-  type        = string
-  description = "AMI ID for the application server image."
+  validation {
+    condition     = var.desired_capacity >= 1 && var.desired_capacity <= 20
+    error_message = "desired_capacity must be between 1 and 20."
+  }
 }
 ```
 
@@ -258,27 +261,14 @@ variable "ami_id" {
 
 ```hcl
 resource "aws_launch_template" "app" {
-  name_prefix   = "app-"
-  image_id      = var.ami_id
+  name_prefix   = "orders-app-"
+  image_id      = var.image_id
   instance_type = var.instance_type
 
   network_interfaces {
     associate_public_ip_address = false
     security_groups             = var.security_group_ids
   }
-}
-
-resource "aws_autoscaling_group" "app" {
-  vpc_zone_identifier = [var.subnet_id]
-  min_size            = var.min_size
-  max_size            = var.max_size
-
-  launch_template {
-    id      = aws_launch_template.app.id
-    version = "$Latest"
-  }
-
-  target_group_arns = [aws_lb_target_group.app.arn]
 }
 
 resource "aws_lb_target_group" "app" {
@@ -292,6 +282,20 @@ resource "aws_lb_target_group" "app" {
     unhealthy_threshold = 3
   }
 }
+
+resource "aws_autoscaling_group" "app" {
+  vpc_zone_identifier = var.subnet_ids
+  desired_capacity    = var.desired_capacity
+  min_size            = 1
+  max_size            = 20
+
+  launch_template {
+    id      = aws_launch_template.app.id
+    version = "$Latest"
+  }
+
+  target_group_arns = [aws_lb_target_group.app.arn]
+}
 ```
 
 `outputs.tf`:
@@ -299,62 +303,58 @@ resource "aws_lb_target_group" "app" {
 ```hcl
 output "target_group_arn" {
   value       = aws_lb_target_group.app.arn
-  description = "Pass this to the load balancer module to route traffic to this compute group."
+  description = "Target group ARN used by the load balancer module."
 }
 
 output "autoscaling_group_name" {
   value       = aws_autoscaling_group.app.name
-  description = "The name of the auto-scaling group, for monitoring and scaling policy references."
+  description = "Auto Scaling group name used by deployment checks and alarms."
 }
 ```
 
-Notice what is not in the outputs: the launch template ID, the target group health check settings, the network interface configuration. Those are internal details. The caller gets two stable, meaningful values and nothing more.
+Every outside dependency is visible in `variables.tf`: VPC, subnets, security groups, image ID, instance size, and capacity. The module creates the runtime pieces, then returns target group and scaling group values. A reviewer can understand the boundary without reading every resource first.
 
 ## Testing Modules in Isolation
+<!-- section-summary: Isolated module tests work when the module can run from only its declared inputs. -->
 
-Testing a module in isolation means deploying the module with a small wrapper configuration that supplies only its declared inputs. This works when the module has no hidden dependencies. Example: a compute module test can create a temporary VPC and security group, pass their IDs into the module, verify the auto-scaling group, and destroy everything afterward.
+**Testing a module in isolation** means wrapping the module with just enough test infrastructure to supply its inputs, then checking the plan or apply result. This works only when the module has an honest interface. Hidden account names, shared state lookups, and secret external resources make isolated tests fragile.
 
-Composable modules are independently testable because they have no hidden dependencies. To test the compute module, you create a small test configuration that provides the minimum required inputs and deploys just that module:
+For the compute module, a test wrapper can create a temporary VPC, subnet, and security group, pass their IDs into the module, and run a plan. A deeper integration test can apply the wrapper in a sandbox account, verify the target group and Auto Scaling group, then destroy the test stack.
 
-```hcl
-module "compute" {
-  source = "../../modules/compute"
+Native `terraform test` gives teams a way to run module tests from HCL test files. Provider mocks and overrides can cover fast interface checks, validation rules, and output wiring. Real apply tests still matter for behavior that only the cloud provider can prove, such as health checks, IAM behavior, and service-specific constraints.
 
-  vpc_id             = aws_vpc.test.id
-  subnet_id          = aws_subnet.test.id
-  security_group_ids = [aws_security_group.test.id]
-  ami_id             = var.test_ami_id
-}
+The pipeline shape usually looks like this:
+
+```shell
+terraform fmt -check
+terraform init
+terraform validate
+terraform test
 ```
 
-This test configuration creates its own VPC and security group just for the test. It does not depend on anything external. You can deploy it, run whatever verification you need, check that the auto-scaling group exists, that the target group is healthy, and then destroy it completely. The test is self-contained.
+For modules that manage expensive or slow resources, teams often split tests into fast checks on every pull request and scheduled or manually approved apply tests in a sandbox account. That split gives reviewers feedback without spending money on every small edit.
 
-Native `terraform test` can make this workflow repeatable in HCL. Recent Terraform versions also support provider mocks and overrides, which let you test module logic without creating every real cloud object. Use real apply tests for behavior that only the cloud API can prove, and mocked tests for interface checks, validation rules, and output wiring that should run quickly in CI.
-
-If the module had hidden dependencies on external resources (the leaky module pattern), you could not test it this way. You would need to set up the external resources first, coordinate between multiple teams, and deal with shared state between tests. The test would be fragile and slow.
-
-Composable modules are also easier to review in code review. A reviewer can look at the variable list and immediately understand what the module depends on. There are no surprise lookups hidden in the resource blocks.
+Composable modules make this practical. The test only has to provide declared inputs, so it avoids recreating a secret set of resources that the module looked up by name.
 
 ## Putting It All Together
+<!-- section-summary: Composable module design keeps responsibilities small, dependencies visible, and root wiring reviewable. -->
 
-The four modules in the example, network, database, compute, load balancer, are composable because each one has a clear job, declares all dependencies as inputs, exposes only necessary outputs, and has no hidden dependency on external naming conventions or shared state.
+The Orders module library now has a clear design style. Each module has one job. Outside dependencies arrive through variables. Useful results leave through outputs. The root configuration wires the modules together so reviewers can see the full service shape in one place.
 
-The root configuration wires them together by passing outputs from earlier modules as inputs to later ones. Terraform reads these references, infers the dependency order, and applies the modules in the correct sequence without any manual instruction. Adding a fifth module, say a monitoring module that watches the auto-scaling group, requires only adding a new module block in the root configuration and passing the `autoscaling_group_name` output into it.
+![Composable module summary showing one responsibility, explicit inputs, small outputs, flat root wiring, and isolated tests.](/content-assets/articles/article-iac-terraform-modules-composable/composable-modules-field-guide.png)
 
-That growth pattern, adding new modules without touching existing ones, combining modules in new ways without rewriting them, is what composability enables. The library of modules grows alongside the organization, and each new project is assembled from proven pieces rather than built from scratch.
+*Composable modules are easier to reuse because each piece declares what it needs, returns what callers use, and keeps internals replaceable.*
 
-## What's Next
+This style helps production teams because it makes change smaller. A database change stays in the database module. A load balancer change stays in the load balancer module. A service-level wiring change stays in the root. When a plan shows a surprise, the address points to a focused part of the system instead of a giant module that owns everything.
 
-Composable modules are the building block. The next step is understanding how to manage multiple environments, development, staging, production, in a way that shares module code while keeping each environment's state completely separate. The next article covers Terraform workspaces and file-layout patterns, both common approaches to environment isolation, and the tradeoffs between them.
-
-
-![Composable modules summary: keep one responsibility, expose a small interface, compose in the root, and test alone.](/content-assets/articles/article-iac-terraform-modules-composable/composable-modules-summary.png)
+The final habit is simple: **small modules, explicit inputs, careful outputs, flat wiring, and tests that prove the contract**. That gives Terraform modules the same kind of maintainability teams expect from any other shared code.
 
 ---
 
 **References**
 
-- [Module Composition (HashiCorp Documentation)](https://developer.hashicorp.com/terraform/language/modules/develop/composition), HashiCorp's official guidance on structuring modules for reuse and composition.
-- [Azure Verified Modules](https://azure.github.io/Azure-Verified-Modules/), Microsoft-backed catalog and guidance for reusable Azure Terraform modules.
-- [Terraform Up & Running, 3rd Edition (Yevgeniy Brikman)](https://www.terraformupandrunning.com), Chapter 4 covers module design patterns in depth, including the pitfalls of monolithic modules and the benefits of small, focused modules.
-- [Testing Terraform Modules (HashiCorp)](https://developer.hashicorp.com/terraform/language/tests), Reference for the native `terraform test` framework, introduced in Terraform 1.6, for writing module tests directly in HCL.
+- [Module Composition (HashiCorp Documentation)](https://developer.hashicorp.com/terraform/language/modules/develop/composition), Official guidance for dependency inversion, composition patterns, and module design.
+- [Standard Module Structure (HashiCorp Documentation)](https://developer.hashicorp.com/terraform/language/modules/develop/structure), Guidance for module file layout, documentation, examples, and reusable module conventions.
+- [Tests (HashiCorp Documentation)](https://developer.hashicorp.com/terraform/language/tests), Reference for native Terraform tests, run blocks, mocks, overrides, and module validation workflows.
+- [Input Variables (HashiCorp Documentation)](https://developer.hashicorp.com/terraform/language/values/variables), Reference for defining explicit module inputs and validation rules.
+- [Output Values (HashiCorp Documentation)](https://developer.hashicorp.com/terraform/language/values/outputs), Reference for exposing selected module values to callers.

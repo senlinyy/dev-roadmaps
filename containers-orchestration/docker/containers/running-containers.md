@@ -15,206 +15,208 @@ aliases:
 
 ## Table of Contents
 
-1. [Why Runtime Matters](#why-runtime-matters)
-2. [The Mental Model](#the-mental-model)
-3. [What Docker Creates](#what-docker-creates)
-4. [The Main Process](#the-main-process)
-5. [Foreground and Detached Runs](#foreground-and-detached-runs)
-6. [Names and Evidence](#names-and-evidence)
-7. [Cleanup](#cleanup)
-8. [Where Runs Break](#where-runs-break)
-9. [Putting It All Together](#putting-it-all-together)
-10. [What's Next](#whats-next)
+1. [The Pieces Docker Combines](#the-pieces-docker-combines)
+2. [Images Become Container Records](#images-become-container-records)
+3. [The Main Process Decides the Lifetime](#the-main-process-decides-the-lifetime)
+4. [Foreground, Detached, and Interactive Runs](#foreground-detached-and-interactive-runs)
+5. [Names and IDs Give You Handles](#names-and-ids-give-you-handles)
+6. [Ports Connect the Host to the Container](#ports-connect-the-host-to-the-container)
+7. [The Writable Layer Holds Runtime Changes](#the-writable-layer-holds-runtime-changes)
+8. [Stopping and Removing Containers](#stopping-and-removing-containers)
+9. [A Practical First Run](#a-practical-first-run)
+10. [Where Container Runs Usually Break](#where-container-runs-usually-break)
+11. [What's Next](#whats-next)
 
-## Why Runtime Matters
+## The Pieces Docker Combines
+<!-- section-summary: A container run combines an image, runtime options, one main process, and a saved container record. -->
 
-A running container is one execution of an image with its own process, runtime settings, identity, writable layer, and recorded state.
+Let's say we are pairing on a small **ticketing API** for an events company. The team already built an image called `devpolaris/tickets-api:local`, and that image contains the application files, installed packages, and a default command that starts the server. The image can sit idle on your laptop all day because it is only the packaged starting point.
 
-The previous Docker work produced an image for the orders API. The image contains a filesystem, installed dependencies, metadata, and a default command. It can sit on a laptop or in a registry without doing anything. Then someone runs it and a different set of problems appears.
+The interesting part starts when Docker turns that image into a **container**. A container is one running or previously run instance of an image, with its own configuration, name or ID, writable layer, network settings, log stream, and process state. Docker runs the process on the host, while giving that process an isolated filesystem, networking view, and process tree.
 
-- The command prints a long id and the terminal prompt comes back, but the app is supposed to be running somewhere.
-- The image built successfully, but the container exits after one second.
-- The logs say the server is listening on port 3000, but the browser cannot reach it.
-- Running the command again fails because the container name already exists.
+There are four pieces to keep in your head as we go. The **image** gives Docker the filesystem and defaults. The **run options** give Docker the local choices for this run, such as name, ports, environment variables, and volume mounts. The **container record** stores what Docker created. The **main process** decides whether the container stays alive.
 
-Those are runtime problems. The image is the packaged starting point. A container is the object Docker creates when it combines that image with runtime settings, prepares a writable layer, attaches isolation boundaries, and starts a process.
+That structure helps us connect the rest of the article. First we will create the container record, then watch the main process, then talk about terminal attachment, names, ports, storage, cleanup, and the common places where a run fails.
 
-Once that transition is clear, the Docker CLI stops reading as disconnected verbs. `docker ps`, `docker logs`, `docker inspect`, `docker stop`, and `docker rm` are different ways to ask what Docker created, what process ran, and what state is still left behind.
+## Images Become Container Records
+<!-- section-summary: Docker creates a container record from the image plus run options before it starts the process. -->
 
-## The Mental Model
+The most common command for this transition is `docker run`. Docker's own CLI reference describes it as the command that runs a command in a new container, and the full shape is `docker run [OPTIONS] IMAGE [COMMAND] [ARG...]`. That shape tells you a lot: options belong to the container setup, the image chooses the package, and the optional command at the end can override what the image would normally run.
 
-An image is inert. A container has identity and history. It has a name, id, created time, process state, network settings, environment values, mounts, logs, and a writable layer for changes made while that container exists.
-
-The center of the model is the main process. Docker does not boot a full guest operating system and then hope the right services start. It starts the configured command. If that command keeps running, the container is running. If that command exits, the container exits.
-
-Example: if the image default is `node dist/server.js`, the container stays `Up` while that Node process stays alive. If you override the run with `node --version`, the command prints a version and exits, so the container exits normally.
-
-```mermaid
-flowchart TD
-    Image["Image<br/>(filesystem and defaults)"]
-    Settings["Run settings<br/>(name, env, ports, mounts)"]
-    Container["Container<br/>(identity and writable layer)"]
-    Process["Main process<br/>(PID 1)"]
-    State["State<br/>(created, running, exited)"]
-
-    Image --> Container
-    Settings --> Container
-    Container --> Process --> State
-```
-
-This is the first Docker runtime boundary. The image describes what the container can start from. The run settings describe how this particular start should behave. The process decides whether the container is alive.
-
-## What Docker Creates
-
-A container record is Docker's runtime object for one created run, including the image reference, configuration, network attachments, logs, and writable layer.
-
-
-![Diagram showing an image becoming a container configuration and then a running process boundary](/content-assets/articles/article-containers-orchestration-docker-docker-cli-basics/docker-run-runtime-map.png)
-
-*A container run starts with image metadata, adds runtime flags, and creates a process boundary.*
-
-The record is the thing Docker can inspect later. It tells you which image was used, which command ran, which ports were published, which environment values were passed, and what writable layer belonged to that run.
-
-A plain run might look like this:
+Here is a plain first run for the ticketing API. The name gives us a stable handle for every command we run after Docker creates the container:
 
 ```bash
-docker run --name orders-api devpolaris/orders-api:local
+docker run --name tickets-api devpolaris/tickets-api:local
 ```
 
-Docker resolves the image reference, reads the image configuration, creates a container record, prepares a writable layer on top of the image layers, applies runtime settings, connects the container to its default network, and starts the image command.
+Docker looks up the image, reads its default configuration, creates a container record, prepares a writable layer on top of the image filesystem, attaches the container to the default network, and starts the configured command. The command might come from the image's `CMD`, from `ENTRYPOINT` plus `CMD`, or from a command you put after the image name. We will go deeper on command resolution in a later article.
 
-The writable layer is important even when you are not thinking about storage yet. If the process writes `/tmp/startup.log`, edits a cache file, or generates a local artifact, those changes belong to this container. They are not written back into the image. A second container created from the same image starts with its own writable layer.
+That container record matters because it survives after the process exits. If the app crashes during startup, Docker can still show the exit code, logs, command, environment, port bindings, and name. So a failed run can still give you useful evidence instead of disappearing from the machine.
 
-That explains why a container can be removed without deleting the image. The image is the reusable package. The container is one run of that package with one layer of runtime changes.
+## The Main Process Decides the Lifetime
+<!-- section-summary: Docker marks the container running while the main process is alive and exited after that process ends. -->
 
-## The Main Process
+The **main process** is the command Docker starts as the center of the container. In a web API image, it might be `node dist/server.js`. In a Postgres image, it is the database server process. In a small utility image, it might be a command that prints one report and exits.
 
-The main process is the process Docker watches to decide whether the container is running or exited.
+Docker watches that process. While the process runs, the container shows as `Up`. When the process exits, Docker records the exit code and the container moves to `Exited`. A web server usually should stay `Up`, while a one-off command can exit successfully and still have done exactly what you asked.
 
-Docker reports container state by watching the main process. If the orders API starts `node dist/server.js`, that Node process is the life of the container. When it exits, Docker records the exit code.
-
-`docker ps -a` is usually the first useful question after a confusing run:
-
-```text
-CONTAINER ID   IMAGE                         COMMAND                  STATUS                    NAMES
-9f7a8c2d4d1a   devpolaris/orders-api:local   "node dist/server.js"    Up 12 seconds             orders-api
-8a48f0b4f62e   devpolaris/orders-api:local   "node dist/server.js"    Exited (1) 3 minutes ago  orders-api-old
-```
-
-`Up` means the main process is still alive. `Exited (1)` means Docker successfully started the command, then the command ended with exit code 1. The difference matters. A failed image build means Docker could not produce the package. An exited container means the package started, but the runtime process did not keep running.
-
-A container can exit immediately for ordinary application reasons: a missing environment variable, a failed database connection during startup, a command that points to a missing file, or a script that completed successfully and had nothing else to do. Docker is not trying to keep an arbitrary command alive unless you configure restart behavior later.
-
-## Foreground and Detached Runs
-
-Foreground and detached runs only change how your terminal attaches to the container's input and output streams.
-
-
-![Diagram comparing foreground and detached Docker runs with named containers](/content-assets/articles/article-containers-orchestration-docker-docker-cli-basics/foreground-detached-names.png)
-
-*Foreground and detached runs change how your terminal attaches to the same basic container process model.*
-
-By default, `docker run` attaches your terminal to the process output. If the process writes to standard output or standard error, you see it. If the process keeps running, your terminal stays occupied. This is useful the first time you run an image because startup failures are visible.
-
-Detached mode changes your terminal relationship, not the container's life:
+You can see this difference with two runs from the same image. The package stays the same, and the process Docker starts changes:
 
 ```bash
-docker run -d --name orders-api devpolaris/orders-api:local
+docker run --name tickets-api devpolaris/tickets-api:local
+docker run --rm devpolaris/tickets-api:local node --version
 ```
 
-Docker starts the same kind of container, then returns control to your shell and prints the container id. The process is still running in the background. Its output still exists, but you read it through Docker:
+The first command uses the image default and should keep the API running. The second command asks the image to run `node --version`, so the process prints the version and completes. Docker treated both commands normally; the difference came from the process you asked Docker to start.
+
+The exit code gives the next clue after a confusing run. Exit code `0` means the process reported success. A non-zero code means the process reported failure, and the application logs usually explain the reason. Docker records the status, while the application decides what the exit code means.
+
+## Foreground, Detached, and Interactive Runs
+<!-- section-summary: Foreground, detached, and interactive modes change the terminal connection around the same container process. -->
+
+By default, `docker run` connects your terminal to the container's standard output and standard error. This mode feels direct because you see startup logs immediately. It is useful during the first few runs of a new image, especially when the app might fail because an environment variable or database URL is missing.
+
+Detached mode uses `-d` or `--detach`. Docker starts the same kind of container process, prints a container ID, and gives your prompt back. The API keeps running in the background, and you can use other commands to read logs, inspect settings, or stop it.
 
 ```bash
-docker logs orders-api
-docker logs -f orders-api
+docker run -d --name tickets-api devpolaris/tickets-api:local
+docker logs tickets-api
+docker ps
 ```
 
-The common beginner mistake is to treat a detached run as if it did nothing because the terminal prompt came back. The prompt only means your terminal detached. The evidence moved to `docker ps` and `docker logs`.
-
-## Names and Evidence
-
-Container names are human-readable handles for container records, and those records preserve evidence until you remove them.
-
-Docker gives every container a long id, but names are the human handle. A name belongs to one container at a time:
+Interactive mode uses `-i` to keep standard input open and `-t` to allocate a terminal. You will often see them together as `-it` when you want a shell inside a small troubleshooting container. The image still needs a shell program such as `sh` or `bash` for that command to work.
 
 ```bash
-docker run --name orders-api devpolaris/orders-api:local
+docker run --rm -it alpine sh
 ```
 
-If `orders-api` already exists, Docker refuses to create another container with that name. That refusal is useful. A stopped container can still hold the exit code, logs, environment values, port mappings, and writable layer changes that explain what happened. Docker does not assume you are ready to throw that evidence away.
+These modes answer different pairing needs. Foreground mode lets the junior developer see the app's first words. Detached mode lets the senior keep the local service running while testing from a browser. Interactive mode gives both people a temporary shell when they need to examine a filesystem or try a command inside the image.
 
-This is why local cleanup is an explicit choice:
+## Names and IDs Give You Handles
+<!-- section-summary: Container names and IDs give Docker commands a stable way to refer to one created run. -->
+
+Every container gets a long **container ID**. Docker also gives it a generated name if you skip `--name`, and a generated name can be funny or memorable by accident. In real work, a deliberate name saves time because the whole team can type the same handle in examples, scripts, and troubleshooting notes.
 
 ```bash
-docker stop orders-api
-docker rm orders-api
+docker run -d --name tickets-api devpolaris/tickets-api:local
+docker logs tickets-api
+docker stop tickets-api
+docker rm tickets-api
 ```
 
-`docker stop` asks the main process to exit. `docker rm` removes the stopped container record and its writable layer. The image remains. Named volumes remain too, which becomes important in the storage article.
+Names must be unique among existing containers on the same Docker host. If you run the same command again while `tickets-api` still exists, Docker will complain about a name conflict. That message means Docker still has a container record with that name, either running or stopped.
 
-For disposable development runs, you will often recreate a container from a clean starting point:
+`docker ps` shows running containers. `docker ps -a` includes stopped containers too, which makes it the better command after a run failed quickly.
+
+```console
+CONTAINER ID   IMAGE                          COMMAND                  STATUS                     NAMES
+1b7f2b6c9a11   devpolaris/tickets-api:local   "node dist/server.js"    Up 15 seconds              tickets-api
+88d7c92a4f30   devpolaris/tickets-api:local   "node dist/server.js"    Exited (1) 3 minutes ago   tickets-api-old
+```
+
+That table ties the name, image, command, and state together. If the name conflict comes from a stopped container, you can inspect it for evidence before removing it. If the conflict comes from a running container, you can decide whether to keep using it or stop it first.
+
+## Ports Connect the Host to the Container
+<!-- section-summary: Port publishing maps a host port to a container port so tools outside the container can reach the service. -->
+
+Our ticketing API listens on port `3000` inside the container. That internal port belongs to the container's network view. Your browser on the host needs a published port if you want to open `http://localhost:8080` and reach the API.
+
+Port publishing uses `-p HOST_PORT:CONTAINER_PORT`. The left side belongs to your host machine, and the right side belongs to the container:
 
 ```bash
-docker rm -f orders-api
-docker run -d --name orders-api devpolaris/orders-api:local
+docker run -d \
+  --name tickets-api \
+  -p 8080:3000 \
+  devpolaris/tickets-api:local
 ```
 
-That is reasonable when the container is only a local process wrapper. It is risky when the container's writable layer quietly contains data you wanted to keep.
+Now the host port `8080` forwards traffic to port `3000` inside the container. If the app logs say `Listening on 3000`, that message describes the container side. The browser reaches it through the host side, so the URL becomes `http://localhost:8080`.
 
-## Cleanup
+This is a common source of first-week Docker confusion. `EXPOSE 3000` in a Dockerfile documents the intended container port and helps tools understand the image. A local `docker run` still needs `-p` when you want host traffic to reach that port.
 
-Container cleanup deletes the container record and writable layer, while leaving the reusable image and named volumes in place.
+Port conflicts happen on the host side. If another process already uses `8080`, Docker reports a bind failure for that host port. You can choose a different host port, such as `8081:3000`, while the app inside the container continues to listen on `3000`.
 
-The safe cleanup question is not "can I remove this container?" It is "where does the important state live?" If the container only ran a web API and all durable data lives in a database volume, removing it is routine. If the container is the database and no volume was mounted, removing it removes the database files stored in that container layer.
+## The Writable Layer Holds Runtime Changes
+<!-- section-summary: Each container gets its own writable layer, so runtime file changes belong to that container record. -->
 
-Example: removing an `orders-api` container usually removes only logs and temporary files. Removing an unmounted `orders-db` container can remove the actual database files if Postgres wrote them into the container layer.
+Docker images use layers, and Docker adds a **writable layer** for each container. That layer stores file changes made while that container exists. If the ticketing API writes `/tmp/startup.json`, downloads a cache file, or creates a local SQLite database during a test run, those changes belong to that container's writable layer.
 
-`--rm` is useful for one-off containers because it removes the container when the command exits:
+The image stays reusable. A second container created from `devpolaris/tickets-api:local` starts from the same image layers and gets a separate writable layer. This explains why removing a container can remove runtime changes while leaving the image available for future runs.
+
+This detail matters in production habits too. Application logs should go to standard output and standard error so Docker can collect them. Durable data should go into a volume, managed database, object store, or another persistence path. The writable layer suits temporary runtime files, and it gives poor durability for data that the business cares about.
+
+You will see this when a teammate says, "I wrote a file inside the container, then it vanished after I removed the container." Docker behaved according to the container lifecycle. The file lived in that one container record rather than in the image or in a volume.
+
+## Stopping and Removing Containers
+<!-- section-summary: Stopping asks the main process to exit, while removing deletes the stopped container record and writable layer. -->
+
+Stopping and removing answer two different questions. **Stopping** changes the process state by asking the main process to exit. **Removing** deletes the container record after the process has stopped, including the writable layer that belonged to that container.
 
 ```bash
-docker run --rm devpolaris/orders-api:local node --version
+docker stop tickets-api
+docker rm tickets-api
 ```
 
-That command creates a new container, runs `node --version`, prints the output, and removes the container. It does not enter an existing `orders-api` container. It is a fresh run from the image with a different command.
+`docker stop` sends a termination signal to the main process, waits for a grace period, and then Docker can force the process if it keeps running. That graceful path matters for web servers because the process may need a moment to stop accepting requests, flush logs, or close database connections.
 
-Use `--rm` when the container has no evidence worth keeping after the command completes. Skip it when startup logs, exit status, or filesystem changes may help explain a failure.
+`--rm` gives you automatic cleanup for short-lived containers. It matches commands where you only care about the result:
 
-## Where Runs Break
+```bash
+docker run --rm devpolaris/tickets-api:local node --version
+```
 
-A successful image can still produce a failed container because Docker moved from build time to runtime. The failure now belongs to the process and its settings.
+That flag works well for one-off checks, test commands, and quick shells. For a container you want to inspect after a crash, a named container that you keep gives you a record to read later. The cleanup choice should match the kind of evidence you need.
 
-If the status is `Exited`, read the logs and exit code before trying to open a shell. There may be no running process to enter.
+## A Practical First Run
+<!-- section-summary: A useful first run names the container, publishes the port, passes required environment, and leaves evidence behind. -->
 
-If the status is `Up` but the app is unreachable, the main process is alive but some boundary around it is wrong. The next likely questions are port publication, bind address, network path, or health.
+Now we can put the pieces together for the ticketing API. The app needs a database URL, listens on port `3000`, and should keep running while we test it from the browser. A practical first run gives the container a name, passes required environment, publishes a host port, and runs detached after we trust the startup path.
 
-If the name already exists, decide whether the old container is evidence or clutter. Inspect it when the previous run might explain the problem. Remove it when you want a clean run from known inputs.
+```bash
+docker run -d \
+  --name tickets-api \
+  -e NODE_ENV=development \
+  -e DATABASE_URL=postgres://tickets:tickets@host.docker.internal:5432/tickets \
+  -p 8080:3000 \
+  devpolaris/tickets-api:local
+```
 
-If a one-off command behaves differently from the long-running container, remember that it is a different container. It starts from the same image, but it has a different identity, writable layer, environment, mounts, and command unless you pass the same settings.
+Then the first checks read the evidence Docker collected. Each command asks a different question about the same container record:
 
-## Putting It All Together
+```bash
+docker ps
+docker logs --tail 50 tickets-api
+docker inspect tickets-api
+```
 
-The opening problems now have a shared shape:
+`docker ps` tells us whether the main process stayed alive. `docker logs` tells us what the process wrote during startup. `docker inspect` shows the configuration Docker used, including environment, command, port bindings, mounts, and state.
 
-- A detached container can be running even though the terminal prompt returned.
-- A container exits when its main process exits, even if the image built correctly.
-- A name collision protects the old container's evidence until you remove it.
-- A container's writable layer belongs to that container, not to the image.
-- Cleanup is safe only when important data lives outside the disposable container layer.
+This path gives the junior developer a reliable rhythm. First identify the container record. Then check the process state. Then read logs. Then inspect configuration only where the logs or state point you.
 
-The runtime model is small but powerful: image plus run settings creates a container; the main process drives state; Docker records the evidence. Most Docker commands are just ways to inspect or change one of those pieces.
+## Where Container Runs Usually Break
+<!-- section-summary: Most first-run problems come from the command, environment, name, port binding, or persistence expectation. -->
+
+The first failure category is the **main command**. The image can exist and the container can still exit immediately because the command finished, crashed, or pointed at a missing file. `docker ps -a` plus `docker logs` usually separates a completed one-off command from a broken server startup.
+
+The second category is **runtime configuration**. The ticketing API might require `DATABASE_URL`, `JWT_SECRET`, or `NODE_ENV`. If those values arrive through `-e` flags, an env file, or Compose, Docker passes them at container creation time. Rebuilding the image will rarely fix a missing runtime value.
+
+The third category is **port publishing**. The app may listen correctly on `3000` inside the container while the host lacks a published port or uses the wrong host port. `docker ps` shows the port mapping, and `docker inspect` shows the full binding details.
+
+The fourth category is **name and cleanup**. A stopped container can keep the name you want, and a removed container takes its writable layer with it. That is why a deliberate cleanup command belongs at the end of a troubleshooting session, after you have collected the state, logs, and configuration you need.
 
 ## What's Next
 
-The next article reads the evidence Docker records after a run: state, logs, exit codes, inspection data, and `exec` access. That is the difference between guessing what a container did and observing what actually happened.
+You now have the first runtime picture: Docker turns an image plus run options into a container record, starts one main process, records the state, and gives you handles for logs, ports, and cleanup. That is enough to understand what Docker created during a normal `docker run`.
 
-![Summary infographic for Docker images, containers, PID 1, ports, names, and cleanup](/content-assets/articles/article-containers-orchestration-docker-docker-cli-basics/running-containers-summary.png)
-
-*The summary groups the CLI basics by image, container, process, connectivity, handles, and cleanup.*
+The next article uses those same pieces for debugging. We will follow container state, logs, inspect output, and `exec` access in a steady order so a failed or strange container gives useful evidence before anyone starts guessing.
 
 ---
 
 **References**
 
-- [Docker Docs: Running containers](https://docs.docker.com/engine/containers/run/) - Official guide to `docker run`, detached mode, image defaults, environment, ports, health checks, and runtime options.
-- [Docker Docs: docker container run](https://docs.docker.com/reference/cli/docker/container/run/) - CLI reference for container creation flags, naming, `--rm`, and command overrides.
-- [Docker Docs: View container logs](https://docs.docker.com/engine/logging/) - Official explanation of container stdout and stderr log behavior.
+- [Docker run CLI reference](https://docs.docker.com/reference/cli/docker/container/run/) - Documents `docker run`, detached mode, port publishing, environment flags, restart flags, and command override shape.
+- [Running containers](https://docs.docker.com/engine/containers/run/) - Explains that Docker runs isolated processes and shows the `docker run [OPTIONS] IMAGE [COMMAND] [ARG...]` form.
+- [Docker create CLI reference](https://docs.docker.com/reference/cli/docker/container/create/) - Explains how Docker creates a writable container layer over an image before a container starts.
+- [Docker ps CLI reference](https://docs.docker.com/reference/cli/docker/container/ls/) - Documents that `docker ps` shows running containers and `docker ps -a` includes stopped containers.
+- [Docker logs CLI reference](https://docs.docker.com/reference/cli/docker/container/logs/) - Documents how Docker retrieves logs from a container.
+- [Docker stop CLI reference](https://docs.docker.com/reference/cli/docker/container/stop/) - Documents stop signals and the grace period before Docker forcefully stops a container.

@@ -31,23 +31,9 @@ Operating in a multi-tenant environment introduces a critical security challenge
 
 Under the hood, Terraform coordinates this authentication process using a decoupled provider architecture. When you execute an infrastructure command, the Terraform core binary parses your declarative configuration files, builds a directed acyclic graph of your resources, and initializes the required provider binaries. The core binary and the provider plugins run as separate operating system processes and communicate over a local plugin protocol. That local plugin handshake is separate from cloud authentication. The provider plugin is tasked with translating your high-level HCL resource blocks into cloud API calls, which means the provider process must locate, validate, and sign or authorize API requests using cloud credentials before transmitting them across the public network.
 
-```mermaid
-flowchart TD
-    subgraph CoreProcess["Terraform Core Process"]
-        Parser["Parser & DAG Compiler"]
-        Engine["Execution Engine"]
-    end
-    subgraph ProviderProcess["AWS Provider Plugin Process"]
-        GrpcServer["gRPC Socket Channel Listener"]
-        CredChain["Credential Provider Chain"]
-        Client["AWS API Client (SigV4)"]
-    end
-    Parser --> Engine
-    Engine -->|1. Ephemeral Handshake Token| GrpcServer
-    GrpcServer --> CredChain
-    CredChain --> Client
-    Client -->|2. Regional Signed HTTPS Call| AWSAPI[("AWS Regional API Endpoint")]
-```
+![Terraform Core talks to the AWS provider locally, then the provider resolves credentials and signs regional AWS API calls.](/content-assets/articles/article-iac-terraform-foundations-authentication/core-provider-auth-flow.png)
+
+*The local plugin handshake is separate from cloud authentication; the provider still has to resolve credentials before it can call AWS.*
 
 ## Early Authentication Pattern
 
@@ -151,18 +137,9 @@ The provider captures this JSON payload in memory, extracts the temporary keys, 
 
 To ensure strict accountability, the provider passes the session_name parameter during the STS handshake. AWS logs this session name directly into CloudTrail, which is the regional auditing plane for cloud actions. If an infrastructure change is made, security administrators can correlate the API call directly to the specific execution run of the central pipeline, ensuring that every deployment action is fully auditable.
 
-```mermaid
-sequenceDiagram
-    participant P as AWS Provider (Local Process)
-    participant STS as AWS STS (Security Token Service)
-    participant API as AWS regional API Endpoints
-    P->>STS: 1. POST AssumeRole (RoleArn, SessionName, Signature)
-    Note over STS: Validate Trust Policy & Sign Session
-    STS-->>P: 2. Return Session Keys (AccessKey, SecretKey, SessionToken)
-    P->>API: 3. POST API Request (SigV4 Signature, SessionToken)
-    Note over API: Verify Signature & Execute Resource Action
-    API-->>P: 4. HTTP 200 OK (Response Payload)
-```
+![AWS STS validates a role trust policy, returns temporary session keys, and the Terraform provider uses them for signed API calls.](/content-assets/articles/article-iac-terraform-foundations-authentication/sts-assume-role-flow.png)
+
+*Role assumption gives Terraform short-lived credentials for the target account instead of permanent access keys.*
 
 ## Link-Local Hypervisor Handshakes: IMDSv2
 
@@ -208,28 +185,9 @@ The pipeline runner then launches the Terraform execution flow. Before starting 
 
 Once the signature is verified, AWS STS evaluates the trust relationship policy attached to the target IAM role. This policy defines strict conditions that must match the claims embedded within the JWT. For example, the trust policy can restrict role assumption so that it is only permitted if the repository matches your production repository and the branch matches main. If all conditions are met, AWS STS returns temporary AWS access credentials to the runner, which are immediately injected into the process environment for Terraform to use.
 
-```mermaid
-flowchart LR
-    subgraph CIRunnerEnv["CI Runner Environment"]
-        Runner["Runner Agent"]
-        JWT["Signed JWT Token"]
-    end
-    subgraph AWSSecurityGateway["AWS Security Gateway"]
-        STS["AWS STS Service"]
-        TrustPolicy["IAM Role Trust Policy"]
-    end
-    subgraph MultiTenantAccounts["Multi-Tenant Accounts"]
-        DevAccount["Target Dev Account"]
-        ProdAccount["Target Prod Account"]
-    end
-    Runner -->|1. Generate| JWT
-    JWT -->|2. AssumeRoleWithWebIdentity| STS
-    STS -->|3. Evaluate Claims| TrustPolicy
-    TrustPolicy -->|4. Generate Temporary Keys| STS
-    STS -->|5. Return Session Keys| Runner
-    Runner -->|6. Deploy to Dev| DevAccount
-    Runner -->|7. Deploy to Prod| ProdAccount
-```
+![A CI runner can exchange signed OIDC claims for temporary cloud credentials, then run Terraform against target accounts.](/content-assets/articles/article-iac-terraform-foundations-authentication/oidc-pipeline-trust-flow.png)
+
+*OIDC federation lets the cloud provider trust a specific repository, branch, and workflow without storing a long-lived cloud key in CI.*
 
 This federated architecture ensures that the pipeline runner never possesses long-lived secrets. Every credential used during the run is ephemeral and bound to the specific execution context of the pipeline job. If a runner is compromised mid-execution, the stolen session keys will automatically expire shortly after the job finishes, and because there are no static credentials saved in the repository settings, there are no keys to rotate or revoke.
 
