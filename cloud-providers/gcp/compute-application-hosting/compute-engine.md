@@ -12,134 +12,193 @@ aliases:
 
 ## Table of Contents
 
-1. [Compute Engine Virtual Machines](#compute-engine-virtual-machines)
-2. [Virtual Machine Machine Families](#virtual-machine-machine-families)
-3. [OS Images and Snowflake Server Prevention](#os-images-and-snowflake-server-prevention)
-4. [Persistent Disks and Storage Decoupling](#persistent-disks-and-storage-decoupling)
-5. [Zonal Placement and Availability Boundaries](#zonal-placement-and-availability-boundaries)
-6. [Automated Startup and Metadata Bootstrap](#automated-startup-and-metadata-bootstrap)
-7. [Guest Process Supervision with systemd](#guest-process-supervision-with-systemd)
-8. [VPC Network Interface Attachment](#vpc-network-interface-attachment)
-9. [Sample Server Shape](#sample-server-shape)
-10. [Putting It All Together](#putting-it-all-together)
-11. [What's Next](#whats-next)
+1. [What Compute Engine Gives You](#what-compute-engine-gives-you)
+2. [The Invoice Worker Scenario](#the-invoice-worker-scenario)
+3. [When a VM Fits](#when-a-vm-fits)
+4. [Machine Families and Machine Types](#machine-families-and-machine-types)
+5. [Images, Disks, and Zones](#images-disks-and-zones)
+6. [Startup Scripts and Metadata](#startup-scripts-and-metadata)
+7. [Keeping the Worker Running with systemd](#keeping-the-worker-running-with-systemd)
+8. [Service Accounts, Scopes, and Network Access](#service-accounts-scopes-and-network-access)
+9. [Instance Templates and Managed Instance Groups](#instance-templates-and-managed-instance-groups)
+10. [Operations Runbook](#operations-runbook)
+11. [Putting It All Together](#putting-it-all-together)
+12. [What's Next](#whats-next)
 
-## Compute Engine Virtual Machines
+## What Compute Engine Gives You
+<!-- section-summary: Compute Engine gives your team a real VM, so your team controls the operating system and also owns the server work that comes with it. -->
 
-Compute Engine is GCP's virtual server service. It gives your team a VM with configurable CPU, memory, operating system image, disks, network interfaces, startup behavior, and process supervision responsibility. Rather than abstracting the hardware layer completely like serverless container runtimes, Compute Engine allows you to provision, configure, and operate virtual servers with direct root control over the operating system kernel, filesystem configurations, network adapters, and running background processes.
+**Compute Engine** is Google Cloud's virtual machine service. A virtual machine, or **VM**, is a software-defined server that runs an operating system such as Debian, Ubuntu, Red Hat Enterprise Linux, or Windows Server on Google-managed hardware. Your team chooses the CPU and memory shape, the boot image, the disks, the zone, the network, the service account, and the startup behavior.
 
-A common architectural trap is choosing a virtual machine out of operational familiarity rather than technical necessity. Compute Engine is the correct runtime only when a workload requires raw server-shaped capabilities, such as running a database engine that requires dedicated block storage, hosting legacy vendor software with hardcoded OS requirements, or executing background daemons that require persistent host-level monitoring agents.
+That server-shaped control is the point. A VM gives you root access, local processes, host agents, custom packages, scheduled jobs, mounted disks, and deep operating system control. The tradeoff is simple to understand: Google runs the data center and the virtualization platform, while your team still operates the guest operating system and the application process inside it.
 
-For engineers transitioning from other cloud platforms, Compute Engine virtual machines are the direct equivalent of Amazon EC2 instances and Azure Virtual Machines. While the underlying virtualization concepts are familiar, GCP differentiates its environment with customizable machine configurations, durable Persistent Disk storage, and live migration for many planned maintenance events.
+For our running example, imagine the same Orders team also owns the billing side of checkout. The main Orders API already has a modern home, but a legacy **invoice worker** still runs as a Linux daemon. It polls an internal database, calls an old PDF rendering library, writes invoice files to a mounted data disk, and depends on a vendor package that expects a normal Linux host. At the same time, the team plans to move receipt emails and file-processing jobs into event-driven functions. That split is healthy: the legacy worker keeps the server it genuinely needs, and the newer background jobs can use smaller event handlers.
 
-:::expand[Design Detail: Maintenance and Live Migration]{kind="design"}
-A primary risk when operating virtual machines is planned host maintenance. If the platform needs to maintain the physical host running your VM, your workload may experience disruption unless the instance type and maintenance policy support live migration.
+So in this article, the VM choice comes from this workload's server-shaped needs rather than habit. Then we will walk through the exact pieces that make the VM reproducible, secure, and operable in production.
 
-Live migration is a Compute Engine feature that can move many running VM instances during planned maintenance with minimal disruption. The beginner contract is important: live migration reduces planned-maintenance downtime for supported instances, but it is not a guarantee that every VM survives every hardware failure. Multi-zone application design is still the reliability boundary for production services.
+## The Invoice Worker Scenario
+<!-- section-summary: A concrete workload helps connect machine sizing, images, disks, startup, identity, networking, and operations into one VM design. -->
 
-```mermaid
-flowchart TD
-    subgraph Before["Before Maintenance"]
-        VMSource["Running VM instance"]
-    end
+The invoice worker has a very plain job. Every few minutes it reads invoices that are ready to generate, renders PDFs with a legacy native library, stores the PDFs, marks each invoice as completed, and sends a small status message back to the billing system. The worker serves no customer web traffic directly, but the finance team depends on it every morning.
 
-    subgraph Platform["Compute Engine Maintenance"]
-        Decision["Maintenance event"]
-        Migration["Live migration if supported"]
-    end
+That detail matters because production design starts from the job the machine performs. A web API cares about request latency, horizontal scaling, and load balancer health checks. This worker cares about process supervision, a predictable filesystem path for the renderer, controlled access to a database, a safe disk backup path, and clear logs for failed invoice IDs.
 
-    subgraph After["After Migration"]
-        VMDest["Same VM continues running"]
-    end
+Here is the first sketch of the runtime shape:
 
-    VMSource --> Decision
-    Decision --> Migration
-    Migration --> VMDest
+| Runtime piece | What the team chooses | Why it matters for the invoice worker |
+|---|---|---|
+| **Machine type** | `e2-standard-2` at first | The worker needs moderate CPU and memory for PDF rendering without paying for a specialized machine. |
+| **Image** | Debian public image or a custom hardened image | The OS must include the packages, agents, and baseline security settings the worker expects. |
+| **Persistent Disk** | Balanced boot disk plus optional data disk | The worker can keep local spool files without tying the data lifecycle to the VM object. |
+| **Zone** | `us-central1-a` for one VM, multi-zone for a group | A single VM has a single zonal failure boundary, while a group can spread replacements across zones. |
+| **Startup script** | Metadata-driven bootstrap | A fresh VM can install or configure the worker without a person SSHing in. |
+| **Service account** | `invoice-worker-runtime@...` | The process receives only the Google Cloud permissions it needs. |
+| **Firewall rules** | Targeted by service account | The worker reaches the database and logging endpoints while avoiding broad inbound access. |
+
+Notice the story already points to the next sections. First we decide whether a VM fits. Then we size it, choose what it boots from, decide where its durable data lives, automate startup, supervise the process, give it identity, and create an operational routine around it.
+
+## When a VM Fits
+<!-- section-summary: VMs fit workloads that need operating-system control, host agents, block storage, special packages, or a migration path for legacy software. -->
+
+A **VM runtime** fits when the application needs the operating system as part of the product. That includes legacy software with native dependencies, daemons that expect long-lived local processes, commercial packages licensed by host, monitoring or security agents that run on the guest OS, workloads that need attached block storage, and migrations from an on-premises server where the first cloud step should minimize application change.
+
+Our invoice worker checks several of those boxes. The renderer depends on a native library. The worker already runs under Linux process supervision. The finance team wants a low-risk migration before rewriting the worker. Compute Engine lets the team keep that shape while still using Google Cloud IAM, VPC networking, snapshots, Cloud Logging, and automated instance creation.
+
+The same platform would be a poor first choice for the receipt email job. A receipt handler receives one event, sends one email, records one result, and then waits for the next event. That job has no reason to keep a whole server warm all day. The next article moves that work into Cloud Run functions, but the important design habit starts here: each workload gets the runtime that matches its actual shape.
+
+For a production review, teams usually ask these questions before approving a VM:
+
+| Question | VM-friendly answer | Runtime to consider if the answer differs |
+|---|---|---|
+| Does the app require OS-level packages, agents, or kernel-adjacent settings? | Yes, the worker depends on host packages and a daemon model. | Cloud Run service if it can run cleanly in a container. |
+| Does the app need local block storage or special disk attachment behavior? | Yes, it uses a local spool and controlled disk snapshots. | Cloud Storage, Cloud SQL, or another managed data service. |
+| Does the team need a lift-and-shift path before a rewrite? | Yes, migration risk matters more than immediate redesign. | Serverless or containers after the workflow is simplified. |
+| Can the app tolerate one zonal VM failing? | Only for a low-criticality worker, or during an early migration stage. | Managed instance group across zones for higher availability. |
+
+This is the first production rule for Compute Engine: the VM is only the beginning. The real design is the surrounding operating model.
+
+## Machine Families and Machine Types
+<!-- section-summary: Machine families describe workload-optimized hardware categories, and machine types choose the concrete CPU and memory shape. -->
+
+A **machine family** is a category of VM hardware profiles optimized for a type of workload. Google Cloud groups Compute Engine machines into families such as general-purpose, compute-optimized, memory-optimized, storage-optimized, and accelerator-optimized. A **machine series** is a generation inside a family, and a **machine type** is the concrete shape you create, such as `e2-standard-2` or `n2-standard-4`.
+
+The beginner-friendly way to read a machine type is by asking how much CPU, memory, and special hardware the workload needs. The invoice worker starts with PDF rendering and database polling, so a general-purpose machine is a reasonable first production shape. If rendering turns CPU-heavy, the team can test a compute-optimized type. If a future report generator holds large in-memory datasets, a memory-optimized family may enter the conversation.
+
+The choice should come from measurement and observed bottlenecks. A safe rollout starts with a modest machine type, installs Cloud Monitoring and the Ops Agent, watches CPU, memory, disk throughput, and process restarts, then changes the template if the evidence points to a different shape. For a worker, the useful question moves from "Can this VM run the code?" to "Can this VM clear the invoice backlog inside the business window with headroom?"
+
+Here is a practical sizing pass for the invoice worker:
+
+| Signal | What to watch | What the team does next |
+|---|---|---|
+| **CPU saturation** | PDF renders keep CPU above 80 percent for long stretches | Test a larger general-purpose type or a compute-optimized type. |
+| **Memory pressure** | The process swaps or gets killed during large invoice batches | Increase memory or split large batches into smaller units. |
+| **Disk throughput** | PDF writes queue up and the worker waits on local I/O | Use balanced or SSD Persistent Disk, resize the disk, or move finished files to Cloud Storage sooner. |
+| **Backlog age** | Old invoices wait too long during month-end | Add more workers through a managed instance group if the job is safe to run concurrently. |
+
+Treat the machine type as a configuration value that lives in Terraform, an instance template, or another reviewed deployment path. That keeps sizing changes visible and repeatable.
+
+## Images, Disks, and Zones
+<!-- section-summary: A production VM needs a repeatable boot image, durable disk decisions, and a clear understanding of the zonal failure boundary. -->
+
+An **image** is the boot disk template for a VM. Public images give you common operating systems maintained by Google or OS vendors. A **custom image** is a boot disk image owned by your project or organization, often built from a hardened baseline that already includes agents, certificates, approved packages, and security configuration.
+
+For the invoice worker, the team has two reasonable paths. Early in the migration, a public Debian image plus a startup script may be enough. After the worker stabilizes, a custom image built by Packer or an image pipeline can reduce boot time and remove package-install surprises. The custom image should still avoid embedding secrets; secrets belong in Secret Manager or another controlled runtime path.
+
+A **Persistent Disk** is Google Cloud's durable block storage for Compute Engine. The VM sees it as a disk device, but Google manages the storage behind the scenes. Persistent Disk data has built-in redundancy, and snapshots can protect against user error. Zonal Persistent Disks belong to one zone. Regional Persistent Disks replicate across two zones in the same region for workloads that need a lower recovery point and recovery time than snapshot-only recovery can provide.
+
+For a worker, the disk decision is usually split into three buckets:
+
+| Data type | Good home | Reason |
+|---|---|---|
+| Application binary and OS packages | Image or startup-managed install | A replacement VM can recreate the runtime. |
+| Temporary spool files | Separate Persistent Disk or local temp path with cleanup | The team can control recovery and retention for in-flight files. |
+| Final invoice PDFs | Cloud Storage | Finished files need object storage, lifecycle rules, and easy downstream access. |
+
+A **zone** is a deployment location inside a region, such as `us-central1-a`. A VM is a zonal resource, so one VM depends on one zone. That is fine for a development worker or a low-criticality migration stage. Production teams document that boundary clearly, then decide whether they need a regional managed instance group, a regional disk pattern, or a queue-based design where another worker can continue from the next invoice.
+
+Here is a compact creation command that shows the main decisions together:
+
+```bash
+gcloud compute instances create invoice-worker-prod-01 \
+  --project=PROJECT_ID \
+  --zone=us-central1-a \
+  --machine-type=e2-standard-2 \
+  --image-family=debian-12 \
+  --image-project=debian-cloud \
+  --boot-disk-size=50GB \
+  --boot-disk-type=pd-balanced \
+  --subnet=apps-us-central1 \
+  --no-address \
+  --service-account=invoice-worker-runtime@PROJECT_ID.iam.gserviceaccount.com \
+  --scopes=https://www.googleapis.com/auth/cloud-platform \
+  --metadata-from-file=startup-script=startup-invoice-worker.sh
 ```
 
-As traced above, live migration is designed to move supported running VMs during maintenance with minimal disruption:
+This command is intentionally explicit. It names the zone, machine type, image, disk, subnet, absence of a public IP address, runtime identity, OAuth scope, and startup script. In a real team, this shape should move into Terraform or another infrastructure-as-code workflow so review and rollback stay out of shell history.
 
-1.  **Maintenance Event**: Google Cloud schedules maintenance for the host infrastructure.
-2.  **Eligibility Check**: Compute Engine checks whether the instance supports live migration and whether its maintenance policy allows it.
-3.  **Migration**: If eligible, Compute Engine moves the running instance while trying to keep disruption low.
-4.  **Application Monitoring**: Your app should still use health checks, retries, and multi-zone capacity because live migration is not a substitute for application-level resilience.
-:::
+## Startup Scripts and Metadata
+<!-- section-summary: Metadata gives a VM runtime facts, and startup scripts turn a fresh boot into a working application server without hand setup. -->
 
-## Virtual Machine Machine Families
+**VM metadata** is key-value configuration that Compute Engine stores for the project or instance. A VM can read metadata from the metadata server at `metadata.google.internal` without extra authorization. Google-managed guest software and your own scripts can use it for startup scripts, attributes, service account tokens, host information, and other runtime facts.
 
-A machine family is a VM hardware profile category for a particular CPU, memory, accelerator, or cost shape. GCP organizes Compute Engine virtual machines into distinct, workload-optimized machine families. Choosing the correct family is critical for matching your workload's hardware requirements to the correct pricing tier:
+A **startup script** is a file of commands that runs when the VM boots. For our invoice worker, the startup script handles the last mile between a generic VM and a ready worker host. It can create a Linux user, fetch a pinned application artifact, write a configuration file, install a `systemd` unit, start the service, and leave logs that explain what happened during boot.
 
-*   **General-Purpose (`E2`, `N2`, `C3`)**: The standard workhorses designed for web applications, background utilities, and medium-scale databases. They run on shared or dedicated physical CPU cores, balancing cost and performance.
-*   **Compute-Optimized (`C2`, `H3`)**: Hardened machine families that bind your virtual CPUs directly to high-frequency physical processor cores. These are designed for CPU-heavy tasks like high-performance computing (HPC) or real-time gaming servers.
-*   **Memory-Optimized (`M1`, `M2`, `M3`)**: Specialized instances with massive RAM footprints (up to 12 terabytes), designed for running in-memory databases like SAP HANA or highly complex analytical workloads.
+The clean production habit is to keep startup scripts small and deterministic. The script should pin package versions where that matters, fetch artifacts by immutable version, fail loudly on missing configuration, and avoid one-off manual repair. If the team fixes a VM only by SSHing into it, the next replacement VM will miss that fix.
 
-## OS Images and Snowflake Server Prevention
+Here is a startup script shape for the invoice worker:
 
-An OS image is the boot template that gives a VM its operating system, default packages, and startup baseline. Every virtual machine starts from an **OS Image** containing the bootloader, operating system kernel, and pre-installed system packages. While GCP provides standard public images (such as Debian, Ubuntu, and Red Hat Enterprise Linux), relying on manual configuration post-boot is a severe operational risk.
+```bash
+set -euo pipefail
 
-![A VM should rebuild from image, metadata, startup script, package source, and service manager.](/content-assets/articles/article-cloud-providers-gcp-compute-application-hosting-compute-engine-virtual-machines/vm-boot-path.png)
+APP_VERSION="$(curl -fsS -H "Metadata-Flavor: Google" \
+  "http://metadata.google.internal/computeMetadata/v1/instance/attributes/app-version")"
 
-*Repeatable boot turns a VM from a handcrafted server into replaceable infrastructure.*
+useradd --system --home /opt/invoice-worker --shell /usr/sbin/nologin invoice-worker || true
+mkdir -p /opt/invoice-worker /etc/invoice-worker /var/lib/invoice-worker
 
-If an operator SSHs into a running VM to manually install dependencies, modify configurations, or update code, that VM becomes a **snowflake server**—an undocumented, fragile system that cannot be reproduced. If the physical host experiences a catastrophic crash or a developer accidentally deletes the VM, the configuration is lost permanently.
+gcloud storage cp "gs://billing-artifacts/invoice-worker/${APP_VERSION}/worker.tar.gz" /tmp/worker.tar.gz
+tar -xzf /tmp/worker.tar.gz -C /opt/invoice-worker
+chown -R invoice-worker:invoice-worker /opt/invoice-worker /var/lib/invoice-worker
 
-To prevent snowflake servers, you must enforce automation:
+cat >/etc/invoice-worker/env <<ENV
+PROJECT_ID=PROJECT_ID
+DATABASE_HOST=10.40.0.12
+SPOOL_DIR=/var/lib/invoice-worker
+ENV
 
-*   **Custom Machine Images (Golden Images)**: Build custom templates using tools like Packer. You install all security agents, runtime dependencies, and application binaries onto a VM, then snapshot its disk to create a custom image. When you deploy a new VM, it boots instantly with all code pre-installed.
-*   **Infrastructure as Code (IaC)**: Standardize all VM deployments using Terraform or Bicep, ensuring that machine types, disk configurations, and VPC attachments are version-controlled and reproducible.
+cp /opt/invoice-worker/systemd/invoice-worker.service /etc/systemd/system/invoice-worker.service
+systemctl daemon-reload
+systemctl enable --now invoice-worker.service
+```
 
-## Persistent Disks and Storage Decoupling
+The important detail is the data flow. The VM receives `app-version` through metadata, uses its attached service account to fetch the artifact, writes local configuration, and hands long-running process ownership to `systemd`. This gives the team a repeatable boot path. A broken replacement VM points to a version, a startup log, a service state, and a small number of inputs.
 
-Persistent Disk is managed block storage that attaches to a VM as a disk device while keeping its own lifecycle. Compute Engine virtual machines store data on **Persistent Disks (PD)**. Unlike a physical boot drive that is inseparable from one machine, a Persistent Disk is managed separately from the VM. The VM sees it as block storage, but the disk can have its own lifecycle, placement rules, and snapshot strategy.
+## Keeping the Worker Running with systemd
+<!-- section-summary: Startup gets the VM ready, while systemd keeps the invoice worker alive and records process-level evidence. -->
 
-![Persistent Disk keeps block storage separate from the VM lifecycle.](/content-assets/articles/article-cloud-providers-gcp-compute-application-hosting-compute-engine-virtual-machines/persistent-disk-boundary.png)
+**systemd** is the service manager used by many Linux distributions. It starts services during boot, restarts them after failures, sends logs to the journal, controls stop behavior, and exposes status through tools such as `systemctl` and `journalctl`. The startup script should prepare the host, then systemd should own the long-running worker process.
 
-*The disk can outlive a VM, but it still has zonal placement rules.*
+This matters because a billing worker should survive ordinary process crashes. A worker may hit a bad PDF input, lose a database connection, or receive a termination signal during maintenance. The service manager gives the process a stable contract: start this command, run as this user, read this environment file, restart on failure, and write output to the system journal.
 
-This network-decoupled architecture provides critical advantages:
-
-*   **Dynamic Resizing**: You can expand a persistent disk's capacity (e.g. from 100GB to 500GB) dynamically while the VM is running and mounting the filesystem, without requiring a reboot.
-*   **Independent Lifecycle**: A persistent disk can outlive the VM that uses it, and you can detach and attach disks within documented limits. This is useful for repair and replacement, but it should not be described as instant failover for every host failure.
-
-Persistent disks include options such as standard, balanced, SSD, and newer Hyperdisk families. To reduce operational burden for most application teams, store primary relational data in managed engines like Cloud SQL when you want Google to handle backups, patching, and high availability. Use VM disks when the workload specifically needs block storage attached to an operating system.
-
-## Zonal Placement and Availability Boundaries
-
-Zonal placement means a VM is created in one specific zone and depends on that zone's capacity and availability. While GCP VPC networks are natively global, Compute Engine virtual machines are strictly **zonal** resources. A VM is provisioned within a single zone inside a region, such as `us-central1-a`.
-
-Because a VM belongs to one zone, deploying a single VM introduces a single failure boundary. If that zone has a serious outage, the workload can go offline.
-
-To secure highly available applications, you must deploy VMs across multiple zones behind a regional Application Load Balancer. By grouping these VMs into **Managed Instance Groups (MIGs)**, GCP's control plane can monitor VM health dynamically, automatically terminating and recreating any unhealthy instances across zonal boundaries to maintain your desired scale.
-
-## Automated Startup and Metadata Bootstrap
-
-The metadata server is the local runtime information endpoint a VM uses to read configuration, identity, and startup data. To automate VM provisioning, Compute Engine uses this endpoint to pass runtime configurations and scripts to the guest operating system at boot time.
-
-When a VM boots, the Google Guest Agent running inside the OS queries the link-local metadata address `http://metadata.google.internal/computeMetadata/v1/` to fetch configuration parameters, including the user-supplied **`startup-script`**.
-
-A startup script is a collection of shell commands or configuration scripts executed automatically by the root user during the final stages of the VM's boot process. The script acts as the bootstrap mechanism: it reads environment variables from metadata, pulls application configuration files, verifies database connectivity, and initializes your guest processes, ensuring that a freshly booted VM becomes a fully operational application server without human intervention.
-
-## Guest Process Supervision with systemd
-
-`systemd` is the Linux process supervisor that keeps services running after the boot script finishes. Once a virtual machine's startup script completes, the guest operating system needs a persistent process supervisor to keep the application running. In modern Linux distributions like Debian or Ubuntu, this is managed by **`systemd`**.
-
-Relying on raw background processes (like executing `node server.js &` inside a terminal session) is an operational hazard: the shell will eventually close, and if the process crashes due to an unhandled exception, it remains terminated.
-
-To configure systemd to supervise your application, you write a standard service unit file (e.g., `/etc/systemd/system/orders-worker.service`):
+A practical unit for the invoice worker looks like this:
 
 ```ini
 [Unit]
-Description=Orders Import Worker Daemon
-After=network.target
+Description=Legacy invoice worker
+After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=simple
-User=orders-app
-WorkingDirectory=/opt/orders-worker
-ExecStart=/usr/bin/node dist/index.js
-Restart=always
-RestartSec=5
-EnvironmentFile=/etc/orders/environment.env
+User=invoice-worker
+Group=invoice-worker
+WorkingDirectory=/opt/invoice-worker
+EnvironmentFile=/etc/invoice-worker/env
+ExecStart=/usr/bin/node /opt/invoice-worker/dist/worker.js
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=30
+KillSignal=SIGTERM
 StandardOutput=journal
 StandardError=journal
 
@@ -147,59 +206,155 @@ StandardError=journal
 WantedBy=multi-user.target
 ```
 
-The systemd unit configuration above guarantees process reliability:
+The unit makes a few production choices visible. The worker runs as a dedicated Linux user instead of root. `Restart=on-failure` recovers from ordinary crashes without hiding clean shutdowns. `TimeoutStopSec=30` gives the worker a short drain window, which is useful if it marks an invoice attempt before exiting. The journal settings let the Ops Agent collect the process output for Cloud Logging.
 
-*   **`ExecStart`**: Defines the precise binary path and arguments to launch your application securely.
-*   **`Restart=always`**: Instructs the Linux kernel to monitor the process ID dynamically. If the application exits with an error code or crashes, systemd waits 5 seconds (`RestartSec=5`) and automatically spawns a fresh process.
-*   **`StandardOutput=journal`**: Routes all application `stdout` and `stderr` streams directly to the system journal (`journald`), allowing the Google Ops Agent to capture and stream logs to Cloud Logging automatically.
+The team should also teach the worker how to stop safely. For example, when it receives `SIGTERM`, it can finish the current invoice or put the invoice back into the queue before exiting. That makes restarts, patch windows, and VM replacement much less risky because the process has a graceful stop path.
 
-## VPC Network Interface Attachment
+Daily debugging then uses normal Linux and Google Cloud tools:
 
-A network interface is the VM attachment point to a VPC subnet and private IP range. Compute Engine virtual machines attach directly to private VPC subnets through network interfaces. Unlike serverless runtimes that hide most backend networking details, a VM is a persistent, addressable node within your private network topology.
+```bash
+systemctl status invoice-worker.service
+journalctl -u invoice-worker.service --since "30 minutes ago"
+gcloud compute instances get-serial-port-output invoice-worker-prod-01 --zone=us-central1-a
+```
 
-This direct attachment requires precise network planning:
+Those commands answer different questions. `systemctl` tells you whether the service is running. `journalctl` shows process logs on the VM. Serial port output helps with early boot and startup-script failures, especially when SSH access is unavailable.
 
-*   **Subnet CIDR Reservation**: Ensure your subnet CIDR ranges are sized adequately to support the maximum scale of your Managed Instance Groups.
-*   **Private Google Access (PGA)**: Keep your VM subnets isolated from the public internet. By enabling Private Google Access on the subnet, VMs lacking public IP addresses can still resolve and securely access Google APIs (such as Cloud Storage or Secret Manager) over Google's private network backplane.
-*   **IAM Target-Based Firewalls**: Attach a dedicated service account to the VM instance, and target your VPC firewall rules directly to that service account principal rather than relying on volatile, user-controlled network tags.
+## Service Accounts, Scopes, and Network Access
+<!-- section-summary: A VM needs a runtime identity for Google APIs and VPC controls for traffic entering and leaving the machine. -->
 
-## Sample Server Shape
+A **service account** is a Google Cloud identity meant for workloads. When a service account is attached to a VM, applications on that VM can use the service account's credentials to call Google Cloud APIs. IAM roles granted to that service account decide what the workload can do, such as reading a Secret Manager secret or writing objects to one Cloud Storage bucket.
 
-A sample server shape is a compact review of the VM's runtime contract. An idiomatic Compute Engine server shape for the Orders background worker isolates machine sizing, operating system templates, and process execution:
+Compute Engine also has **access scopes**, a legacy OAuth scope mechanism. IAM roles decide the service account's permission level, while access scopes can further limit OAuth-based calls from the VM. Google recommends using the broad `cloud-platform` scope and controlling actual access with IAM roles. That pattern avoids confusing failures where IAM allows an API call but the VM's scope blocks it.
 
-| Server Parameter | Configuration Value | Operational Purpose |
-| :--- | :--- | :--- |
-| **Instance Name** | `orders-worker-prod-01` | Unique zonal hostname within the VPC. |
-| **Machine Type** | `e2-standard-2` | Balanced 2 vCPU, 8GB RAM general-purpose instance. |
-| **OS Image** | `debian-12-hardened-v2026` | Pre-built custom golden image with Ops Agent active. |
-| **Persistent Disk** | `30GB Balanced SSD` | Low-latency boot disk network-decoupled from hardware. |
-| **Identity Account**| `orders-worker-runtime@prod-project...` | Least-privilege IAM service account principal. |
-| **Bootstrap Script**| Metadata `startup-script` | Automates config fetching and env file writing. |
-| **Process Manager** | `systemd` daemon unit | Supervises process execution and restarts on crash. |
+For the invoice worker, the runtime service account should be narrow:
+
+| Need | IAM direction |
+|---|---|
+| Read the worker artifact from one bucket | Grant object read access to the artifact bucket. |
+| Write finished invoices to one output bucket | Grant object create access to the invoice output bucket. |
+| Read database credentials | Grant Secret Manager secret accessor only for the required secret. |
+| Write logs and metrics | Use the standard logging and monitoring roles or agent setup required by the environment. |
+
+The VM network path matters just as much as identity. A **VPC firewall rule** allows or denies connections to or from VM instances, and Google Cloud enforces enabled VPC firewall rules regardless of the guest operating system state. A VM without a public IP address can still reach private resources in the VPC. If it needs Google APIs privately from a subnet without external IP addresses, the subnet design should include Private Google Access or an approved private access pattern.
+
+Targeting firewall rules by service account gives the rule a stronger workload meaning than a loose network tag. For example, the database egress rule can follow the invoice worker identity:
+
+```bash
+gcloud compute firewall-rules create allow-invoice-worker-to-db \
+  --project=PROJECT_ID \
+  --network=prod-vpc \
+  --direction=EGRESS \
+  --target-service-accounts=invoice-worker-runtime@PROJECT_ID.iam.gserviceaccount.com \
+  --destination-ranges=10.40.0.12/32 \
+  --rules=tcp:5432
+```
+
+Inbound access deserves the same discipline. Many production VMs can avoid public SSH. Teams often use OS Login with IAM, Identity-Aware Proxy for controlled administrative access, or a private bastion path. The invoice worker is a background process, so the normal operational path should be logs, metrics, serial output, and controlled replacement rather than casual interactive repair.
+
+## Instance Templates and Managed Instance Groups
+<!-- section-summary: Templates capture the VM recipe, and managed instance groups use that recipe to replace or scale workers. -->
+
+An **instance template** stores a VM configuration: machine type, boot disk image, labels, startup script, service account, network settings, and other instance properties. Google Cloud uses templates to create individual VMs and managed instance groups. Templates are designed for identical VM creation, so teams create a new template when the recipe changes instead of editing the existing template in place.
+
+For one invoice worker, an instance template can seem like extra setup. It earns its keep the first time a boot disk fails, a zone has capacity trouble, or a patch rollout needs a clean replacement. The template says, "This is the server recipe," while the startup script and image say, "This is how the server turns into the invoice worker."
+
+A **Managed Instance Group**, or **MIG**, creates and maintains a group of VM instances from an instance template. A MIG can recreate unhealthy instances, roll out a new template, autoscale in some patterns, and spread instances across zones when configured as a regional group. For the invoice worker, a MIG makes sense only if the job can safely run on more than one VM at a time. The queue or database must prevent two workers from generating the same invoice simultaneously.
+
+Here is the design review for turning one invoice worker into a small group:
+
+| Check | Why it matters |
+|---|---|
+| **Idempotent claim** | Each invoice job needs a database claim or lock so two workers cannot process it twice. |
+| **Externalized output** | Finished PDFs should land in Cloud Storage or another shared destination instead of only one VM disk. |
+| **Health signal** | The worker should expose or write a signal that distinguishes "alive" from "clearing work." |
+| **Template versioning** | New app versions should create a new template or update path with a rollback target. |
+| **Zone spread** | A regional MIG can reduce dependence on one zone if the database and storage path also support that design. |
+
+The invoice worker may stay as a single VM during migration. That is acceptable if the business risk is documented. The production direction should still be clear: one-off VMs are for narrow cases, while repeatable server fleets belong behind templates and groups.
+
+## Operations Runbook
+<!-- section-summary: VM ownership includes patching, logging, backups, replacement, and a short incident routine that engineers can follow under pressure. -->
+
+A **runbook** is the written operating routine for a system. It tells the team what to check, what evidence to collect, how to recover, and which actions need approval. Compute Engine reduces hardware work, but the guest OS and the invoice process still need runbook ownership.
+
+Start with patching. **VM Manager** can apply on-demand and scheduled patches, report patch compliance, collect OS inventory, and manage OS policies. A practical team tests patches in development, rolls them through staging, then patches production during a low-risk window. If the worker runs in a MIG, the safer pattern is often replacement from a fresh image or template rollout rather than long-lived hand-patched pets.
+
+Logging and monitoring come next. Compute Engine provides VM observability metrics, and the **Ops Agent** collects more detailed telemetry such as memory and process metrics. The worker should emit structured JSON logs that include `invoice_id`, `attempt_id`, `worker_version`, and a clear status such as `claimed`, `rendered`, `uploaded`, or `failed`. That gives an on-call engineer a clean path from a finance complaint to one invoice attempt.
+
+Backups need a specific answer. Persistent Disk snapshots are incremental and can be scheduled for zonal and regional disks. If the worker writes only temporary files, a short-retention snapshot may be enough. If it writes important local state, the team should prefer moving that state to Cloud Storage, Cloud SQL, or another managed service, because a VM disk backup is a recovery tool rather than a full application consistency guarantee.
+
+Here is a sample operations table for the invoice worker:
+
+| Situation | First checks | Recovery action |
+|---|---|---|
+| Worker stopped | `systemctl status`, recent `journalctl`, Cloud Logging errors | Restart the service once, then replace the VM from the template if the failure repeats. |
+| Startup failed | Serial port output, startup-script logs, metadata values | Fix the script or metadata in source control and create a replacement VM. |
+| Invoice backlog rising | CPU, memory, database latency, oldest queued invoice age | Increase machine type, add workers only after job claiming is safe, or reduce batch size. |
+| Disk filling | `df -h`, spool directory growth, upload failures | Clear confirmed temporary files, increase disk size, and repair the cleanup path. |
+| Security patch due | VM Manager patch status, image pipeline status | Patch lower environments first, then roll production through a replacement or scheduled patch window. |
+| Bad deploy | Worker version in logs, instance template version, artifact path | Roll back to the previous artifact version or previous template and confirm new attempts succeed. |
+
+The recurring tasks can also be represented as commands. A snapshot schedule can back up the worker disk:
+
+```bash
+gcloud compute resource-policies create snapshot-schedule invoice-worker-daily \
+  --project=PROJECT_ID \
+  --region=us-central1 \
+  --daily-schedule \
+  --start-time=03:00 \
+  --max-retention-days=14
+
+gcloud compute disks add-resource-policies invoice-worker-data \
+  --project=PROJECT_ID \
+  --zone=us-central1-a \
+  --resource-policies=invoice-worker-daily
+```
+
+And log review can start with a narrow Cloud Logging query:
+
+```bash
+gcloud logging read \
+  'resource.type="gce_instance" AND jsonPayload.invoice_id="INV-10492"' \
+  --project=PROJECT_ID \
+  --limit=50 \
+  --format=json
+```
+
+The runbook should be boring in the best way. During an incident, the team should have already settled how the VM was built, where logs live, which service account it uses, and whether the disk has backups. Those answers should already be in the recipe.
 
 ## Putting It All Together
+<!-- section-summary: A production VM is a complete recipe: machine shape, image, disk, zone, startup, service supervision, identity, networking, and operations. -->
 
-Operating virtual machines requires establishing automated, reproducible bootstrap configurations.
+The invoice worker starts as a legacy server-shaped workload, so Compute Engine is a reasonable home for it. The team chooses a general-purpose machine type, boots from a known image, attaches durable disk where local state is unavoidable, places the VM in a chosen zone, and keeps finished files in Cloud Storage. That covers the physical shape of the runtime.
 
-When your deployment pipeline provisions a new background worker VM, Compute Engine creates the instance from the selected machine type, image, disks, network interface, and metadata. The VM boots using a hardened custom image, and the Google Guest Agent queries `metadata.google.internal` to fetch and execute the startup script.
+Then the team makes the server reproducible. Metadata passes in the app version and configuration values. The startup script prepares the host and installs the worker. systemd runs the process, restarts it after ordinary failures, and sends output to the journal. The Ops Agent and Cloud Logging give operators the evidence they need without treating SSH as the main debugging tool.
 
-The script writes localized environment configurations and launches the systemd supervisor daemon. Systemd executes the application binary, monitors its process ID dynamically to recover from runtime crashes, and streams all logging output directly to the local journal. Finally, the local Ops Agent captures the journal log stream and forwards it to Cloud Logging, ensuring your server-shaped workload remains fully secure, automated, and observable.
+Finally, the team wraps the VM in production controls. A dedicated service account grants narrow API access. Access scopes use `cloud-platform` while IAM holds the real permissions. Firewall rules target the runtime identity and keep the VM off the public internet. Instance templates document the server recipe, and a MIG enters the design once the invoice claiming logic can handle multiple workers safely.
+
+The Compute Engine takeaway is practical. Use a VM when the workload truly needs a server, then make that server replaceable, observable, patched, backed up, and routine to operate.
 
 ## What's Next
+<!-- section-summary: The next article moves smaller background jobs out of the VM and into event-driven Cloud Run functions. -->
 
-Compute Engine virtual machines provide comprehensive operating system control for persistent, server-shaped workloads. However, many background tasks are highly ephemeral and event-driven, requiring a runtime that scales immediately to zero when idle. In the next article, we analyze Cloud Run functions, detailing Eventarc CloudEvents triggers and at-least-once idempotency guards.
+The invoice worker can stay on Compute Engine while the team modernizes jobs with no full-server dependency. Receipt emails, file upload processing, and small cleanup tasks usually fit an event-driven shape. They need a handler, a trigger, idempotency, retries, and logs rather than a persistent Linux host.
 
-![A six-part summary infographic for compute engine summary covering Machine family, Image, Startup script, Persistent Disk, Zone, Network NIC](/content-assets/articles/article-cloud-providers-gcp-compute-application-hosting-compute-engine-virtual-machines/compute-engine-summary.png)
-
-*Use this summary as the quick mental checklist before designing or debugging the service.*
+The next article follows those jobs into Cloud Run functions. We will keep the same Orders and billing scenario and look at how Pub/Sub, Eventarc, CloudEvents, service accounts, and retry-safe handler code work together.
 
 
 ---
 
 **References**
 
-- [Google Cloud: Compute Engine VM instances](https://cloud.google.com/compute/docs/instances) - Specification for virtual machine provisioning.
-- [Google Cloud: Machine families resource guide](https://cloud.google.com/compute/docs/machine-resource) - Resource allocation and CPU/RAM sizing standards.
-- [Google Cloud: About startup scripts](https://cloud.google.com/compute/docs/instances/startup-scripts) - Documentation for automated metadata-driven bootstrapping.
-- [Google Cloud: Persistent disk storage](https://cloud.google.com/compute/docs/disks) - Guide to software-defined network persistent storage.
-- [Google Cloud: Live migration process](https://cloud.google.com/compute/docs/instances/live-migration-process) - Explains live migration behavior, support boundaries, and disruption expectations.
+- [Compute Engine VM instances](https://docs.cloud.google.com/compute/docs/instances) - Google Cloud's guide to creating and managing VM instances.
+- [Machine families resource and comparison guide](https://docs.cloud.google.com/compute/docs/machine-resource) - Defines machine families, series, and machine types.
+- [OS images](https://docs.cloud.google.com/compute/docs/images) - Explains public and custom images for Compute Engine boot disks.
+- [Persistent Disk](https://docs.cloud.google.com/compute/docs/disks/persistent-disks) - Documents Persistent Disk behavior, zonal and regional disks, snapshots, scaling, and reliability notes.
+- [About startup scripts](https://docs.cloud.google.com/compute/docs/instances/startup-scripts) - Describes startup scripts for Linux and Windows VMs.
+- [About VM metadata](https://docs.cloud.google.com/compute/docs/metadata/overview) - Explains the metadata server and metadata key-value model.
+- [Service accounts for Compute Engine](https://docs.cloud.google.com/compute/docs/access/service-accounts) - Covers VM service accounts, IAM roles, and access scopes.
+- [Networking overview for VMs](https://docs.cloud.google.com/compute/docs/networking/network-overview) - Documents VM networking and VPC firewall rule behavior.
+- [Instance templates](https://docs.cloud.google.com/compute/docs/instance-templates) - Explains templates, managed instance group usage, and template update behavior.
+- [About VM Manager](https://docs.cloud.google.com/compute/docs/vm-manager) - Describes patching, OS inventory, and OS policy services for VMs.
+- [Observe and monitor VMs](https://docs.cloud.google.com/compute/docs/instances/observe-monitor-vms) - Covers VM observability and Ops Agent guidance.
+- [Create schedules for disk snapshots](https://docs.cloud.google.com/compute/docs/disks/scheduled-snapshots) - Documents scheduled snapshots for Persistent Disk and Hyperdisk volumes.

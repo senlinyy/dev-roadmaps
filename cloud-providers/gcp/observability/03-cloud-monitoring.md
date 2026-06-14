@@ -1,160 +1,255 @@
 ---
 title: "Cloud Monitoring"
-description: "Turn metrics into actionable dashboards and automated alerting policies to catch failures early."
-overview: "No one can watch dashboards 24/7. This article explains how to query metrics and create symptom-based alerting policies using the gcloud CLI."
-tags: ["gcp", "observability", "monitoring", "alerting", "metrics"]
+description: "Turn GCP metrics into useful dashboards, alert policies, SLOs, uptime checks, and incident response loops."
+overview: "Cloud Monitoring stores numerical telemetry as time series, then uses dashboards, alert policies, notification channels, SLOs, and Prometheus-compatible workflows to help teams catch production symptoms and verify recovery."
+tags: ["gcp", "observability", "monitoring", "alerting", "metrics", "slo"]
 order: 3
 id: article-cloud-providers-gcp-observability-cloud-monitoring
 ---
 
-Cloud Monitoring is the central metrics and alerting service for Google Cloud. It stores numerical telemetry as time series and can evaluate those series against alerting rules. When a high-traffic web service begins dropping customer requests, staring at a dashboard in real time is not a viable operational strategy. You need an automated check that tracks the error rate and notifies an engineer when the symptom crosses a dangerous limit.
-
 ## Table of Contents
 
-- [Querying Raw Metrics](#querying-raw-metrics)
-- [Defining an Alerting Policy](#defining-an-alerting-policy)
-- [Applying the Policy](#applying-the-policy)
-- [Symptoms Over Causes](#symptoms-over-causes)
-- [Putting It All Together](#putting-it-all-together)
-- [What's Next](#whats-next)
+1. [The Alert That Starts The Response](#the-alert-that-starts-the-response)
+2. [What A Time Series Contains](#what-a-time-series-contains)
+3. [Cloud Run Metrics For Checkout](#cloud-run-metrics-for-checkout)
+4. [Dashboards That Support Triage](#dashboards-that-support-triage)
+5. [Alert Policies, Conditions, And Notification Channels](#alert-policies-conditions-and-notification-channels)
+6. [Error Rate As A Ratio](#error-rate-as-a-ratio)
+7. [SLOs, SLIs, Error Budgets, And Burn Rate](#slos-slis-error-budgets-and-burn-rate)
+8. [Uptime Checks, Synthetic Checks, And Prometheus Metrics](#uptime-checks-synthetic-checks-and-prometheus-metrics)
+9. [Operating The Monitoring Setup](#operating-the-monitoring-setup)
+10. [Putting It All Together](#putting-it-all-together)
+11. [What's Next](#whats-next)
 
-## Querying Raw Metrics
+## The Alert That Starts The Response
+<!-- section-summary: Cloud Monitoring turns raw metric streams into charts and alert decisions that start incident response. -->
 
-At its core, a metric is just a stream of numbers recorded over time, behaving much like a sensor writing down the outside temperature every sixty seconds. In Google Cloud, these continuous streams are called time series. Every managed service, from load balancers to serverless containers, asynchronously emits data points consisting of a timestamp and a numerical value into the central monitoring control plane.
+In the previous article, logs explained the exact `checkout-api` error. Cloud Monitoring answers the question that usually starts the response: how big is the symptom, and does someone need to act now?
 
-To understand how this data is structured before we build alerts on top of it, we can query the Monitoring API directly. While Google Cloud provides graphical dashboards, fetching the raw data using a terminal session reveals the data model the platform uses for metrics. We will query the API for the number of HTTP requests hitting a Cloud Run service over a specific five-minute window.
+**Cloud Monitoring** is Google Cloud's service for metric storage, charts, dashboards, alerting, uptime checks, SLOs, and related service health workflows. It stores numerical telemetry as **time series**. A time series is a sequence of measured values over time, such as Cloud Run request count, HTTP `5xx` count, p95 latency, instance count, CPU utilization, memory utilization, Pub/Sub backlog, or Cloud SQL connections.
 
-```bash
-curl -H "Authorization: Bearer $(gcloud auth print-access-token)" \
-  "https://monitoring.googleapis.com/v3/projects/my-prod-project/timeSeries?filter=metric.type=%22run.googleapis.com/request_count%22&interval.endTime=2023-10-24T12:00:00Z&interval.startTime=2023-10-24T11:55:00Z"
-```
+For the checkout incident, the first useful page should come from a user-facing symptom. Customers care that checkout fails or takes too long, and container CPU matters when that pressure hurts the checkout outcome. The strongest first alert watches sustained `5xx` rate, latency, or checkout completion drop, then lets the responder use lower-level metrics to find the cause.
+
+This article keeps using `checkout-api` in project `shop-prod` and region `us-central1`. The goal is to turn the raw platform metrics into a monitoring setup that pages only when production needs attention, gives the on-call engineer a helpful dashboard, and proves that a rollback or fix worked.
+
+## What A Time Series Contains
+<!-- section-summary: A metric point only makes sense with its metric type, resource type, labels, value, and time interval. -->
+
+A **metric** is the thing being measured. In Google Cloud, metric types have names such as `run.googleapis.com/request_count` for Cloud Run requests. Metric labels add detail about the measurement, such as response code class. The metric value is the number recorded for a specific interval.
+
+A **monitored resource** is the Google Cloud resource that produced the metric. Cloud Run revision metrics use the `cloud_run_revision` monitored resource. Resource labels then tell Cloud Monitoring which project, location, service, revision, and configuration the data point belongs to.
+
+Here is a simplified time-series response for Cloud Run request count:
 
 ```json
 {
-  "timeSeries": [
+  "metric": {
+    "type": "run.googleapis.com/request_count",
+    "labels": {
+      "response_code": "500",
+      "response_code_class": "5xx"
+    }
+  },
+  "resource": {
+    "type": "cloud_run_revision",
+    "labels": {
+      "project_id": "shop-prod",
+      "location": "us-central1",
+      "service_name": "checkout-api",
+      "revision_name": "checkout-api-00042-n9p",
+      "configuration_name": "checkout-api"
+    }
+  },
+  "points": [
     {
-      "metric": {
-        "labels": {
-          "response_code": "500",
-          "response_code_class": "5xx"
-        },
-        "type": "run.googleapis.com/request_count"
+      "interval": {
+        "startTime": "2026-06-14T14:04:00Z",
+        "endTime": "2026-06-14T14:05:00Z"
       },
-      "resource": {
-        "type": "cloud_run_revision",
-        "labels": {
-          "project_id": "my-prod-project",
-          "location": "us-central1",
-          "service_name": "checkout-api"
-        }
-      },
-      "points": [
-        {
-          "interval": {
-            "startTime": "2023-10-24T11:59:00Z",
-            "endTime": "2023-10-24T12:00:00Z"
-          },
-          "value": {
-            "int64Value": "14"
-          }
-        },
-        {
-          "interval": {
-            "startTime": "2023-10-24T11:58:00Z",
-            "endTime": "2023-10-24T11:59:00Z"
-          },
-          "value": {
-            "int64Value": "2"
-          }
-        }
-      ]
+      "value": {
+        "int64Value": "42"
+      }
     }
   ]
 }
 ```
 
-The JSON response exposes the strict anatomy of a time series. The system does not just store bare numbers; it tags every data stream with metadata. The `metric` block describes exactly what was measured, identifying the data as a request count and using labels to specify that these particular numbers represent failed requests returning HTTP 500 status codes. The `resource` block identifies the physical or logical origin of the data, pinpointing the exact Cloud Run service and region that emitted the metrics.
+The value `42` means very little by itself. The envelope says those are Cloud Run requests, from `checkout-api`, on revision `checkout-api-00042-n9p`, in `us-central1`, with response code class `5xx`, during one one-minute interval. That structure is what lets dashboards and alert policies ask precise questions.
 
-The actual numerical data lives inside the `points` array. Notice that each point is not a single instantaneous timestamp, but rather a time interval with a defined start and end. Cloud Run integrates with Cloud Monitoring and exposes metrics under the `cloud_run_revision` monitored resource. In this output, fourteen HTTP 500 errors were reported for the one-minute window ending at 12:00:00Z.
-
-## Defining an Alerting Policy
-
-Querying metrics manually is useful for debugging, but an operational environment requires the platform to evaluate these streams automatically. An alerting policy is an automated metric check. You give it a specific metric query and a threshold rule, and the monitoring engine evaluates that rule in the background, opening an incident when the data breaks the rule.
-
-We can define this automated check declaratively using a standard YAML configuration file. This policy will monitor the checkout service and trigger an alert if the rate of HTTP 5xx errors exceeds five percent of total traffic.
-
-```yaml
-displayName: "High 5xx Error Rate on Checkout API"
-notificationChannels:
-  - projects/my-prod-project/notificationChannels/1234567890
-combiner: OR
-conditions:
-  - displayName: "HTTP 5xx rate exceeded 5%"
-    conditionThreshold:
-      filter: 'metric.type="run.googleapis.com/request_count" AND resource.type="cloud_run_revision" AND metric.labels.response_code_class="5xx"'
-      comparison: COMPARISON_GT
-      thresholdValue: 0.05
-      duration: "120s"
-      aggregations:
-        - alignmentPeriod: "60s"
-          crossSeriesReducer: REDUCE_SUM
-          perSeriesAligner: ALIGN_RATE
-      denominatorFilter: 'metric.type="run.googleapis.com/request_count" AND resource.type="cloud_run_revision"'
-      denominatorAggregations:
-        - alignmentPeriod: "60s"
-          crossSeriesReducer: REDUCE_SUM
-          perSeriesAligner: ALIGN_RATE
-```
-
-The `filter` explicitly limits the policy's view to only the time series representing failed server requests. Because data points arrive continuously and asynchronously from multiple container instances, the engine uses the `aggregations` block to normalize the streams. The `alignmentPeriod` mathematically snaps misaligned timestamps onto a strict sixty-second grid, while the `crossSeriesReducer` sums the values across all active instances of the checkout service to create a single global metric.
-
-To calculate the error rate rather than an absolute error count, the policy uses a `denominatorFilter` to capture all requests regardless of status code. The monitoring engine divides the error rate by the total request rate, comparing the resulting fraction against the `thresholdValue` of `0.05` (five percent). Finally, the `duration` field dictates that this ratio must remain above five percent for at least two consecutive minutes. This prevents the monitoring control plane from waking up an engineer due to a single dropped network packet or a momentary capacity blip.
-
-## Applying the Policy
-
-With the policy defined on disk, we must push it into Cloud Monitoring. We do this using the Google Cloud command-line interface, passing the YAML file directly to the API.
+The Monitoring API can return this shape directly. A responder might use the API when debugging an alert rule or proving that a filter selects the expected series:
 
 ```bash
-gcloud monitoring policies create --policy-from-file=alert.yaml
+FILTER='metric.type="run.googleapis.com/request_count" AND resource.type="cloud_run_revision" AND resource.labels.service_name="checkout-api"'
+
+curl -G \
+  -H "Authorization: Bearer $(gcloud auth print-access-token)" \
+  --data-urlencode "filter=${FILTER}" \
+  --data-urlencode "interval.startTime=2026-06-14T14:00:00Z" \
+  --data-urlencode "interval.endTime=2026-06-14T14:10:00Z" \
+  "https://monitoring.googleapis.com/v3/projects/shop-prod/timeSeries"
 ```
 
-```text
-Created alerting policy [projects/my-prod-project/alertPolicies/867530912345678].
+This command mainly helps while debugging filters because it shows the same data model that dashboards, alert policies, SLOs, and API clients use underneath.
+
+## Cloud Run Metrics For Checkout
+<!-- section-summary: Cloud Run request, latency, instance, CPU, and memory metrics give the first operating view for a serverless service. -->
+
+Cloud Run publishes useful metrics into Cloud Monitoring. For the checkout incident, the most important one is `run.googleapis.com/request_count`. It is a delta metric that counts requests reaching the revision and includes labels for response code and response code class. The response code class label makes it possible to separate `2xx`, `4xx`, and `5xx` traffic.
+
+Latency matters right next to errors. A service can return HTTP `200` while taking eight seconds to respond, and customers still experience a broken checkout. Cloud Run request latency metrics can show percentiles such as p50, p95, and p99. The p95 value often works well for alerting because it focuses on slow common user experience without letting one strange outlier dominate the page.
+
+Instance count, CPU, and memory explain pressure after the user-facing symptom is visible. If `5xx` rises while instance count is pinned at the maximum, the service might need scaling or dependency relief. If memory climbs until instances crash, the app might have a leak. If CPU stays calm while errors rise, the cause might live in a dependency, configuration, IAM, or code path rather than raw compute capacity.
+
+The dashboard should also include dependency metrics. A checkout service usually depends on Cloud SQL, Pub/Sub, Secret Manager, external payment APIs, and sometimes GKE or another Cloud Run service. Cloud Monitoring can show Google Cloud resource metrics directly, and application metrics can add business signals such as `checkout_attempts`, `checkout_successes`, `payment_timeouts`, and `receipt_publish_failures`.
+
+| Metric layer | Example signal | Incident question |
+|---|---|---|
+| User outcome | Completed checkouts per minute | Are customers finishing the flow? |
+| API symptom | Cloud Run `5xx` rate and p95 latency | Is checkout failing or slow? |
+| Runtime pressure | Instance count, CPU, memory | Is the service resource constrained? |
+| Dependency health | Cloud SQL latency, Pub/Sub backlog | Which downstream system is under pressure? |
+| Release context | Revision and deployment marker | Did the symptom start after a rollout? |
+
+This order matters because it starts with the customer. A responder should know the user impact before diving into CPU, memory, or queue graphs.
+
+## Dashboards That Support Triage
+<!-- section-summary: A useful dashboard puts customer impact first, then shows runtime, dependencies, releases, and links to deeper evidence. -->
+
+A **dashboard** is a shared view of metrics, logs, incidents, SLOs, and other operational context. The dashboard should help the on-call engineer start the incident with a small number of high-signal widgets. For `checkout-api`, that means the top row should show user-facing health.
+
+A practical dashboard layout could look like this:
+
+| Dashboard row | Widgets |
+|---|---|
+| Customer impact | Completed checkouts, checkout success rate, p95 latency, `5xx` rate |
+| Cloud Run service | Request count, response code class split, active instances, CPU, memory |
+| Dependencies | Cloud SQL latency and connections, Pub/Sub oldest unacked message age, payment timeout count |
+| Release and change | Current revision, recent deployment annotations, related audit log link |
+| Investigation shortcuts | Logs query link, trace query link, Error Reporting group link, runbook link |
+
+The row order gives the responder a natural path. First the team sees whether customers are hurt. Then the team sees whether the Cloud Run service has pressure. Then the team sees whether a dependency lines up with the symptom. Then the team sees whether a recent change is involved.
+
+Dashboards also need stable filters. If every chart uses a different service label or region filter, the responder has to translate chart by chart. The same service name, environment, project, region, and release naming should appear across dashboards, logs, metrics, traces, and alert documentation.
+
+Dashboards and alerts have different jobs. A dashboard helps humans triage when they are looking. An alert policy decides when telemetry requires attention and sends that signal to the right place.
+
+## Alert Policies, Conditions, And Notification Channels
+<!-- section-summary: Alert policies evaluate metric or query conditions and route incidents through notification channels. -->
+
+An **alerting policy** is a rule that Cloud Monitoring evaluates against telemetry. A policy contains one or more conditions, a combiner that says how conditions relate, documentation, severity or labels, and notification channels. When a condition stays true for the configured duration, Cloud Monitoring opens an incident and sends notifications through the configured channels.
+
+A **condition** is the actual check. It might say that `5xx` rate is above 5 percent for five minutes, p95 latency is above two seconds for ten minutes, or Pub/Sub oldest unacked message age is above the team's recovery threshold. The duration matters because a one-minute spike might be normal, while a sustained spike means customers are likely affected.
+
+A **notification channel** is the route from monitoring to people or automation. It can be email, chat, PagerDuty, webhooks, Pub/Sub, or another supported target. A production alert should include enough documentation for the responder to start well: what the alert means, what service owns it, which dashboard to open, which log query to run, and what rollback or mitigation paths are approved.
+
+Here is the creation command for a policy stored in a YAML file:
+
+```bash
+gcloud monitoring policies create \
+  --project=shop-prod \
+  --policy-from-file=checkout-5xx-policy.yaml
 ```
 
-Once this command executes successfully, the policy becomes active. The Monitoring evaluation engine applies the configured aligners and reducers to incoming time series. If the resulting error rate breaches the five percent threshold for the required duration, the system opens an incident. Notifications are sent only when the policy has notification channels, such as the example channel in this YAML. Those channels can point to email, Slack, PagerDuty, webhooks, or other supported destinations.
+That command matters because alert policies should be treated like production configuration. Many teams manage them through Terraform or another infrastructure-as-code workflow, but the YAML shape is still useful for learning the fields that Cloud Monitoring evaluates.
 
-## Symptoms Over Causes
+## Error Rate As A Ratio
+<!-- section-summary: A ratio alert compares failed requests to total requests, which keeps alerting tied to customer impact instead of raw volume. -->
 
-A practical way to design an effective alerting strategy is to measure the actual user experience rather than the physical hardware. A user does not care if your container CPU is running at ninety-nine percent capacity. A user only cares if their checkout request fails or takes too long to process.
+Raw error count is useful, but it can page at the wrong time. Ten `5xx` responses might be a disaster if the service only had twelve requests. Ten `5xx` responses might be a small blip if the service had one hundred thousand requests. **Error rate** compares failed requests with total requests, so the alert follows the share of users affected.
 
-Alerting on error rate is evaluating a symptom, while alerting on CPU usage is evaluating a physical cause. If you build alerting policies based entirely on physical causes, you will suffer from both false positives and false negatives. A heavy background batch job might peg the CPU at maximum capacity for an hour without impacting a single user request, yet an aggressive CPU alert would trigger a severe incident response. Conversely, a deadlocked database connection could leave the application container idling at five percent CPU while completely failing to process any web traffic. A CPU-based alert would completely miss the outage.
+Cloud Monitoring threshold conditions can use a numerator filter and a denominator filter. The numerator selects the failed request series. The denominator selects all request series for the same service. The policy below watches `checkout-api` in `us-central1` and opens an incident when the `5xx` ratio stays above 5 percent for five minutes:
 
-By tying the alerting policy directly to the `request_count` metric and filtering for HTTP 5xx responses, the alert follows a user-visible symptom instead of a machine guess. The monitoring engine evaluates the application's output first, leaving the underlying CPU, memory, network, or database cause for the human investigation that follows.
+```yaml
+displayName: "checkout-api high 5xx rate"
+combiner: OR
+enabled: true
+notificationChannels:
+  - projects/shop-prod/notificationChannels/1234567890
+documentation:
+  content: "Checkout is returning a sustained 5xx ratio. First response path: production dashboard, logs filtered by checkout-api and the current revision, then recent Cloud Run audit logs before rollback."
+  mimeType: "text/markdown"
+conditions:
+  - displayName: "5xx ratio above 5 percent"
+    conditionThreshold:
+      filter: 'metric.type="run.googleapis.com/request_count" AND resource.type="cloud_run_revision" AND resource.labels.service_name="checkout-api" AND resource.labels.location="us-central1" AND metric.labels.response_code_class="5xx"'
+      denominatorFilter: 'metric.type="run.googleapis.com/request_count" AND resource.type="cloud_run_revision" AND resource.labels.service_name="checkout-api" AND resource.labels.location="us-central1"'
+      comparison: COMPARISON_GT
+      thresholdValue: 0.05
+      duration: "300s"
+      aggregations:
+        - alignmentPeriod: "60s"
+          perSeriesAligner: ALIGN_RATE
+          crossSeriesReducer: REDUCE_SUM
+      denominatorAggregations:
+        - alignmentPeriod: "60s"
+          perSeriesAligner: ALIGN_RATE
+          crossSeriesReducer: REDUCE_SUM
+```
+
+The `alignmentPeriod` groups incoming points into one-minute intervals. The `ALIGN_RATE` aligner turns delta request counts into a per-second rate. The `REDUCE_SUM` reducer combines the matching series, such as multiple revisions during a rollout, into one value for the service. The numerator and denominator use the same resource filters so the ratio compares the same service and region.
+
+This policy still needs production tuning. A low-traffic service might need a minimum request volume condition so one failed request stays out of high-priority paging. A very critical service might need a lower threshold or a shorter duration. The right threshold comes from the service's reliability target, traffic pattern, and incident response expectations.
+
+## SLOs, SLIs, Error Budgets, And Burn Rate
+<!-- section-summary: SLO monitoring turns service health into explicit reliability targets and uses burn rate to page when the target is being spent too quickly. -->
+
+After the first alert set works, teams usually want a clearer reliability target. A **service level indicator**, or **SLI**, is the measurement of service health. For checkout, a simple availability SLI could be the percentage of `POST /checkout` requests without `5xx`. A latency SLI could be the percentage of checkout requests that finish under two seconds.
+
+A **service level objective**, or **SLO**, gives the SLI a target over a time window. For example, the team might set an objective that 99.9 percent of production checkout requests should succeed over 30 days. That target creates an **error budget**, which is the amount of unreliability the service can spend while still meeting the objective.
+
+Burn rate describes how fast the service is spending that error budget. A high burn rate means the service is consuming its monthly budget too quickly. Burn-rate alerts are useful because they page on reliability risk instead of one instant threshold. A short-window burn-rate alert catches fast outages, while a long-window burn-rate alert catches slow damage that might miss a simple spike alert.
+
+For `checkout-api`, the team might start with two SLOs:
+
+| SLO | SLI idea | Why it matters |
+|---|---|---|
+| Availability | Good events are checkout requests without `5xx` | Customers need payment submission to work |
+| Latency | Good events finish under two seconds | Slow checkout can still lose orders |
+
+SLOs should use signals that match user experience. A CPU SLO describes resource pressure, while a checkout SLO should describe the service behavior that users care about. CPU can support diagnosis, and the reliability target should stay tied to checkout success or latency.
+
+## Uptime Checks, Synthetic Checks, And Prometheus Metrics
+<!-- section-summary: Outside-in checks and Prometheus-style metrics cover gaps that built-in service metrics miss. -->
+
+Cloud Run metrics show requests that reach the service. An **uptime check** or **synthetic monitor** can test the public path from outside the service. That matters when the failure is DNS, TLS, routing, authentication, a load balancer, or a dependency path that normal internal metrics miss.
+
+For checkout, a safe synthetic check should avoid charging real payment cards or creating real orders. It might call a health endpoint that validates the service can reach required dependencies, or it might run a test checkout path against a sandbox payment provider and a clearly marked test tenant. The check should create enough evidence to catch public route failure without creating noisy business data.
+
+Many production teams also use Prometheus-style metrics. Google Cloud Managed Service for Prometheus can collect Prometheus metrics and lets teams use PromQL in Cloud Monitoring. This is especially useful for GKE, hybrid environments, or applications that already expose OpenTelemetry or Prometheus metrics such as `http.server.request.duration`, queue worker counts, and custom business metrics.
+
+Prometheus metrics need the same label discipline as Cloud Monitoring metrics. Labels like `service`, `environment`, `route`, `status_class`, and `dependency` work well. Labels like `user_id`, `checkout_id`, full URL paths with IDs, or request IDs create high-cardinality series and can make dashboards expensive, slow, and hard to read.
+
+## Operating The Monitoring Setup
+<!-- section-summary: Monitoring stays useful when teams tune noise, test notifications, document response, and review alerts after incidents. -->
+
+A monitoring setup continues after the policy is created. The team has to operate it. That means testing notification channels, checking that runbook links still work, tuning noisy thresholds, and making sure every alert has a clear owner.
+
+Every high-priority alert should answer five questions in its documentation. What user symptom does this represent? Which dashboard should the responder open first? Which log or trace query starts the investigation? Which rollback, scaling, or mitigation actions are allowed? Which team owns follow-up work after the incident?
+
+After the checkout incident, the team should review the monitoring path. If customers reported the failure before Cloud Monitoring paged, the alert was too weak or the signal was missing. If the page fired and the dashboard left the team confused, the dashboard needs better context. If five alerts fired for one symptom, the team should choose the one high-signal page and demote the rest to dashboard or ticket-level visibility.
+
+Cost and cardinality also need routine review. A new custom metric with too many labels can create thousands of series. A log-based metric based on a renamed field can silently stop matching. A dashboard with old revision filters can drift out of date. Small monitoring reviews after incidents keep the system trustworthy.
 
 ## Putting It All Together
+<!-- section-summary: Cloud Monitoring turns telemetry into scope, response, reliability targets, and recovery proof. -->
 
-Operational visibility requires moving beyond raw data and building automated safety mechanisms.
+For `checkout-api`, Cloud Monitoring gives the team the operational loop around the logs and traces. Time series show that `5xx` rate jumped after release `2026-06-14.3`. A dashboard shows customer impact, Cloud Run health, dependencies, and rollout context. An alert policy compares failed requests with total requests and pages only when the symptom is sustained. SLOs turn checkout reliability into a target, and burn-rate alerts show when the team is spending the error budget too quickly.
 
-- We fetched raw metrics directly from the Monitoring API using `curl` to observe how Google Cloud structures time-series data into timestamped aggregation buckets.
-- We constructed a declarative alerting policy that mathematically compares error request rates against total request rates to accurately measure system failure.
-- We deployed the policy into Cloud Monitoring using the `gcloud monitoring policies create` command, establishing a continuous automated check.
-- We designed the threshold around a symptom rather than a physical cause, so the alert starts from user-visible failure before deeper diagnosis.
+The best monitoring design starts with user impact, then gives the responder enough supporting evidence to find the cause. Logs explain the exact event. Traces show the request path. Audit logs show the change history. Metrics, dashboards, alert policies, and SLOs decide when the team needs to act and whether the fix worked.
 
 ## What's Next
 
-We now have an automated alerting policy that can open an incident when a web service returns a high volume of errors. However, knowing that the checkout endpoint is failing is only the first step in incident response. When a complex architecture involves load balancers, API gateways, application containers, and databases, how do we find out exactly which hop in the network is introducing the latency or throwing the error?
-
-![Cloud Monitoring summary showing time series, metric labels, alignment, reduction, alert policy, and notification channel.](/content-assets/articles/article-cloud-providers-gcp-observability-cloud-monitoring/cloud-monitoring-summary.png)
-
-*Cloud Monitoring turns time-series data into alert decisions by aligning points, reducing related series, evaluating a policy, and notifying a configured channel.*
+The next article follows one failed checkout request through Cloud Trace and OpenTelemetry. We will look at trace context, spans, propagation, OpenTelemetry instrumentation, trace-to-log correlation, sampling, async handoff, and the practical checks that prove a request can be followed across services.
 
 ---
 
 **References**
 
-- [Cloud Run Monitoring](https://cloud.google.com/run/docs/monitoring) - Explains Cloud Run metrics in Cloud Monitoring.
-- [Google Cloud Metrics List](https://cloud.google.com/monitoring/api/metrics_gcp_p_z) - Documents Cloud Run metric types such as `run.googleapis.com/request_count`.
-- [Cloud Monitoring Time Series](https://cloud.google.com/monitoring/api/v3/metrics-details) - Explains metric, resource, and point structure.
-- [Cloud Monitoring Alerting](https://cloud.google.com/monitoring/alerts) - Explains alerting policies, incidents, and notification channels.
-- [gcloud monitoring policies create](https://cloud.google.com/sdk/gcloud/reference/monitoring/policies/create) - Documents creating alerting policies from files.
+- [Cloud Monitoring documentation](https://docs.cloud.google.com/monitoring) - Covers metrics, dashboards, alerts, uptime checks, SLOs, PromQL, and monitoring APIs.
+- [Structure of time series](https://docs.cloud.google.com/monitoring/api/v3/metrics-details) - Explains metric, resource, point, interval, and value structure.
+- [Cloud Run monitoring](https://cloud.google.com/run/docs/monitoring) - Documents Cloud Run health and performance monitoring.
+- [Google Cloud metrics list](https://docs.cloud.google.com/monitoring/api/metrics_gcp_p_z) - Documents Cloud Run metric types such as `run.googleapis.com/request_count`.
+- [Alerting overview](https://docs.cloud.google.com/monitoring/alerts) - Explains alerting policies, incidents, notification channels, and alert evaluation.
+- [gcloud monitoring policies create](https://docs.cloud.google.com/sdk/gcloud/reference/monitoring/policies/create) - Documents creating alerting policies from JSON or YAML files.
+- [Service monitoring concepts](https://docs.cloud.google.com/stackdriver/docs/solutions/slo-monitoring) - Explains services, SLIs, SLOs, error budgets, and burn-rate alerting.
+- [PromQL for Cloud Monitoring](https://docs.cloud.google.com/monitoring/promql) - Documents PromQL support in Cloud Monitoring and Managed Service for Prometheus workflows.

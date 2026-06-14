@@ -75,6 +75,10 @@ CloudWatch metrics exist in the Region where they are created. Metric data also 
 
 CloudWatch cannot delete a metric directly. A metric stops appearing in normal metric lists after it stops receiving recent datapoints, and old datapoints expire on the CloudWatch retention schedule. That matters for naming. If a team accidentally publishes `CheckoutLatency` with a typo in the namespace, that mistaken metric can stay discoverable for a while even after the code is fixed.
 
+![CloudWatch metric identity broken into namespace, metric name, dimensions, unit, and period](/content-assets/articles/article-cloud-iac-observability-metrics-dashboards/metric-identity.png)
+
+*The visual shows why dimensions matter so much. The namespace and metric name start the address, but dimensions decide the exact time series CloudWatch stores and alarms on.*
+
 ## Namespaces, Dimensions, Units, and Resolution
 <!-- section-summary: Metric identity choices control how CloudWatch stores, filters, aggregates, bills, and alarms on time-series data. -->
 
@@ -291,6 +295,10 @@ aws cloudwatch put-dashboard \
 
 CloudWatch dashboards can include cross-account and cross-Region widgets by using `accountId` and `region` in dashboard JSON. That helps teams build one high-level view across production accounts and Regions. The dashboard should still stay readable. A dashboard with fifty charts and no order usually slows response because every chart asks for attention at once.
 
+![Triage dashboard layout with customer health, edge latency, app errors, data pressure, queue delay, and recent changes](/content-assets/articles/article-cloud-iac-observability-metrics-dashboards/triage-dashboard-layout.png)
+
+*A dashboard should guide the responder's eyes. Customer impact comes first, then the path through edge, application, data, async work, and recent changes.*
+
 ## Alarms as State Machines
 <!-- section-summary: A CloudWatch alarm evaluates metric data over time and changes state only when the configured evaluation rule is satisfied. -->
 
@@ -420,6 +428,10 @@ The production checklist is:
 - **Tune alarms with M out of N evaluation and missing-data behavior** so pages match real action.
 - **Use anomaly detection and composite alarms carefully** to catch shifting patterns and reduce noise.
 - **Centralize visibility across accounts** while keeping resource-owning teams responsible for their workload signals.
+
+![CloudWatch metric response flow from datapoints through statistic, threshold, alarm state, SNS route, and runbook action](/content-assets/articles/article-cloud-iac-observability-metrics-dashboards/from-metric-to-response.png)
+
+*The summary image connects metric design to incident response. A number only becomes useful when the alarm state reaches the right route and the runbook action is clear.*
 
 ## What's Next
 <!-- section-summary: The following observability work adds deeper log and trace practices so metrics can lead into exact evidence. -->

@@ -1,505 +1,643 @@
 ---
 title: "Namespaces and kubectl Basics"
-description: "Use namespaces and kubectl to inspect Kubernetes resources, avoid context mistakes, and read the first useful evidence from the cluster."
-overview: "Namespaces scope many Kubernetes objects, and kubectl is the main tool for asking the API server what exists, what changed, and why something is stuck."
-tags: ["kubernetes", "namespaces", "kubectl", "contexts"]
+description: "Use namespaces, kubeconfig contexts, and kubectl commands to inspect Kubernetes workloads without guessing where your command is pointed."
+overview: "Namespaces give Kubernetes resources a clear scope, and kubectl gives operators a practical way to inspect Deployments, Pods, Services, logs, events, rollout status, and structured output."
+tags: ["kubernetes", "namespaces", "kubectl", "kubeconfig", "operations"]
 order: 5
 id: article-containers-orchestration-kubernetes-fundamentals-namespaces-and-kubectl-basics
 ---
 
 ## Table of Contents
 
-1. [Before You Run a Command](#before-you-run-a-command)
+1. [The Work We Are Operating](#the-work-we-are-operating)
 2. [Namespaces](#namespaces)
-3. [kubectl](#kubectl)
-4. [Contexts](#contexts)
-5. [Reading Objects](#reading-objects)
-6. [Namespaced and Cluster-Scoped Resources](#namespaced-and-cluster-scoped-resources)
-7. [Logs and Events](#logs-and-events)
-8. [Structured Output](#structured-output)
-9. [A Daily Inspection Routine](#a-daily-inspection-routine)
-10. [Putting It All Together](#putting-it-all-together)
-11. [What's Next](#whats-next)
+3. [Application Namespaces and System Namespaces](#application-namespaces-and-system-namespaces)
+4. [kubectl](#kubectl)
+5. [Kubeconfig and Contexts](#kubeconfig-and-contexts)
+6. [The Safe Command Shape](#the-safe-command-shape)
+7. [Reading Resources](#reading-resources)
+8. [Namespaced and Cluster-Scoped Resources](#namespaced-and-cluster-scoped-resources)
+9. [Logs and Events](#logs-and-events)
+10. [Structured Output](#structured-output)
+11. [A Daily Operations Routine](#a-daily-operations-routine)
+12. [Putting It All Together](#putting-it-all-together)
 
-## Before You Run a Command
+## The Work We Are Operating
+<!-- section-summary: This article follows one production-like platform so every kubectl command has a clear purpose. -->
 
-At its core, `kubectl` is a client for a remote API, not a command that only affects your laptop.
-The same command can target a local cluster, staging, or production depending on your local Kubernetes configuration.
-Example: `kubectl delete pod api-1` deletes a Pod from whichever cluster and namespace your current context selects.
+We are going to follow a **Customer Notification Platform** through the whole article. The platform has a `notification-api` that accepts customer requests, a `worker` that sends email and SMS jobs, a database dependency that stores notification preferences and delivery status, live traffic from customer-facing systems, and a rollout process that moves new versions through staging and production.
 
-![kubectl context and namespace scope showing the same command pointed at dev and prod namespace objects](/content-assets/articles/article-containers-orchestration-kubernetes-fundamentals-namespaces-and-kubectl-basics/context-namespace-scope.png)
+That scenario matters because `kubectl` commands only make sense when you know what question you are asking. During a rollout, the question might be "did the new `notification-api` ReplicaSet receive traffic yet?" During an incident, the question might be "are the worker Pods crashing because the database connection string changed?" During a routine shift, the question might be "which namespace holds production right now?"
 
-*The same kubectl command can inspect different objects depending on the active context and namespace.*
-
-
-Most command-line utilities execute tasks against a single local environment by default.
-In contrast, the same Kubernetes command-line tools can inspect a local development VM, a shared staging cloud, or a high-traffic production system.
-A single simple-looking command can read or alter completely different environments based on hidden local variables.
-
-Consider this command:
-
-```bash
-kubectl get pods
-```
-
-This command looks harmless.
-However, its behavior depends entirely on your active client configuration.
-Your current context determines which cluster and credential profile are used.
-Your current namespace determines the default workspace searched for resources.
-If these configurations point to production, your command reads production.
-If you execute a write operation, like a resource deletion, it immediately alters production.
-
-The first critical operational habit is to verify your target configuration before executing any change.
-
-To audit your current active profiles, run these commands:
-
-```bash
-kubectl config current-context
-```
-
-The output reveals the active target context:
-
-```text
-notifications-prod
-```
-
-Next, query the active default namespace assigned to that context:
-
-```bash
-kubectl config view --minify --output 'jsonpath={..namespace}{"\n"}'
-```
-
-The terminal reports the default namespace:
-
-```text
-notifications-prod
-```
-
-If the namespace output is blank, the tool defaults to searching the `default` namespace unless you override it with the `-n` flag.
-This verification is the Kubernetes equivalent of checking your git branch before pushing code.
-It takes two seconds and prevents expensive operational mistakes in live environments.
+This article connects the pieces in the order a real operator usually needs them. First we give resources a place with **namespaces**. Then we talk to the cluster through **kubectl**. After that, **kubeconfig contexts** keep kubectl pointed at the right cluster and namespace. Then we read objects, logs, events, rollout status, and structured output in a way that works for both humans and scripts.
 
 ## Namespaces
+<!-- section-summary: A namespace gives many Kubernetes resources a named scope inside one cluster, which lets teams reuse names across environments. -->
 
-A namespace is a name scope inside a single Kubernetes cluster.
-It exists so teams and environments can reuse names without colliding with each other.
-Example: `notifications-staging` and `notifications-prod` can both contain a Deployment named `notification-api`.
-Deployments, Pods, Services, ConfigMaps, and Secrets belong to namespaces.
-This allows a staging environment and a production environment to share a cluster safely without resource name collisions.
+A **namespace** is a named scope inside one Kubernetes cluster. Many Kubernetes resources, including Pods, Deployments, Services, ConfigMaps, and Secrets, live inside a namespace. The resource name must stay unique inside that namespace, while another namespace can use the same name for a separate resource.
 
-For the Customer Notification Service, you can maintain identical resource names across different lifecycle environments:
+For our Customer Notification Platform, that means staging and production can both have a Deployment named `notification-api`. Kubernetes can keep them separate because the full location includes the namespace. The production Deployment lives at `notifications-prod/notification-api`, and the staging Deployment lives at `notifications-staging/notification-api`.
+
+A small namespace manifest looks like this. The labels give platform tooling a simple way to group the namespace by application and environment.
+
+```yaml
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: notifications-prod
+  labels:
+    app.kubernetes.io/part-of: customer-notification-platform
+    environment: prod
+```
+
+The same idea works for staging. The name and label change, while the object kind and structure stay familiar.
+
+```yaml
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: notifications-staging
+  labels:
+    app.kubernetes.io/part-of: customer-notification-platform
+    environment: staging
+```
+
+A team can create those namespaces through the same declarative workflow they use for other Kubernetes objects. The command sends the YAML to the API server and lets Kubernetes store the namespace objects.
+
+```bash
+kubectl apply -f namespaces/notifications-prod.yaml
+kubectl apply -f namespaces/notifications-staging.yaml
+```
+
+Now the team can deploy the same resource names into each namespace. The namespace flag tells kubectl which copy of the resource to read.
 
 ```bash
 kubectl get deployment notification-api -n notifications-staging
-```
-
-The terminal reports the status of the staging workload:
-
-```text
-NAME               READY   UP-TO-DATE   AVAILABLE   AGE
-notification-api   2/2     2            2           12d
-```
-
-Now, query the production namespace using the same resource name:
-
-```bash
 kubectl get deployment notification-api -n notifications-prod
 ```
 
-The terminal reports the production status:
+A production cluster often has many teams and many environments. Namespaces help those teams organize resources, apply quotas, attach access rules, label environments, and keep repeated names from colliding. A platform team may give the notification team access to `notifications-staging` for normal development and restrict `notifications-prod` to deployment automation and on-call operators.
 
-```text
-NAME               READY   UP-TO-DATE   AVAILABLE   AGE
-notification-api   3/3     3            3           18d
-```
+The namespace alone gives organization and a policy attachment point. Production isolation also needs the surrounding controls: **RBAC** for who can read or change resources, **NetworkPolicy** for which Pods can talk to each other, **ResourceQuota** for capacity limits, and **Pod Security Admission** labels for baseline runtime rules. Namespaces create the place where those controls can apply cleanly.
 
-This resource naming is possible because the namespace forms a core part of the resource's API identity.
-It prevents teams from accidentally overwriting sibling workloads.
+So namespaces give our platform a clear place to live. Before we start using kubectl heavily, we should also recognize the namespaces Kubernetes already creates for itself.
 
-However, namespaces are virtual dividers, not physical firewalls.
-Workloads in different namespaces share the same underlying control plane, node servers, and cluster DNS system.
-Unless restricted by Network Policies or RBAC rules, Pods in different namespaces can communicate over the network.
-A database in `notifications-prod` must still be secured against unauthorized access from `notifications-staging`.
+## Application Namespaces and System Namespaces
+<!-- section-summary: Application teams usually work in dedicated namespaces, while Kubernetes keeps core cluster components in system namespaces. -->
 
-You can audit the active namespaces in your cluster:
+Kubernetes clusters start with a few built-in namespaces. `default` exists so a new cluster can accept objects right away. `kube-system` holds many cluster components and add-ons. `kube-public` exists for publicly readable cluster information. `kube-node-lease` holds node heartbeat lease objects that help the control plane track node health.
+
+A quick namespace list usually looks like this. The application namespaces sit beside the built-in namespaces, which makes the split visible at a glance.
 
 ```bash
 kubectl get namespaces
 ```
 
-The output lists the logical partitions and their runtime statuses:
-
-```text
-NAME                  STATUS   AGE
-default               Active   31d
-kube-node-lease       Active   31d
-kube-public           Active   31d
-kube-system           Active   31d
-notifications-staging Active   18d
-notifications-prod    Active   18d
+```
+NAME                      STATUS   AGE
+default                   Active   41d
+kube-node-lease           Active   41d
+kube-public               Active   41d
+kube-system               Active   41d
+notifications-staging     Active   22d
+notifications-prod        Active   22d
 ```
 
-Kubernetes creates several system namespaces automatically.
-`kube-system` holds the core DNS and proxy control plane components.
-`kube-public` is reserved for public bootstrap data.
-Application teams should always create dedicated namespaces for their workloads.
-Deploying production applications directly to `default` is a security risk that complicates access controls.
+For production application work, teams usually create dedicated namespaces for application workloads. That habit gives every environment an obvious name, makes access review easier, and helps scripts keep test resources separate from real traffic. In our platform, `notifications-prod` tells an operator that the resources serve customers, while `notifications-staging` tells the same operator that the resources support testing and rollout validation.
+
+Namespaces also affect service discovery. A Service named `database` inside `notifications-prod` receives a DNS name like `database.notifications-prod.svc.cluster.local`. A Pod in the same namespace can often call it as `database`, while a Pod in another namespace should use the longer name so the request reaches the intended Service.
+
+Here is a common production example. The `notification-api` Pod reads its database host from a ConfigMap. In staging, the value points to `database.notifications-staging.svc.cluster.local`; in production, the value points to `database.notifications-prod.svc.cluster.local`. The application code can stay the same because the namespace-specific configuration tells it which database dependency to use.
+
+Now we have named places for the platform. The next piece is the tool that asks Kubernetes what lives in those places.
 
 ## kubectl
+<!-- section-summary: kubectl is the command-line client that sends authenticated requests to the Kubernetes API server. -->
 
-`kubectl` is the primary command-line client for interacting with the Kubernetes API Server.
-It translates command-line verbs, resource names, flags, and YAML files into HTTPS API requests for the API Server.
-It parses local credentials, resolves target contexts, executes network queries, and formats JSON outputs.
-Example: `kubectl get pods -n notifications-prod` sends an authenticated read request for Pod objects in the `notifications-prod` namespace.
-For a beginner, the important point is that `kubectl` does not manage containers by itself.
-It asks the API Server to read or change stored Kubernetes objects, and the rest of the cluster reacts to those stored changes.
+**kubectl** is the main command-line client for Kubernetes. It reads your local configuration, chooses a cluster, authenticates as a user or service identity, sends a request to the Kubernetes API server, and prints the response. When you type `kubectl get pods`, kubectl asks the control plane for Pod objects and formats the answer for your terminal.
 
-The tool does not connect directly to worker hosts or execute SSH commands on server operating systems.
-Instead, it communicates exclusively with the `kube-apiserver` HTTPS endpoint.
-This design guarantees that every command passes through the cluster's centralized authentication and validation loops.
+That detail matters during real operations. kubectl sends API requests; controllers, schedulers, kubelets, and container runtimes carry out the work after the API server accepts the desired state. A `kubectl apply` command stores a desired Deployment update, and then the Deployment controller works through ReplicaSets and Pods to roll the new version out.
 
-```mermaid
-flowchart LR
-    subgraph ClientSide["Client-Side Local Space"]
-        A["kubectl (CLI Client)"] --> B["Kubeconfig (Local YAML)"]
-        B --> |Resolves context| A
-    end
-    subgraph ServerSide["Control Plane Cluster"]
-        A --> |OpenAPI local validation| A
-        A --> |HTTPS REST Request| C["kube-apiserver (REST Interface)"]
-        C --> D["etcd Database"]
-        D --> C
-        C --> |JSON Stream Response| A
-    end
+Most day-to-day kubectl commands follow this shape. The exact resource and flags change, while the grammar stays steady.
+
+```bash
+kubectl <verb> <resource-type> <resource-name> --context <context-name> -n <namespace> -o <output-format>
 ```
 
-The diagram outlines the network path of a `kubectl` execution.
-The client validates the request structure locally using cached OpenAPI schemas before dialing the server.
-All transactions pass through the api-server gateway, which reads and writes state to the etcd database.
+The **verb** says what kind of API action you want. The **resource type** says which Kubernetes object kind you care about. The **resource name** narrows the request to one object. The **context** chooses the cluster and identity. The **namespace** chooses the resource scope. The **output format** chooses how kubectl prints the response.
 
-Most daily cluster operations rely on a small set of verbs:
+Here are the verbs a junior operator usually reaches for first. Each verb maps to a common operational question in the notification platform.
 
-- `get` lists resources and prints compact status tables.
-- `describe` compiles a detailed, human-readable view of a resource and its recent events.
-- `logs` retrieves the standard output and error streams of container processes.
-- `apply` creates or updates resources using declarative YAML manifests.
-- `delete` terminates resources and triggers eviction loops.
-- `rollout` monitors and manages deployment version updates.
+| Verb | What it asks | Customer Notification Platform example |
+|---|---|---|
+| `get` | Show a compact list or one object summary | Check whether `notification-api` has available replicas |
+| `describe` | Show a human-readable detail view and related events | Inspect why a `worker` Pod keeps restarting |
+| `logs` | Read container stdout and stderr | See application errors from `notification-api` |
+| `apply` | Create or update objects from YAML | Deploy the latest staging manifests |
+| `diff` | Compare manifests with live cluster state | Preview the change before production apply |
+| `rollout` | Inspect or manage Deployment rollout state | Watch the `notification-api` rollout finish |
+| `delete` | Remove resources | Clear a temporary debug Pod after an incident |
 
-You do not need to memorize every flag.
-Instead, understand the structural grammar of a request: verb, resource type, resource name, target namespace, and output format.
-
-Consider a detailed, explicit inspection command:
+A clear read command for our production API looks like this. The command names the cluster context and the namespace in the same line.
 
 ```bash
 kubectl get deployment notification-api --context notifications-prod -n notifications-prod
 ```
 
-This command explicitly declares the context and namespace in the command line.
-This layout is longer to type, but it prevents environment mistakes.
-It provides an explicit record, making it valuable for automation scripts and incident response notes.
+```
+NAME               READY   UP-TO-DATE   AVAILABLE   AGE
+notification-api   6/6     6            6           22d
+```
 
-## Contexts
+The command says exactly where it is looking. It targets the `notifications-prod` context, looks inside the `notifications-prod` namespace, asks for a Deployment, and names `notification-api`. That explicit shape gives better incident notes, safer copy-paste, and fewer surprises during a late-night rollout.
 
-At its core, a context is a saved target profile for `kubectl`.
-It combines a cluster address, a user credential, and an optional default namespace.
-Example: one context can point to `notifications-staging`, while another points to `notifications-prod`.
-Your cluster configurations are stored in a local YAML registry called a kubeconfig file.
-This file typically lives at `~/.kube/config`.
-It enables you to manage access to multiple clusters (local development, staging, production) in one document.
+That context flag leads to the next important topic. kubectl can talk to many clusters from one laptop, so the local configuration deserves the same care as the command itself.
 
-You can audit the contexts registered in your local kubeconfig:
+## Kubeconfig and Contexts
+<!-- section-summary: A kubeconfig file tells kubectl which clusters, users, namespaces, and current context it can use. -->
+
+A **kubeconfig** file is a local configuration file that kubectl uses to find clusters, users, namespaces, and authentication details. The default file usually lives at `~/.kube/config`. Teams can also point kubectl at other files through the `KUBECONFIG` environment variable or the `--kubeconfig` flag.
+
+A **context** is a named entry inside kubeconfig. It groups three things: a cluster, a user, and an optional namespace. For example, a `notifications-prod` context can point at the production cluster, use the production operator identity, and default to the `notifications-prod` namespace.
+
+A context list might look like this. The table shows the current profile, the cluster behind each profile, the user identity, and the default namespace.
 
 ```bash
 kubectl config get-contexts
 ```
 
-The output highlights the registered target profiles:
-
-```text
-CURRENT   NAME                  CLUSTER              AUTHINFO                 NAMESPACE
-*         notifications-prod    prod-eu-west-2       notifications-prod-user  notifications-prod
-          notifications-staging staging-eu-west-2    notifications-stage-user notifications-staging
-          kind-notifications    kind-notifications   kind-notifications       default
+```
+CURRENT   NAME                    CLUSTER              AUTHINFO                  NAMESPACE
+*         notifications-prod      prod-eu-west-2       prod-operator             notifications-prod
+          notifications-staging   staging-eu-west-2    staging-developer         notifications-staging
+          kind-notifications      kind-notifications   kind-notifications-user   default
 ```
 
-The asterisk (`*`) marks the active context.
-If the asterisk points to `notifications-prod`, all commands executed without explicit overrides will run in production.
+The star marks the current context. When a command leaves out `--context`, kubectl uses the current context from the kubeconfig merge result. When a command leaves out `-n` or `--namespace` for a namespaced resource, kubectl uses the namespace from that context, and many setups fall back to `default` when the context has no namespace.
 
-You can switch your active context at any time:
+These commands show the active target before a change window. They give the operator one quick check for both cluster context and default namespace.
+
+```bash
+kubectl config current-context
+kubectl config view --minify --output 'jsonpath={..namespace}{"\n"}'
+```
+
+```
+notifications-prod
+notifications-prod
+```
+
+During focused staging work, an engineer may switch their current context. That local switch makes short read-only debugging commands less repetitive during the session.
 
 ```bash
 kubectl config use-context notifications-staging
 ```
 
-The terminal confirms the context switch:
-
-```text
+```
 Switched to context "notifications-staging".
 ```
 
-Switching contexts is convenient during focused maintenance sessions.
-However, explicit targeting remains the safest approach for ad-hoc commands:
+The team may also save a default namespace on the current context. This setting changes the default namespace for later namespaced commands in that context.
 
 ```bash
-kubectl get pods --context notifications-staging -n notifications-staging
+kubectl config set-context --current --namespace=notifications-staging
 ```
 
-Both habits are valuable.
-The key is to avoid guessing.
-Before executing any write operation (like `apply`, `scale`, or `delete`), verify your active context.
+That setting helps during a long debugging session in one namespace. Production scripts and incident commands should still carry explicit `--context` and `-n` values because reusable automation should avoid hidden local state. Kubernetes usage conventions also recommend machine-oriented output and explicit targeting in reusable scripts.
 
-## Reading Objects
+Kubeconfig files can contain credentials and command hooks. A kubeconfig from a trusted cluster admin or managed Kubernetes provider belongs in the normal workflow. A random kubeconfig from a ticket, chat message, or third-party system deserves inspection before anyone loads it into their shell.
 
-At its core, reading Kubernetes objects means asking the API Server for the current stored record and status summary.
-The `get` verb provides a compact, high-level summary of your resources.
-Always start diagnostics with the highest-level workload resource.
-For our Customer Notification Service, that is the Deployment:
-Example: reading the Deployment first tells you whether the service is missing replicas before you inspect individual Pods, events, or container logs.
+Now we can talk to the right cluster and namespace. The next step is turning that habit into a command shape the whole team can recognize.
 
-![Kubernetes object evidence stack showing get, describe, logs, events, and json views](/content-assets/articles/article-containers-orchestration-kubernetes-fundamentals-namespaces-and-kubectl-basics/kubectl-evidence-stack.png)
+## The Safe Command Shape
+<!-- section-summary: Explicit context, namespace, resource type, name, and output make kubectl commands safer for humans and scripts. -->
 
-*kubectl is most useful when you choose the evidence layer that matches the question you are asking.*
+A safe kubectl command names its target clearly. The target has four practical parts: **context**, **namespace**, **resource type**, and **resource name**. Output format adds the fifth part when another tool or script will consume the result.
 
+For our production API, this command gives a clear, human-readable status. It keeps the destination visible for anyone reading the terminal history later.
 
 ```bash
-kubectl get deployment notification-api -n notifications-prod
+kubectl get deployment notification-api --context notifications-prod -n notifications-prod
 ```
 
-The output reports the high-level scaling health:
+For a script that only needs the Kubernetes object address, `-o name` gives stable machine-oriented output. The script can compare that value without parsing a table.
 
-```text
+```bash
+kubectl get deployment notification-api \
+  --context notifications-prod \
+  -n notifications-prod \
+  -o name
+```
+
+```
+deployment.apps/notification-api
+```
+
+For a rollout check, the command can target the Deployment directly. Kubernetes then reports whether the Deployment has completed the rollout.
+
+```bash
+kubectl rollout status deployment/notification-api \
+  --context notifications-prod \
+  -n notifications-prod
+```
+
+```
+deployment "notification-api" successfully rolled out
+```
+
+For a risky operation, the explicit shape matters even more. A production delete, scale, restart, or image update should make the destination visible in the command and in the change record. A team can paste the command into an incident timeline and see which cluster and namespace it touched without reconstructing a laptop's local context.
+
+The same shape also makes pair debugging calmer. One engineer can say, "We are reading `deployment/notification-api` in `notifications-prod` through the `notifications-prod` context." Another engineer can compare their own command and spot the mismatch before the team follows the wrong evidence.
+
+With a safe command shape in hand, we can start reading the actual objects that explain traffic, rollout, and dependency problems. The investigation will move from high-level workload state into the smaller objects that carry the evidence.
+
+## Reading Resources
+<!-- section-summary: Daily Kubernetes inspection usually starts with the workload, then narrows to Pods, Services, and dependency configuration. -->
+
+**Reading a resource** means asking the API server for the current stored object and its status fields. For a Deployment, that includes desired replicas, available replicas, selector labels, rollout conditions, and the Pod template used for new Pods. For a Service, that includes ports, selectors, and the stable virtual IP or load balancer details.
+
+In the Customer Notification Platform, the first read during a production incident should usually start at the Deployment level. The Deployment tells us whether Kubernetes has enough available replicas before we spend time on individual Pods.
+
+```bash
+kubectl get deployment notification-api \
+  --context notifications-prod \
+  -n notifications-prod
+```
+
+```
 NAME               READY   UP-TO-DATE   AVAILABLE   AGE
-notification-api   3/3     3            3           18d
+notification-api   4/6     6            4           22d
 ```
 
-Next, query the active Pods managed by that Deployment using selector labels:
+This output says the Deployment wants six replicas, has updated six replicas, and currently has four available. That points the investigation toward Pod health and rollout conditions. The next command can read the Pods selected by the Deployment:
 
 ```bash
-kubectl get pods -n notifications-prod -l app=notification-api
+kubectl get pods \
+  --context notifications-prod \
+  -n notifications-prod \
+  -l app=notification-api \
+  -o wide
 ```
 
-The terminal lists the individual Pod instances and their container statuses:
-
-```text
-NAME                                READY   STATUS    RESTARTS   AGE
-notification-api-7c8d9f-a1b2c       1/1     Running   0          2h
-notification-api-7c8d9f-d3e4f       1/1     Running   0          2h
-notification-api-7c8d9f-g5h6i       1/1     Running   0          2h
+```
+NAME                                READY   STATUS             RESTARTS   AGE   IP            NODE
+notification-api-746dd8dbf8-4x9qm   1/1     Running            0          18m   10.24.2.41    worker-a
+notification-api-746dd8dbf8-8pt6p   1/1     Running            0          18m   10.24.1.37    worker-b
+notification-api-746dd8dbf8-ds6tw   0/1     CrashLoopBackOff   5          16m   10.24.3.52    worker-c
+notification-api-746dd8dbf8-jk9qg   0/1     CrashLoopBackOff   5          16m   10.24.2.59    worker-a
 ```
 
-If the Pod status reveals a failure, use `describe` to inspect the detailed events:
+The Deployment summary told us capacity dropped. The Pod list tells us the reason sits with two crashing Pods. Now the operator can inspect one Pod in detail:
 
 ```bash
-kubectl describe pod notification-api-7c8d9f-a1b2c -n notifications-prod
+kubectl describe pod notification-api-746dd8dbf8-ds6tw \
+  --context notifications-prod \
+  -n notifications-prod
 ```
 
-The `describe` output compiles a human-readable summary of the resource configuration, status, and event log:
+`describe` gathers a human-readable view of fields and related events. It is useful when the question involves scheduling, image pulls, probe failures, container restarts, or volume mounts. For a beginner, this command often gives the first plain clue after a compact `get` output.
 
-```text
-Name:           notification-api-7c8d9f-a1b2c
-Namespace:      notifications-prod
-Node:           worker-03/10.240.0.13
-Status:         Running
-Events:
-  Type    Reason     Age   From               Message
-  ----    ------     ----  ----               -------
-  Normal  Scheduled  4m    default-scheduler  Successfully assigned to worker-03
+The API may be healthy while traffic still fails because the Service points at the wrong Pods. The Service selector deserves a quick read because it defines which Pods receive traffic.
+
+```bash
+kubectl get service notification-api \
+  --context notifications-prod \
+  -n notifications-prod \
+  -o yaml
 ```
 
-This output is designed for human operators.
-It collects all related resource metadata in one terminal view, making it the primary tool for diagnostic research.
-For automated scripts, you should rely on structured formats instead.
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: notification-api
+  namespace: notifications-prod
+spec:
+  ports:
+    - port: 80
+      targetPort: 8080
+  selector:
+    app: notification-api
+```
+
+The selector says the Service sends traffic to Pods with `app=notification-api`. If the new rollout accidentally changed Pod labels to `app=customer-notification-api`, the Service would have no matching backend Pods. The operator can confirm the current labels like this:
+
+```bash
+kubectl get pods \
+  --context notifications-prod \
+  -n notifications-prod \
+  -l app=notification-api \
+  --show-labels
+```
+
+The worker side follows the same pattern. The high-level workload shows replica health, the Pod list shows runtime state, and the detailed Pod view shows scheduling and restart evidence.
+
+```bash
+kubectl get deployment worker --context notifications-prod -n notifications-prod
+kubectl get pods --context notifications-prod -n notifications-prod -l app=worker
+kubectl describe pod worker-68d7f56b8f-cw2mt --context notifications-prod -n notifications-prod
+```
+
+The database dependency often shows up through configuration. A ConfigMap or Secret may hold host names, ports, queue names, and feature flags. A safe inspection for a non-secret ConfigMap looks like this:
+
+```bash
+kubectl get configmap notification-api-config \
+  --context notifications-prod \
+  -n notifications-prod \
+  -o yaml
+```
+
+That inspection path moves from workload to Pods to Service to configuration. The next question is scope: which resources live inside a namespace, and which resources sit outside all application namespaces?
 
 ## Namespaced and Cluster-Scoped Resources
+<!-- section-summary: Some Kubernetes resources live inside namespaces, while cluster-wide resources describe the cluster itself. -->
 
-At its core, resource scope defines whether an object belongs to a namespace or to the whole cluster.
-Namespaced resources, such as Pods and Services, need a namespace because each team or environment can own separate copies.
-Cluster-scoped resources, such as Nodes and StorageClasses, describe shared cluster infrastructure and exist outside any namespace.
+A **namespaced resource** belongs to one namespace. Pods, Deployments, Services, ConfigMaps, Secrets, Jobs, and CronJobs usually fall into this category. The `-n notifications-prod` flag matters for those resources because kubectl needs to know which namespace to search.
 
-Example: `kubectl get pods -n notifications-prod` targets one namespace, but `kubectl get nodes` lists global worker servers for the cluster.
+A **cluster-scoped resource** belongs to the whole cluster. Nodes, PersistentVolumes, StorageClasses, ClusterRoles, and Namespaces sit at this level. A Node can run Pods from many namespaces, so it has no single application namespace.
 
-Consider the scope mapping of common cluster resources:
-
-| Resource Kind | SHORTNAMES | API Version | Scope |
-| --- | --- | --- | --- |
-| Pod | `po` | `v1` | Namespaced |
-| Deployment | `deploy` | `apps/v1` | Namespaced |
-| Service | `svc` | `v1` | Namespaced |
-| Secret | `secret` | `v1` | Namespaced |
-| Namespace | `ns` | `v1` | Cluster-scoped |
-| Node | `no` | `v1` | Cluster-scoped |
-| StorageClass | `sc` | `storage.k8s.io/v1` | Cluster-scoped |
-
-This structural difference explains why some commands reject namespace flags.
-Passing `-n notifications-prod` is required when querying Pods.
-However, it is rejected or ignored when querying Nodes, because nodes belong to the global cluster capacity.
-
-You can audit the scope of any resource type:
+kubectl can show which API resources use namespaces. This is useful when a command fails because a namespace flag was provided for a cluster-scoped resource.
 
 ```bash
 kubectl api-resources --namespaced=true
-```
-
-The terminal lists all namespaced resources available in your cluster API.
-To view global resources, query cluster-scoped kinds:
-
-```bash
 kubectl api-resources --namespaced=false
 ```
 
-This query is highly valuable when working with custom resources or third-party operators.
-It tells you whether you must provide a namespace flag to target the resource.
+That distinction helps during production work. If `notification-api` has crashing Pods on `worker-c`, the Pod read uses the application namespace because the Pod belongs to `notifications-prod`.
+
+```bash
+kubectl get pod notification-api-746dd8dbf8-ds6tw \
+  --context notifications-prod \
+  -n notifications-prod \
+  -o wide
+```
+
+The Node read uses the cluster scope. The node represents a worker machine that can host Pods from many namespaces.
+
+```bash
+kubectl get node worker-c --context notifications-prod
+```
+
+A storage issue may cross both scopes. The `worker` Deployment runs in `notifications-prod`, while a PersistentVolume can describe cluster-level storage backing a claim. A PersistentVolumeClaim has a namespace, and the PersistentVolume it binds to sits cluster-wide. That is why operators often read both objects during database-adjacent incidents.
+
+```bash
+kubectl get pvc database-backup-cache \
+  --context notifications-prod \
+  -n notifications-prod
+
+kubectl get pv pvc-4bd7428e-30f7-46d4-81e8-a617e3d74b4f \
+  --context notifications-prod
+```
+
+Once you know scope, the next layer of evidence usually comes from logs and events. They answer different questions, so it helps to keep their jobs separate.
 
 ## Logs and Events
+<!-- section-summary: Logs explain what the container process said, while events explain what Kubernetes observed around the object. -->
 
-At its core, logs come from your application process, while events come from Kubernetes components.
-Logs represent the stdout and stderr streams generated by the containerized application process.
-Events are API records generated by the scheduler, controllers, and kubelet.
-You read logs to inspect application code behavior.
-You read events to audit cluster scheduling, network setups, and process initializations.
+**Logs** are the stdout and stderr streams from a container process. They answer application questions: connection errors, validation failures, startup messages, panic traces, retry loops, and business workflow failures. For `notification-api`, logs may show that the app cannot connect to the database or rejects requests because a feature flag changed.
 
-For a healthy Pod, you can read the application's runtime transactions:
+A snapshot of the current container logs looks like this. The `--tail` flag keeps the output focused on the most recent application messages.
 
 ```bash
-kubectl logs deployment/notification-api -n notifications-prod --tail=20
+kubectl logs deployment/notification-api \
+  --context notifications-prod \
+  -n notifications-prod \
+  --tail=100
 ```
 
-The terminal prints the standard log output of the container process:
-
-```text
-2026-05-31T16:11:00Z info server listening on :3000
-2026-05-31T16:11:02Z info database connection established
-2026-05-31T16:12:45Z info alert sent user_id=4829 type=SMS
-```
-
-If a container crashes and restarts, you can inspect the crash traceback using the previous flag:
+A live stream during a rollout looks like this. The `--follow` flag keeps the terminal attached while new log lines arrive.
 
 ```bash
-kubectl logs pod/notification-api-7c8d9f-a1b2c -n notifications-prod --previous
+kubectl logs deployment/notification-api \
+  --context notifications-prod \
+  -n notifications-prod \
+  --follow
 ```
 
-This retrieves the logs from the last terminated container instance.
-It allows you to diagnose database timeouts or uncaught memory tracebacks that caused the process to exit.
-
-However, if the container fails to start at all, the application log will be empty.
-The failure occurred before the application code could initialize.
-In this case, you must read the Pod's events to find the block:
+For a Pod with multiple containers, the container name keeps the evidence specific. That matters for Pods with sidecars, init containers, or helper containers.
 
 ```bash
-kubectl describe pod notification-api-7c8d9f-a1b2c -n notifications-prod
+kubectl logs notification-api-746dd8dbf8-ds6tw \
+  --context notifications-prod \
+  -n notifications-prod \
+  -c notification-api \
+  --tail=100
 ```
 
-The event log reveals the runtime startup failure:
+**Events** are Kubernetes records about things the control plane and node agents observed. They answer platform questions: image pull failures, failed scheduling, probe failures, volume attach problems, node pressure, and container restart reasons. Events often explain why a Pod never reached the point where application logs would help.
 
-```text
-Warning  Failed  kubelet  Failed to pull image "ghcr.io/devpolaris/notification-api:1.4.3": not found
+A focused event list for the production namespace looks like this. Sorting by creation timestamp puts the newest platform clues at the bottom of the list.
+
+```bash
+kubectl get events \
+  --context notifications-prod \
+  -n notifications-prod \
+  --sort-by=.metadata.creationTimestamp
 ```
 
-The event explains the failure: the node agent could not pull the image.
-This details the diagnostic rule: use events to audit cluster operations, and use logs to debug application code.
+```
+LAST SEEN   TYPE      REASON      OBJECT                                   MESSAGE
+2m          Warning   Unhealthy   pod/notification-api-746dd8dbf8-ds6tw     Readiness probe failed: HTTP probe failed with statuscode: 503
+90s         Warning   BackOff     pod/notification-api-746dd8dbf8-ds6tw     Back-off restarting failed container notification-api
+```
+
+The logs might say the API cannot reach the database. The events might say the readiness probe returns 503 and Kubernetes keeps the Pod out of Service endpoints. Together, they explain both the application symptom and the traffic impact.
+
+During a worker incident, the same split helps. Worker logs may show "queue authentication failed." Events may show no scheduling issue, healthy image pulls, and repeated restarts after the process exits. That combination points the team toward credentials or queue configuration, while node capacity sits lower on the likely list.
+
+Humans can read tables and descriptions during an incident. Scripts and dashboards need structured output, so kubectl also supports output formats that carry the raw object fields.
 
 ## Structured Output
+<!-- section-summary: kubectl output formats let humans scan resources and let scripts read exact object fields. -->
 
-At its core, structured output is machine-readable data returned by `kubectl`.
-It exists so scripts and CI jobs can read exact fields without scraping human-formatted tables.
-Example: a deployment check can extract `.status.readyReplicas` and fail a pipeline if fewer than three replicas are ready.
+kubectl prints human-readable tables by default. That default is great during a conversation, because the table shows the fields Kubernetes thinks matter for that resource. For scripts, dashboards, and repeatable checks, the command should ask for stable output such as `-o name`, `-o yaml`, `-o json`, `-o custom-columns`, or `-o jsonpath`.
 
-Human-readable output is ideal for active investigation, but it is difficult to parse in scripts.
-`kubectl` can format API responses in structured JSON, YAML, JSONPath, or custom columns.
-This enables clean integration with CI/CD checks, auditing pipelines, and parsing utilities.
-
-To extract a specific field path, use JSONPath formatting:
+`-o wide` adds useful table columns for humans. For Pods, the extra node and IP fields often help connect an application symptom to a worker node.
 
 ```bash
-kubectl get deployment notification-api -n notifications-prod \
-  -o jsonpath='{.status.readyReplicas}{" replicas are ready\n"}'
+kubectl get pods \
+  --context notifications-prod \
+  -n notifications-prod \
+  -l app=notification-api \
+  -o wide
 ```
 
-The command extracts the specific integer value directly:
-
-```text
-3 replicas are ready
-```
-
-You can compile custom columns to format a clean, tailored terminal dashboard:
+`-o yaml` shows the object shape. This is the view operators use when they need selectors, status conditions, annotations, and other fields that the default table hides.
 
 ```bash
-kubectl get deployment notification-api -n notifications-prod \
-  -o custom-columns=NAME:.metadata.name,REPLICAS:.spec.replicas,IMAGE:.spec.template.spec.containers[0].image
+kubectl get deployment notification-api \
+  --context notifications-prod \
+  -n notifications-prod \
+  -o yaml
 ```
 
-The output returns only the specified columns, removing the default verbose fields:
+`-o custom-columns` prints a table with fields the team chooses. It is a good fit for runbooks that need the same small set of fields every time.
 
-```text
-NAME               REPLICAS   IMAGE
-notification-api   3          ghcr.io/devpolaris/notification-api:1.4.2
+```bash
+kubectl get pods \
+  --context notifications-prod \
+  -n notifications-prod \
+  -l app=notification-api \
+  -o custom-columns='NAME:.metadata.name,PHASE:.status.phase,NODE:.spec.nodeName,STARTED:.status.startTime'
 ```
 
-This custom column format is highly valuable for production playbooks.
-It allows you to extract precise telemetry data without writing complex regex scripts.
+```
+NAME                                PHASE     NODE       STARTED
+notification-api-746dd8dbf8-4x9qm   Running   worker-a   2026-06-14T08:12:17Z
+notification-api-746dd8dbf8-ds6tw   Running   worker-c   2026-06-14T08:14:02Z
+```
 
-## A Daily Inspection Routine
+**JSONPath** lets kubectl extract specific fields from the JSON object. It is useful when a script needs a value, such as the image currently running in production, and the script should receive only that value.
 
-At its core, a daily inspection routine is an ordered set of reads that moves from broad context to specific failure evidence.
-It exists to avoid guessing random commands during an incident.
-Example: verify the active context, read the Deployment, list its Pods, inspect one failing Pod's events, then read its logs.
+```bash
+kubectl get deployment notification-api \
+  --context notifications-prod \
+  -n notifications-prod \
+  -o jsonpath='{.spec.template.spec.containers[?(@.name=="notification-api")].image}{"\n"}'
+```
 
-A structured inspection routine follows the dependency chain from the environment context down to the container.
-When troubleshooting the Customer Notification Service, execute these commands in sequence:
+```
+registry.example.com/notification-api:2026.06.14.3
+```
+
+A rollout script can record the image, rollout status, and available replicas without parsing a human table. That makes the check less sensitive to column spacing or terminal formatting.
+
+```bash
+kubectl get deployment notification-api \
+  --context notifications-prod \
+  -n notifications-prod \
+  -o jsonpath='{.status.availableReplicas}/{.spec.replicas}{" available\n"}'
+```
+
+```
+6/6 available
+```
+
+For complex transformations, many teams pipe JSON into `jq`. JSONPath handles simple field extraction inside kubectl. `jq` handles larger filtering, grouping, and reshaping. The practical rule is simple: teams choose the smallest structured output that makes the check reliable.
+
+Now we have the pieces. We can combine them into a routine an on-call engineer can use during normal operations and incidents.
+
+## A Daily Operations Routine
+<!-- section-summary: A steady kubectl routine checks target, workload, rollout, traffic path, logs, events, and dependency configuration. -->
+
+A daily Kubernetes routine should start with target confirmation. The engineer checks context and namespace, then reads the highest-level workload before digging into Pods. That order avoids chasing one failing Pod while the bigger issue sits in a Deployment, Service, or rollout condition.
+
+The target check looks like this. It gives the operator a quick view of the cluster context and namespace before any read or write command.
 
 ```bash
 kubectl config current-context
-kubectl get deployment notification-api -n notifications-prod
-kubectl get rs -n notifications-prod -l app=notification-api
-kubectl get pods -n notifications-prod -l app=notification-api -o wide
-kubectl describe pod <pod-name> -n notifications-prod
-kubectl logs <pod-name> -n notifications-prod --tail=50
+kubectl config view --minify --output 'jsonpath={..namespace}{"\n"}'
 ```
 
-Each step in this routine narrows your diagnostic focus:
+The workload read starts with the API and worker Deployments. These two Deployments carry the request path and the asynchronous delivery path for the platform.
 
-- **Current Context**: Verifies which cluster and credential profile are being queried.
-- **Deployment**: Checks the overall scaling availability of the workload.
-- **ReplicaSets**: Audits which deployment generation owns the active Pods.
-- **Pods**: Identifies which specific instances are pending, running, or crashing.
-- **Describe Pod**: Audits the event logs to diagnose scheduling or startup failures.
-- **Logs**: Reads the application process standard outputs to debug runtime crashes.
+```bash
+kubectl get deployment notification-api worker \
+  --context notifications-prod \
+  -n notifications-prod
+```
 
-This systematic routine avoids random command guesses.
-It traces the natural relationships of the cluster components, leading you directly to the root cause.
+```
+NAME               READY   UP-TO-DATE   AVAILABLE   AGE
+notification-api   6/6     6            6           22d
+worker             4/4     4            4           22d
+```
+
+The rollout read tells the team whether a new version finished. Rollout history also gives the revision numbers needed for an approved rollback.
+
+```bash
+kubectl rollout status deployment/notification-api \
+  --context notifications-prod \
+  -n notifications-prod
+
+kubectl rollout history deployment/notification-api \
+  --context notifications-prod \
+  -n notifications-prod
+```
+
+During a traffic incident, the Service and selected Pods matter. The Service controls the traffic path, and the selected Pods show which backends can receive that traffic.
+
+```bash
+kubectl get service notification-api \
+  --context notifications-prod \
+  -n notifications-prod
+
+kubectl get pods \
+  --context notifications-prod \
+  -n notifications-prod \
+  -l app=notification-api \
+  -o wide
+```
+
+During a database dependency incident, configuration and application logs matter. The ConfigMap shows the intended host and settings, while logs show what the application experienced at runtime.
+
+```bash
+kubectl get configmap notification-api-config \
+  --context notifications-prod \
+  -n notifications-prod \
+  -o yaml
+
+kubectl logs deployment/notification-api \
+  --context notifications-prod \
+  -n notifications-prod \
+  --tail=100
+```
+
+During a restart incident, events and previous container logs matter. Previous logs help when the current container restarted and the important error happened in the old process, while events show the Kubernetes-side restart evidence.
+
+```bash
+kubectl logs notification-api-746dd8dbf8-ds6tw \
+  --context notifications-prod \
+  -n notifications-prod \
+  --previous \
+  --tail=100
+
+kubectl get events \
+  --context notifications-prod \
+  -n notifications-prod \
+  --sort-by=.metadata.creationTimestamp
+```
+
+For a production rollback, the team should first inspect rollout history and the current image. Then the approved rollback command can target the Deployment explicitly so the command record shows the exact revision.
+
+```bash
+kubectl rollout history deployment/notification-api \
+  --context notifications-prod \
+  -n notifications-prod
+
+kubectl rollout undo deployment/notification-api \
+  --context notifications-prod \
+  -n notifications-prod \
+  --to-revision=12
+```
+
+Rollback is still a production change. The same command-shape rule applies: context, namespace, resource type, resource name, and a recorded reason in the change or incident system. After the rollback, the operator reads rollout status, Pods, logs, and events again so the team verifies the customer-facing effect.
+
+This routine gives beginners a stable path through a cluster. It also matches how senior operators write incident notes: target, workload, rollout, traffic path, dependencies, logs, events, action, verification.
 
 ## Putting It All Together
+<!-- section-summary: Namespaces and kubectl give operators a safe path from cluster target to production evidence. -->
 
-Namespaces scope and isolate API resources, while contexts map target clusters, user credentials, and default workspaces.
-The `kubectl` CLI translates command flags into validated HTTPS requests for the api-server.
-API resources are divided into namespaced and cluster-scoped kinds.
-Events document cluster operations, and logs expose application process behaviors.
+The Customer Notification Platform now has a clean Kubernetes operating shape. `notifications-staging` and `notifications-prod` give the API, worker, Service, and dependency configuration separate scopes. The same resource names can appear in both environments because the namespace forms part of the object's practical address.
 
-To operate safely, always verify your active environment targets explicitly:
+kubectl gives the team one client for reading and changing those objects through the Kubernetes API server. The useful command shape names the context, namespace, resource type, resource name, and output format. That shape helps a human understand the command and helps a script avoid hidden local state.
 
-- Identify your active cluster: `kubectl config current-context`.
-- Target your resources explicitly: `kubectl get deployment notification-api --context notifications-prod -n notifications-prod`.
-- Trace failures systematically: Deployment -> ReplicaSet -> Pod -> events -> logs.
+kubeconfig and contexts decide where kubectl sends requests. A context groups a cluster, user, and optional namespace, and kubectl uses the current context unless a command provides `--context`. Production commands and reusable scripts should make the target visible because local defaults can differ from laptop to laptop.
 
-These foundational practices ensure safe, predictable cluster operations.
+Reading Kubernetes resources follows a steady path. The path starts with the Deployment, then moves into selected Pods, Services, rollout status, configuration, logs, and events. Logs explain what the container process said. Events explain what Kubernetes observed around scheduling, probes, image pulls, restarts, and volumes.
 
-## What's Next
+Structured output finishes the basics. Human tables help during live debugging. YAML and JSON show full object fields. Custom columns and JSONPath let scripts extract the exact values they need, such as the production image tag or available replica count.
 
-In the next submodule, we will focus on workloads.
-We will explore Pod architectures, resource management, and container specifications in detail, checking how to run applications reliably.
-
-
-![Six-tile kubectl basics summary covering context, namespace, get, describe, logs, and events](/content-assets/articles/article-containers-orchestration-kubernetes-fundamentals-namespaces-and-kubectl-basics/kubectl-basics-summary.png)
-
-*A reliable kubectl habit starts with context and namespace, then uses get, describe, logs, and events for separate evidence.*
+That is enough kubectl and namespace knowledge for a real first week on a Kubernetes-backed team. You can find the right environment, ask the API server clear questions, inspect the notification platform from traffic to rollout to dependency configuration, and leave behind commands that another operator can understand later.
 
 ---
 
 **References**
 
-- [Command-line Tool (kubectl)](https://kubernetes.io/docs/reference/kubectl/) - Official overview and command line syntax guide.
-- [Configure Access Using kubeconfig](https://kubernetes.io/docs/concepts/configuration/organize-cluster-access-kubeconfig/) - Official reference for kubeconfig files, contexts, and user profiles.
-- [Namespaces Overview](https://kubernetes.io/docs/concepts/overview/working-with-objects/namespaces/) - Official reference on namespaces, scoping, and DNS search domains.
-- [kubectl Commands Reference](https://kubernetes.io/docs/reference/generated/kubectl/kubectl-commands) - Complete API reference for verbs, resource shortnames, and output formatting.
-- [Manage Cluster Resources](https://kubernetes.io/docs/tasks/manage-kubernetes-objects/) - Official task playbooks for applying, auditing, and deleting API resources.
+- [Kubernetes Namespaces](https://kubernetes.io/docs/concepts/overview/working-with-objects/namespaces/) - Defines namespace scope, initial namespaces, namespace DNS behavior, and namespaced versus cluster-scoped resources.
+- [Command line tool (kubectl)](https://kubernetes.io/docs/reference/kubectl/) - Explains kubectl syntax, operations, resource targeting, output options, common examples, logs, exec, describe, apply, delete, and diff.
+- [kubectl Quick Reference](https://kubernetes.io/docs/reference/kubectl/quick-reference/) - Provides practical examples for contexts, namespace defaults, get/describe/logs/events, JSONPath, rollout status, rollout history, and rollout undo.
+- [Organizing Cluster Access Using kubeconfig Files](https://kubernetes.io/docs/concepts/configuration/organize-cluster-access-kubeconfig/) - Documents kubeconfig files, trusted-source warnings, clusters, users, namespaces, contexts, `KUBECONFIG`, and merge rules.
+- [Configure Access to Multiple Clusters](https://kubernetes.io/docs/tasks/access-application-cluster/configure-access-multiple-clusters/) - Shows how kubeconfig contexts let kubectl switch among clusters, users, and namespaces.
+- [kubectl Usage Conventions](https://kubernetes.io/docs/reference/kubectl/conventions/) - Recommends explicit targeting and machine-oriented output for reusable scripts.
+- [JSONPath Support](https://kubernetes.io/docs/reference/kubectl/jsonpath/) - Describes kubectl JSONPath templates and field extraction syntax.

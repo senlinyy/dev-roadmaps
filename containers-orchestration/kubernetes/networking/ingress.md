@@ -1,7 +1,7 @@
 ---
 title: "Ingress"
 description: "Route HTTP and HTTPS traffic from outside the cluster to internal Kubernetes Services."
-overview: "Ingress gives HTTP workloads a shared outside entry point. It maps hostnames and paths to ClusterIP Services such as devpolaris-orders-api."
+overview: "Ingress gives HTTP workloads a shared outside entry point. It connects public hostnames and URL paths to internal Services while an Ingress controller does the real proxy or load balancer work."
 tags: ["ingress", "http", "tls", "routing"]
 order: 3
 id: article-containers-orchestration-kubernetes-networking-ingress
@@ -9,315 +9,404 @@ id: article-containers-orchestration-kubernetes-networking-ingress
 
 ## Table of Contents
 
-1. [HTTP Routing Needs More Than a Service](#http-routing-needs-more-than-a-service)
-2. [A First Ingress for devpolaris-orders-api](#a-first-ingress-for-devpolaris-orders-api)
-3. [IngressClass Connects Rules to a Controller](#ingressclass-connects-rules-to-a-controller)
-4. [Path Matching Is an API Contract](#path-matching-is-an-api-contract)
-5. [TLS Belongs at the Edge](#tls-belongs-at-the-edge)
-6. [Failure Mode: 502 From the Edge](#failure-mode-502-from-the-edge)
-7. [Ingress Tradeoffs](#ingress-tradeoffs)
-8. [Production Review Questions](#production-review-questions)
-9. [Evidence to Keep During Changes](#evidence-to-keep-during-changes)
+1. [The Request Ingress Is Built For](#the-request-ingress-is-built-for)
+2. [Service First, Ingress Second](#service-first-ingress-second)
+3. [Ingress Object, IngressClass, and Controller](#ingress-object-ingressclass-and-controller)
+4. [Hosts, Paths, and Backend Services](#hosts-paths-and-backend-services)
+5. [TLS at the Edge](#tls-at-the-edge)
+6. [DNS and the Controller Address](#dns-and-the-controller-address)
+7. [Rollout Checks for a New Ingress](#rollout-checks-for-a-new-ingress)
+8. [Debugging by Following the Request](#debugging-by-following-the-request)
+9. [Production Ownership and Tradeoffs](#production-ownership-and-tradeoffs)
+10. [What's Next](#whats-next)
 
-## HTTP Routing Needs More Than a Service
+## The Request Ingress Is Built For
+<!-- section-summary: Ingress is the Kubernetes API object that describes how outside HTTP or HTTPS traffic should reach Services inside the cluster. -->
 
-A Service can expose one set of Pods, but real web traffic usually has more shape than one port. You may need `api.devpolaris.local` to reach `devpolaris-orders-api`, `/auth` to reach an identity service, and TLS certificates for browser clients. A plain ClusterIP Service cannot express those HTTP routing rules.
+Picture a learner opening the DevPolaris web app and clicking a page that loads course progress. The browser sends a request to `https://api.devpolaris.example/progress/me`. That request starts outside the cluster, uses a public hostname, uses HTTPS, and carries a URL path that should reach the progress API running inside Kubernetes.
 
-![Kubernetes Ingress path showing client, Ingress, controller, Service, and pods](/content-assets/articles/article-containers-orchestration-kubernetes-networking-ingress/ingress-edge-path.png)
+The progress API Pods already live inside the cluster. They have Pod IPs, labels, readiness probes, and a Deployment that keeps the right number of replicas running. The browser only needs a hostname and a path; Kubernetes keeps the Pod IPs behind the Service.
 
-*Ingress adds HTTP host, path, and TLS routing in front of a normal Service.*
+**Ingress** is the Kubernetes resource that describes that outside HTTP entry rule. The official Kubernetes [Ingress documentation](https://kubernetes.io/docs/concepts/services-networking/ingress/) describes Ingress as an API object for managing external access to Services, usually HTTP. In practical terms, an Ingress says: when a request reaches this hostname and this path, send it to this Service.
 
-
-Ingress is the Kubernetes API object for HTTP and HTTPS routing into Services. It stores rules such as host, path, backend Service, and TLS secret. An Ingress controller is the running component that watches those rules and configures a proxy or load balancer to enforce them.
+There are a few concepts connected together here. A **Service** gives the Pods a stable internal address. An **Ingress rule** maps a public host and path to that Service. An **Ingress controller** is the running software that reads the rule and configures a proxy or load balancer. **DNS** points the public hostname at the controller's address. **TLS** gives the browser a trusted HTTPS connection.
 
 ```mermaid
-flowchart TD
-    A[Browser or API client] --> B[External load balancer]
-    B --> C[Ingress controller]
-    C --> D[Ingress rules]
-    D --> E[orders Service]
-    E --> F[orders Pods]
+flowchart LR
+    Browser[Browser] --> DNS[api.devpolaris.example]
+    DNS --> Edge[Ingress controller]
+    Edge --> Rule[Ingress rule: /progress]
+    Rule --> Service[progress-api Service]
+    Service --> Pods[ready progress API Pods]
 ```
 
-The split between object and controller is important. Creating an Ingress object without a controller is like writing an Nginx config file on a machine without Nginx running. The API stores your intent, but no traffic changes.
+That is the whole article in one path. We will start at the Service because the Service owns Pod selection and stable backend naming. Then we will add the Ingress object, the controller that makes it real, the hostname and path rules, TLS, DNS, rollout checks, and debugging. Each part answers one question in the request: where did the client enter, which rule matched, which Service received it, and which Pods handled it?
 
-## A First Ingress for devpolaris-orders-api
+## Service First, Ingress Second
+<!-- section-summary: A Service gives the application a stable internal target, and Ingress places an HTTP entry rule in front of that target. -->
 
-An Ingress rule maps an external HTTP host and path to an internal Kubernetes Service. The backend Service stays internal, while the Ingress becomes the HTTP entry point for clients outside the cluster.
+A **Service** is Kubernetes' stable internal address for a group of Pods. The Kubernetes [Service documentation](https://kubernetes.io/docs/concepts/services-networking/service/) explains that a Service exposes an application running on a set of Pods and gives clients a stable way to reach them. For the progress API, the Service can be named `progress-api` in the `learning` namespace.
 
-Example: `api.devpolaris.local/orders` can route to the internal `devpolaris-orders-api` Service on its named `http` port.
+The Service uses a selector to find Pods with the right labels. It exposes one port that other cluster workloads can call, and it sends traffic to the container port where the app listens. This keeps callers away from changing Pod IPs. A Deployment can replace Pods during a rollout, and the Service name stays the same.
+
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: progress-api
+  namespace: learning
+spec:
+  type: ClusterIP
+  selector:
+    app: progress-api
+  ports:
+    - name: http
+      port: 80
+      targetPort: 3000
+```
+
+`type: ClusterIP` means the Service is reachable inside the cluster. That is usually the right starting point for an app behind Ingress. The Service keeps the backend private, and the Ingress controller acts as the shared edge that outside clients use.
+
+Before the platform team adds any outside route, someone should prove that the Service works from inside the cluster. This check creates a temporary curl Pod in a different namespace and calls the Service DNS name. The response tells us that cluster DNS, Service selection, backend endpoints, and the app health endpoint line up.
+
+```bash
+kubectl -n web run netcheck --rm -it --restart=Never --image=curlimages/curl -- \
+  curl -sS http://progress-api.learning/healthz
+```
+
+```json
+{"status":"ok","service":"progress-api"}
+```
+
+That internal check matters because Ingress builds on top of the Service. A broken selector, a wrong `targetPort`, or missing ready Pods will still break the request after the edge route looks perfect. The clean flow is Service first, then Ingress.
+
+## Ingress Object, IngressClass, and Controller
+<!-- section-summary: The Ingress object stores the desired HTTP rule, while an Ingress controller watches that object and configures real traffic handling. -->
+
+The **Ingress object** is the YAML resource stored in the Kubernetes API. It contains the host, path, TLS, and backend Service references. Kubernetes accepts the object as desired configuration, the same way it stores a Deployment or Service.
+
+The **Ingress controller** is the running component that turns that desired configuration into real network behavior. The official Kubernetes [Ingress controllers page](https://kubernetes.io/docs/concepts/services-networking/ingress-controllers/) lists many implementations, including HAProxy, Traefik, Kong, Cilium, cloud provider controllers, and Envoy-based options. Each controller watches Ingress objects and configures its own proxy, gateway, or load balancer.
+
+This split is the first big production lesson. Creating an Ingress object only records the route. Traffic starts working when a controller is installed, watches the matching Ingress, exposes an address, and can reach the backend Service. A cluster can store a valid Ingress YAML file while no outside request succeeds, because the controller piece is missing or pointed at a different class.
+
+**IngressClass** connects an Ingress to the controller that should handle it. In a small cluster, there may be one class named `public`. In a larger company, there might be a public internet controller, an internal-only controller, and a special controller for partner traffic. The class keeps each route on the intended edge.
+
+```bash
+kubectl get ingressclass
+```
+
+```bash
+NAME       CONTROLLER                                  PARAMETERS   AGE
+public     platform.devpolaris.example/public-ingress   <none>       24d
+internal   platform.devpolaris.example/internal-edge    <none>       24d
+```
+
+For the DevPolaris progress API, outside users need the public edge, so the Ingress will use `ingressClassName: public`. A different internal admin API might use `ingressClassName: internal` and a private load balancer address. Same Kubernetes API shape, different controller ownership.
+
+One more important detail belongs here. Kubernetes says the Ingress API is stable and frozen, while [Gateway API](https://kubernetes.io/docs/concepts/services-networking/gateway/) is the recommended successor for newer, richer traffic management. Many production clusters still use Ingress every day, and new platform designs should know where Ingress fits and where Gateway API may be a stronger long-term platform choice.
+
+There is also a 2026 controller footnote that matters for real production work. The Kubernetes project announced that the community-maintained `kubernetes/ingress-nginx` controller was retired in March 2026 in its [Ingress NGINX retirement announcement](https://kubernetes.io/blog/2025/11/11/ingress-nginx-retirement/). That retirement applies to that controller project; the Ingress API itself remains supported and frozen. For new production work, the platform team should choose a maintained Ingress controller or a Gateway API implementation.
+
+## Hosts, Paths, and Backend Services
+<!-- section-summary: Ingress rules match HTTP hostnames and paths, then forward matching requests to named Service ports. -->
+
+Now we can write the first useful route. The DevPolaris web app calls `https://api.devpolaris.example/progress/me`, and that path should reach the `progress-api` Service in the `learning` namespace. The Ingress lives in the same namespace as the backend Service, so the backend reference can use the local Service name.
 
 ```yaml
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: devpolaris-orders-api
-  namespace: orders
+  name: progress-api
+  namespace: learning
 spec:
-  ingressClassName: nginx
+  ingressClassName: public
   rules:
-    - host: api.devpolaris.local
+    - host: api.devpolaris.example
       http:
         paths:
-          - path: /orders
+          - path: /progress
             pathType: Prefix
             backend:
               service:
-                name: devpolaris-orders-api
+                name: progress-api
                 port:
                   name: http
 ```
 
-Read the manifest from the outside inward. A request for host `api.devpolaris.local` and path beginning with `/orders` should go to the Service named `devpolaris-orders-api` on its `http` port. The Ingress does not select Pods directly. The Service still owns that layer.
+The `host` field matches the HTTP host that the browser sends. The `path` field matches the URL path. The backend points to the Service and a Service port. In this example, the backend uses the port name `http`, which matches the Service manifest from the previous section.
 
-```bash
-$ kubectl -n orders get ingress devpolaris-orders-api
-NAME                    CLASS   HOSTS                 ADDRESS        PORTS   AGE
-devpolaris-orders-api   nginx   api.devpolaris.local  203.0.113.80   80      44s
-```
+A named Service port is a useful contract. The application team can change the container from port `3000` to port `8080` by updating the Service `targetPort`, while the Ingress keeps pointing at the Service port named `http`. The edge route stays tied to the Service contract instead of a container detail.
 
-The address usually belongs to the load balancer in front of the controller. If it is empty, check the controller and its Service before changing backend application code.
+`pathType` decides how path matching works. `Exact` matches one complete path. `Prefix` matches by path segments. `ImplementationSpecific` lets the controller decide the behavior. The official Ingress docs describe these path types, and a beginner-friendly default is to choose `Prefix` for route families such as `/progress`, `/progress/me`, and `/progress/history`.
 
-## IngressClass Connects Rules to a Controller
+| Request path | Rule path | `pathType` | Result |
+|---|---|---|---|
+| `/progress` | `/progress` | `Prefix` | Matches the progress API |
+| `/progress/me` | `/progress` | `Prefix` | Matches the progress API |
+| `/progress-history` | `/progress` | `Prefix` | No match as the same path segment |
+| `/progress` | `/progress` | `Exact` | Matches the progress API |
+| `/progress/me` | `/progress` | `Exact` | No match |
 
-An IngressClass is the link between an Ingress rule and the controller implementation that should enforce it. Multiple controllers can exist in one cluster, so the class prevents a rule from being handled by the wrong edge component.
+The path contract should match the application contract. If the public route is `/progress`, the cleanest backend application also serves routes under `/progress`. Some controllers can rewrite paths with annotations, such as stripping `/progress` before the request reaches the app. That can help with older apps, but it also adds controller-specific behavior that has to be tested during every migration.
 
-Example: `ingressClassName: nginx` means the NGINX Ingress Controller should read this object and program its proxy configuration.
+**Annotations** are key-value metadata on a Kubernetes object. Controllers often read them as extra instructions. The Ingress API gives the shared fields, and controller annotations add implementation details. The Kubernetes Ingress docs note that controllers frequently use annotations for extra behavior, and those annotations belong to the controller's own documentation.
 
-```bash
-$ kubectl get ingressclass
-NAME    CONTROLLER             PARAMETERS   AGE
-nginx   k8s.io/ingress-nginx   <none>       12d
-```
+A legacy rewrite is a good side scenario. Maybe a profile service serves `/` inside the container, while the public route must be `/profile` because all APIs share `api.devpolaris.example`. A rewrite annotation can strip `/profile` before the request reaches the service. The production check should record the public path, the path the backend receives, and a `curl --resolve` test that proves the route still behaves the same after a controller upgrade.
 
-If the class is wrong or missing in a cluster without a default class, the Ingress may sit unused. The rule looks correct, the Service works internally, and outside traffic still returns a default backend or timeout because no controller accepted the object.
+A partner webhook gives another path choice. If a payment provider calls exactly `/webhooks/payments`, an `Exact` path can keep that endpoint separate from `/webhooks/payments/debug` or `/webhooks/payments/test`. The progress API still uses `Prefix` because it owns a whole route family, while the webhook route might use `Exact` because the partner contract names one endpoint.
 
-```bash
-$ kubectl -n orders describe ingress devpolaris-orders-api
-Events:
-  Type     Reason             Age   From                      Message
-  Warning  Rejected           2m    nginx-ingress-controller  ingress class "ngnix" not found
-```
+## TLS at the Edge
+<!-- section-summary: TLS lets the Ingress edge serve HTTPS for a hostname, usually by reading a certificate and private key from a Kubernetes Secret. -->
 
-The typo is small, but the effect is complete. Fix the class name or configure a default class intentionally.
+**TLS termination** means the edge accepts HTTPS, presents a certificate, decrypts the request, and then forwards the request toward the backend. In an Ingress setup, that edge is usually the Ingress controller or a cloud load balancer connected to it.
 
-## Path Matching Is an API Contract
+For the browser, the certificate must match the hostname. A request to `api.devpolaris.example` needs a certificate whose DNS names include `api.devpolaris.example`. That matching name tells the browser that the HTTPS connection is meant for the API hostname.
 
-Path matching is the rule that decides which backend receives an HTTP request after the hostname matches. It becomes an API contract as soon as clients build URLs against it.
-
-Example: `pathType: Prefix` lets `/orders/123` match the `/orders` route, while `pathType: Exact` would match `/orders` only. `ImplementationSpecific` lets the controller decide, which may be acceptable for advanced controller features but is less portable.
-
-For `devpolaris-orders-api`, a prefix route is a reasonable API contract if the application serves all order endpoints under `/orders`. The application and Ingress must agree on whether the prefix is preserved or rewritten. Rewrites are controller-specific and should be used carefully because they hide part of the URL from the backend.
-
-| Request path | Prefix `/orders` match? | Exact `/orders` match? |
-|--------------|-------------------------|------------------------|
-| `/orders` | Yes | Yes |
-| `/orders/123` | Yes | No |
-| `/orders-v2` | Usually no with element-wise prefix matching | No |
-
-When a route returns 404, check whether the request reached the controller and whether the backend received the path it expects. A 404 from the controller means routing did not match. A 404 from the application means routing matched, but the app did not have that endpoint.
-
-## TLS Belongs at the Edge
-
-TLS termination is the point where an edge component accepts HTTPS, presents the certificate, decrypts the request, and forwards traffic to the backend Service. With Ingress, that usually happens at the controller or the load balancer in front of it.
-
-Example: the browser connects to `https://api.devpolaris.local`, the Ingress edge presents the `devpolaris-api-tls` certificate, then the controller forwards plain HTTP to the internal orders Service if that is how the backend is configured.
+Kubernetes stores the certificate and private key in a TLS Secret. The Ingress `tls` block names the host and the Secret. The Secret must be in the same namespace as the Ingress. The Kubernetes API reference for [Ingress TLS](https://kubernetes.io/docs/reference/kubernetes-api/networking/ingress-v1/) also points out that Ingress TLS uses port 443 and can use SNI so different hosts can share the same TLS port when the controller supports it. **SNI**, or Server Name Indication, is the TLS handshake field where the client tells the edge which hostname it wants before HTTP routing starts.
 
 ```yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: progress-api
+  namespace: learning
 spec:
+  ingressClassName: public
   tls:
     - hosts:
-        - api.devpolaris.local
-      secretName: devpolaris-api-tls
+        - api.devpolaris.example
+      secretName: api-devpolaris-example-tls
   rules:
-    - host: api.devpolaris.local
+    - host: api.devpolaris.example
       http:
         paths:
-          - path: /orders
+          - path: /progress
             pathType: Prefix
             backend:
               service:
-                name: devpolaris-orders-api
+                name: progress-api
                 port:
                   name: http
 ```
 
-The TLS secret must exist in the same namespace as the Ingress. If it is missing, clients may see a default certificate, a TLS handshake error, or a controller-specific warning.
+In real clusters, teams often use **cert-manager** to create and renew that Secret. cert-manager's [Ingress usage documentation](https://cert-manager.io/docs/usage/ingress/) explains that annotating an Ingress can let ingress-shim create a Certificate resource for the `tls.secretName`. The issuer might use Let's Encrypt for a public domain, or a company certificate authority for internal hosts.
 
-```bash
-$ kubectl -n orders get secret devpolaris-api-tls
-Error from server (NotFound): secrets "devpolaris-api-tls" not found
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: progress-api
+  namespace: learning
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+spec:
+  ingressClassName: public
+  tls:
+    - hosts:
+        - api.devpolaris.example
+      secretName: api-devpolaris-example-tls
+  rules:
+    - host: api.devpolaris.example
+      http:
+        paths:
+          - path: /progress
+            pathType: Prefix
+            backend:
+              service:
+                name: progress-api
+                port:
+                  name: http
 ```
 
-That error is not a Service problem. The backend can be healthy while the edge cannot prove its identity to clients.
+The important troubleshooting habit is to separate certificate readiness from backend readiness. A certificate error points to DNS, issuer, Secret, hostname, or controller TLS configuration. A `502` after a clean TLS handshake points farther inside the request path. The browser reports both as a broken API, but Kubernetes gives you different places to check.
 
-## Failure Mode: 502 From the Edge
+## DNS and the Controller Address
+<!-- section-summary: DNS sends the public hostname to the address exposed by the Ingress controller, and Ingress status shows what address the controller reports. -->
 
-A `502 Bad Gateway` from an Ingress usually means the controller accepted the client request but could not get a healthy response from the backend. The route matched. The edge is alive. The next layer is the Service and Pods.
+DNS is the bridge between the public hostname and the Ingress controller. A user types or the frontend calls `api.devpolaris.example`. DNS resolves that name to an IP address or cloud load balancer name. That target belongs to the controller's public entry point.
 
-![Kubernetes Ingress 502 debug path showing edge error, Ingress rule, service port, endpoints, and pod readiness](/content-assets/articles/article-containers-orchestration-kubernetes-networking-ingress/ingress-502-debug.png)
-
-*A 502 from the edge is usually a broken backend path, not proof that DNS or TLS is wrong.*
-
+The Ingress object can show a reported address after the controller accepts it. In a cloud cluster, that address might come from a managed load balancer. In a local lab, the address might come from minikube tunnel, kind port mapping, or MetalLB. The exact source depends on the controller and environment, but the check is the same.
 
 ```bash
-$ curl -i https://api.devpolaris.local/orders/healthz
-HTTP/2 502
-server: nginx
-content-type: text/html
-
-<html><body><h1>502 Bad Gateway</h1></body></html>
+kubectl -n learning get ingress progress-api
 ```
-
-Start by checking the backend Service from inside the cluster. If the Service fails internally, fix that before changing Ingress. If it works internally, inspect controller logs and upstream configuration.
 
 ```bash
-$ kubectl -n orders run netcheck --rm -it --image=curlimages/curl --restart=Never -- \
-  curl -sS http://devpolaris-orders-api/healthz
-{"status":"ok"}
-
-$ kubectl -n ingress-nginx logs deploy/ingress-nginx-controller --tail=5
-upstream timed out while connecting to upstream, client: 198.51.100.25, server: api.devpolaris.local, request: "GET /orders/healthz HTTP/2.0", upstream: "http://10.244.2.19:3000/healthz"
+NAME           CLASS    HOSTS                    ADDRESS          PORTS     AGE
+progress-api   public   api.devpolaris.example   203.0.113.20     80, 443   3m
 ```
 
-That log says the controller tried a Pod IP and port. Now inspect readiness, network policy, and application listener behavior.
+That `ADDRESS` value is what DNS should eventually point to. During a rollout, DNS may still point at the old edge, or it may still be cached by clients. A route can be correct in Kubernetes while public traffic keeps hitting a previous load balancer until DNS changes reach users.
 
-## Ingress Tradeoffs
-
-Ingress is a shared HTTP entry rule for Services. It is widely supported and simple for common host, path, and TLS routing. The tradeoff is that many advanced behaviors live in controller-specific annotations. Rate limits, rewrites, authentication, and timeouts often differ between controllers.
-
-For a small platform, that is acceptable if the controller choice is deliberate and documented. For a larger platform with multiple teams and richer traffic management, Gateway API may give clearer roles and more portable resources.
-
-Keep this boundary in mind: Ingress routes HTTP traffic to Services. It does not replace Services, NetworkPolicies, application authorization, DNS ownership, or observability. It is one layer in the path, not the whole path.
-
-## Production Review Questions
-
-A production Ingress review should connect the public URL to the internal Service path. Ask which controller owns the address, which host and path should match, which TLS secret clients receive, and which Service receives the request. For `devpolaris-orders-api`, the answer should name the Ingress, the backend Service, and the controller rather than saying only "Kubernetes handles it."
-
-```text
-Request path review:
-- Caller identity and namespace
-- DNS name used by the caller
-- Service type and Service port
-- Backend Pod port and readiness check
-- External routing layer if traffic leaves the cluster
-- Logs or metrics that prove the path works
-```
-
-This review is most valuable before production traffic arrives. It catches exposure mistakes while they are still a pull request, not a customer-facing symptom.
-
-## Evidence to Keep During Changes
-
-When you need to prove the design after deployment, collect one short evidence bundle. The bundle should show object state, one successful request, and the first diagnostic target if the request fails.
+A useful pre-DNS test is `curl --resolve`. It tells curl to use a specific IP address for a hostname, while still sending the correct Host header and validating the hostname path through TLS when certificates are ready. This lets the team test the new controller address before changing public DNS.
 
 ```bash
-$ kubectl -n orders get svc devpolaris-orders-api -o wide
-$ kubectl -n orders get endpointslice -l kubernetes.io/service-name=devpolaris-orders-api
-$ kubectl -n web run netcheck --rm -it --restart=Never --image=curlimages/curl -- \
-  curl -i http://devpolaris-orders-api.orders/healthz
+curl --resolve api.devpolaris.example:443:203.0.113.20 \
+  https://api.devpolaris.example/progress/me
 ```
 
-Leave enough proof that another engineer can see which network layers were healthy at the time of the check.
+```json
+{"userId":"u_123","completedLessons":42}
+```
 
-A useful Ingress evidence packet includes the rule, the controller address, the backend Service, and one external request. The goal is to prove whether the failure is at the edge or behind it.
+This check follows the same shape as a real browser request. It uses the public hostname, the public path, the controller address, TLS, the Ingress rule, the Service, and the Pods. That makes it much stronger than only curling a Pod IP or only reading the YAML.
+
+## Rollout Checks for a New Ingress
+<!-- section-summary: A safe Ingress rollout checks the internal Service, controller class, Ingress status, certificate readiness, and real HTTP response. -->
+
+An Ingress rollout has several layers, so the checks move from inside to outside. The backend Service comes first because the edge route depends on it. The sequence then moves through the class and controller, the Ingress object and its address, TLS readiness, and a real request through the hostname.
+
+The first check asks whether the Service has ready backends. An **EndpointSlice** is Kubernetes' modern record of the network endpoints behind a Service. The official [EndpointSlices documentation](https://kubernetes.io/docs/concepts/services-networking/endpoint-slices/) explains that EndpointSlices track backend endpoint IP addresses and help Services scale to many backends. Empty endpoints usually mean the Service selector finds zero Pods, the Pods are still unready, or the app containers are failing readiness probes.
 
 ```bash
-$ kubectl -n orders get ingress devpolaris-orders-api
-NAME                    CLASS   HOSTS                 ADDRESS        PORTS     AGE
-devpolaris-orders-api   nginx   api.devpolaris.local  203.0.113.80   80,443    18m
+kubectl -n learning get endpointslice -l kubernetes.io/service-name=progress-api
+```
 
-$ kubectl -n orders describe ingress devpolaris-orders-api
+```bash
+NAME                 ADDRESSTYPE   PORTS   ENDPOINTS                     AGE
+progress-api-x8mzs   IPv4          3000    10.244.2.18,10.244.3.41       12m
+```
+
+The next check asks whether the controller class exists and whether the controller is running. The class proves the Ingress can target a known controller. The controller Pods prove the edge software is alive.
+
+```bash
+kubectl get ingressclass public
+kubectl -n edge-system get pods -l app=public-ingress-controller
+```
+
+```bash
+NAME     CONTROLLER                                  PARAMETERS   AGE
+public   platform.devpolaris.example/public-ingress   <none>       24d
+
+NAME                                         READY   STATUS    RESTARTS   AGE
+public-ingress-controller-7d9d5c7b9f-q8wtr   1/1     Running   0          24d
+```
+
+The object-level check is the Ingress itself. `kubectl describe ingress` shows the rules, backend, events, class, TLS Secret, and reported address. Events are especially useful because controllers often write warnings there when a Service or Secret cannot be found.
+
+```bash
+kubectl -n learning describe ingress progress-api
+```
+
+```bash
 Rules:
-  Host                  Path     Backends
-  api.devpolaris.local  /orders  devpolaris-orders-api:http (10.244.1.17:3000,10.244.2.19:3000)
+  Host                    Path       Backends
+  ----                    ----       --------
+  api.devpolaris.example  /progress  progress-api:http (10.244.2.18:3000,10.244.3.41:3000)
 TLS:
-  devpolaris-api-tls terminates api.devpolaris.local
+  api-devpolaris-example-tls terminates api.devpolaris.example
+Events:
+  Type    Reason  Age   From                      Message
+  ----    ------  ----  ----                      -------
+  Normal  Sync    45s   public-ingress-controller  Scheduled for sync
 ```
 
-The backend addresses in `describe ingress` are a strong signal. They show the controller can resolve the Service to endpoints. If the list is empty, inspect the Service. If the list is populated and users still see `502`, inspect controller logs, protocol expectations, timeouts, and the application.
+Certificate checks come next when HTTPS is part of the route. With cert-manager, the Certificate resource should become ready and the Secret should exist. A missing Secret or failed issuer challenge keeps HTTPS broken even when the backend app is healthy.
 
 ```bash
-$ curl -i https://api.devpolaris.local/orders/healthz
-HTTP/2 200
-content-type: application/json
-
-{"status":"ok","service":"orders-api"}
+kubectl -n learning get certificate
+kubectl -n learning get secret api-devpolaris-example-tls
 ```
-
-When the same request fails, compare status codes carefully.
-
-```text
-404 from the controller
-  The host or path rule probably did not match.
-
-502 from the controller
-  The rule matched, but the controller could not get a good backend response.
-
-500 from orders-api
-  The request reached the application, and the application failed.
-
-TLS certificate warning
-  The edge certificate or hostname is wrong before HTTP routing starts.
-```
-
-This is why Ingress debugging should not begin by editing annotations. First decide whether the request reached the rule, the Service, and the application. Each answer narrows the next change.
-
-For TLS problems, keep one command in your pocket that shows the certificate name the client actually receives. HTTP tools can hide that detail behind a browser warning.
 
 ```bash
-$ openssl s_client -connect api.devpolaris.local:443 -servername api.devpolaris.local </dev/null 2>/dev/null   | openssl x509 -noout -subject -issuer
-subject=CN=api.devpolaris.local
-issuer=CN=DevPolaris Local CA
+NAME                         READY   SECRET                       AGE
+api-devpolaris-example-tls   True    api-devpolaris-example-tls   2m
 ```
 
-If the subject is a default controller certificate, the Ingress may not be using the intended TLS secret. If the subject is correct but the browser still complains, check the issuer trust chain and hostname. That is a certificate path problem, not a backend Service problem.
+The final check sends a real request. A healthy response from the public hostname proves all the pieces work together. A failure at this last step means the team can walk back through the checks instead of guessing.
 
-This separation is the main operational lesson for Ingress. A request can fail before it reaches HTTP routing, after routing but before the backend responds, or inside the application. The status code, certificate, controller event, and backend test tell you which one it is.
+## Debugging by Following the Request
+<!-- section-summary: Ingress debugging works best when each symptom gets mapped to DNS, TLS, controller routing, Service endpoints, NetworkPolicy, or application behavior. -->
 
-A final lightweight smoke record can sit in a pull request or release note. It should use the real namespace and the real Service name so future readers can compare it with production symptoms.
+Ingress failures can all look the same from the user's chair. The web app spins, the browser shows a network error, or the API returns a status code. Inside the cluster, those symptoms come from different layers. The fastest path is to follow the request in order.
 
-```text
-Smoke record:
-  namespace: orders
-  service: devpolaris-orders-api
-  caller: web/devpolaris-web
-  expected response: HTTP 200 from /healthz
-  owner for failures before Service: platform networking
-  owner for failures after Service reaches Pod: orders API team
+The first layer is DNS when the client cannot connect to the expected address. `dig` or `nslookup` should show the hostname pointing at the controller's load balancer or IP. A wrong DNS answer can send the request to an old edge, a different cluster, or an address with no route at all.
+
+```bash
+dig +short api.devpolaris.example
+kubectl -n learning get ingress progress-api
 ```
 
-That ownership line matters during incidents. It helps the team route the next investigation without turning every networking symptom into a cluster-wide mystery.
+The next layer is TLS. A certificate name mismatch usually means the Secret contains the wrong certificate, the Ingress `tls.hosts` entry differs from the browser hostname, or DNS sends traffic to a different controller with a different default certificate. `openssl s_client` can show the certificate that the edge presents.
 
-For a learner, the useful habit is to write the expected path in words before running the command. That prevents a correct command against the wrong namespace, host, or Service from looking like useful evidence.
-
-```text
-Expected path:
-  caller resolves the intended name
-  request reaches the intended Kubernetes Service
-  Service forwards only to ready orders API Pods
-  application returns the expected health response
+```bash
+openssl s_client -connect api.devpolaris.example:443 \
+  -servername api.devpolaris.example </dev/null
 ```
 
-If the actual result differs, the first mismatching line is the next place to inspect.
+After TLS, the next question is whether the controller matched the rule. A `404` from the controller often means the host or path missed every Ingress rule. The request may use `api.devpolaris.example`, while the Ingress says `api.internal.devpolaris.example`. The request may use `/progress/me`, while the Ingress uses `Exact` on `/progress`.
 
-This final comparison also keeps the article practical: names and routes are useful only when they match what the running workload actually uses.
+A **NetworkPolicy** is a Kubernetes resource that controls allowed traffic to and from Pods when the cluster's network plugin enforces it. The official [Network Policies documentation](https://kubernetes.io/docs/concepts/services-networking/network-policies/) describes rules for ingress traffic into Pods and egress traffic leaving Pods. In our request path, a NetworkPolicy can allow the public controller Pods to reach `progress-api` while still blocking unrelated namespaces.
 
-Use that mismatch as a pointer, not as an invitation to rewrite every layer.
+Backend errors move the investigation behind the rule. A `502` or `503` often means the controller matched the route but could not reach a healthy backend. The Service might have no endpoints, the Service port might point to the wrong target port, the Pods might be failing readiness, or a NetworkPolicy might block traffic from the controller namespace to the app namespace.
 
-Small proofs compound into a reliable diagnosis.
+```bash
+kubectl -n learning get svc progress-api
+kubectl -n learning get endpointslice -l kubernetes.io/service-name=progress-api
+kubectl -n learning get pods -l app=progress-api
+kubectl -n learning describe pod -l app=progress-api
+```
 
-Keep the original failing URL beside every successful backend check.
+Application errors are the last layer. A clean `500` from the progress API means the edge path reached the app and the app handled the request badly. At that point, controller logs may show a successful upstream response, while application logs show the real failure.
 
+```bash
+kubectl -n edge-system logs deploy/public-ingress-controller --tail=100
+kubectl -n learning logs deploy/progress-api --tail=100
+```
 
-![Kubernetes Ingress summary covering IngressClass, host, path, TLS, Service, and endpoints](/content-assets/articles/article-containers-orchestration-kubernetes-networking-ingress/ingress-summary.png)
+This table maps the user-visible symptom to the layer that deserves attention next. The point is to keep each clue tied to one part of the request path instead of changing DNS, TLS, Service selectors, and application code all at once.
 
-*Use this checklist to find where an HTTP request stops between the edge and pods.*
+| Symptom | Likely layer | Useful check |
+|---|---|---|
+| Hostname resolves to the wrong place | DNS | Compare DNS answer with Ingress `ADDRESS` |
+| Browser reports certificate mismatch | TLS | Inspect the certificate and Ingress `tls.hosts` |
+| Controller returns `404` | Host or path rule | Check `host`, `path`, and `pathType` |
+| Controller returns `502` or `503` | Backend routing | Check Service port, EndpointSlices, Pods, NetworkPolicy |
+| App returns `500` | Application | Check app logs, traces, and upstream dependencies |
+
+This style of debugging keeps the layers separate. It also gives a clean incident timeline: DNS was correct, TLS was correct, the controller matched the rule, the Service had no ready endpoints, and the Deployment rollout caused the endpoints to disappear. That story is much easier to fix than "Ingress is broken."
+
+## Production Ownership and Tradeoffs
+<!-- section-summary: Ingress works well when teams agree who owns the shared controller, route contracts, TLS, annotations, DNS, and migration path. -->
+
+Ingress is a shared edge, so ownership has to be clear. The platform team usually owns the controller installation, controller upgrades, cloud load balancer settings, default certificates, controller logs, shared security policy, and DNS handoff. Application teams usually own their Ingress rules, Services, readiness probes, application paths, and tests for public routes.
+
+That split matters during changes. If the progress team changes `/progress` to `/learning-progress`, they own the client contract and the Ingress path update. If the platform team changes from one controller to another, they own annotation compatibility, timeout behavior, allowed body size, logging format, and migration checks.
+
+Annotations deserve special attention. They are how many controllers expose features beyond the standard Ingress fields, such as request timeouts, path rewrites, request body limits, rate limiting, authentication, or custom headers. Those settings can be necessary, but they are tied to the selected controller. A production review should list every annotation, why it exists, which controller supports it, and what test proves it still works.
+
+The controller migration workflow should be concrete. Export every Ingress, list every annotation, group annotations by feature, find the equivalent in the new controller or Gateway API, and write one request test for every host and path. During the cutover, `curl --resolve` can send traffic to the new controller address before DNS moves. After the cutover, controller logs and application logs should show the same status codes, response headers, and backend routes that the old controller produced.
+
+Security also lives across several layers. TLS protects the client-to-edge connection. NetworkPolicy can restrict which Pods the controller may reach. The app still needs authentication and authorization for user actions. Ingress routing gets the HTTP request to the right Service; user permission checks stay inside the application and its identity system.
+
+The production review for the DevPolaris progress route can use a simple checklist. Each row names one owner-facing question, and together the rows describe the whole path from public hostname to ready Pods.
+
+| Area | Question to answer |
+|---|---|
+| Controller | Which IngressClass owns this route, and who operates that controller? |
+| DNS | Which record points `api.devpolaris.example` to the controller address? |
+| TLS | Which Secret contains the certificate, and how does it renew? |
+| Route | Which host and path are public API contracts? |
+| Backend | Which Service port receives the request, and which Pods are ready? |
+| Policy | Which NetworkPolicies allow controller-to-backend traffic? |
+| Observability | Which logs, metrics, and alerts show edge errors and backend errors separately? |
+| Migration | Which annotations or behaviors would change under another controller or Gateway API? |
+
+This is also where Gateway API enters the conversation. The Kubernetes project recommends Gateway API as the successor to Ingress for newer traffic management needs. Ingress remains common and stable, and Gateway API gives platform teams a richer model for listeners, routes, cross-namespace attachment, and shared gateway ownership. The next article can build on this Ingress path and show how Gateway API separates those responsibilities more explicitly.
+
+## What's Next
+
+Ingress gives Kubernetes HTTP workloads a practical public entry point. It maps a hostname and path to a Service, and the Ingress controller turns that rule into real edge behavior. Once that request path makes sense, Gateway API is the next step because it expands the same idea into a more expressive platform model for modern traffic routing.
 
 ---
 
 **References**
 
-- [Ingress](https://kubernetes.io/docs/concepts/services-networking/ingress/) - The official API concept for HTTP routing rules that send traffic to Services.
-- [Ingress Controllers](https://kubernetes.io/docs/concepts/services-networking/ingress-controllers/) - The official explanation of controllers that make Ingress resources take effect.
-- [Service](https://kubernetes.io/docs/concepts/services-networking/service/) - The canonical Kubernetes explanation of Services, selectors, Service types, and EndpointSlices.
-- [Debug Services](https://kubernetes.io/docs/tasks/debug/debug-application/debug-service/) - The official troubleshooting path for checking Pods, Services, endpoints, DNS, and kube-proxy behavior.
+- [Ingress](https://kubernetes.io/docs/concepts/services-networking/ingress/) - The official Kubernetes concept page for Ingress resources, host/path routing, TLS, and the frozen API status.
+- [Ingress Controllers](https://kubernetes.io/docs/concepts/services-networking/ingress-controllers/) - The official list and explanation of controllers that implement Ingress behavior.
+- [Service](https://kubernetes.io/docs/concepts/services-networking/service/) - The official Kubernetes explanation of Services as stable access points for Pods.
+- [EndpointSlices](https://kubernetes.io/docs/concepts/services-networking/endpoint-slices/) - The official explanation of how Kubernetes tracks Service backends at scale.
+- [Network Policies](https://kubernetes.io/docs/concepts/services-networking/network-policies/) - The official Kubernetes concept page for pod traffic rules.
+- [Gateway API](https://kubernetes.io/docs/concepts/services-networking/gateway/) - The official Kubernetes successor model for richer traffic routing.
+- [Ingress NGINX Retirement](https://kubernetes.io/blog/2025/11/11/ingress-nginx-retirement/) - The Kubernetes project announcement for the community `kubernetes/ingress-nginx` controller retirement.
+- [cert-manager Ingress usage](https://cert-manager.io/docs/usage/ingress/) - cert-manager's official guide for creating certificates from annotated Ingress resources.

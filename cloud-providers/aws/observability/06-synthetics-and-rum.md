@@ -45,6 +45,10 @@ This is the user experience gap. To close it, teams add two more signals:
 
 Synthetics answers, "Can a known journey work from the outside right now?" RUM answers, "What are real users experiencing across browsers, devices, pages, and geographies?"
 
+![Synthetic checks and real users comparison showing scheduled journeys, API health, real sessions, browser errors, and the checkout service](/content-assets/articles/article-cloud-providers-aws-observability-synthetics-and-rum/synthetic-checks-and-real-users.png)
+
+*The visual separates the two outside-in signals. Synthetics tests a known path on schedule, while RUM records what sampled real users actually experience.*
+
 ## What CloudWatch Synthetics Does
 <!-- section-summary: CloudWatch Synthetics runs scheduled canary scripts from your AWS account to test endpoints, APIs, and browser journeys before customers report problems. -->
 
@@ -148,6 +152,10 @@ aws synthetics start-canary-dry-run \
   --name checkout-api-health \
   --runtime-version syn-nodejs-puppeteer-9.1
 ```
+
+![Safe canary update workflow showing draft script, dry run, review artifacts, promote runtime, watch alarms, and rollback if checks fail](/content-assets/articles/article-cloud-providers-aws-observability-synthetics-and-rum/safe-canary-update.png)
+
+*Canary code protects production, so it needs its own safe update path. Dry runs and artifact review help the team update monitoring without breaking the monitor itself.*
 
 Canary artifacts also deserve attention. Canaries can store load timing data, screenshots, logs, reports, and HAR-style request evidence. This is useful during incidents because the responder can see what the synthetic browser saw. It also means artifact storage needs retention, encryption, and access controls. AWS documents that canaries store artifacts in Amazon S3 by default, with encryption at rest using an AWS-managed KMS key unless you choose another encryption option.
 
@@ -357,6 +365,10 @@ For the checkout platform, the final operating model is clear:
 | What exact error did the code write? | CloudWatch Logs |
 
 This is the practical version of observability on AWS. The team starts before the customer screenshot arrives. It watches the service promise, tests the public journey, records real user experience, and keeps the trace and log path ready for diagnosis.
+
+![User experience evidence map connecting checkout journey, SLO health, canary result, RUM session, X-Ray trace, and CloudWatch logs](/content-assets/articles/article-cloud-providers-aws-observability-synthetics-and-rum/user-experience-evidence.png)
+
+*The summary image shows the customer edge and backend evidence together. A public journey can move from SLO health to canary result, RUM session, trace, and logs.*
 
 ## What's Next
 <!-- section-summary: The next article applies the observability pieces to Lambda, ECS, and EKS runtime operations. -->

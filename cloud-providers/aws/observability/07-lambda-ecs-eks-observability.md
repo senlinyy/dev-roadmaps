@@ -37,6 +37,10 @@ Here is the shape we will use through the article:
 
 The important idea is simple: **observability starts with the runtime boundary**. Lambda already knows about invocations, duration, errors, throttles, and memory. ECS knows about clusters, services, tasks, and containers. EKS knows about Kubernetes objects such as namespaces, pods, deployments, nodes, and DaemonSets. A good setup respects those native shapes, then adds a shared trace ID and shared log fields so one checkout can be followed across all of them.
 
+![Three runtime shapes showing Lambda, ECS, and EKS connected to logs, metrics, traces, and runtime health](/content-assets/articles/article-cloud-providers-aws-observability-lambda-ecs-eks-observability/three-runtime-shapes.png)
+
+*The image shows the shared goal across different compute models. Lambda, ECS, and EKS all need logs, metrics, traces, and runtime health, but each runtime exposes them through a different setup path.*
+
 We will start with Lambda because it gives the most managed experience. AWS runs the host, the runtime lifecycle, and the scaling path, so your first job is to read the signals Lambda already emits and then add the missing detail.
 
 ## Lambda Observability
@@ -219,6 +223,10 @@ For ECS clusters on EC2 instances, AWS also documents an ECS agent version requi
 
 Container Insights gives ECS strong infrastructure visibility, and application traces sit beside it. For a service such as `orders-api`, teams commonly add ADOT as a sidecar or collector path so the application can emit OpenTelemetry traces to X-Ray or another backend. The infrastructure view tells you which task hurt; the trace tells you which downstream call hurt inside the request.
 
+![Container Insights view showing cluster, node, task, pod, CPU, memory, restart, network, and logs](/content-assets/articles/article-cloud-providers-aws-observability-lambda-ecs-eks-observability/container-insights-view.png)
+
+*Container Insights adds the runtime layer that service metrics often miss. The team can move from cluster health to node, task, pod, CPU, memory, restarts, network, and logs.*
+
 Now the same checkout flow moves into EKS, where the container unit changes again. ECS tasks map neatly to AWS task metadata, while EKS adds Kubernetes objects and a cluster control plane.
 
 ## EKS Observability
@@ -353,6 +361,10 @@ For all three, keep the application fields boring and consistent:
 | `errorType` | Lets teams group failures without parsing full stack traces. |
 
 The final setup should feel practical in a real incident. A responder should move from an alarm to a function, task, pod, trace, or log query in a few clicks or commands. The goal is to collect the signals that answer where the failure happened, who or what it affected, and what changed just before it happened.
+
+![Runtime observability checklist with structured logs, platform metrics, runtime insights, trace context, service names, and alert path](/content-assets/articles/article-cloud-providers-aws-observability-lambda-ecs-eks-observability/runtime-observability-checklist.png)
+
+*The checklist keeps the runtime work concrete. Before an incident, the team wires the shared fields, runtime metrics, trace context, and alert path that make Lambda, ECS, and EKS debuggable.*
 
 ## What's Next
 <!-- section-summary: The next article moves from runtime symptoms to audit evidence about who changed AWS and what the resource looked like. -->

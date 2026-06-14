@@ -38,6 +38,10 @@ If Maple Market puts every piece of state into one database, the database receiv
 
 The first question is simple: **what does the application need to do with this data every day?** After that, the service choice starts to make sense. Whole files usually point to S3. Structured business records usually point to RDS or Aurora. High-volume key lookups often point to DynamoDB. Host-mounted storage points to EBS, EFS, or FSx. Moving large sets of existing data points to tools like DataSync, DMS, Transfer Family, S3 Batch Operations, and sometimes physical transfer options.
 
+![AWS storage and database services mapped to object, SQL, key lookup, disk, shared file, and movement data shapes](/content-assets/articles/article-cloud-providers-aws-storage-databases-storage-database-mental-model/data-shape-service-map.png)
+
+*The first useful split is the data shape. The service name comes after the job is clear.*
+
 ## Objects, Records, Items, Disks, and Shared Files
 <!-- section-summary: Each AWS data service maps to a data shape, so naming the shape helps narrow the service choice. -->
 
@@ -81,6 +85,10 @@ For DynamoDB, the main boundary is the **table and its key design**. An applicat
 For EBS, EFS, and FSx, the boundary includes **placement and network reachability**. EBS follows Availability Zone placement. EFS and FSx mount through private network interfaces and security groups. A team must decide which subnets have mount targets, which security groups can reach NFS or SMB ports, and how backup policies apply to the filesystem.
 
 This is why a production storage decision should include more than a service name. A useful design note says: "the upload service writes objects under `uploads/raw/` in the customer media bucket through an ECS task role, S3 events trigger image processing, lifecycle rules expire abandoned temporary uploads, and CloudTrail data events are enabled for sensitive prefixes." That level of detail turns a service choice into an operating plan.
+
+![Three review layers around a Maple Market data choice: access, change behavior, and recovery](/content-assets/articles/article-cloud-providers-aws-storage-databases-storage-database-mental-model/access-change-recovery-map.png)
+
+*A storage choice is ready for review only when access, change behavior, and recovery have names.*
 
 ## Change Patterns and Consistency
 <!-- section-summary: How data changes over time decides whether the system needs transactions, conditional writes, versions, locks, or filesystem semantics. -->
@@ -152,6 +160,10 @@ Maple Market does not need one giant storage answer. It needs a few focused answ
 Product photos and invoice PDFs go to S3 because they are whole objects with object-level permissions, lifecycle rules, and event hooks. Checkout records go to RDS or Aurora because orders, payments, and inventory need transactions and SQL constraints. Carts, sessions, and idempotency keys go to DynamoDB when the app needs fast known-key access at high traffic. Host disks use EBS. Shared Linux paths use EFS. Windows shares, Lustre scratch storage, ONTAP, or OpenZFS workloads use FSx. Existing files and databases move through DataSync, DMS, Transfer Family, S3 replication, S3 Batch Operations, or a controlled export pipeline.
 
 The useful habit is to describe the data before choosing the product. Name the shape, owner, read path, write path, change pattern, recovery copy, movement path, and cost control. Once those facts are visible, AWS storage choices turn into normal engineering decisions instead of a long menu of service names.
+
+![Storage decision checklist with data shape, owner, read/write path, access control, recovery copy, and movement path](/content-assets/articles/article-cloud-providers-aws-storage-databases-storage-database-mental-model/storage-selection-summary.png)
+
+*The final decision should read like an operating checklist, not just a service label.*
 
 ## What's Next
 <!-- section-summary: The next article zooms into S3 because object storage is the first AWS storage service many applications need. -->

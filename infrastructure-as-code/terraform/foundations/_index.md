@@ -1,6 +1,6 @@
 ---
 title: "Foundations & Getting Started"
-description: "Understand the 'why' behind Infrastructure as Code, how Terraform works under the hood, and how to authenticate with cloud providers."
-tags: ["iac", "terraform", "providers"]
+description: "Understand why Infrastructure as Code matters, how Terraform works, how to run a safe first project, and how providers, versions, and credentials fit into real team workflows."
+tags: ["iac", "terraform", "providers", "getting-started"]
 order: 1
 ---

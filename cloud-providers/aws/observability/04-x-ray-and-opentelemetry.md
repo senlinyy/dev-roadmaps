@@ -108,6 +108,10 @@ Here is the boundary behavior in the checkout flow. The load balancer or first i
 
 There is also a security habit here. AWS documentation notes that a trace header can come from a client request, an AWS service, or an SDK. Applications at public trust boundaries can remove or replace incoming `X-Amzn-Trace-Id` values so outside callers cannot force confusing trace IDs or sampling decisions into the internal system.
 
+![Trace context propagation through browser, checkout API, SQS message, Lambda worker, and payment provider](/content-assets/articles/article-cloud-providers-aws-observability-tracing-request-correlation/trace-context-propagation.png)
+
+*The trace header acts like the request identity. Each service keeps the same story going by reading the incoming context and sending context to the next hop.*
+
 ## Spans, Segments, and Subsegments
 <!-- section-summary: OpenTelemetry records spans, and X-Ray displays those records as segments and subsegments that show service work and dependency calls. -->
 
@@ -191,6 +195,10 @@ node --require ./instrumentation.js app.js
 ```
 
 The same shape applies in other languages. The names change, but the pieces stay familiar: OpenTelemetry SDK, resource detection, propagation, exporter, and collector or CloudWatch agent. The team verifies success in CloudWatch by checking trace maps, trace details, and the service views that use X-Ray trace data.
+
+![OpenTelemetry to AWS pipeline showing app SDK, OTLP, CloudWatch agent, ADOT Collector, X-Ray traces, CloudWatch metrics, and CloudWatch logs](/content-assets/articles/article-cloud-providers-aws-observability-tracing-request-correlation/opentelemetry-to-aws.png)
+
+*The pipeline shows the modern AWS tracing path. Applications emit OpenTelemetry data, and AWS-supported agents or collectors deliver it into CloudWatch and X-Ray views.*
 
 ## Tracing Queues and Event-Driven Work
 <!-- section-summary: Async systems need explicit context handoff because the request leaves HTTP and waits in a queue before another service continues the work. -->
@@ -318,6 +326,10 @@ graph TB
 ```
 
 This is the end state the observability section has been building toward. Metrics tell the team a customer-facing behavior changed. Logs explain the concrete error. Traces connect the services, queues, and dependencies into one request path. With all three signals connected, incident response has a real story instead of a pile of disconnected clues.
+
+![Trace, log, and sampling summary showing trace map, trace-linked logs, sampling rules, and a checkout timeout callout](/content-assets/articles/article-cloud-providers-aws-observability-tracing-request-correlation/trace-log-sample-summary.png)
+
+*The summary connects the tracing controls that matter during incidents: enough sampled traces, trace-linked logs, and a clear trace map for the failing checkout path.*
 
 ## What's Next
 <!-- section-summary: The next article rolls telemetry into service health, service level indicators, and reliability targets. -->

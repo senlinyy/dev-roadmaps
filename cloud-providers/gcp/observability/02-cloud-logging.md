@@ -1,124 +1,265 @@
 ---
-title: "Cloud Logging"
-description: "Make application, platform, and audit logs searchable, and route them using log sinks for long-term retention."
-overview: "Logs are only valuable if you can find them and keep them. This article explains how to query structured logs and configure log routing sinks using the gcloud CLI."
-tags: ["gcp", "observability", "logging", "log-router"]
+title: "Cloud Logging and Audit Evidence"
+description: "Use structured logs, LogEntry fields, audit logs, Log Router sinks, retention, exports, and log-based metrics during a real GCP incident."
+overview: "Cloud Logging stores application, platform, and audit evidence as structured records. This article follows checkout-api 500s through jsonPayload fields, resource labels, trace correlation, audit logs, routing, retention, and log-based metrics."
+tags: ["gcp", "observability", "logging", "audit-logs", "log-router"]
 order: 2
 id: article-cloud-providers-gcp-observability-cloud-logging
+aliases:
+  - cloud-logging
 ---
 
 ## Table of Contents
 
-1. [Querying Structured Logs](#querying-structured-logs)
-2. [Resource Labels and Payloads](#resource-labels-and-payloads)
-3. [The Log Router and Sinks](#the-log-router-and-sinks)
-4. [Putting It All Together](#putting-it-all-together)
-5. [What's Next](#whats-next)
+1. [Why Logs Carry The Incident Details](#why-logs-carry-the-incident-details)
+2. [Writing Structured Application Logs](#writing-structured-application-logs)
+3. [Reading The LogEntry Envelope](#reading-the-logentry-envelope)
+4. [Querying Cloud Run Logs During The 500s](#querying-cloud-run-logs-during-the-500s)
+5. [Connecting Logs To Traces](#connecting-logs-to-traces)
+6. [Audit Logs For Who Changed What](#audit-logs-for-who-changed-what)
+7. [Log Router, Sinks, Retention, And Exports](#log-router-sinks-retention-and-exports)
+8. [Log-Based Metrics](#log-based-metrics)
+9. [Putting It All Together](#putting-it-all-together)
+10. [What's Next](#whats-next)
 
-## Querying Structured Logs
+## Why Logs Carry The Incident Details
+<!-- section-summary: Metrics show the size of the problem, while logs explain the exact event that happened inside one service. -->
 
-Google Cloud Logging is a centralized, fully managed service that stores, queries, and routes log data from your applications and infrastructure. Unlike traditional environments where logs are flat lines of text written to scattered local files, Google Cloud stores logs as structured entries. When an application or a Google Cloud service emits a log, the entry carries metadata such as resource type, severity, timestamp, and payload. In this walkthrough, we will use the `gcloud` CLI to query these structured logs and configure routing rules for longer retention.
+The `checkout-api` alert tells the team that the HTTP `5xx` rate is high. That signal matters because it says customers are affected. It still leaves a very large question open: what happened inside the service when one checkout failed?
 
-Before you can route a log to a new destination, you must know how to find it. In Google Cloud, every log entry includes standardized metadata. This metadata includes a precise timestamp, a severity level such as `INFO` or `ERROR`, and a unique identifier.
+That is where **Cloud Logging** comes in. Cloud Logging is Google Cloud's managed service for storing, searching, routing, and analyzing log entries. Managed platforms such as Cloud Run can send request logs, container stdout, container stderr, and platform events into Cloud Logging. Application code can add structured logs with the fields that only the application understands.
 
-To see this structure in action, we can query the most recent Cloud Audit Log. These logs record administrative actions, such as creating or modifying resources. We use the `gcloud logging read` command, passing a filter that selects only activity logs, and we format the output as JSON so we can read the raw fields:
+The difference between a weak log and a useful log is the difference between a sentence and evidence. A weak log says `payment failed`. A useful log says the route was `POST /checkout`, the release was `2026-06-14.3`, the dependency was `payment-provider`, the error code was `provider_timeout`, and the active trace ID was `4bf92f3577b34da6a3ce929d0e0e4736`.
 
-```bash
-gcloud logging read 'logName="projects/MY_PROJECT/logs/cloudaudit.googleapis.com%2Factivity"' --format=json --limit=1
-```
+Logs also need care because they are searchable records. A production team keeps access tokens, card numbers, raw passwords, session cookies, private keys, and full personal records out of logs. The goal is enough detail to investigate, with enough discipline to keep telemetry from turning into a data leak.
+
+## Writing Structured Application Logs
+<!-- section-summary: Structured JSON logs give Cloud Logging fields that responders can filter, group, route, and connect to traces. -->
+
+**Structured logging** means the application writes log events as JSON fields instead of one flat string. Cloud Logging can map recognized fields into the `LogEntry` envelope, and it usually stores the remaining application fields in `jsonPayload`. That gives the team queries like `jsonPayload.error_code="provider_timeout"` instead of fragile text searches.
+
+Here is a practical error event from `checkout-api` during the incident:
 
 ```json
-[
-  {
-    "insertId": "1a2b3c4d",
-    "logName": "projects/my-project/logs/cloudaudit.googleapis.com%2Factivity",
-    "protoPayload": {
-      "@type": "type.googleapis.com/google.cloud.audit.AuditLog",
-      "authenticationInfo": {
-        "principalEmail": "admin@example.com"
-      },
-      "methodName": "v1.compute.instances.delete"
-    },
-    "receiveTimestamp": "2024-05-14T10:30:02Z",
-    "resource": {
-      "labels": {
-        "instance_id": "89234723984",
-        "project_id": "my-project",
-        "zone": "us-central1-a"
-      },
-      "type": "gce_instance"
-    },
-    "severity": "NOTICE",
-    "timestamp": "2024-05-14T10:30:00Z"
+{
+  "severity": "ERROR",
+  "message": "payment provider rejected checkout request",
+  "route": "POST /checkout",
+  "checkout_id": "chk_9f21",
+  "payment_provider": "stripe",
+  "error_code": "provider_timeout",
+  "release": "2026-06-14.3",
+  "logging.googleapis.com/trace": "projects/shop-prod/traces/4bf92f3577b34da6a3ce929d0e0e4736",
+  "logging.googleapis.com/spanId": "d5b0214a4f6d9a12",
+  "logging.googleapis.com/trace_sampled": true,
+  "logging.googleapis.com/labels": {
+    "team": "checkout",
+    "env": "prod",
+    "service": "checkout-api"
   }
-]
+}
 ```
 
-The output shows exactly how Google Cloud organizes log data. Because the log is structured, you never have to guess how to parse it or write fragile text-matching scripts.
+The top-level `severity` tells Cloud Logging how important the event is. The `message` gives a human-readable summary. The route, checkout ID, provider, error code, and release fields stay in `jsonPayload` so the team can filter and group them. The special `logging.googleapis.com/*` fields tell Cloud Logging to populate log labels and trace fields in the `LogEntry` envelope.
 
-## Resource Labels and Payloads
+The shape is more important than the exact library. A Node service might use Pino or Winston, a Python service might use the standard logging module with JSON formatting, and a Go service might use `slog` or a structured logger. In every language, the production habit is the same: create stable fields for stable questions, keep high-cardinality request details out of labels, and keep sensitive data out of every telemetry path.
 
-When you run a large system, millions of log entries pour in from databases, load balancers, and virtual machines. The `resource.labels` field identifies the component that generated the log. For a Compute Engine instance, that might include the project, zone, and instance ID. For Cloud Run, it might include the service, revision, and region.
+## Reading The LogEntry Envelope
+<!-- section-summary: A LogEntry has an envelope for source context and a payload for event details, and both parts matter during incident search. -->
 
-These structured labels make filtering practical. If a developer needs to debug a failing API, they can filter by resource type and service name before searching the payload text. The beginner habit is to narrow by resource metadata first, then read the message.
+Cloud Logging stores each record as a **LogEntry**. A beginner can read a `LogEntry` in two parts. The envelope tells where the event came from, when it happened, how severe it was, which log stream it belongs to, and which trace it connects to. The payload tells what the application, platform, or audit source reported.
 
-The `protoPayload` field contains the domain-specific details of the event. For an audit log, it explicitly names the identity of the user (`principalEmail`) and the exact API method they called (`methodName`). In this example, the payload proves that an administrator deleted a Compute Engine instance.
+A simplified stored entry from the checkout incident looks like this:
 
-## The Log Router and Sinks
+```json
+{
+  "insertId": "684ee1a90004b0b6",
+  "logName": "projects/shop-prod/logs/run.googleapis.com%2Fstdout",
+  "resource": {
+    "type": "cloud_run_revision",
+    "labels": {
+      "project_id": "shop-prod",
+      "location": "us-central1",
+      "service_name": "checkout-api",
+      "revision_name": "checkout-api-00042-n9p",
+      "configuration_name": "checkout-api"
+    }
+  },
+  "severity": "ERROR",
+  "jsonPayload": {
+    "message": "payment provider rejected checkout request",
+    "route": "POST /checkout",
+    "checkout_id": "chk_9f21",
+    "payment_provider": "stripe",
+    "error_code": "provider_timeout",
+    "release": "2026-06-14.3"
+  },
+  "labels": {
+    "team": "checkout",
+    "env": "prod",
+    "service": "checkout-api"
+  },
+  "timestamp": "2026-06-14T14:04:12.221Z",
+  "trace": "projects/shop-prod/traces/4bf92f3577b34da6a3ce929d0e0e4736",
+  "spanId": "d5b0214a4f6d9a12",
+  "traceSampled": true
+}
+```
 
-Logs are only useful if they are kept. By default, Google Cloud places most operational logs in a default storage bucket that automatically deletes them after 30 days to control storage costs. If a security team needs to retain all administrative actions for a year to meet compliance rules, the platform must intercept the logs in flight and route them to a permanent destination.
+The `resource.type` and `resource.labels` fields identify the exact Google Cloud resource. This lets the team filter by Cloud Run service, region, and revision before reading payloads. The `logName` tells which log stream stored the event, such as Cloud Run stdout, stderr, request logs, or audit logs. The `timestamp` is the event time used for the incident window.
 
-Logs written to Cloud Logging pass through the Log Router before they are stored or exported. The Log Router evaluates log entries against sinks, which are routing rules that choose destinations.
+The payload can take different shapes. `jsonPayload` holds structured application fields. `textPayload` holds a plain string. `protoPayload` commonly appears for audit logs because those events use protocol buffer structures. A strong responder learns to read the envelope first, then the payload, because the envelope narrows the search and the payload explains the event.
 
-Under the documented model, the Log Router manages the flow of new log entries through matching sinks. Google Cloud also temporarily stores entries to buffer disruptions for supported destinations, but that buffer does not fix configuration mistakes. If the sink destination or permissions are wrong, the routing path needs to be repaired.
+## Querying Cloud Run Logs During The 500s
+<!-- section-summary: Resource-first filters make Cloud Logging searches precise before the team reads application fields. -->
 
-As these workers process the queue, they evaluate every incoming log against a list of routing rules called sinks. A sink behaves like a strict set of shipping instructions. It pairs an IF condition (the filter) with a THEN action (the destination). To solve the security team's retention problem, we can create a custom sink that sends all audit logs to a BigQuery dataset for long-term analysis.
-
-We use the `gcloud logging sinks create` command. We provide the name of the new sink, the BigQuery destination, and the exact log filter we tested earlier:
+During the checkout incident, the team starts with the service and revision. The query below filters by the Cloud Run revision resource, the production service, the affected region, the new revision, the severity, and the incident window:
 
 ```bash
-gcloud logging sinks create my-audit-sink \
-  bigquery.googleapis.com/projects/MY_PROJECT/datasets/audit_logs \
-  --log-filter='logName="projects/MY_PROJECT/logs/cloudaudit.googleapis.com%2Factivity"'
+gcloud logging read \
+  'resource.type="cloud_run_revision"
+   resource.labels.service_name="checkout-api"
+   resource.labels.location="us-central1"
+   resource.labels.revision_name="checkout-api-00042-n9p"
+   severity>=ERROR
+   timestamp>="2026-06-14T14:00:00Z"
+   timestamp<="2026-06-14T14:15:00Z"' \
+  --project=shop-prod \
+  --limit=50 \
+  --format=json
 ```
 
-```text
-Created [https://logging.googleapis.com/v2/projects/MY_PROJECT/sinks/my-audit-sink].
-Please remember to grant `serviceAccount:p123456789-987654@gcp-sa-logging.iam.gserviceaccount.com` the BigQuery Data Editor role on the dataset.
+After that first pass, the team can ask more specific application questions. The next query filters for the error code that appears in structured logs:
+
+```bash
+gcloud logging read \
+  'resource.type="cloud_run_revision"
+   resource.labels.service_name="checkout-api"
+   jsonPayload.error_code="provider_timeout"
+   jsonPayload.release="2026-06-14.3"' \
+  --project=shop-prod \
+  --freshness=30m \
+  --limit=20 \
+  --format='table(timestamp,severity,jsonPayload.checkout_id,jsonPayload.payment_provider,trace)'
 ```
 
-When you run this command, the control plane provisions a new rule in the Log Router. The output returns a success message and points out that the Log Router operates under its own dedicated service account. For the Router to successfully write to BigQuery, you must grant that specific service account the correct permissions on the target dataset. If you skip that step, matching logs will not reach the destination, and you should diagnose the sink with routing errors, sink status, and export error metrics.
+That table gives the incident channel a short evidence list: time, severity, checkout ID, provider, and trace. The table output works well for quick triage, while JSON output works better when a responder needs to inspect the full envelope or paste a precise entry into the incident notes.
 
-Once configured, the Log Router evaluates the filter in real-time. If a new log matches, the Router asynchronously copies the log and delivers it to BigQuery, bypassing the default 30-day storage limits.
+Cloud Logging filters should stay as specific as the question allows. A filter that starts with `severity>=ERROR` across the whole project might return unrelated service failures. A filter that names `resource.type`, service, region, revision, and a tight time window gives the team a much smaller and more trustworthy result set.
 
-A critical systems engineering gotcha is that log sinks route new matching entries after the sink exists. Creating a sink does not automatically replay old entries into the new destination. If the old entries are still stored in a log bucket and have not passed retention, Google Cloud provides separate copy workflows for moving stored logs to Cloud Storage.
+## Connecting Logs To Traces
+<!-- section-summary: Trace fields let one log event open the full request timeline in Cloud Trace. -->
+
+The checkout log includes `trace`, `spanId`, and `traceSampled`. These fields connect the log event to the distributed trace. When a responder sees one failed checkout log, they can query the rest of the logs for that exact trace:
+
+```bash
+gcloud logging read \
+  'trace="projects/shop-prod/traces/4bf92f3577b34da6a3ce929d0e0e4736"' \
+  --project=shop-prod \
+  --format='table(timestamp,resource.labels.service_name,severity,jsonPayload.message,jsonPayload.dependency)'
+```
+
+The result should show related log entries from `checkout-api` and any other service that preserved the same trace context. If `inventory-api` and `payment-worker` also write trace-linked logs, the team can read the request story across services without guessing from timestamps.
+
+This trace link works when the application or instrumentation writes the trace fields. Cloud Logging indexes trace fields that reach the `LogEntry` structure. OpenTelemetry instrumentation, framework integration, a logging library hook, or a small logging wrapper has to put the active trace ID and span ID into each important event.
+
+The practical standard is simple. Every service that handles a customer request should preserve incoming trace context, inject context into outbound calls, and write logs from the active context. A service that drops context turns the incident story into separate chapters.
+
+## Audit Logs For Who Changed What
+<!-- section-summary: Cloud Audit Logs explain control-plane changes around the same time as the application symptom. -->
+
+Application logs explain what the application did. **Cloud Audit Logs** explain what people, automation, Google Cloud services, and policy systems did to cloud resources. During the checkout incident, the team needs both views because a code exception and a deployment event can belong to the same story.
+
+Cloud Audit Logs include several categories. **Admin Activity audit logs** record user-driven API calls and actions that modify resource configuration or metadata, such as deploying a Cloud Run revision or changing IAM permissions. **Data Access audit logs** record access to resource data and can be large, so teams enable and retain them deliberately. **System Event audit logs** record Google Cloud system actions. **Policy Denied audit logs** record access denied by security policy.
+
+Audit log entries are also `LogEntry` objects, but their audit details live in `protoPayload`. A focused query for Cloud Run service updates might look like this:
+
+```bash
+gcloud logging read \
+  'logName="projects/shop-prod/logs/cloudaudit.googleapis.com%2Factivity"
+   protoPayload.serviceName="run.googleapis.com"
+   protoPayload.methodName:"UpdateService"
+   timestamp>="2026-06-14T13:45:00Z"
+   timestamp<="2026-06-14T14:10:00Z"' \
+  --project=shop-prod \
+  --limit=20 \
+  --format=json
+```
+
+The important fields in the result are usually `protoPayload.authenticationInfo.principalEmail`, `protoPayload.methodName`, `protoPayload.resourceName`, request metadata, and timestamps. If the principal is `ci-deploy@shop-prod.iam.gserviceaccount.com`, the team can connect the runtime symptom to the deployment pipeline. If the principal is a human administrator, the incident notes should record the change path and approval context.
+
+Audit logs also support compliance and security review. A central platform or security team might route Admin Activity and Policy Denied logs from many projects into a central BigQuery dataset. Application teams can still query their project logs during incidents, while security keeps a longer organization-wide history.
+
+## Log Router, Sinks, Retention, And Exports
+<!-- section-summary: Routing and retention decide which logs stay searchable, which logs export, and which teams can review them later. -->
+
+Cloud Logging receives log entries, then the **Log Router** evaluates them against **sinks**. A sink is a routing rule with a filter and a destination. Destinations can include log buckets, BigQuery, Cloud Storage, Pub/Sub, and supported external or partner destinations depending on the use case.
+
+The default path is enough for many day-to-day searches, but production teams usually design a routing plan. Recent operational logs stay in log buckets for fast incident queries. Security and audit logs often route to central buckets or BigQuery for longer retention and review. High-volume debug logs might have shorter retention or exclusion rules. Compliance archives might route to Cloud Storage with lifecycle rules and restricted access.
+
+Here is a sink that routes Cloud Run error logs for `checkout-api` into a central operations log bucket:
+
+```bash
+gcloud logging sinks create checkout-api-errors \
+  logging.googleapis.com/projects/shop-observability/locations/global/buckets/prod-app-errors \
+  --project=shop-prod \
+  --log-filter='resource.type="cloud_run_revision"
+    resource.labels.service_name="checkout-api"
+    severity>=ERROR'
+```
+
+For audit evidence, an organization or folder sink can centralize records across many projects. This pattern helps when every product team owns its own project, but security needs one place to review production changes:
+
+```bash
+gcloud logging sinks create org-admin-activity-to-bq \
+  bigquery.googleapis.com/projects/sec-logs/datasets/gcp_admin_activity \
+  --organization=123456789012 \
+  --include-children \
+  --log-filter='logName:"cloudaudit.googleapis.com%2Factivity"'
+```
+
+After creating a sink, the team has to grant the sink writer identity permission on the destination. This is a common setup miss. The command output shows a service account for the sink, and that service account needs the right destination role, such as permission to write to a BigQuery dataset or a logging bucket.
+
+Retention belongs in the design conversation too. A short retention window saves cost but can erase evidence needed for a slow customer report, compliance request, or monthly reliability review. A long retention window helps investigations but can increase cost and data exposure. The practical pattern is to choose retention by log class: hot operational logs, security audit logs, debug logs, and long-term compliance exports usually deserve different policies.
+
+## Log-Based Metrics
+<!-- section-summary: Log-based metrics turn repeated log patterns into alertable numbers when a direct application metric is missing. -->
+
+Sometimes a log pattern needs to become a number. A **log-based metric** counts or measures log entries that match a filter. For `checkout-api`, the team can count payment provider timeout logs even before the application exposes a custom metric for that exact failure.
+
+Here is a counter metric for the incident pattern:
+
+```bash
+gcloud logging metrics create checkout_payment_provider_timeouts \
+  --project=shop-prod \
+  --description="Payment provider timeout logs from checkout-api" \
+  --log-filter='resource.type="cloud_run_revision"
+    resource.labels.service_name="checkout-api"
+    jsonPayload.error_code="provider_timeout"'
+```
+
+This metric gives Cloud Monitoring a time series based on matching log entries. The team can put the time series on a dashboard or create an alert if the count rises above a threshold. This is useful when the application already emits reliable structured logs and the team needs an alert quickly.
+
+Log-based metrics still need care. They depend on ingestion and log shape, so a code change that renames `jsonPayload.error_code` can break the metric. They also count events after the application emits logs, so they should complement direct service metrics such as request count, error rate, latency, and saturation. They fit important business or error patterns that logs can express cleanly.
 
 ## Putting It All Together
+<!-- section-summary: Logging turns the incident into searchable evidence, and routing keeps that evidence available for the right team. -->
 
-Application and platform logs are only valuable if you can find the data you need and retain it for as long as your compliance rules require.
+For the `checkout-api` 500s, Cloud Logging gives the team structured runtime events, platform context, audit evidence, trace fields, and routing controls. The useful habit is to filter by `resource.type`, resource labels, severity, time window, and trace first, then read `jsonPayload` and `protoPayload` for the specific story.
 
-- **Structured Entries**: Google Cloud wraps every message in a JSON object with a timestamp, a severity, and a unique identifier.
-- **Querying Logs**: The `gcloud logging read` command allows you to search logs instantly using specific logical tags instead of raw text strings.
-- **The Log Router**: A high-throughput pipeline that decouples API ingestion from physical storage.
-- **Sinks**: Routing rules created with `gcloud logging sinks create` that securely forward logs to destinations like BigQuery for complex analysis, bypassing default retention limits.
+The production design is also clear now. Application logs should be structured. Audit logs should be reviewable. Log Router sinks should send the right records to the right retention and analysis destinations. Log-based metrics should turn repeated important log patterns into alertable time series before the application exposes the metric directly.
 
 ## What's Next
 
-Logs tell us what happened, but how do we get alerted when something goes wrong? We shouldn't have to search manually to find out that an API is broken.
-
-In the next article, we will use Cloud Monitoring to define service-level thresholds and set up alerting policies, ensuring that the right engineer is notified the moment an application stops behaving normally.
-
-![Cloud Logging summary showing log entry metadata, resource labels, payload, Log Router, sink, and destination.](/content-assets/articles/article-cloud-providers-gcp-observability-cloud-logging/cloud-logging-summary.png)
-
-*Cloud Logging wraps each message as a structured entry, then the Log Router copies matching entries through sinks to destinations such as BigQuery.*
+The next article moves from log evidence to Cloud Monitoring. We will use metrics, dashboards, alert policies, notification channels, uptime checks, SLOs, SLIs, error budgets, burn-rate thinking, and Prometheus-style workflows to make the `checkout-api` symptom visible before customers flood support.
 
 ---
 
 **References**
 
-- [Overview of Cloud Logging](https://cloud.google.com/logging/docs) - Explains log entries, the Log Router, and the difference between storage and routing.
-- [Cloud Audit Logs](https://cloud.google.com/logging/docs/audit) - Details the payload structure of Admin Activity and Data Access logs.
-- [Route logs to supported destinations](https://cloud.google.com/logging/docs/export) - Covers inclusion and exclusion filters, sink creation, and retrospective routing limitations.
-- [Log Router Overview](https://cloud.google.com/logging/docs/routing/overview) - Describes how the Log Router evaluates entries against sinks.
-- [Troubleshoot Log Routing](https://cloud.google.com/logging/docs/export/troubleshoot) - Documents sink routing errors and export error signals.
-- [Copy Logs](https://cloud.google.com/logging/docs/routing/copy-logs) - Explains copying stored logs before retention expires.
+- [Cloud Logging documentation](https://cloud.google.com/logging/docs) - Explains Cloud Logging concepts, storage, querying, and routing.
+- [Structured logging](https://docs.cloud.google.com/logging/docs/structured-logging) - Documents structured JSON fields such as `severity`, `message`, `logging.googleapis.com/trace`, labels, and `httpRequest`.
+- [LogEntry reference](https://docs.cloud.google.com/logging/docs/reference/v2/rest/v2/LogEntry) - Defines `LogEntry` fields including payloads, resource, labels, trace fields, severity, and timestamps.
+- [Cloud Audit Logs](https://docs.cloud.google.com/logging/docs/audit) - Explains Admin Activity, Data Access, System Event, and Policy Denied audit logs.
+- [Log Router overview](https://docs.cloud.google.com/logging/docs/routing/overview) - Describes how sinks route log entries at project, folder, and organization levels.
+- [Log-based metrics overview](https://docs.cloud.google.com/logging/docs/logs-based-metrics) - Explains counter and distribution metrics derived from log filters.

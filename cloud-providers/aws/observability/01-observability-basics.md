@@ -61,6 +61,10 @@ For our checkout example, the first version of the observability map might look 
 
 The flow starts with the customer outcome, then connects that outcome to technical signals. That order keeps observability useful because the team can see whether a technical spike actually matters to users.
 
+![Production evidence loop showing customer report, metrics, logs, traces, and alarm routing as one incident workflow](/content-assets/articles/article-cloud-providers-aws-observability-observability-mental-model/production-evidence-loop.png)
+
+*The loop shows why observability is an operating workflow, not a pile of separate tools. A customer signal leads to scope, detail, request path, and action.*
+
 ## The Signals: Logs, Metrics, and Traces
 <!-- section-summary: Logs explain individual events, metrics summarize behavior over time, and traces connect the path of one request across services. -->
 
@@ -93,6 +97,10 @@ For the checkout service, metrics can answer questions like: did latency climb g
 **Traces** follow one request across service boundaries. A trace is made from spans or segments that record how long each part of the request took. If checkout calls the payment provider, then RDS, then SQS, a trace can show that the payment call took 2.4 seconds while the rest of the work took 80 milliseconds.
 
 AWS X-Ray groups trace segments that belong to the same request and builds service graphs. CloudWatch also supports OpenTelemetry ingestion, and OpenTelemetry gives teams vendor-neutral APIs and attributes for metrics, logs, and traces. The important beginner idea is simple: traces connect the hops so you can see where one request spent its time.
+
+![Three observability signals with the question each one answers: logs, metrics, and traces](/content-assets/articles/article-cloud-providers-aws-observability-observability-mental-model/three-signals-three-questions.png)
+
+*This separates the first diagnostic question each signal answers. Logs explain the event, metrics show the trend, and traces connect the route through services.*
 
 ## Start With KPIs and Service Health
 <!-- section-summary: Good observability starts with the outcomes the workload must protect, then maps those outcomes to technical signals. -->
@@ -291,6 +299,10 @@ The practical checklist is:
 - **Use dashboards for triage** with customer impact at the top and dependencies below.
 - **Use alarms for action** with clear thresholds, SNS routing, and runbook links.
 - **Centralize multi-account visibility** so responders can investigate without account switching.
+
+![Layered AWS observability stack from workload telemetry through CloudWatch storage, signals, dashboards, alarms, and team improvement](/content-assets/articles/article-cloud-providers-aws-observability-observability-mental-model/aws-observability-stack.png)
+
+*The summary image turns the article into one stack: workloads emit evidence, CloudWatch organizes it, and the team uses that evidence to improve the service.*
 
 ## What's Next
 <!-- section-summary: The next article turns the basics into concrete CloudWatch metric, dashboard, and alarm design. -->

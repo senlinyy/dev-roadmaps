@@ -1,133 +1,56 @@
 ---
 title: "Desired State and Reconciliation"
-description: "Understand how Kubernetes uses specs, status, controllers, and events to move the cluster toward declared intent."
-overview: "Kubernetes works by comparing what you requested with what the cluster reports. This article explains that loop through Deployments, Pods, events, and rollouts."
-tags: ["kubernetes", "desired-state", "controllers", "reconciliation"]
+description: "Understand how Kubernetes uses specs, status, controllers, events, and rollouts to keep applications close to the state you declared."
+overview: "Kubernetes runs applications by storing the state you want, checking the state it sees, and letting controllers close the gap. This article follows a Customer Notification Platform through Deployments, Services, readiness checks, events, rollouts, rollback, and daily operations."
+tags: ["kubernetes", "desired-state", "controllers", "reconciliation", "deployments"]
 order: 4
 id: article-containers-orchestration-kubernetes-fundamentals-desired-state-and-reconciliation
 ---
 
 ## Table of Contents
 
-1. [The Cluster Keeps Comparing](#the-cluster-keeps-comparing)
-2. [The Request and the Report](#the-request-and-the-report)
-3. [Spec and Status](#spec-and-status)
-4. [Controllers](#controllers)
-5. [A Deployment as Desired State](#a-deployment-as-desired-state)
-6. [Events](#events)
-7. [Rollouts](#rollouts)
-8. [Manual Changes](#manual-changes)
-9. [Bad Desired State](#bad-desired-state)
-10. [Putting It All Together](#putting-it-all-together)
-11. [What's Next](#whats-next)
+1. [The Pieces We Are Connecting](#the-pieces-we-are-connecting)
+2. [Desired State and Current State](#desired-state-and-current-state)
+3. [Objects, Spec, and Status](#objects-spec-and-status)
+4. [Controllers and Reconciliation](#controllers-and-reconciliation)
+5. [Declaring the Customer Notification Platform](#declaring-the-customer-notification-platform)
+6. [Traffic, Readiness, and the Database Dependency](#traffic-readiness-and-the-database-dependency)
+7. [Applying Changes Safely](#applying-changes-safely)
+8. [Reading Status and Events](#reading-status-and-events)
+9. [Rollouts and Rollbacks](#rollouts-and-rollbacks)
+10. [Manual Changes and Drift](#manual-changes-and-drift)
+11. [Production Operating Habits](#production-operating-habits)
+12. [Putting It All Together](#putting-it-all-together)
+13. [What's Next](#whats-next)
 
-## The Cluster Keeps Comparing
+## The Pieces We Are Connecting
+<!-- section-summary: Desired state, current state, controllers, events, and rollouts form one operating loop. -->
 
-At its core, Kubernetes runs by continuously comparing a request with a report.
-The request is the configuration you want, and the report is what the cluster observes on nodes right now.
-Example: you request three notification API Pods, but the report says only two are ready because one node failed.
+Before YAML enters the picture, the useful pieces need names in the order they work together. Kubernetes stores a request, checks what is actually running, and uses background controllers to keep moving the cluster toward the request. The useful words are **desired state**, **current state**, **spec**, **status**, **controller**, **reconciliation**, **event**, and **rollout**.
 
-![Kubernetes reconciliation loop showing spec, status, compare, controller action, and running pods](/content-assets/articles/article-containers-orchestration-kubernetes-fundamentals-desired-state-and-reconciliation/reconciliation-loop.png)
+We will follow one production-style system all the way through: a **Customer Notification Platform**. The platform has a `notification-api` that receives HTTP requests from the product, a `notification-worker` that sends queued messages, and a PostgreSQL database dependency that stores notification jobs. During a normal day, traffic comes into the API, the API writes jobs to the database, the worker drains the queue, and the operations team rolls out new versions without dropping customer requests.
 
-*Reconciliation is the repeated comparison between what the spec asks for and what the cluster reports.*
+Those parts give us a useful path through the article. First, we define the state Kubernetes stores. Then we look at how controllers act on that state. After that, we write concrete manifests for the API, worker, Service, and readiness checks. Finally, we operate the platform with `kubectl apply`, status checks, events, rollouts, rollback, and drift handling.
 
+## Desired State and Current State
+<!-- section-summary: Desired state is the request you store in Kubernetes, and current state is the condition Kubernetes observes while the cluster runs. -->
 
-Traditional scripting tools operate as one-time execution paths.
-You run an imperative script to deploy an application, it executes a sequence of SSH commands, and then it exits.
-If a server process crashes five minutes later, the script is no longer running to repair it.
-Kubernetes uses a fundamentally different operating model.
-Instead of running one-off deployment steps, you submit a configuration request, and the cluster monitors that request continuously.
+**Desired state** means the condition you want Kubernetes to maintain. In plain English, it is your request to the cluster. For the Customer Notification Platform, desired state might say: keep three `notification-api` Pods running, keep two `notification-worker` Pods running, expose the API through a Service, and send traffic only to API Pods that pass a readiness check.
 
-This target configuration is called the **Desired State**.
-For our Customer Notification Service, the desired state declared in the API might state:
+**Current state** means the condition Kubernetes observes right now. One node might be healthy, another node might be under memory pressure, one API Pod might be ready, and another API Pod might be waiting for the image registry. Kubernetes keeps collecting that live information from the control plane, kubelets, schedulers, and controllers.
 
-- The namespace `notifications-prod` must have a Deployment named `notification-api`.
-- The Deployment must maintain three healthy, identical replicas of the workload.
-- Each container must execute the image `ghcr.io/devpolaris/notification-api:1.4.2`.
-- Each instance must expose port `3000` and respond to active health checks.
-- Network routing must bypass instances that fail to report healthy status.
+**Reconciliation** is the repeated work of comparing desired state with current state and taking action. If desired state says three API Pods and current state says two ready API Pods, a controller has work to do. If desired state says image `ghcr.io/devpolaris/notification-api:1.4.2` and a node still runs the old image, the Deployment controller has rollout work to do.
 
-The actual, active condition of the cluster is called the **Current State**.
-The current state represents what the platform observes on the physical hosts right now.
-For example, two Pods are running healthy, but the third node has suffered a physical memory crash.
-Or the container registry is offline, preventing the node from pulling the requested image.
+This matters because Kubernetes work continues after the first command finishes. A shell script can start a process and exit. Kubernetes stores the request in the API, then controllers keep checking that request while nodes fail, Pods restart, images change, traffic shifts, and operators investigate incidents.
 
-Reconciliation is the automated process that compares these two states and calculates the corrective actions required.
+## Objects, Spec, and Status
+<!-- section-summary: Kubernetes stores intent and observation on API objects, mainly through the spec and status fields. -->
 
-```mermaid
-flowchart TD
-    subgraph LogicalState["Logical Declarations"]
-        A["Desired State<br/>(Spec Manifest)"]
-        B["Current State<br/>(Status telemetry)"]
-    end
-    subgraph ControlEngine["Control Plane Reconciliation"]
-        C["Deployment Controller<br/>(State Evaluator)"] --> |Calculates delta| D{"State Mismatch?"}
-        D --> |"Yes (Gap found)"| E["Queue API Change"]
-        D --> |"No (Match)"| F["Keep watching etcd"]
-    end
-    A --> C
-    B --> C
-    E --> |Updates Pod spec| G["Scheduler / Worker Host"]
-    G --> |Reports telemetry| B
-```
+A **Kubernetes object** is a record in the Kubernetes API. A Pod, Deployment, Service, ConfigMap, Secret, and Namespace are all objects. You can think of an object as a structured record with a name, labels, configuration, and live reporting fields.
 
-The diagram illustrates the continuous loop that drives the cluster.
-The controller compares the desired spec and current status.
-If a gap is found, the system immediately queues API changes to schedule replacements.
-Otherwise, the engine goes back to watching for active state changes.
+Most important workload objects have two fields that beginners should learn early. The **spec** field holds the desired state that you write. The **status** field holds the current state that Kubernetes components report as they try to satisfy the spec.
 
-This reconciliation loop is the core mechanical principle of Kubernetes.
-It allows the system to recover from hardware failures and process crashes automatically.
-However, it will also repeat a failing instruction indefinitely.
-If your desired state references a broken image tag, the cluster will continuously attempt to run it.
-It will loop through failures until you update the request.
-
-## The Request and the Report
-
-At its core, the request is what you asked Kubernetes to maintain, and the report is what Kubernetes observed after trying to run it.
-The request lives in the object's `spec`.
-The report lives in the object's `status`.
-Events, container logs, and diagnostic terminal probes provide additional evidence to support the status.
-
-For the Customer Notification Service, the request is three healthy Pod replicas.
-If one node crashes, the status reports only two running Pods and one failing Pod.
-The spec (your request) has not changed, but the status (the report) reveals that the system has drifted.
-The controller immediately acts to align the report with the request.
-
-```mermaid
-flowchart LR
-    subgraph APIInterface["Kubernetes API Server"]
-        A["spec field<br/>(Human intent)"]
-        B["status field<br/>(System report)"]
-    end
-    subgraph ControlPlane["Control Plane Loops"]
-        C["Controller Engine"]
-    end
-    subgraph NodeHost["Worker Node Fleet"]
-        D["kubelet daemon"]
-    end
-    A --> |Developer writes spec| C
-    D --> |Node reports status| B
-    C --> |Compares delta| D
-```
-
-The diagram outlines the communication boundaries between components.
-Developers write to the spec, while the node agents update the status.
-The controller engine compares the delta between the two fields to drive execution.
-
-This distinction prevents the common mistake of assuming a resource is healthy just because it exists.
-A Deployment object can sit in the cluster API database for weeks while its containers are crashing.
-The existence of the object proves the API Server accepted the YAML manifest.
-You must read the status block to verify whether the cluster successfully realized that configuration on the hosts.
-
-## Spec and Status
-
-At its core, `spec` is the input field and `status` is the output field.
-You write and update the `spec` block to declare your operational intent.
-Kubernetes components, like controllers and worker node agents, update the `status` block.
-Example: a Deployment spec can request `replicas: 3`, while the status can report `readyReplicas: 2`.
-
-Consider a simplified Deployment manifest showing this structural split:
+Here is a small, simplified view of the split. A real Deployment manifest usually contains more fields, but this example shows the main idea clearly.
 
 ```yaml
 apiVersion: apps/v1
@@ -143,86 +66,48 @@ status:
   updatedReplicas: 3
 ```
 
-This Deployment status reveals a critical operational gap.
-The spec requests three replicas, but only two are marked ready and available for traffic.
-This mismatch is your primary diagnostic signal.
-It shows that although the API server accepted the updated configuration, the cluster has failed to converge on the target state.
+The `spec.replicas: 3` line says the team wants three API Pods. The `status.readyReplicas: 2` line says Kubernetes currently sees only two ready Pods. That gap gives the controller a clear job: keep working until the observed state matches the requested state, or report why it cannot make progress.
 
-You can query this status split directly from the command line:
+In production, operators read both fields. The fact that a Deployment exists only tells you the API server accepted the object. The status tells you whether the cluster actually reached the useful condition, such as three available API Pods serving traffic.
+
+A compact command shows this split in daily use. It is often the first check before anyone opens the full Deployment YAML. A typical command is below.
 
 ```bash
 kubectl get deployment notification-api -n notifications-prod
 ```
 
-The terminal prints the compiled spec and status values in a compact layout:
+The output might look like this during a partial outage. The numbers show the mismatch before the team digs into individual Pods. A sample output is below.
 
-```text
+```
 NAME               READY   UP-TO-DATE   AVAILABLE   AGE
 notification-api   2/3     3            2           18d
 ```
 
-This output quickly reveals the health of your workloads.
-`READY 2/3` tells you that one instance is failing to pass health checks.
-`UP-TO-DATE 3` tells you that all three instances are running the latest version of your Pod template.
-This immediately narrows your diagnostic path: the rollout succeeded, but one new instance is crashing.
+`READY 2/3` means two Pods are ready out of the three requested by the Deployment. `UP-TO-DATE 3` means all three Pods use the latest Pod template, so the rollout version probably finished creating Pods. `AVAILABLE 2` tells the operations team that only two Pods currently count as available for service.
 
-This spec-status split runs through every level of the platform.
-A Pod's spec declares its container images and limits, while its status reports whether those containers are running or failing.
-A Service's spec defines its selector tags, while its endpoint status lists the active Pod IPs that match those tags.
+## Controllers and Reconciliation
+<!-- section-summary: Controllers watch objects and make API changes that move current state toward desired state. -->
 
-## Controllers
+A **controller** is a background process that watches Kubernetes objects and makes follow-up changes. The controller usually talks to the API server, and node agents handle local machine work. It sees a gap, writes another API object or updates an existing one, and lets the next part of the system continue the work.
 
-At its core, a controller is a background process that watches Kubernetes objects and makes follow-up changes.
-It exists so the cluster can keep working after the original command has finished.
-Example: the ReplicaSet controller notices that only two Pods are running for a three-replica Deployment, then asks the API Server to create another Pod.
+The Deployment path shows this clearly. You create one Deployment for `notification-api`, and then several controllers and agents cooperate. Each part owns one small step in the chain:
 
-Kubernetes does not operate as a single master program.
-Instead, it runs a suite of independent controller loops compiled into the `kube-controller-manager` binary.
-Deployments, ReplicaSets, Services, and Nodes each have their own dedicated controller loops.
+- The **Deployment controller** watches the Deployment and creates or updates ReplicaSets.
+- The **ReplicaSet controller** watches the ReplicaSet and keeps the requested number of Pods present.
+- The **scheduler** assigns unscheduled Pods to nodes that can run them.
+- The **kubelet** on each node starts containers and reports Pod status back to the API server.
+- The **Service and EndpointSlice controllers** keep the network endpoints aligned with matching ready Pods.
 
-A controller's job is to reconcile the difference between the desired spec and the observed status.
-The Deployment controller monitors Deployment objects.
-The ReplicaSet controller manages Pod counts.
-The Node controller monitors host server health and evicts workloads when nodes drop offline.
+That chain gives Kubernetes its usual operating style. Each component owns a small part of the loop, and the API server acts as the shared coordination point. The Deployment controller can stay focused on ReplicaSets, and the kubelet can stay focused on starting containers.
 
-For a Deployment, the reconciliation loop does not start containers directly.
-Instead, it manages resources down an API chain:
+For the Customer Notification Platform, the controller chain matters during ordinary failures. If a node disappears and takes an API Pod with it, the ReplicaSet controller notices that the Pod count dropped. It creates a replacement Pod object, the scheduler places it on another node, and the kubelet starts the container from the Deployment's Pod template.
 
-- The developer submits a Deployment manifest declaring three replicas.
-- The Deployment controller reads the manifest and creates a matching ReplicaSet resource.
-- The ReplicaSet controller reads the ReplicaSet resource and creates three individual Pod resources.
-- The scheduler reads the unassigned Pod resources and binds them to healthy worker nodes.
-- The kubelet agent on each node reads the Pod assignments and instructs containerd to start the containers.
+## Declaring the Customer Notification Platform
+<!-- section-summary: A Deployment turns application requirements into desired state that controllers can maintain. -->
 
-This decoupled architecture ensures high availability.
-If one component crashes, the other components continue executing their local reconciliation loops.
-The system uses the centralized API Server as the shared coordination point for these steps.
+A **Deployment** is a Kubernetes workload object for running replicated application Pods, commonly for stateless services. In this article, `notification-api` is a good Deployment because any healthy API replica can receive an HTTP request and write a notification job to the database. The API Pods are interchangeable, so Kubernetes can replace them during failures and rollouts.
 
-When a controller takes corrective action, it records the event in the API Server.
-You can read these records to audit the reconciliation history:
-
-```bash
-kubectl describe deployment notification-api -n notifications-prod
-```
-
-The output displays the event log at the bottom of the resource description:
-
-```text
-Events:
-  Type    Reason             From                   Message
-  ----    ------             ----                   -------
-  Normal  ScalingReplicaSet  deployment-controller  Scaled up replica set notification-api-7c8d9f to 3
-```
-
-This event proves that the Deployment controller successfully processed your manifest change.
-It tells you that the controller created the matching ReplicaSet.
-Your next diagnostic step is to inspect the ReplicaSet's events to verify whether it successfully spawned the Pods.
-
-## A Deployment as Desired State
-
-At its core, a Deployment manifest is the written request for how Kubernetes should run a stateless application.
-It exists so the same desired state can be reviewed, applied, rolled out, and repaired by controllers.
-Example: the manifest below asks Kubernetes to keep three `notification-api` Pods running from image `1.4.2`.
+Here is a production-shaped Deployment for the API. The important pieces are the replica count, labels, Pod template, image, port, database secret reference, readiness probe, rollout strategy, and progress deadline.
 
 ```yaml
 apiVersion: apps/v1
@@ -230,275 +115,355 @@ kind: Deployment
 metadata:
   name: notification-api
   namespace: notifications-prod
+  labels:
+    app.kubernetes.io/name: notification-api
+    app.kubernetes.io/part-of: customer-notification-platform
 spec:
   replicas: 3
+  progressDeadlineSeconds: 600
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
   selector:
     matchLabels:
-      app: notification-api
+      app.kubernetes.io/name: notification-api
   template:
     metadata:
       labels:
-        app: notification-api
+        app.kubernetes.io/name: notification-api
+        app.kubernetes.io/part-of: customer-notification-platform
     spec:
       containers:
-        - name: api
+        - name: notification-api
           image: ghcr.io/devpolaris/notification-api:1.4.2
           ports:
-            - containerPort: 3000
+            - name: http
+              containerPort: 3000
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: notification-database
+                  key: url
           readinessProbe:
             httpGet:
-              path: /healthz
-              port: 3000
+              path: /readyz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            failureThreshold: 3
 ```
 
-This declarative configuration defines the target state for our service:
+The `replicas: 3` field gives the ReplicaSet controller a target count. The `selector.matchLabels` field tells the Deployment which Pods belong to it. The `template` field gives Kubernetes the blueprint for each Pod it creates.
 
-- `replicas` requests that the cluster keep three Pod instances running continuously.
-- `selector` binds the Deployment to any Pod carrying the metadata label `app: notification-api`.
-- `template` defines the Pod blueprint that the controller must execute.
-- `readinessProbe` tells the node agent how to verify the application's startup health.
+The `DATABASE_URL` environment variable pulls a connection string from a Secret named `notification-database`. The Secret is another desired-state object, and the application still needs the real database to accept connections. Kubernetes can wire the value into the Pod, while the database itself might live as a managed PostgreSQL service outside the cluster.
 
-The readiness probe is critical for traffic routing.
-It tells the cluster not to route client requests to a Pod until it responds with an HTTP `200` status on `/healthz`.
-This prevents uninitialized containers from receiving and dropping user packets during deployments.
+The worker follows the same pattern with a different job. It consumes queued notifications from the database and sends email, SMS, or push messages through provider APIs.
 
-Once applied, you verify that the cluster successfully converged on your declared configuration:
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: notification-worker
+  namespace: notifications-prod
+  labels:
+    app.kubernetes.io/name: notification-worker
+    app.kubernetes.io/part-of: customer-notification-platform
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: notification-worker
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: notification-worker
+        app.kubernetes.io/part-of: customer-notification-platform
+    spec:
+      containers:
+        - name: notification-worker
+          image: ghcr.io/devpolaris/notification-worker:1.4.2
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: notification-database
+                  key: url
+```
+
+Now the platform has two desired-state records for compute: one for HTTP traffic and one for background processing. The next question is traffic. API Pods can come and go during reconciliation, so clients need one stable way to reach the changing set of healthy API Pods.
+
+## Traffic, Readiness, and the Database Dependency
+<!-- section-summary: Services route traffic to matching Pods, and readiness tells Kubernetes which Pods should receive requests. -->
+
+A **Service** is a Kubernetes object that exposes a stable network endpoint for a changing set of Pods. Pods receive their own IP addresses, but Pods are temporary. A Service gives other clients one stable name and port while Kubernetes updates the backing endpoints behind it.
+
+For `notification-api`, the Service selects Pods with the same label used by the Deployment's Pod template. That label connection is important because it tells Kubernetes which Pods belong behind the Service.
+
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: notification-api
+  namespace: notifications-prod
+  labels:
+    app.kubernetes.io/name: notification-api
+spec:
+  selector:
+    app.kubernetes.io/name: notification-api
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+```
+
+Inside the cluster, another workload can call `http://notification-api.notifications-prod.svc.cluster.local`. An Ingress or Gateway can sit in front of this Service for customer-facing HTTP traffic. The key idea for this article is that clients keep using the Service while controllers replace Pods underneath it.
+
+A **readiness probe** tells Kubernetes whether a container is ready to receive traffic. This is different from simply asking whether the process exists. An API process might be running, but it may still be loading config, warming caches, or waiting for a database connection.
+
+For the Customer Notification Platform, the `/readyz` endpoint should check the pieces required for serving a request. A practical implementation often checks that the HTTP server can accept requests and that the database connection pool can reach PostgreSQL. If the database dependency is unavailable, the Pod should report unready so the Service stops sending it fresh traffic while it recovers.
+
+This is where desired state connects to real customer traffic. The Deployment asks for three API Pods, the Service points traffic at matching Pods, and the readiness probe controls whether each Pod enters the ready endpoint set. Kubernetes can only make good traffic decisions when the app exposes a truthful readiness signal.
+
+## Applying Changes Safely
+<!-- section-summary: kubectl apply sends manifest files to the API server so Kubernetes can create or update desired state. -->
+
+`kubectl apply` is the common command for creating or updating objects from YAML or JSON files. The command sends the configuration to the Kubernetes API server. If the object already exists, Kubernetes updates it according to the applied configuration.
+
+Teams usually keep manifests in source control so every change gets review. A small production repository might hold these files. The layout can stay simple while the team learns the platform:
+
+```
+k8s/
+  notifications/
+    namespace.yaml
+    database-secret.yaml
+    notification-api-deployment.yaml
+    notification-api-service.yaml
+    notification-worker-deployment.yaml
+```
+
+A typical apply command targets the directory. It sends each manifest in that folder to the API server. The command is below.
+
+```bash
+kubectl apply -f k8s/notifications/
+```
+
+The output names each object that Kubernetes created or configured. That feedback confirms the API server accepted the requested objects. A sample response is below.
+
+```
+namespace/notifications-prod configured
+secret/notification-database configured
+deployment.apps/notification-api configured
+service/notification-api configured
+deployment.apps/notification-worker configured
+```
+
+This workflow gives the team a source of record outside the cluster. Pull requests show who changed the API image, who raised the worker replica count, and who edited the readiness probe. The live cluster still has current state, but the reviewed files hold the desired state the team expects to keep.
+
+There is one important operational habit here. One management style per object keeps the workflow predictable. If a team mixes repeated manual edits, `kubectl replace`, GitOps, and `kubectl apply` against the same object, the live state can surprise people during incidents. In most production teams, manifests flow through Git and a deployment pipeline, while emergency manual commands get written back to Git quickly.
+
+## Reading Status and Events
+<!-- section-summary: Status gives the current summary, while events show recent actions and failures around an object. -->
+
+After applying desired state, the next job is reading what Kubernetes reports. **Status** gives the compact answer: how many replicas are ready, whether a rollout progressed, and which conditions the controller currently reports. **Events** give the recent story of what Kubernetes tried, such as scheduling a Pod, pulling an image, failing a readiness probe, or scaling a ReplicaSet.
+
+The first command usually checks the Deployment summary. It gives the quickest view of desired replicas compared with available replicas. The command is below.
 
 ```bash
 kubectl get deployment notification-api -n notifications-prod
 ```
 
-The terminal reports the compiled availability status:
+During a database outage, the output might show this. The Deployment still exists, but readiness has reduced the available API Pods. A sample response is below.
 
-```text
+```
 NAME               READY   UP-TO-DATE   AVAILABLE   AGE
-notification-api   3/3     3            3           22m
+notification-api   1/3     3            1           18d
 ```
 
-A status of `3/3` indicates that all three instances are ready and serving traffic.
-This single row confirms that the entire reconciliation loop completed successfully from manifest validation to container execution.
+That row says the Deployment still wants three API Pods and all three use the latest template. Only one Pod is ready and available, so the operations team should inspect Pods, readiness, logs, and events. The row gives a starting point, and the rest of the incident needs more evidence.
 
-## Events
-
-At its core, an event is a short API record describing something Kubernetes just tried or observed.
-If status provides the current operational summary, events provide the recent history.
-Example: a Pod event can say the scheduler placed the Pod on `worker-03`, then the kubelet pulled the container image.
-
-When a Pod remains stuck in a `Pending` state, the status summary does not tell you why it is blocked.
-You must inspect the event log to read the diagnostic story.
-The event log reveals whether the scheduler is blocked by resource limits or the node agent is failing to pull images.
-
-Consider the event log of a healthy Pod startup:
+`kubectl describe` adds controller details and related events. It is useful after the summary points at a mismatch. The command is below.
 
 ```bash
-kubectl describe pod notification-api-7c8d9f-a1b2c -n notifications-prod
+kubectl describe deployment notification-api -n notifications-prod
 ```
 
-The event log documents the exact sequence of the reconciliation steps:
+The bottom of the description might show Deployment events like this. The `From` column tells you which controller reported the action. A sample event section is below.
 
-```text
+```
 Events:
-  Type    Reason     Age   From               Message
-  ----    ------     ----  ----               -------
-  Normal  Scheduled  4m    default-scheduler  Successfully assigned notifications-prod/notification-api-7c8d9f-a1b2c to worker-03
-  Normal  Pulling    4m    kubelet            Pulling image "ghcr.io/devpolaris/notification-api:1.4.2"
-  Normal  Pulled     3m    kubelet            Successfully pulled image
-  Normal  Created    3m    kubelet            Created container api
-  Normal  Started    3m    kubelet            Started container api
+  Type    Reason              Age   From                   Message
+  Normal  ScalingReplicaSet   8m    deployment-controller  Scaled up replica set notification-api-7db9c9f5c6 to 3
 ```
 
-The `From` column identifies the specific component that executed each step.
-The scheduler reports the node assignment (`default-scheduler`), and the node agent reports container execution (`kubelet`).
-
-If the reconciliation loop fails, the event log records a warning.
-These warnings point you directly to the root cause of the failure:
-
-- `FailedScheduling` indicates that the scheduler cannot place the Pod due to insufficient CPU or memory capacity.
-- `Failed` (from kubelet) indicates that the node agent cannot pull the container image or find the registry tag.
-- `Unhealthy` indicates that the container is running but failing its readiness probes.
-
-These warnings require different operational fixes.
-A scheduling failure requires adjusting your resource requests or scaling your nodes.
-An image pull failure requires verifying your container registry credentials or tags.
-A readiness probe failure requires fixing your application code or database connections.
-
-## Rollouts
-
-At its core, a rollout is the process of replacing old Pods with new Pods after a Deployment template changes.
-When you update the container image from `1.4.2` to `1.4.3`, you write a new desired state to the Deployment spec.
-The Deployment controller detects this change and initiates a progressive rolling update.
-Example: the notification API can move from `ghcr.io/devpolaris/notification-api:1.4.2` to `1.4.3` one Pod at a time, while the old healthy Pods keep serving traffic until the new ones pass readiness checks.
-
-The controller manages this update by orchestrating two parallel ReplicaSets:
-
-- It creates a new ReplicaSet using the updated Pod template (`1.4.3`).
-- It scales up the new ReplicaSet to start one new Pod instance.
-- It waits for the new Pod to pass its readiness probes and enter a healthy state.
-- It then scales down the old ReplicaSet (`1.4.2`) to terminate one old Pod.
-- It repeats this scale-up and scale-down loop until all active Pods are running the new version.
-
-```mermaid
-flowchart TD
-    subgraph RolloutStage["Deployment Rollout Engine"]
-        A["Deployment Spec Update<br/>(Image: 1.4.3)"] --> B["Create New ReplicaSet"]
-        B --> C["Scale Up New Pod 01"]
-        C --> |Wait for Readiness| D["Scale Down Old Pod 01"]
-        D --> E["Repeat Loop"]
-    end
-```
-
-This rolling update pattern ensures zero-downtime deployments.
-The system guarantees that a minimum number of healthy Pods remain active to serve user traffic throughout the rollout.
-
-You can monitor the active status of a rollout from your terminal:
+For Pod-level startup and readiness problems, the Pod events usually give sharper clues. The kubelet reports many of the node-side container and probe problems there. The command is below.
 
 ```bash
-kubectl rollout status deployment/notification-api -n notifications-prod
+kubectl describe pod notification-api-7db9c9f5c6-j2k8p -n notifications-prod
 ```
 
-The command monitors the state transitions in real time and reports when the update completes:
+A readiness failure can appear like this. The message gives the team a concrete place to investigate in the application and database path. A sample event is below.
 
-```text
+```
+Events:
+  Type     Reason     Age   From     Message
+  Warning  Unhealthy  2m    kubelet  Readiness probe failed: database connection check timed out
+```
+
+`kubectl events` can filter the event stream for one object. That helps during an active rollout or incident because new events appear while you watch. The command is below.
+
+```bash
+kubectl events -n notifications-prod --for deployment/notification-api --watch
+```
+
+Events are best-effort, short-lived operational records. They help you understand recent controller and node actions, while metrics and logs fill in the long-term picture. In a real on-call flow, a team usually checks Deployment status, Pod status, events, application logs, and database metrics together.
+
+## Rollouts and Rollbacks
+<!-- section-summary: Deployment rollouts replace old Pods with new Pods at a controlled rate, and rollback restores an earlier Pod template. -->
+
+A **rollout** is the process of moving a Deployment from one Pod template to another. Changing the image from `notification-api:1.4.2` to `notification-api:1.4.3` changes desired state. The Deployment controller responds by creating a new ReplicaSet and gradually shifting replicas from the old template to the new template.
+
+The strategy in our manifest controls the pace. The two fields below decide how much extra capacity Kubernetes can use and how much availability it must preserve. The relevant YAML is below.
+
+```yaml
+strategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxSurge: 1
+    maxUnavailable: 0
+```
+
+`maxSurge: 1` allows Kubernetes to run one extra API Pod during the update. `maxUnavailable: 0` tells the controller to keep the existing available count during the rollout. For customer traffic, that gives the platform extra room to start a new Pod and wait for readiness before removing an old ready Pod.
+
+A release can update the image through a manifest change and `kubectl apply`, or through a direct image command during a controlled operation. The direct command is common during practice labs and emergency testing. The command is below.
+
+```bash
+kubectl set image deployment/notification-api \
+  notification-api=ghcr.io/devpolaris/notification-api:1.4.3 \
+  -n notifications-prod
+```
+
+The rollout status command watches progress. It waits for the latest revision and exits with a failure when the rollout exceeds the configured deadline. The command is below.
+
+```bash
+kubectl rollout status deployment/notification-api -n notifications-prod --timeout=5m
+```
+
+Successful output looks like this. The first line shows progress, and the second line confirms the rollout completed. A sample response is below.
+
+```
 Waiting for deployment "notification-api" rollout to finish: 1 of 3 updated replicas are available...
 deployment "notification-api" successfully rolled out
 ```
 
-If the new image version crashes on startup, the new Pods will fail their readiness probes.
-The rollout will pause automatically, leaving your old, healthy Pods running to serve users.
-This self-healing gate protects your production environment from broken releases.
+A broken release usually shows up as a rollout that cannot make progress. Maybe image `1.4.3` starts but fails `/readyz` because a database migration was missed. Kubernetes reports the stalled condition when the progress deadline passes, and higher-level tooling or an operator can act on that status.
 
-## Manual Changes
-
-At its core, a manual change either changes the desired state or changes only the current running objects.
-If you manually delete an active Pod, you change only the current state, so the desired replica count no longer matches what is running.
-The ReplicaSet controller immediately detects this gap and starts a replacement:
-Example: deleting one notification API Pod is temporary because the Deployment still asks for three replicas, while scaling the Deployment to five changes the target the controller enforces.
-
-![Kubernetes manual drift view showing a live pod edit replaced by a recreated pod from the spec](/content-assets/articles/article-containers-orchestration-kubernetes-fundamentals-desired-state-and-reconciliation/manual-drift-recreation.png)
-
-*Manual changes to live objects can disappear because controllers keep rebuilding the requested shape from the spec.*
-
-
-```bash
-kubectl delete pod notification-api-7c8d9f-a1b2c -n notifications-prod
-```
-
-The terminal reports the deletion, and a query of the active Pods reveals the recovery:
-
-```text
-pod "notification-api-7c8d9f-a1b2c" deleted
-```
-
-```bash
-kubectl get pods -n notifications-prod
-```
-
-The ReplicaSet controller has already spawned a replacement Pod to restore the desired state:
-
-```text
-NAME                                READY   STATUS              AGE
-notification-api-7c8d9f-d3e4f       1/1     Running             18m
-notification-api-7c8d9f-g5h6i       1/1     Running             18m
-notification-api-7c8d9f-z9y8x       0/1     ContainerCreating   5s
-```
-
-In contrast, if you scale the Deployment, you update the desired state itself:
-
-```bash
-kubectl scale deployment notification-api --replicas=5 -n notifications-prod
-```
-
-The controller accepts this new scale as its target.
-It immediately spawns two additional Pods to meet your updated request.
-The reconciliation loop does not fight your manual commands; it executes them by updating the desired state.
-
-This is why modern teams manage configurations using GitOps workflows.
-A GitOps agent (like ArgoCD) continuously monitors your Git repository manifests.
-If you scale a deployment manually in the cluster, the agent detects the drift from Git and restores the reviewed code.
-This keeps your active cluster state in sync with your version-controlled repository.
-
-## Bad Desired State
-
-At its core, bad desired state is a valid request that Kubernetes cannot successfully run.
-The API Server may accept the YAML, but the node-side work can still fail later.
-Example: a typo in an image tag creates a Deployment that keeps asking nodes to pull an image that does not exist.
-
-Imagine a deployment rollout where you mistyped the container image tag as `1.4.30`:
-
-```bash
-kubectl get deployment notification-api -n notifications-prod
-```
-
-The status reports that the rollout is blocked:
-
-```text
-NAME               READY   UP-TO-DATE   AVAILABLE   AGE
-notification-api   2/3     1            2           18d
-```
-
-The two old Pods (`1.4.2`) continue running to serve traffic, but the new Pod is failing to start:
-
-```bash
-kubectl get pods -n notifications-prod
-```
-
-The new Pod reports an image pull failure:
-
-```text
-NAME                                READY   STATUS             AGE
-notification-api-7c8d9f-d3e4f       1/1     Running            3h
-notification-api-7c8d9f-g5h6i       1/1     Running            3h
-notification-api-8x9y0z-p1q2r       0/1     ImagePullBackOff   7m
-```
-
-The Pod's event log explains the failure: the node agent cannot find the image tag in the registry.
-The reconciliation loop is stuck.
-It will keep trying to pull the broken image until you change the desired state.
-
-To recover, you must correct the manifest or execute a rollback command:
+Rollback is the practical recovery command for a bad Deployment revision. It works by restoring an earlier Deployment Pod template. The command is below.
 
 ```bash
 kubectl rollout undo deployment/notification-api -n notifications-prod
 ```
 
-The rollback command instructs the Deployment controller to restore the previous, healthy Pod template spec.
-The controller terminates the failing Pod and restores the healthy replica counts.
-This highlights the core rule of troubleshooting: always correct the desired state configuration that the loop is executing.
+That command tells Kubernetes to restore the previous Deployment Pod template. After rollback starts, the same status command tracks the recovery. The team can watch the old healthy template return:
+
+```bash
+kubectl rollout status deployment/notification-api -n notifications-prod --timeout=5m
+```
+
+Production teams usually pair this with a small runbook. The runbook includes `kubectl rollout history`, a decision about the last known good revision, a rollback step for active customer impact, and a follow-up fix so the broken desired state stays out of future apply cycles.
+
+## Manual Changes and Drift
+<!-- section-summary: Some manual commands change only current state, while other commands change the desired state controllers follow. -->
+
+**Drift** means the live cluster and the expected configuration no longer match. Drift can happen because a human made a manual change, a GitOps controller applied an older file, a pipeline failed halfway, or a controller changed a dependent object as part of reconciliation. The important question is whether the manual action changed current state only, or changed desired state as well.
+
+Deleting one API Pod changes current state. The Deployment still asks for three replicas, so the ReplicaSet controller creates a replacement. The command below removes one live Pod:
+
+```bash
+kubectl delete pod notification-api-7db9c9f5c6-j2k8p -n notifications-prod
+```
+
+The next Pod listing might show a new replacement. The new Pod starts with a fresh name because the old Pod was disposable. A sample response is below.
+
+```
+NAME                                READY   STATUS              AGE
+notification-api-7db9c9f5c6-d4m9q   1/1     Running             42m
+notification-api-7db9c9f5c6-r8v2l   1/1     Running             41m
+notification-api-7db9c9f5c6-x6b1p   0/1     ContainerCreating   8s
+```
+
+Scaling the Deployment changes desired state because it updates the Deployment spec. The next command raises the requested API replica count. The command is below.
+
+```bash
+kubectl scale deployment notification-api --replicas=5 -n notifications-prod
+```
+
+The controller now works toward five API replicas. If the team manages the Deployment from Git, the matching manifest should change too. A GitOps controller such as Argo CD or Flux may later restore the Git version if the manual scale never reaches the repository.
+
+This is why operations teams talk about **source of truth**. Kubernetes has the live API state. Git often has the reviewed desired state. During an incident, a temporary manual scale can help absorb traffic, but the follow-up change belongs in the manifest so the next apply cycle keeps the same target.
+
+## Production Operating Habits
+<!-- section-summary: Real teams combine manifests, status checks, events, rollout commands, and alerts into a repeatable operating flow. -->
+
+Desired state sounds simple until you operate it under traffic. The practical habit is to treat every change as two questions: what desired state did we write, and what current state did Kubernetes report after controllers worked on it? That question pair works for deploys, scaling, readiness issues, and emergency recovery.
+
+A normal deployment flow for `notification-api` might look like this. The sequence applies the manifests, watches the rollout, and then checks the live objects. The commands are below.
+
+```bash
+kubectl apply -f k8s/notifications/
+kubectl rollout status deployment/notification-api -n notifications-prod --timeout=5m
+kubectl get deployment notification-api notification-worker -n notifications-prod
+kubectl get pods -n notifications-prod -l app.kubernetes.io/part-of=customer-notification-platform
+```
+
+During an incident, the flow gets more investigative. The sequence moves from high-level status into Pod details and logs. The commands are below.
+
+```bash
+kubectl get deployment notification-api -n notifications-prod
+kubectl describe deployment notification-api -n notifications-prod
+kubectl get pods -n notifications-prod -l app.kubernetes.io/name=notification-api
+kubectl describe pod notification-api-7db9c9f5c6-j2k8p -n notifications-prod
+kubectl logs deployment/notification-api -n notifications-prod --tail=100
+```
+
+The commands line up with the concepts from earlier. `get deployment` reads status. `describe deployment` shows controller activity and related events. `get pods` shows the current Pods under the Deployment. `describe pod` gives node-side events. `logs` shows what the application reported.
+
+Alerts should follow the same structure. A useful alert can watch available replicas dropping below desired replicas, rollout progress exceeding the deadline, readiness failures rising, worker queue depth growing, or database connection errors increasing. Kubernetes reconciliation can replace Pods, but it cannot fix a broken image tag, missing migration, exhausted database, or wrong readiness endpoint without a corrected desired state.
+
+This is also where adjacent production tools fit naturally. CI can validate YAML and apply a server-side dry run before merge. GitOps can keep the cluster aligned with reviewed manifests. Metrics and logs can show whether customer traffic, queue processing, and database health agree with the Kubernetes status.
 
 ## Putting It All Together
+<!-- section-summary: Desired state gives Kubernetes a target, and reconciliation turns that target into ongoing operations. -->
 
-The desired state model defines how Kubernetes operates.
-You declare your operational intent in the resource `spec`, and the cluster reports its observed status in the `status` block.
-Independent controller loops monitor these fields, calculating state differences and executing repairs automatically.
-Events document these state transitions, and rollouts automate progressive version updates safely.
+The Customer Notification Platform gives us the full loop. The team writes Deployment and Service manifests for `notification-api`, a Deployment for `notification-worker`, and a Secret reference for the database connection. Those manifests become desired state in the Kubernetes API after `kubectl apply` or a GitOps sync.
 
-For our Customer Notification Service, this reconciliation model ensures high reliability:
+Kubernetes then keeps reporting current state. Pods schedule onto nodes, kubelets start containers, readiness probes decide whether the API can receive traffic, Services point at ready endpoints, and controllers update status as they make progress. When something fails, events and status tell the team which part of the loop needs attention.
 
-- You write your target configuration to the Deployment's `spec`.
-- Kubelet agents and network plugins report container health back to the `status` block.
-- The controller manager runs background loops to maintain the replica counts.
-- Pod events document the exact sequence of scheduling, pulling, and starting actions.
-- Typo configurations or registry failures pause rollouts automatically to protect active traffic.
+Rollouts use the same idea for releases. Updating the image changes desired state, the Deployment controller creates a new ReplicaSet, readiness gates traffic, rollout status reports progress, and rollback restores an earlier Pod template when a release hurts production. Manual changes fit into the same model once you ask whether they changed current state or desired state.
 
-Adopting this mental model changes how you operate clusters.
-Rather than running manual recovery scripts, you manage workloads by maintaining their declarative desired state.
+The key idea is simple enough to carry into every Kubernetes topic after this. You write the target, Kubernetes reports what happened, controllers keep working, and operators use status, events, logs, metrics, and reviewed manifests to guide the next change.
 
 ## What's Next
 
-In the next article, we will focus on daily operational command-line habits.
-We will explore namespaces and `kubectl` configurations, checking how to navigate and manage these API resources safely.
-
-
-![Six-tile desired state and reconciliation summary covering spec, status, controller, events, rollout, and drift](/content-assets/articles/article-containers-orchestration-kubernetes-fundamentals-desired-state-and-reconciliation/desired-state-summary.png)
-
-*Desired state becomes practical when you know where the spec lives, how status reports reality, and which controller closes the gap.*
+Now that desired state and reconciliation are clear, the next article can move into daily cluster navigation. We will look at namespaces and `kubectl` configuration, because operating safely depends on knowing which cluster, namespace, and context each command will touch.
 
 ---
 
 **References**
 
-- [Kubernetes Objects](https://kubernetes.io/docs/concepts/overview/working-with-objects/) - Official reference for declarative schemas, specs, and status fields.
-- [Controller Architecture](https://kubernetes.io/docs/concepts/architecture/controller/) - Systems-level description of reconciliation loops and controllers.
-- [Deployments and Rollouts](https://kubernetes.io/docs/concepts/workloads/controllers/deployment/) - Detailed guide on deployment updates, strategies, and rollbacks.
-- [ReplicaSet Operations](https://kubernetes.io/docs/concepts/workloads/controllers/replicaset/) - Official reference for the ReplicaSet controller managing pod counts.
-- [Object Management Strategies](https://kubernetes.io/docs/concepts/overview/working-with-objects/object-management/) - Official overview of declarative vs. imperative object management.
+- [Kubernetes Objects](https://kubernetes.io/docs/concepts/overview/working-with-objects/) - Official explanation of objects, desired state, `spec`, and `status`.
+- [Controllers](https://kubernetes.io/docs/concepts/architecture/controller/) - Official description of Kubernetes controllers as control loops that move current state closer to desired state.
+- [Deployments](https://kubernetes.io/docs/concepts/workloads/controllers/deployment/) - Official guide to Deployment behavior, ReplicaSets, rollout progress, failed Deployments, and rollback.
+- [kubectl apply](https://kubernetes.io/docs/reference/kubectl/generated/kubectl_apply/) - Official command reference for applying YAML or JSON configuration by file, directory, or stdin.
+- [Kubernetes Object Management](https://kubernetes.io/docs/concepts/overview/working-with-objects/object-management/) - Official overview of imperative and declarative object management approaches.
+- [Events API](https://kubernetes.io/docs/reference/kubernetes-api/core/event-v1/) - Official Event API reference and guidance that events are short-lived, best-effort supplemental records.
+- [kubectl events](https://kubernetes.io/docs/reference/kubectl/generated/kubectl_events/) - Official command reference for listing and filtering Kubernetes events.
+- [kubectl describe](https://kubernetes.io/docs/reference/kubectl/generated/kubectl_describe/) - Official command reference for showing resource details and related events.
+- [kubectl rollout](https://kubernetes.io/docs/reference/kubectl/generated/kubectl_rollout/) - Official command group for managing rollouts across Deployments, DaemonSets, and StatefulSets.
+- [kubectl rollout status](https://kubernetes.io/docs/reference/kubectl/generated/kubectl_rollout/kubectl_rollout_status/) - Official command reference for watching rollout progress.
+- [kubectl rollout undo](https://kubernetes.io/docs/reference/kubectl/generated/kubectl_rollout/kubectl_rollout_undo/) - Official command reference for rolling back to a previous rollout revision.
+- [Service](https://kubernetes.io/docs/concepts/services-networking/service/) - Official explanation of Services, selectors, endpoints, and stable traffic routing to changing Pods.
+- [Labels and Selectors](https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/) - Official guide to labels as key/value pairs used for organizing and selecting objects.
+- [Liveness, Readiness, and Startup Probes](https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/) - Official task guide for readiness behavior and traffic routing through Services.

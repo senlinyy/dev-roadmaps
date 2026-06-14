@@ -9,123 +9,231 @@ id: article-containers-orchestration-kubernetes-workloads-rollouts-and-rollbacks
 
 ## Table of Contents
 
-1. [Changing Pods Without Dropping Traffic](#changing-pods-without-dropping-traffic)
-2. [The RollingUpdate Strategy](#the-rollingupdate-strategy)
-3. [Starting and Watching a Rollout](#starting-and-watching-a-rollout)
-4. [Reading ReplicaSets During a Release](#reading-replicasets-during-a-release)
-5. [Failure Mode: Rollout Stuck on Readiness](#failure-mode-rollout-stuck-on-readiness)
-6. [Rolling Back a Bad Revision](#rolling-back-a-bad-revision)
-7. [Pause, Resume, and Safer Changes](#pause-resume-and-safer-changes)
-8. [What Kubernetes Rollback Does Not Prove](#what-kubernetes-rollback-does-not-prove)
+1. [How a Deployment Changes Running Pods](#how-a-deployment-changes-running-pods)
+2. [Revisions and the Pod Template Hash](#revisions-and-the-pod-template-hash)
+3. [RollingUpdate Pacing](#rollingupdate-pacing)
+4. [Readiness and Traffic Safety](#readiness-and-traffic-safety)
+5. [Starting and Watching a Release](#starting-and-watching-a-release)
+6. [Diagnosing a Stuck Rollout](#diagnosing-a-stuck-rollout)
+7. [History, Undo, and Restart](#history-undo-and-restart)
+8. [Pause, Resume, and Release Runbooks](#pause-resume-and-release-runbooks)
+9. [Rollback Caveats](#rollback-caveats)
+10. [What's Next](#whats-next)
 
-## Changing Pods Without Dropping Traffic
+## How a Deployment Changes Running Pods
+<!-- section-summary: A rollout replaces Pods created from one Deployment template with Pods created from a newer template. -->
 
-A rollout is the controlled replacement of old Pods with new Pods from a changed template. A rollback is the same mechanism pointed back at an earlier template revision.
+A **rollout** is the process Kubernetes uses to move a workload from one Pod template to another Pod template. A Pod template is the part of a Deployment that describes the Pods it should create: container image, environment variables, probes, labels, resource settings, volumes, and other Pod-level settings.
 
-![Kubernetes RollingUpdate lane showing old ReplicaSet, new ReplicaSet, ready pods, service traffic, and surge](/content-assets/articles/article-containers-orchestration-kubernetes-workloads-rollouts-and-rollbacks/rolling-update-lane.png)
+For this article, picture a team shipping `devpolaris-orders-api`. Version `2026.06.14-1` is already serving customer checkout traffic. The next release, `2026.06.14-2`, includes a bug fix for coupon validation and a new environment variable named `ORDERS_EVENT_TOPIC`. The team changes the Deployment template so new Pods use the new image and the new variable. Kubernetes sees that the template changed, creates new Pods from the new template, and gradually removes the Pods from the previous template.
 
-*A rolling update changes pods gradually while ready pods keep serving traffic.*
+A **rollback** points the same machinery back at an earlier template. If version `2026.06.14-2` fails readiness checks or returns bad checkout responses, the team can ask Kubernetes to use the previous Deployment revision again. Kubernetes then creates Pods from that earlier template and scales down the broken one.
 
+The important beginner detail is that Kubernetes changes Pods by replacement. A running container keeps the image and configuration it started with. When you change a Deployment, Kubernetes creates a new group of Pods and retires the old group according to the Deployment strategy. That replacement process gives the platform a chance to keep healthy Pods available during the release.
 
-Example: an update to `devpolaris-orders-api` usually means the team has built a new container image and wants production Pods to use it. Kubernetes cannot change the image inside a running container. It creates new Pods from a new template and removes old Pods when enough new Pods are ready.
-
-That process is called a rollout. A rollback tells Kubernetes to return a Deployment to an earlier Pod template revision. Both operations depend on readiness probes because Kubernetes needs a signal that a new Pod can receive traffic.
-
-The goal is to keep enough healthy replicas available while moving from old code to new code.
-
-```mermaid
-flowchart TD
-    A["Old ReplicaSet<br/>3 ready Pods"] --> B["New image applied"]
-    B --> C["New ReplicaSet<br/>creates Pods"]
-    C --> D{"New Pods<br/>ready?"}
-    D -->|"Yes"| E["Scale old down<br/>scale new up"]
-    D -->|"No"| F["Rollout waits<br/>or fails progress"]
-```
-
-## The RollingUpdate Strategy
-
-`RollingUpdate` is the default Deployment strategy that replaces Pods gradually instead of deleting every old Pod at once. It exists so a service can keep serving traffic while Kubernetes introduces the new Pod template.
-
-Example: for a three-replica orders API, Kubernetes can start one new Pod, wait until it is ready, then remove one old Pod. Two fields control the pace: `maxUnavailable` and `maxSurge`.
+Here is the small Deployment shape we will keep using:
 
 ```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: devpolaris-orders-api
+  labels:
+    app: devpolaris-orders-api
 spec:
+  replicas: 3
+  revisionHistoryLimit: 5
+  progressDeadlineSeconds: 300
+  selector:
+    matchLabels:
+      app: devpolaris-orders-api
   strategy:
     type: RollingUpdate
     rollingUpdate:
-      maxUnavailable: 1
       maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: devpolaris-orders-api
+    spec:
+      containers:
+        - name: api
+          image: ghcr.io/devpolaris/orders-api:2026.06.14-1
+          ports:
+            - containerPort: 8080
+          env:
+            - name: ORDERS_EVENT_TOPIC
+              value: orders.events.v1
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: 8080
+            periodSeconds: 5
+            failureThreshold: 3
 ```
 
-`maxUnavailable: 1` allows one fewer ready Pod than desired during the rollout. `maxSurge: 1` allows one extra Pod above desired during the rollout. For a three-replica API, Kubernetes may temporarily run four Pods while it brings a new one up before removing an old one.
+This manifest introduces the pieces that matter for rollout safety: **replicas** tell Kubernetes how many Pods should exist, **RollingUpdate** tells it to replace them gradually, **progressDeadlineSeconds** tells it how long progress can stall before the Deployment reports a failure condition, and the **readiness probe** tells it whether a new Pod should receive traffic.
 
-These values are a tradeoff. More surge can make rollouts faster, but it needs spare cluster capacity. Less unavailability protects service capacity, but a rollout may wait longer if new Pods cannot fit or cannot become ready.
+## Revisions and the Pod Template Hash
+<!-- section-summary: Each changed Pod template gets a Deployment revision, and the Deployment controller uses ReplicaSets plus a pod-template-hash label to keep versions apart. -->
 
-## Starting and Watching a Rollout
+A **Deployment revision** is Kubernetes' record of a particular Deployment Pod template. When the template changes, the Deployment controller creates or updates a ReplicaSet for the new template and increments the revision number. A ReplicaSet is the controller object that keeps a matching set of Pods running for one template.
 
-Starting a rollout means changing the Deployment's Pod template so Kubernetes creates a new ReplicaSet. Watching a rollout means following the controller while new Pods become ready and old Pods leave service.
+For `devpolaris-orders-api`, revision 1 might represent image `2026.06.14-1` with `ORDERS_EVENT_TOPIC=orders.events.v1`. Revision 2 might represent image `2026.06.14-2` with `ORDERS_EVENT_TOPIC=orders.events.v2`. Kubernetes can keep old ReplicaSets around because `revisionHistoryLimit` allows previous templates to remain available for rollback.
 
-Example: changing the orders API image from `2026-05-07.1` to `2026-05-07.2` changes the template. In a GitOps workflow, you usually make that change in a file and let automation apply it. For learning, `kubectl set image` makes the moving parts visible.
+The **pod template hash** is a label the Deployment controller adds to Pods and ReplicaSets so it can separate one template from another. You will often see a name like `devpolaris-orders-api-6f8f7b9d88`. The last part comes from the template hash. You should treat that label as Kubernetes-owned. It helps the controller avoid mixing old Pods and new Pods under the same Deployment selector.
 
-```bash
-$ kubectl set image deployment/devpolaris-orders-api \
-  api=ghcr.io/devpolaris/orders-api:2026-05-07.2
-deployment.apps/devpolaris-orders-api image updated
-
-$ kubectl rollout status deployment/devpolaris-orders-api
-Waiting for deployment "devpolaris-orders-api" rollout to finish: 1 old replicas are pending termination...
-deployment "devpolaris-orders-api" successfully rolled out
-```
-
-The status command watches the Deployment controller's view. It does not call your public API. It tells you Kubernetes completed the replacement according to the Deployment's rules.
-
-Check the final image after rollout:
-
-```bash
-$ kubectl get deployment devpolaris-orders-api \
-  -o jsonpath='{.spec.template.spec.containers[0].image}{"\n"}'
-ghcr.io/devpolaris/orders-api:2026-05-07.2
-```
-
-That proves the desired Pod template changed. You still need application-level verification for user behavior.
-
-## Reading ReplicaSets During a Release
-
-ReplicaSets are useful during rollouts because each one represents a particular Pod template revision. During a release, they let you see how many old-version Pods and new-version Pods Kubernetes is managing.
-
-Example: if the new ReplicaSet has one desired Pod and zero ready Pods, the release is blocked by the new template, not by the old Pods that are still serving traffic.
+This command shows the ReplicaSets that belong to the orders API:
 
 ```bash
 $ kubectl get rs -l app=devpolaris-orders-api
-NAME                                DESIRED   CURRENT   READY   AGE
-devpolaris-orders-api-6c98b8f6d7    0         0         0       2d
-devpolaris-orders-api-7b7d4b5f9c    3         3         3       4m
+NAME                                 DESIRED   CURRENT   READY   AGE
+devpolaris-orders-api-6f8f7b9d88     3         3         3       2d
+devpolaris-orders-api-7c9d4c685b     0         0         0       15m
 ```
 
-The old ReplicaSet remains with zero desired replicas so Kubernetes can roll back to its template if history is retained. The new ReplicaSet owns the running Pods.
+The ready ReplicaSet is the version serving traffic. The zero-desired ReplicaSet can still matter because it may hold a previous template for rollback. During an active rollout, both ReplicaSets may have desired Pods for a short time: the new one scales up, and the old one scales down.
 
-Rollout history makes that relationship easier to read:
+You can connect Pods back to their template hash while a release is moving:
 
 ```bash
-$ kubectl rollout history deployment/devpolaris-orders-api
-deployment.apps/devpolaris-orders-api
-REVISION  CHANGE-CAUSE
-1         <none>
-2         <none>
+$ kubectl get pods -l app=devpolaris-orders-api -L pod-template-hash
+NAME                                       READY   STATUS    RESTARTS   POD-TEMPLATE-HASH
+devpolaris-orders-api-6f8f7b9d88-8fkwd     1/1     Running   0          6f8f7b9d88
+devpolaris-orders-api-6f8f7b9d88-lk2qp     1/1     Running   0          6f8f7b9d88
+devpolaris-orders-api-7c9d4c685b-m8vnn     0/1     Running   0          7c9d4c685b
 ```
 
-Many teams record change cause through annotations or through their deployment system instead of relying only on this table. The important part is that you can identify which template revision is running.
+That output tells a useful story. Two old Pods are still ready. One new Pod exists, but it has not passed readiness yet. The next section explains how Kubernetes decides how many of each version may exist at the same time.
 
-## Failure Mode: Rollout Stuck on Readiness
+## RollingUpdate Pacing
+<!-- section-summary: RollingUpdate uses maxSurge and maxUnavailable to control how quickly new Pods appear and old Pods disappear. -->
 
-A rollout stuck on readiness means the new Pods were created but Kubernetes will not count them as traffic-ready. The Deployment pauses replacement because removing more old Pods would reduce available capacity too far.
+**RollingUpdate** is the default Deployment strategy. It gradually replaces old Pods with new Pods while trying to keep enough available Pods in service. This strategy fits normal stateless web APIs because the Service can send traffic to whichever Pods are ready.
 
-![Kubernetes rollout failure path showing old version, new version, readiness failed, rollout paused, rollback, and service traffic](/content-assets/articles/article-containers-orchestration-kubernetes-workloads-rollouts-and-rollbacks/readiness-rollback-loop.png)
+Two fields control the pace. **maxSurge** is the number of extra Pods Kubernetes may create above the desired replica count during the rollout. **maxUnavailable** is the number of desired Pods that may be unavailable during the rollout. Both fields accept an absolute number or a percentage.
 
-*When readiness fails, the rollout should pause before traffic fully trusts the new version.*
+For the orders API, the Deployment asks for three replicas:
 
+```yaml
+spec:
+  replicas: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+```
 
-Example: the new orders API image may start the Node.js process but fail `/health/ready` because a required environment variable is missing.
+With `maxSurge: 1`, Kubernetes may temporarily run four Pods: three old Pods plus one new Pod. With `maxUnavailable: 0`, Kubernetes should keep three available Pods during the release. This is a conservative setting for a production API because old traffic capacity stays in place while one new Pod proves it can serve.
+
+The tradeoff is cluster capacity. A surge Pod needs CPU and memory like any other Pod. If every node is already full, the new Pod may stay Pending and the rollout will wait. If the team uses `maxUnavailable: 1` instead, Kubernetes may remove one old Pod before the new one is ready, which reduces capacity but may avoid needing extra headroom for the surge Pod.
+
+Percentages behave the same way, but Kubernetes rounds them to whole Pods. A common pattern is:
+
+```yaml
+rollingUpdate:
+  maxSurge: 25%
+  maxUnavailable: 25%
+```
+
+That pattern works well for larger replica counts. For a tiny three-replica API, exact numbers often make the rollout behavior easier to reason about during incidents. The next piece is the signal Kubernetes uses before it trusts a new Pod with traffic.
+
+## Readiness and Traffic Safety
+<!-- section-summary: Readiness probes and optional readiness gates decide whether a new Pod can join Service traffic during a rollout. -->
+
+A **readiness probe** is a check that tells Kubernetes whether a container is ready to receive traffic. For an HTTP API, it usually calls a path such as `/health/ready`. If the probe succeeds, Kubernetes can mark the Pod Ready. If the probe fails, Kubernetes keeps the Pod out of normal Service traffic.
+
+In the orders API, readiness should check the things needed for real requests. The process may be running, but checkout traffic still needs the database connection, the event topic configuration, and any required cache warmup. A readiness endpoint should return success only after the app can handle ordinary user traffic.
+
+```yaml
+readinessProbe:
+  httpGet:
+    path: /health/ready
+    port: 8080
+  initialDelaySeconds: 10
+  periodSeconds: 5
+  timeoutSeconds: 2
+  failureThreshold: 3
+```
+
+This probe gives the application a short startup window, then checks every five seconds. Three failures mark the container unready. During a rollout, that unready state protects users because the new Pod stays out of Service endpoints while old ready Pods keep serving.
+
+Kubernetes also has **readiness gates** for advanced cases. A readiness gate adds a custom Pod condition that must be `True` before the Pod counts as Ready. Teams use this when another controller has extra knowledge, such as a cloud load balancer controller that knows whether the Pod is registered and healthy outside the cluster. If the custom condition is missing or `False`, the Pod stays unready even when its containers are ready.
+
+Here is the shape, included so you recognize it in production manifests:
+
+```yaml
+spec:
+  readinessGates:
+    - conditionType: devpolaris.com/external-lb-ready
+```
+
+That field needs a controller or operator to update the Pod status condition. A normal application Deployment usually starts with a good readiness probe. Add a readiness gate only when a real external readiness signal exists and your platform has a controller that writes that condition.
+
+Readiness connects directly to release safety. The Deployment controller counts available Pods, Services route to ready endpoints, and `kubectl rollout status` waits for the new template to satisfy the rollout rules. Now we can start a release and watch those signals in order.
+
+## Starting and Watching a Release
+<!-- section-summary: A rollout starts when the Deployment Pod template changes, and kubectl can watch the controller until the new revision completes or stalls. -->
+
+A rollout starts when you change the Deployment's Pod template. In a production team, that change usually lands through GitOps or a CI/CD pipeline. Someone edits a manifest, opens a pull request, automation applies the change, and the cluster moves toward the new desired state. For learning and emergency work, `kubectl set image` shows the same mechanism directly.
+
+The orders team wants to move from image `2026.06.14-1` to `2026.06.14-2`:
+
+```bash
+$ kubectl set image deployment/devpolaris-orders-api \
+  api=ghcr.io/devpolaris/orders-api:2026.06.14-2
+deployment.apps/devpolaris-orders-api image updated
+```
+
+Now watch the rollout:
+
+```bash
+$ kubectl rollout status deployment/devpolaris-orders-api --timeout=5m
+Waiting for deployment "devpolaris-orders-api" rollout to finish: 1 out of 3 new replicas have been updated...
+Waiting for deployment "devpolaris-orders-api" rollout to finish: 2 of 3 updated replicas are available...
+deployment "devpolaris-orders-api" successfully rolled out
+```
+
+That command reports the Deployment controller's progress. It tells you whether Kubernetes completed the replacement according to the Deployment rules. It still belongs beside application verification, because a Pod can pass readiness while a business path still has a bug.
+
+Check the controller view:
+
+```bash
+$ kubectl get deployment devpolaris-orders-api
+NAME                    READY   UP-TO-DATE   AVAILABLE   AGE
+devpolaris-orders-api   3/3     3            3           14d
+```
+
+Then check the template image:
+
+```bash
+$ kubectl get deployment devpolaris-orders-api \
+  -o jsonpath='{.spec.template.spec.containers[?(@.name=="api")].image}{"\n"}'
+ghcr.io/devpolaris/orders-api:2026.06.14-2
+```
+
+And check the user path:
+
+```bash
+$ curl -fsS https://orders.devpolaris.example/health/ready
+{"status":"ready","database":"ok","events":"ok"}
+
+$ curl -fsS https://orders.devpolaris.example/internal/smoke/checkout-total
+{"status":"ok","scenario":"coupon-with-tax","total":"42.19"}
+```
+
+The first `curl` checks the same readiness surface the Pod exposes. The second checks a real business behavior. Many production teams run a small smoke test like this after the rollout status succeeds, then watch dashboards and alerts for error rate, latency, restarts, and queue lag.
+
+## Diagnosing a Stuck Rollout
+<!-- section-summary: A stuck rollout needs a quick path through Deployment status, ReplicaSets, Pods, events, and logs. -->
+
+A rollout is **stuck** when Kubernetes cannot make progress toward the new revision. The new Pods may be Pending, CrashLooping, failing readiness, blocked by an image pull error, or waiting for capacity. The old Pods may still be serving, but the release has stopped moving.
+
+The Deployment field **progressDeadlineSeconds** tells Kubernetes how long a rollout can go without progress before the Deployment reports a failed progress condition. In the orders API manifest, that deadline is 300 seconds. When the deadline passes, Kubernetes sets a condition with the reason `ProgressDeadlineExceeded`. The controller keeps reconciling afterward, so this condition is an alert signal and a debugging entry point.
+
+Start with rollout status:
 
 ```bash
 $ kubectl rollout status deployment/devpolaris-orders-api --timeout=60s
@@ -133,199 +241,208 @@ Waiting for deployment "devpolaris-orders-api" rollout to finish: 1 out of 3 new
 error: timed out waiting for the condition
 ```
 
-Now inspect the Deployment, then the new Pods:
+Then read the Deployment:
 
 ```bash
-$ kubectl get deploy devpolaris-orders-api
-NAME                    READY   UP-TO-DATE   AVAILABLE
-devpolaris-orders-api   2/3     1            2
-
-$ kubectl get pods -l app=devpolaris-orders-api
-NAME                                      READY   STATUS    RESTARTS
-devpolaris-orders-api-6c98b8f6d7-v2q5m    1/1     Running   0
-devpolaris-orders-api-6c98b8f6d7-zk6nd    1/1     Running   0
-devpolaris-orders-api-7b7d4b5f9c-dx8mt    0/1     Running   0
+$ kubectl describe deployment devpolaris-orders-api
+Conditions:
+  Type           Status  Reason
+  ----           ------  ------
+  Available      True    MinimumReplicasAvailable
+  Progressing    False   ProgressDeadlineExceeded
+Events:
+  Type     Reason             Message
+  ----     ------             -------
+  Normal   ScalingReplicaSet  Scaled up replica set devpolaris-orders-api-7c9d4c685b to 1
 ```
 
-The new Pod is running but not ready. Describe it and read logs:
+The conditions tell you the shape of the incident. `Available=True` means enough old Pods may still be serving. `Progressing=False` with `ProgressDeadlineExceeded` means the new revision did not move forward in time.
+
+Next, inspect the Pods and events:
 
 ```bash
-$ kubectl describe pod devpolaris-orders-api-7b7d4b5f9c-dx8mt
+$ kubectl get pods -l app=devpolaris-orders-api -L pod-template-hash
+NAME                                       READY   STATUS             RESTARTS   POD-TEMPLATE-HASH
+devpolaris-orders-api-6f8f7b9d88-8fkwd     1/1     Running            0          6f8f7b9d88
+devpolaris-orders-api-6f8f7b9d88-lk2qp     1/1     Running            0          6f8f7b9d88
+devpolaris-orders-api-6f8f7b9d88-zp4hz     1/1     Running            0          6f8f7b9d88
+devpolaris-orders-api-7c9d4c685b-m8vnn     0/1     Running            0          7c9d4c685b
+
+$ kubectl describe pod devpolaris-orders-api-7c9d4c685b-m8vnn
 Events:
   Type     Reason     Message
   ----     ------     -------
   Warning  Unhealthy  Readiness probe failed: HTTP probe failed with statuscode: 500
-
-$ kubectl logs devpolaris-orders-api-7b7d4b5f9c-dx8mt --tail=20
-2026-05-07T11:03:41Z startup complete
-2026-05-07T11:03:43Z readiness failed: missing env ORDERS_EVENT_TOPIC
 ```
 
-The fix direction is specific. The new image expects `ORDERS_EVENT_TOPIC`, but the Deployment template or ConfigMap does not provide it. You can add the missing environment value and continue the rollout, or roll back if production should return to the previous version immediately.
-
-## Rolling Back a Bad Revision
-
-A rollback changes the Deployment's Pod template back to a previous revision. It exists to restore an older set of Pods when the new template is clearly unhealthy.
-
-Example: if image `2026-05-07.2` starts but fails readiness because it needs `ORDERS_EVENT_TOPIC`, rolling back can return the Deployment to image `2026-05-07.1` while the team fixes the missing configuration.
+Now read the application logs:
 
 ```bash
-$ kubectl rollout undo deployment/devpolaris-orders-api
+$ kubectl logs devpolaris-orders-api-7c9d4c685b-m8vnn --tail=40
+2026-06-14T10:42:17Z server started on :8080
+2026-06-14T10:42:20Z readiness failed: missing ORDERS_EVENT_TOPIC
+```
+
+That points to a release packaging issue. The new image expects `ORDERS_EVENT_TOPIC`, and the new template may have the wrong value, the wrong environment variable name, or a missing ConfigMap reference. The fast production choice is usually one of two paths: patch the missing configuration and let the rollout continue, or roll back to the previous revision while the release fix goes through review.
+
+Other stuck rollout shapes have different first fixes:
+
+| Symptom | What it usually means | First checks |
+|---|---|---|
+| `ImagePullBackOff` | The node cannot pull the image | Image tag, registry auth, imagePullSecrets |
+| `Pending` with `Insufficient cpu` | The surge Pod cannot fit on available nodes | Requests, node allocatable, cluster autoscaler, maxSurge |
+| `CrashLoopBackOff` | The container starts and exits repeatedly | `kubectl logs --previous`, command, config, dependencies |
+| `Running` but `0/1 Ready` | The app process is up but readiness fails | Readiness endpoint, dependencies, startup timing, readiness gates |
+
+This workflow gives you the evidence needed for the rollback decision. You know whether old capacity remains healthy, whether the new template can be repaired quickly, and whether the issue affects user traffic.
+
+## History, Undo, and Restart
+<!-- section-summary: kubectl rollout history, undo, and restart let operators inspect revisions, return to an earlier template, or refresh Pods without changing the image. -->
+
+`kubectl rollout history` shows Deployment revisions. It helps you answer which templates Kubernetes can still use for rollback.
+
+```bash
+$ kubectl rollout history deployment/devpolaris-orders-api
+deployment.apps/devpolaris-orders-api
+REVISION  CHANGE-CAUSE
+1         initial production Deployment
+2         orders-api 2026.06.14-2 coupon validation release
+```
+
+Kubernetes stores the template for each retained revision on ReplicaSets. The table is most useful when your pipeline annotates the Deployment with a clear change cause before or during release:
+
+```bash
+$ kubectl annotate deployment/devpolaris-orders-api \
+  kubernetes.io/change-cause="orders-api 2026.06.14-2 coupon validation release" \
+  --overwrite
+deployment.apps/devpolaris-orders-api annotated
+```
+
+You can inspect a specific revision:
+
+```bash
+$ kubectl rollout history deployment/devpolaris-orders-api --revision=2
+deployment.apps/devpolaris-orders-api with revision #2
+Pod Template:
+  Labels:       app=devpolaris-orders-api
+                pod-template-hash=7c9d4c685b
+  Containers:
+   api:
+    Image:      ghcr.io/devpolaris/orders-api:2026.06.14-2
+```
+
+`kubectl rollout undo` asks Kubernetes to restore a previous template:
+
+```bash
+$ kubectl rollout undo deployment/devpolaris-orders-api --to-revision=1
 deployment.apps/devpolaris-orders-api rolled back
 
-$ kubectl rollout status deployment/devpolaris-orders-api
+$ kubectl rollout status deployment/devpolaris-orders-api --timeout=5m
 deployment "devpolaris-orders-api" successfully rolled out
 ```
 
-After a rollback, verify the image:
+After an undo, verify the template and the user path:
 
 ```bash
 $ kubectl get deployment devpolaris-orders-api \
-  -o jsonpath='{.spec.template.spec.containers[0].image}{"\n"}'
-ghcr.io/devpolaris/orders-api:2026-05-07.1
+  -o jsonpath='{.spec.template.spec.containers[?(@.name=="api")].image}{"\n"}'
+ghcr.io/devpolaris/orders-api:2026.06.14-1
+
+$ curl -fsS https://orders.devpolaris.example/internal/smoke/checkout-total
+{"status":"ok","scenario":"coupon-with-tax","total":"42.19"}
 ```
 
-Rollback is a production safety tool, but it is not a substitute for fixing the release. Open a follow-up change that adds the missing environment variable or corrects the image, then roll forward deliberately.
+`kubectl rollout restart` serves a different purpose. It refreshes Pods by changing an annotation on the Pod template, which causes a new rollout using the same image and configuration. Teams use it after rotating a Secret mounted as a volume, refreshing connections, or recovering from a node-level issue. Use it with the same rollout status and smoke-test checks because it still replaces Pods.
 
-## Pause, Resume, and Safer Changes
+```bash
+$ kubectl rollout restart deployment/devpolaris-orders-api
+deployment.apps/devpolaris-orders-api restarted
 
-A paused Deployment accepts template changes without immediately starting a new rollout. It is a safety tool for grouping related changes into one revision instead of creating several half-finished revisions.
+$ kubectl rollout status deployment/devpolaris-orders-api --timeout=5m
+deployment "devpolaris-orders-api" successfully rolled out
+```
 
-Example: if a release needs both a new image and a new `ORDERS_EVENT_TOPIC` variable, pausing lets you apply both changes before new Pods begin replacing old Pods.
+Undo and restart are operational tools. The next section ties them into a release runbook so a team can use them consistently during real incidents.
+
+## Pause, Resume, and Release Runbooks
+<!-- section-summary: Pause and resume help group multiple template changes, while a runbook keeps release and rollback decisions consistent. -->
+
+`kubectl rollout pause` marks a Deployment as paused. While paused, the Deployment can accept template changes, but the controller holds off on rolling out those changes. `kubectl rollout resume` lets the controller continue.
+
+This helps when a fix needs multiple template edits. Suppose the orders API release needs both a new image and a new `ORDERS_EVENT_TOPIC` value. Applying the image first could create a broken revision. Pausing lets an operator group the changes:
 
 ```bash
 $ kubectl rollout pause deployment/devpolaris-orders-api
 deployment.apps/devpolaris-orders-api paused
 
-$ kubectl set image deployment/devpolaris-orders-api api=ghcr.io/devpolaris/orders-api:2026-05-07.3
-$ kubectl set env deployment/devpolaris-orders-api ORDERS_EVENT_TOPIC=orders.events.v2
+$ kubectl set image deployment/devpolaris-orders-api \
+  api=ghcr.io/devpolaris/orders-api:2026.06.14-2
+deployment.apps/devpolaris-orders-api image updated
+
+$ kubectl set env deployment/devpolaris-orders-api \
+  ORDERS_EVENT_TOPIC=orders.events.v2
+deployment.apps/devpolaris-orders-api env updated
 
 $ kubectl rollout resume deployment/devpolaris-orders-api
 deployment.apps/devpolaris-orders-api resumed
 ```
 
-This is helpful for emergency command-line work. In a steady team workflow, prefer one reviewed manifest change that contains both updates. The operational idea is the same: avoid creating half-updated revisions.
+In a steady delivery workflow, a reviewed manifest change gives the same safety with a stronger audit trail. The pause and resume commands still matter for emergency command-line work, especially when you need to avoid creating several partial revisions during a live incident.
 
-## What Kubernetes Rollback Does Not Prove
+A practical release runbook for `devpolaris-orders-api` can stay short:
 
-Kubernetes readiness is a platform signal, not a full application test. It can tell you whether Pods became ready according to their probes, but it cannot prove that checkout totals are correct, that a new API field is backward compatible, or that a downstream payment provider accepted the new request shape.
+1. Confirm the manifest uses an immutable image tag or digest for the release.
+2. Confirm the Deployment has readiness probes, resource requests, and a rollout strategy with enough surge capacity.
+3. Apply the manifest through the normal pipeline.
+4. Watch `kubectl rollout status deployment/devpolaris-orders-api --timeout=5m`.
+5. Check Deployment, ReplicaSets, and Pods if the rollout waits longer than expected.
+6. Run the readiness URL and one business smoke test after Kubernetes reports success.
+7. Watch error rate, latency, restarts, and queue lag for the release window.
+8. Roll back if the new revision fails readiness, fails smoke tests, or causes user-facing errors beyond the agreed threshold.
 
-Example: a Pod can pass `/health/ready` because the process and database connection work, while still returning the wrong tax calculation for a real order request.
+The rollback runbook should be just as concrete:
 
-For `devpolaris-orders-api`, a rollout check should be followed by a small application check:
+1. Capture the current revision with `kubectl rollout history deployment/devpolaris-orders-api`.
+2. Save the failing Pod logs and events before they disappear.
+3. Run `kubectl rollout undo deployment/devpolaris-orders-api --to-revision=<known-good-revision>`.
+4. Watch rollout status until the old template is available again.
+5. Verify the image, readiness URL, business smoke test, and production dashboard.
+6. Open a follow-up fix that explains why the bad template failed and how the next rollout will avoid the same failure.
 
-```bash
-$ curl -fsS https://orders.devpolaris.example/health/ready
-{"status":"ready","database":"ok","events":"ok"}
-```
+Runbooks prevent improvisation during pressure. They also make the limits of Kubernetes rollback clearer, which matters for database changes, mutable tags, and external systems.
 
-That endpoint is still only a health check. For risky releases, teams add smoke tests, metrics checks, and error-rate alerts. Kubernetes controls the replacement of Pods. Your release process still needs evidence that the application behaves correctly.
+## Rollback Caveats
+<!-- section-summary: Kubernetes rollback restores a previous Pod template, while data changes, external systems, and mutable artifacts need separate recovery planning. -->
 
-You can make that evidence more concrete with a short post-rollout check. For the orders API, a smoke test might create a test order in a staging namespace, read it back, and confirm the event writer is connected. In production, the same idea should use a safe synthetic request or a read-only check that cannot create customer-visible data by accident.
+A Kubernetes rollback restores a Deployment Pod template. That is powerful, but the surrounding release may include changes outside that template. Production teams plan for those boundaries before they need the rollback.
 
-```bash
-$ curl -fsS https://orders.devpolaris.example/internal/version
-{"service":"orders-api","version":"2026-05-07.2","gitSha":"a8f14c9"}
+The first caveat is database migration. If release `2026.06.14-2` changed the schema in a way that older code cannot read, rolling the Pods back to `2026.06.14-1` may restore old containers while leaving the database in the new shape. Safer release plans use backward-compatible migrations: add columns before code uses them, write code that tolerates both shapes during the transition, and remove old columns in a later release.
 
-$ curl -fsS https://orders.devpolaris.example/internal/dependencies
-{"database":"ok","eventTopic":"orders.events.v2","payments":"ok"}
-```
+The second caveat is configuration. A rollback restores the Deployment template, including environment variables written directly in the template. If the template references a ConfigMap or Secret by a stable name, and someone changed the object contents separately, the old Deployment revision may still point at the new ConfigMap or Secret data. Many teams version configuration names or let GitOps manage Deployment and configuration together so the release can return to a known set of files.
 
-Those responses connect the Kubernetes rollout to application reality. The Deployment says the new image is running. The internal endpoint says the new process can see the dependencies the release needs.
+The third caveat is image identity. A mutable tag like `latest` or `prod` can point to different images over time. Rollback works best with immutable tags or image digests because revision history should lead back to the exact artifact that previously ran. For production release records, store the image digest, commit SHA, build ID, and deployment revision together.
 
-Rollbacks also have data limits. If version `2026-05-07.2` writes a new database column and version `2026-05-07.1` ignores it, rollback is usually fine. If the new version rewrites data into a shape the old version cannot read, rollback may restore Pods while leaving the application broken.
+The fourth caveat is external side effects. If the bad release published duplicate order events, charged a payment provider, or changed data in another service, a Deployment rollback will only change future Pods. The incident may still need data repair, message replay handling, or a compensating workflow.
 
-```text
-Rollback risk review:
-1. Did the release change only code?
-2. Did it add backward-compatible config?
-3. Did it change database schema?
-4. Did it write new data formats?
-5. Did it change messages sent to other services?
-```
+So the production habit is simple: use Kubernetes rollback to recover the workload template quickly, then keep investigating the full release. The rollback gets healthy Pods back into service. The incident review handles the database, configuration, artifact, and business effects.
 
-The Deployment controller cannot answer those questions. The release owner has to answer them before deciding whether rollback is safe or whether a forward fix is safer.
+## What's Next
+<!-- section-summary: The next article explains why resource requests and limits affect scheduling, rollout speed, and failure behavior. -->
 
-Progress deadlines are another part of rollout design. A Deployment can declare how long Kubernetes should wait before marking progress as failed.
+Rollouts depend on capacity. A safe `maxSurge: 1` setting only helps if the cluster has room for one extra Pod. A readiness probe only gets a chance to pass if the Pod can schedule and start. CPU pressure can make a new version look slow, and memory limits can restart a Pod right as the Deployment waits for it to become available.
 
-```yaml
-spec:
-  progressDeadlineSeconds: 300
-```
-
-This does not stop the rollout by itself. It changes the Deployment condition so automation and humans can see that progress failed. Pair it with alerting or deployment tooling that notices the condition.
-
-```bash
-$ kubectl get deployment devpolaris-orders-api -o jsonpath='{.status.conditions[?(@.type=="Progressing")].reason}{"\n"}'
-ProgressDeadlineExceeded
-```
-
-When you see that reason, collect evidence before acting: Deployment conditions, ReplicaSet counts, Pod events, and logs from the newest Pods. That evidence tells you whether to fix config, add capacity, roll back, or pause.
-
-For review, keep rollout settings close to service behavior:
-
-| Setting or signal | Question it answers |
-|-------------------|---------------------|
-| `maxUnavailable` | How much capacity can disappear during update? |
-| `maxSurge` | How much spare capacity can the cluster use? |
-| Readiness probe | When can a new Pod receive traffic? |
-| Progress deadline | When should humans or automation intervene? |
-| Rollout history | Which template can we return to? |
-| Smoke test | Does the application behavior still work? |
-
-This is the difference between "Kubernetes replaced the Pods" and "the release is healthy." Both matter, and they are not the same check.
-
-A final rollout skill is knowing when to stop adding change. If a rollout is already unhealthy, do not stack unrelated edits onto the same Deployment unless they are part of the fix. More changes make it harder to know which line changed behavior.
-
-For `devpolaris-orders-api`, a clean fix might add the missing environment variable and keep the same image:
-
-```bash
-$ kubectl set env deployment/devpolaris-orders-api ORDERS_EVENT_TOPIC=orders.events.v2
-deployment.apps/devpolaris-orders-api env updated
-
-$ kubectl rollout status deployment/devpolaris-orders-api
-deployment "devpolaris-orders-api" successfully rolled out
-```
-
-If the image itself is bad, a clean rollback might only undo the image revision. Both paths are valid. The decision comes from evidence: Pod events, logs, and application behavior.
-
-Keep a small release note even for command-line emergency fixes:
-
-```text
-Release note:
-service: devpolaris-orders-api
-time: 2026-05-07T11:18Z
-action: rollback deployment to image 2026-05-07.1
-reason: 2026-05-07.2 readiness failed because ORDERS_EVENT_TOPIC was missing
-follow-up: add env var in Git and redeploy 2026-05-07.3
-```
-
-That note is not ceremony. It prevents the next engineer from rediscovering the same failure from scattered terminal history and chat messages. It also makes the follow-up clear: roll forward with the corrected manifest.
-
-Rollout work also needs a clear owner while the release is moving. If two people both run `kubectl set image` or `kubectl rollout undo`, the Deployment history can become confusing. Agree who is driving the release, who is watching metrics, and what signal will trigger rollback or a forward fix.
-
-For the orders API, a simple release watch might look like this:
-
-```text
-Release watch:
-driver: platform-oncall
-observer: orders-api owner
-rollback trigger: readiness failure for 5 minutes or error rate above 2 percent
-forward-fix trigger: missing config with clear one-line patch
-success signal: rollout complete, dependency endpoint ok, P95 latency normal
-```
-
-Those thresholds should match the service, but writing them down before the rollout reduces hesitation. Kubernetes gives you the mechanism. The team still needs the decision rule.
-
-
-![Kubernetes rollout summary covering strategy, ReplicaSets, readiness, history, rollback, and traffic](/content-assets/articles/article-containers-orchestration-kubernetes-workloads-rollouts-and-rollbacks/rollout-summary.png)
-
-*A safe rollout needs a strategy, readiness evidence, history, rollback path, and traffic protection.*
+The next article looks at **resource requests and limits**. We will use the same `devpolaris-orders-api` service to see how Kubernetes decides where Pods fit, why CPU and memory behave differently, and how bad resource settings can turn a normal rollout into a confusing production incident.
 
 ---
 
 **References**
 
-- [Kubernetes Deployments](https://kubernetes.io/docs/concepts/workloads/controllers/deployment/) - Official reference for rollout, rollback, pause, and revision behavior.
-- [Rolling Update a Deployment](https://kubernetes.io/docs/tutorials/kubernetes-basics/update/update-intro/) - Kubernetes tutorial material for updating an application through Deployment rollouts.
-- [kubectl rollout](https://kubernetes.io/docs/reference/kubectl/generated/kubectl_rollout/) - The official command reference for rollout status, history, undo, pause, and resume.
+- [Kubernetes Deployments](https://kubernetes.io/docs/concepts/workloads/controllers/deployment/) - Explains Deployment rollouts, ReplicaSets, revisions, progress deadlines, rollback behavior, and rolling update configuration.
+- [kubectl rollout](https://kubernetes.io/docs/reference/kubectl/generated/kubectl_rollout/) - Lists rollout subcommands such as status, history, undo, restart, pause, and resume.
+- [kubectl rollout status](https://kubernetes.io/docs/reference/kubectl/generated/kubectl_rollout/kubectl_rollout_status/) - Documents how rollout status watches the latest rollout and supports timeouts and revision selection.
+- [kubectl rollout undo](https://kubernetes.io/docs/reference/kubectl/generated/kubectl_rollout/kubectl_rollout_undo/) - Documents rolling back to a previous rollout revision.
+- [kubectl rollout restart](https://kubernetes.io/docs/reference/kubectl/generated/kubectl_rollout/kubectl_rollout_restart/) - Documents restarting workloads through rollout machinery.
+- [kubectl rollout pause](https://kubernetes.io/docs/reference/kubectl/generated/kubectl_rollout/kubectl_rollout_pause/) and [kubectl rollout resume](https://kubernetes.io/docs/reference/kubectl/generated/kubectl_rollout/kubectl_rollout_resume/) - Document pausing and resuming Deployment rollout reconciliation.
+- [Liveness, Readiness, and Startup Probes](https://kubernetes.io/docs/concepts/workloads/pods/probes/) - Defines readiness probes and their role in deciding whether a container can receive traffic.
+- [Pod lifecycle: Pod readiness](https://kubernetes.io/docs/concepts/workloads/pods/pod-lifecycle/) - Documents Pod readiness gates and how custom Pod conditions affect the Ready condition.
+- [Update a Deployment without downtime](https://kubernetes.io/docs/tasks/run-application/update-deployment-rolling/) - Walks through rolling updates, monitoring progress, pausing, resuming, and rolling back.

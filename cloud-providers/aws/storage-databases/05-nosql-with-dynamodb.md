@@ -67,6 +67,10 @@ The primary key is more than a label. It affects performance and scale. DynamoDB
 
 This is why naming keys deserves review. `CUSTOMER#771` may work for carts if each customer has moderate traffic. A celebrity live event or flash sale counter under one key could overload that key. For high-write counters, teams often shard the key, write to multiple buckets such as `COUNTER#sale-2026#shard-03`, and aggregate results later.
 
+![DynamoDB key routing infographic showing a cart request, partition key hash, storage partitions, selected cart item, and hot key warning](/content-assets/articles/article-cloud-providers-aws-storage-databases-dynamodb-tables-access-patterns/dynamodb-key-routing.png)
+
+*The partition key is both an address and a traffic distribution choice.*
+
 ## Access Patterns Before Attributes
 <!-- section-summary: DynamoDB table design starts by listing exact reads and writes, then choosing keys and indexes that serve those paths. -->
 
@@ -114,6 +118,10 @@ The service can create an idempotency item with a condition that the item does n
 If the item already exists, DynamoDB rejects the write with a conditional check failure. The service can then read the existing item and return the already-created result or wait for the first request to finish. That is much safer than checking first and writing later because a check-then-write sequence can race under concurrent requests.
 
 DynamoDB also supports transactions for cases where multiple items need coordinated changes. Transactions are useful, but they should stay tied to clear access patterns and measured needs. If most of the application needs broad relational transactions and flexible joins, the data may belong in RDS or Aurora instead. For key-based concurrency barriers, DynamoDB conditional writes are often a clean fit.
+
+![DynamoDB conditional write flow showing payment request, PutItem, item-missing condition, first request processing, duplicate returning saved result, and one charge](/content-assets/articles/article-cloud-providers-aws-storage-databases-dynamodb-tables-access-patterns/conditional-idempotency-flow.png)
+
+*A conditional write can turn a retry-prone payment request into one safe business result.*
 
 ## Indexes, Streams, TTL, and Global Tables
 <!-- section-summary: Secondary DynamoDB features support alternate lookups, event-driven workflows, expiry, and multi-Region table replicas. -->
@@ -172,6 +180,10 @@ The checklist makes DynamoDB less mysterious for a beginner. It also keeps the t
 Maple Market uses DynamoDB for carts, sessions, idempotency records, and other key-based state. The team starts from access patterns, then chooses partition keys, sort keys, and indexes. It uses conditional writes to prevent duplicate payment work. It uses TTL for records with a natural expiry. It watches capacity, throttles, hot keys, and stream lag. It turns on recovery features for important tables and keeps IAM scoped to the exact table and indexes.
 
 DynamoDB can serve very large traffic with low operational overhead, but it asks for careful data modeling upfront. Relational design starts from relationships and flexible SQL. DynamoDB design starts from known questions and known keys. When the access paths are clear, that trade is powerful.
+
+![DynamoDB table review checklist covering access patterns, partition key, sort key, GSI, capacity mode, and PITR plus TTL](/content-assets/articles/article-cloud-providers-aws-storage-databases-dynamodb-tables-access-patterns/dynamodb-table-review.png)
+
+*The table review starts with the application questions, then checks key design and operating controls.*
 
 ## What's Next
 <!-- section-summary: The final article covers the movement paths that get files, databases, and exports into and around AWS. -->

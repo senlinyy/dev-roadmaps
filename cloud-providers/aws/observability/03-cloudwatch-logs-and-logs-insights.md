@@ -109,6 +109,10 @@ For the checkout API, a useful event includes fields that answer the first inves
 
 Notice the shape of the event. It has stable names and normal data types, so later queries can filter `level`, group by `errorType`, calculate percentiles from `durationMs`, and join human investigation around `requestId` or `traceId`. This is much more useful than one long sentence that hides those values inside text.
 
+![CloudWatch Logs hierarchy showing a log group, log streams, and log events for a checkout API](/content-assets/articles/article-cloud-iac-observability-logs-traces/cloudwatch-logs-hierarchy.png)
+
+*This hierarchy shows the practical search path. Start at the service log group, then use streams and events only after the query finds the right runtime and request.*
+
 ## Getting Logs into the Right Group
 <!-- section-summary: Lambda, ECS, EC2, and advanced container routes all need explicit logging paths so every runtime sends evidence to the group the team will query. -->
 
@@ -256,6 +260,10 @@ parse @message "level=* requestId=* provider=* status=* durationMs=*" as level, 
 
 Logs Insights also has commands for pattern analysis, anomaly detection, comparing a period with an earlier period, unmasking protected data when allowed, and using field indexes. The checkout team can start with a small set of reliable queries that answer "which requests failed", "which error grew", and "which deployment or dependency changed near the failure window". More advanced commands fit naturally after the team has the everyday incident queries working.
 
+![Logs Insights workflow showing log group selection, time window, field filtering, stats, and trace follow-up](/content-assets/articles/article-cloud-iac-observability-logs-traces/logs-insights-workflow.png)
+
+*The workflow keeps query cost and noise down. A good search narrows the log groups and time window before it starts grouping errors or opening traces.*
+
 ## Query Cost and Field Indexes
 <!-- section-summary: Logs Insights charges by scanned data, so teams control cost with narrow time ranges, focused log groups, and field indexes for common equality searches. -->
 
@@ -367,6 +375,10 @@ graph LR
 ```
 
 This is the production habit to build. Logs serve as structured evidence, stored under owned log groups, queried with care, converted into a few durable metrics, and retained for the period the business actually needs. Application teams get the most value when every printed event has a clear operational purpose.
+
+![Log control plane showing retention, log class, field index, metric filter, and subscription around a log group](/content-assets/articles/article-cloud-iac-observability-logs-traces/log-control-plane.png)
+
+*The summary image groups the controls that keep logs useful over time: retention, class, indexes, filters, and subscriptions all belong to the log group design.*
 
 ## What's Next
 <!-- section-summary: The next article follows a single request across services with X-Ray and OpenTelemetry so logs can connect to a full trace. -->

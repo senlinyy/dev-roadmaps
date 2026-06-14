@@ -1,7 +1,7 @@
 ---
 title: "ClusterIP, NodePort, and LoadBalancer"
-description: "Choose the right Kubernetes Service type for internal traffic, node-level exposure, and cloud load balancers."
-overview: "Service types are exposure choices. ClusterIP keeps devpolaris-orders-api inside the cluster, NodePort opens a port on nodes, and LoadBalancer asks infrastructure to publish the Service externally."
+description: "Understand how Kubernetes Service types change who can reach an application: private cluster callers, node-level callers, or infrastructure-managed external callers."
+overview: "A Kubernetes Service gives stable access to changing Pods. This article follows a checkout platform as the same orders API stays private with ClusterIP, gets node-level access with NodePort, and reaches external infrastructure through LoadBalancer."
 tags: ["clusterip", "nodeport", "loadbalancer", "services"]
 order: 2
 id: article-containers-orchestration-kubernetes-networking-clusterip-nodeport-loadbalancer
@@ -9,321 +9,419 @@ id: article-containers-orchestration-kubernetes-networking-clusterip-nodeport-lo
 
 ## Table of Contents
 
-1. [One Service API, Three Exposure Shapes](#one-service-api-three-exposure-shapes)
-2. [ClusterIP for Internal Contracts](#clusterip-for-internal-contracts)
-3. [NodePort for Direct Node Entry](#nodeport-for-direct-node-entry)
-4. [LoadBalancer for Infrastructure Integration](#loadbalancer-for-infrastructure-integration)
-5. [Choosing by Audience](#choosing-by-audience)
-6. [Failure Mode: Pending External IP](#failure-mode-pending-external-ip)
-7. [Failure Mode: NodePort Opens More Than Intended](#failure-mode-nodeport-opens-more-than-intended)
-8. [A Safe Exposure Progression](#a-safe-exposure-progression)
-9. [Production Review Questions](#production-review-questions)
-10. [Evidence to Keep During Changes](#evidence-to-keep-during-changes)
+1. [The Traffic Question](#the-traffic-question)
+2. [The Service Contract](#the-service-contract)
+3. [ClusterIP for Private Calls](#clusterip-for-private-calls)
+4. [NodePort for Node-Level Access](#nodeport-for-node-level-access)
+5. [LoadBalancer for Infrastructure Entry](#loadbalancer-for-infrastructure-entry)
+6. [How the Types Stack Together](#how-the-types-stack-together)
+7. [Choosing the Type](#choosing-the-type)
+8. [Debugging the Path](#debugging-the-path)
+9. [Changing Exposure Safely](#changing-exposure-safely)
+10. [Putting It All Together](#putting-it-all-together)
+11. [What's Next](#whats-next)
 
-## One Service API, Three Exposure Shapes
+## The Traffic Question
+<!-- section-summary: ClusterIP, NodePort, and LoadBalancer answer the same question at three different scopes: cluster callers, node callers, and infrastructure-managed callers. -->
 
-Service types are exposure settings for the same Service API. They answer where the stable Service address should be reachable from: only inside the cluster, through every node, or through an external load balancer.
+Let's keep one simple application in our heads the whole time. DevPolaris runs a checkout platform in Kubernetes. A Pod called `checkout-web` receives browser traffic, then it calls `orders-api` to create an order, and `orders-api` calls `inventory-api` to reserve stock. Pods come and go during rollouts, failures, autoscaling, and node maintenance, so the web app should never hardcode a Pod IP.
 
-![Kubernetes Service exposure shapes comparing ClusterIP, NodePort, and LoadBalancer entry paths](/content-assets/articles/article-containers-orchestration-kubernetes-networking-clusterip-nodeport-loadbalancer/service-exposure-shapes.png)
+A **Kubernetes Service** gives a stable network name and port for a changing group of Pods. The Service selects Pods by labels, Kubernetes tracks the ready backend Pods through EndpointSlices, and clients call the Service instead of chasing individual Pod IPs. That was the big idea in the previous Services article.
 
-*The Service type decides who the audience is: inside the cluster, through node ports, or through external infrastructure.*
+This article adds the next question: **who should be able to reach that Service?** `ClusterIP`, `NodePort`, and `LoadBalancer` are Service types. The type controls where Kubernetes publishes the Service contract.
 
+| Service type | Main audience | What Kubernetes publishes |
+|---|---|---|
+| **ClusterIP** | Pods and other in-cluster clients | A cluster-internal virtual IP and Service DNS name |
+| **NodePort** | Clients that can reach Kubernetes node IPs | A static port on every node, plus the ClusterIP behavior |
+| **LoadBalancer** | Clients that enter through cloud or platform infrastructure | An external load balancer address, plus Service behavior behind it |
 
-Example: the same `devpolaris-orders-api` backend can stay internal as `ClusterIP` for web Pods, become reachable on node port `31080` in a lab, or request a cloud load balancer with an external IP. The type does not change the application code in `devpolaris-orders-api`; it changes how far Kubernetes publishes the Service.
+The useful path starts small. If `checkout-web` calls `orders-api` inside the cluster, `orders-api` usually needs `ClusterIP`. If a lab or bare-metal platform needs to enter through node IPs, `NodePort` can play that role. If a cloud or platform load balancer needs to publish an address, `LoadBalancer` asks that infrastructure to create one.
 
-`ClusterIP` is the default. It creates a cluster-internal virtual IP and DNS name. `NodePort` builds on that and opens a high port on every node. `LoadBalancer` builds on those ideas and asks the cloud provider or load balancer implementation to create an external load balancer.
+The examples below keep returning to the same `orders-api` Service. That makes the difference clear: the application can stay the same, while the Service type changes the audience.
 
-```mermaid
-flowchart TD
-    A[ClusterIP] --> B[Reachable inside the cluster]
-    A --> C[NodePort]
-    C --> D[Reachable on each node IP and port]
-    C --> E[LoadBalancer]
-    E --> F[Reachable through external load balancer]
+## The Service Contract
+<!-- section-summary: A Service has a stable name, selector, Service port, target port, and optional exposure fields that decide how traffic reaches the selected Pods. -->
+
+Before looking at the three types, let's name the pieces that show up in every manifest. A **selector** is the label query the Service uses to find backend Pods. If the Service selects `app.kubernetes.io/name: orders-api`, then Pods with that label become possible backends for the Service.
+
+Kubernetes stores those selected backend addresses in **EndpointSlices**. An EndpointSlice is a Kubernetes object that lists a slice of the ready network endpoints behind a Service. Application teams usually let Kubernetes create EndpointSlices, and they check them during debugging because an empty EndpointSlice means the Service has no ready backend Pods to send traffic to.
+
+The port fields also matter because they describe two different sides of the connection. A beginner-friendly Service review should name these fields out loud because many traffic bugs hide in this small part of the manifest.
+
+| Field | Simple meaning | Example in this article |
+|---|---|---|
+| **port** | The port clients use on the Service | `80` |
+| **targetPort** | The port Kubernetes sends traffic to on the selected Pods | `http` or `8080` |
+| **nodePort** | The high port opened on nodes for a NodePort Service | `31080` |
+| **clusterIP** | The virtual IP inside the cluster for the Service | `10.96.42.18` |
+| **status.loadBalancer** | The address a load balancer implementation reports back | `203.0.113.42` or a cloud hostname |
+
+Here is the shape we will use for the backend Pods. The Deployment gives each Pod the same label, and the container listens on a named port called `http`.
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: orders-api
+  namespace: orders
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: orders-api
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: orders-api
+    spec:
+      containers:
+        - name: orders-api
+          image: ghcr.io/devpolaris/orders-api:2026.06.14
+          ports:
+            - name: http
+              containerPort: 8080
 ```
 
-The safe default for most backend APIs is `ClusterIP`. You can still expose that backend through Ingress or Gateway API later. Starting with the narrowest useful exposure keeps accidental public access out of the first design.
+The named `targetPort` gives the Service a small bit of flexibility. The Service can expose port `80` to clients, while the Pods listen on container port `8080`. Later, if the application moves its HTTP listener to `8081`, the team can update the Pod port named `http` and keep the Service port stable for clients. That stable client contract is the heart of the Service, and the type decides where that contract appears.
 
-## ClusterIP for Internal Contracts
+## ClusterIP for Private Calls
+<!-- section-summary: ClusterIP is the default Service type and the usual choice for backend application calls inside the cluster. -->
 
-A `ClusterIP` Service is a cluster-internal virtual IP and DNS name. It is for callers inside the Kubernetes network.
+**ClusterIP** exposes a Service on a cluster-internal virtual IP address. Kubernetes also gives the Service a DNS name, so Pods can call the Service by name instead of calling the cluster IP directly. This is the default Service type, so a Service without `spec.type` uses ClusterIP.
 
-Example: `devpolaris-web`, background workers, or another API can call `devpolaris-orders-api.orders` without sending traffic through a public load balancer.
+For `orders-api`, ClusterIP is the normal starting point. The caller, `checkout-web`, already runs inside Kubernetes. A private cluster address gives it everything it needs, while the orders backend stays away from node-level and cloud load balancer exposure.
 
 ```yaml
 apiVersion: v1
 kind: Service
 metadata:
-  name: devpolaris-orders-api
+  name: orders-api
   namespace: orders
+  labels:
+    app.kubernetes.io/name: orders-api
+    app.kubernetes.io/part-of: checkout
 spec:
   type: ClusterIP
   selector:
-    app.kubernetes.io/name: devpolaris-orders-api
+    app.kubernetes.io/name: orders-api
   ports:
     - name: http
+      protocol: TCP
       port: 80
       targetPort: http
 ```
 
-The Service gets a cluster IP from a range configured for Services. That range is different from Pod IPs and node IPs. Callers do not need to know that range, but operators should remember that overlapping IP ranges can cause confusing routing failures.
+Inside the `orders` namespace, a client can use `http://orders-api`. From another namespace, a client should qualify the name as `orders-api.orders` or use the full name `orders-api.orders.svc.cluster.local`. That namespace part matters in real clusters because many teams reuse simple Service names such as `api`, `web`, or `worker` in different namespaces.
+
+The live Service should show a cluster IP and no external address. This proves the API server accepted the internal Service shape.
 
 ```bash
-$ kubectl -n orders get svc devpolaris-orders-api -o wide
-NAME                    TYPE        CLUSTER-IP    EXTERNAL-IP   PORT(S)   AGE   SELECTOR
-devpolaris-orders-api   ClusterIP   10.96.42.18   <none>        80/TCP    4m    app.kubernetes.io/name=devpolaris-orders-api
+kubectl -n orders get svc orders-api -o wide
 ```
 
-The `<none>` under `EXTERNAL-IP` is not an error. It is the point. This Service is not directly published outside the cluster.
+```bash
+NAME         TYPE        CLUSTER-IP    EXTERNAL-IP   PORT(S)   AGE   SELECTOR
+orders-api   ClusterIP   10.96.42.18   <none>        80/TCP    4m    app.kubernetes.io/name=orders-api
+```
 
-## NodePort for Direct Node Entry
+The `<none>` value under `EXTERNAL-IP` is healthy for this design. It says Kubernetes created an internal Service contract with only a cluster-facing address. A laptop outside the cluster will usually fail if it tries to curl `10.96.42.18`, because that address belongs to the cluster network.
 
-A `NodePort` Service opens a port on each node IP and forwards traffic from that port into the Service. It exists for direct node entry, local labs, or external load balancers that you manage outside Kubernetes.
+A useful smoke test comes from a Pod, because the intended caller also lives inside the cluster. The command below creates a temporary BusyBox Pod in the `checkout` namespace and removes it after the check.
 
-Example: if the node port is `31080`, traffic to `worker-1:31080` and `worker-2:31080` can both reach the orders API Service. Kubernetes usually allocates a port from the configured node port range. Many clusters use the default range `30000-32767`, but you should check your cluster rather than assume it.
+```bash
+kubectl -n checkout run orders-smoke --rm -it --restart=Never --image=busybox:1.36 -- \
+  wget -qO- http://orders-api.orders/healthz
+```
+
+The important detail is the caller location. A ClusterIP test from inside the cluster proves the path that `checkout-web` actually uses. A failed curl from a developer laptop proves very little about this Service, because the laptop sits outside the audience that ClusterIP serves.
+
+Most backend Services in production stay here. Public HTTP traffic often reaches an Ingress controller or Gateway implementation first, and that edge component forwards to ClusterIP Services behind the scenes. That gives the platform one public entry point for hostnames, TLS, routing, authentication hooks, rate limits, and web-facing policy, while backend Services stay private.
+
+## NodePort for Node-Level Access
+<!-- section-summary: NodePort adds a static high port on every node, which can help labs and custom load balancer designs while widening the network audience. -->
+
+**NodePort** exposes a Service on every node IP at a static port. Kubernetes still creates the internal ClusterIP behavior, then it adds a node-level entry path. By default, Kubernetes allocates the node port from the configured Service node port range, commonly `30000-32767`.
+
+Imagine the platform team runs a small bare-metal cluster in a training lab. There is no cloud load balancer integration. A network appliance can reach the Kubernetes worker nodes and forward traffic to a fixed node port. In that world, NodePort gives the appliance something stable to target.
 
 ```yaml
 apiVersion: v1
 kind: Service
 metadata:
-  name: devpolaris-orders-api-nodeport
+  name: orders-api-nodeport
   namespace: orders
 spec:
   type: NodePort
   selector:
-    app.kubernetes.io/name: devpolaris-orders-api
+    app.kubernetes.io/name: orders-api
   ports:
     - name: http
+      protocol: TCP
       port: 80
       targetPort: http
       nodePort: 31080
 ```
 
-NodePort is useful for local labs, bare-metal clusters, or integration with load balancers you manage yourself. It is rarely the best public interface for a production web API because it exposes node addresses and requires external firewall rules to match node membership.
+The Service now has two useful addresses. Pods inside the cluster can still call `http://orders-api-nodeport.orders:80`. Clients that can route to a worker node can call `http://<node-ip>:31080`.
 
 ```bash
-$ kubectl -n orders get svc devpolaris-orders-api-nodeport
-NAME                              TYPE       CLUSTER-IP     EXTERNAL-IP   PORT(S)        AGE
-devpolaris-orders-api-nodeport    NodePort   10.96.84.201   <none>        80:31080/TCP   31s
+kubectl -n orders get svc orders-api-nodeport
 ```
 
-The `80:31080/TCP` output means clients inside the cluster can still use port 80 on the Service, while clients that can reach a node can use node port 31080.
+```bash
+NAME                  TYPE       CLUSTER-IP    EXTERNAL-IP   PORT(S)        AGE
+orders-api-nodeport   NodePort   10.96.81.22   <none>        80:31080/TCP   2m
+```
 
-## LoadBalancer for Infrastructure Integration
+That `80:31080/TCP` value packs two facts into one column. The Service port is `80`, and the node port is `31080`. A client inside Kubernetes usually uses port `80` on the Service name. A client outside Kubernetes, with network access to a node, uses port `31080` on a node IP.
 
-A `LoadBalancer` Service asks infrastructure outside the Kubernetes API to publish the Service externally. In a managed cloud cluster, that usually means the cloud controller talks to the cloud provider. In a local or bare-metal cluster, a project such as MetalLB may provide the implementation.
+NodePort has real uses. It works well for local clusters, training environments, and bare-metal patterns where another load balancer already owns the public address. It can also act as a simple diagnostic tool because the path is easy to see: client, node IP, node port, Service, ready Pods.
 
-Example: a cloud controller can create a public IP such as `203.0.113.42`, attach it to a provider load balancer, and forward traffic to the Service backends.
+The production risk is reachability. A node port opens on node interfaces selected by kube-proxy configuration. If node IPs sit on a corporate network, a VPN, a peered VPC, or a public subnet, the Service may reach many more clients than the application team had in mind. Security groups, firewall rules, routing tables, and the kube-proxy node port address settings belong in the review.
+
+For the checkout platform, a direct NodePort usually adds exposure without helping the normal workflow. `checkout-web` already runs in the cluster, so ClusterIP serves that call. If an engineer needs a temporary local debugging path, `kubectl port-forward` keeps the Service private and creates a short-lived tunnel through the Kubernetes API:
+
+```bash
+kubectl -n orders port-forward svc/orders-api 8080:80
+curl -i http://127.0.0.1:8080/healthz
+```
+
+That port-forward path suits a person debugging a specific issue. NodePort suits a platform design where node-level access is intentional and reviewed.
+
+## LoadBalancer for Infrastructure Entry
+<!-- section-summary: LoadBalancer asks a cloud provider or load balancer controller to create an external address and report it on the Service status. -->
+
+**LoadBalancer** exposes a Service through infrastructure outside the Kubernetes API server. In a managed cloud cluster, the cloud controller usually creates a cloud load balancer. In a bare-metal cluster, a controller such as MetalLB or another platform integration can provide a similar result.
+
+Kubernetes hands the external load balancer work to the provider or load balancer controller. The Service object records the request, and the provider or controller fulfills it. That controller creates or configures infrastructure, then writes the resulting IP address or hostname into the Service status.
+
+A direct LoadBalancer for `orders-api` could look like this. We will use it to understand the type first, then we will narrow the production design.
 
 ```yaml
 apiVersion: v1
 kind: Service
 metadata:
-  name: devpolaris-orders-api-public
+  name: orders-api-public
   namespace: orders
 spec:
   type: LoadBalancer
   selector:
-    app.kubernetes.io/name: devpolaris-orders-api
+    app.kubernetes.io/name: orders-api
   ports:
     - name: http
+      protocol: TCP
       port: 80
       targetPort: http
 ```
 
-Creation is asynchronous. The Service can exist before the load balancer address is ready. Do not treat `<pending>` as a YAML syntax problem. It usually means the infrastructure side has not finished, lacks permission, or has no load balancer implementation.
+Right after the apply, the external address may stay pending while the provider creates the infrastructure. That short waiting period is normal for cloud and platform controllers.
 
 ```bash
-$ kubectl -n orders get svc devpolaris-orders-api-public
-NAME                           TYPE           CLUSTER-IP     EXTERNAL-IP      PORT(S)        AGE
-devpolaris-orders-api-public   LoadBalancer   10.96.10.44    203.0.113.42     80:31692/TCP   2m
+kubectl -n orders get svc orders-api-public
 ```
-
-The external IP is the outside entry point. The node port may still exist behind the scenes, depending on implementation and configuration.
-
-## Choosing by Audience
-
-A Service type is an exposure choice. It decides where the stable Service address is reachable, so choose it by naming the caller first. If the only callers are other Pods, use `ClusterIP`. If you need each node to listen on a stable port for a lab or custom load balancer, use `NodePort`. If the cluster should request infrastructure for outside traffic, use `LoadBalancer`.
-
-| Need | Service type | Good fit for `devpolaris-orders-api` |
-|------|--------------|--------------------------------------|
-| Internal API called by web Pods | `ClusterIP` | Yes, common default |
-| Local demo reachable through node IP | `NodePort` | Useful in a lab |
-| Public raw TCP or simple HTTP endpoint | `LoadBalancer` | Possible, but Ingress or Gateway often gives better HTTP routing |
-| Many hostnames and TLS routes | Ingress or Gateway plus `ClusterIP` backend | Usually best |
-
-The tradeoff is surface area. Wider exposure gives easier access from outside the cluster, but it also adds firewall, DNS, TLS, cost, and ownership questions. Keep the backend Service narrow unless the exposure is part of the design.
-
-## Failure Mode: Pending External IP
-
-A pending external IP means Kubernetes accepted the `LoadBalancer` Service, but the infrastructure layer has not assigned an outside address yet. The manifest applied successfully, but the public entry point never appeared.
-
-![Kubernetes LoadBalancer pending external IP path showing Service, cloud controller, load balancer, and external IP status](/content-assets/articles/article-containers-orchestration-kubernetes-networking-clusterip-nodeport-loadbalancer/loadbalancer-pending-ip.png)
-
-*A LoadBalancer Service depends on infrastructure outside Kubernetes before the external IP appears.*
-
 
 ```bash
-$ kubectl -n orders get svc devpolaris-orders-api-public
-NAME                           TYPE           CLUSTER-IP    EXTERNAL-IP   PORT(S)        AGE
-devpolaris-orders-api-public   LoadBalancer   10.96.10.44   <pending>     80:31692/TCP   17m
+NAME                TYPE           CLUSTER-IP     EXTERNAL-IP   PORT(S)        AGE
+orders-api-public   LoadBalancer   10.96.10.44    <pending>     80:31872/TCP   18s
 ```
 
-The diagnostic path starts with events. Events often tell you whether the cloud controller lacked permission, a quota was exhausted, an annotation was invalid, or no load balancer implementation exists.
+After the controller finishes, the Service status should show an address. Some providers return an IP address, while others return a hostname.
 
 ```bash
-$ kubectl -n orders describe svc devpolaris-orders-api-public
-Events:
-  Type     Reason                Age   From                Message
-  Warning  SyncLoadBalancerFailed 16m   service-controller  Error syncing load balancer: no available public IP addresses in subnet aks-prod-public
+NAME                TYPE           CLUSTER-IP     EXTERNAL-IP                             PORT(S)        AGE
+orders-api-public   LoadBalancer   10.96.10.44    a1b2c3d4.us-east-1.elb.amazonaws.com   80:31872/TCP   3m
 ```
 
-That message points to infrastructure capacity, not the Service selector. If the Service also has no endpoints, fix that too, but no amount of Pod restarting will create a public IP address when the subnet has none available.
+The `PORT(S)` column often still shows a node port because many LoadBalancer implementations start by creating NodePort behavior, then point the external load balancer at that node port. Some implementations can route directly to Pods and can use `spec.allocateLoadBalancerNodePorts: false`, depending on the provider. This is why a LoadBalancer review still needs to understand the cluster's implementation.
 
-## Failure Mode: NodePort Opens More Than Intended
+LoadBalancer fits best when the Service itself represents a network entry point. Common examples include an Ingress controller Service, a Gateway controller Service, a private TCP endpoint for systems outside the cluster, or a public layer 4 service where TCP or UDP routing belongs directly at the Service.
 
-NodePort can surprise teams because it opens the port on every node, including nodes without backend Pods. That is part of the design. Traffic reaches any node and is then forwarded to an endpoint.
+For `orders-api`, direct public LoadBalancer exposure would usually skip too much of the platform's edge design. A more common production path looks like this:
+
+```mermaid
+flowchart LR
+    Client[Browser or partner client] --> LB[LoadBalancer Service for Gateway]
+    LB --> Gateway[Gateway or Ingress controller Pods]
+    Gateway --> Checkout[checkout-web ClusterIP Service]
+    Checkout --> Orders[orders-api ClusterIP Service]
+    Orders --> Inventory[inventory-api ClusterIP Service]
+```
+
+In that design, the LoadBalancer publishes the platform edge, and the application backends remain ClusterIP. The Gateway or Ingress layer owns hostnames, TLS certificates, HTTP paths, request headers, web timeouts, and route attachment rules. The orders backend can focus on being an internal API.
+
+LoadBalancer also brings cloud and platform details into the Service review. The team should know whether the load balancer is public or private, which subnets or networks it uses, which firewall rules allow clients, how health checks work, how DNS points to the address, and where TLS terminates. On many providers, annotations or `loadBalancerClass` choose a particular load balancer implementation or scheme, so a small Service change can create real infrastructure.
+
+## How the Types Stack Together
+<!-- section-summary: The Service types usually add layers: ClusterIP gives internal reachability, NodePort adds node reachability, and LoadBalancer adds infrastructure reachability. -->
+
+The three types are easier to reason about as layers around the same Service contract. ClusterIP gives the stable internal Service address. NodePort keeps that and adds a static port on nodes. LoadBalancer usually keeps those pieces and asks outside infrastructure to forward traffic into the Service path.
+
+```mermaid
+flowchart TB
+    subgraph ClusterIPPath[ClusterIP]
+      PodClient[Pod client] --> ServiceDNS[orders-api.orders:80]
+      ServiceDNS --> ClusterIP[Cluster IP]
+      ClusterIP --> ReadyPods[Ready orders-api Pods]
+    end
+
+    subgraph NodePortPath[NodePort]
+      NodeClient[Node-network client] --> NodeIP[Node IP:31080]
+      NodeIP --> NodeService[Service routing]
+      NodeService --> ReadyPods
+    end
+
+    subgraph LoadBalancerPath[LoadBalancer]
+      ExternalClient[External client] --> ExternalLB[Load balancer address]
+      ExternalLB --> ProviderPath[Provider path: node port or direct pod routing]
+      ProviderPath --> ReadyPods
+    end
+```
+
+This layered view helps during design reviews. A request to "make it LoadBalancer" usually means the team wants an address outside the cluster. That request still depends on the Service selector, the target port, Pod readiness, NetworkPolicy, node health, provider health checks, and firewall rules. The external address adds front-door reachability, while selector, readiness, and target port still decide whether any request reaches a healthy Pod.
+
+The same view also helps with naming. A backend Service can stay named `orders-api` with ClusterIP, while the edge object has a separate name such as `public-gateway` or `checkout-ingress-controller`. That separation keeps internal callers from depending on an external exposure object. It also gives the team a cleaner rollback path because removing the public edge leaves internal names and calls untouched.
+
+There are a few advanced fields worth knowing about, even for a beginner review. `externalTrafficPolicy: Local` tells Kubernetes to preserve client source IP for external traffic in supported paths, and it also changes how nodes without local ready endpoints participate in load balancer health checks. `loadBalancerClass` tells Kubernetes which load balancer implementation should handle a LoadBalancer Service. `allocateLoadBalancerNodePorts: false` skips node port allocation only for load balancer implementations that can route without node ports.
+
+Those fields should appear when the platform needs them. A regular Service can usually leave them out. The first beginner habit stays the same: name the intended caller, then choose the narrowest Service type that serves that caller.
+
+## Choosing the Type
+<!-- section-summary: The right Service type follows the intended caller, the network owner, and the controls needed around the entry point. -->
+
+The simplest review question is: **where does the normal caller sit?** If the caller is a Pod, ClusterIP usually fits. If the caller reaches node IPs through a deliberate network path, NodePort may fit. If the caller enters through cloud or platform infrastructure, LoadBalancer may fit.
+
+| Situation | Service type that usually fits | Why it fits |
+|---|---|---|
+| `checkout-web` calls `orders-api` inside Kubernetes | **ClusterIP** | The caller already has cluster DNS and cluster network access. |
+| An engineer needs a temporary local debug path | **ClusterIP plus port-forward** | The Service stays private while the tunnel exists only for the debugging session. |
+| A local lab needs simple access from the host machine | **NodePort** | The node IP and high port give a visible path for a controlled environment. |
+| A bare-metal cluster uses an existing appliance in front of nodes | **NodePort** | The appliance can target node IPs and the fixed node port. |
+| A public HTTP platform needs one entry for many apps | **LoadBalancer for Gateway or Ingress, then ClusterIP backends** | The edge layer owns HTTP routing, TLS, and policy while backends stay private. |
+| A private TCP service needs a stable address outside the cluster | **LoadBalancer** | The Service itself is the network entry point and the infrastructure controller owns the address. |
+
+The checkout platform gives a concrete answer. `orders-api` is a backend API used by `checkout-web`, so ClusterIP is the best starting point. The public browser path should land on a Gateway or Ingress controller, and that controller can call the internal Services.
+
+Now imagine the business adds a partner integration. Partners need to create orders from outside the cluster. Publishing `orders-api` directly as a public LoadBalancer might look fast. The production path should still include authentication, rate limits, audit logs, versioned routes, TLS, monitoring, and a clear owner for the public contract. A Gateway route or Ingress path usually gives the team a cleaner place to manage those controls.
+
+There are cases where direct LoadBalancer exposure makes sense. A database proxy, message broker, game server, or custom TCP service may need a stable layer 4 endpoint. In those cases, the review should name the protocol, client networks, allowed source ranges, health check behavior, DNS record, TLS or mTLS plan, and rollback plan before the Service goes live.
+
+Cost belongs in the choice too. A ClusterIP Service costs no external load balancer. A LoadBalancer Service can create billable cloud resources, public IPs, data processing charges, firewall objects, and DNS work. A Service type can look like a tiny YAML field, and it may create infrastructure with an invoice and an attack surface.
+
+## Debugging the Path
+<!-- section-summary: Good Service debugging follows the same order every time: Service, DNS, ports, EndpointSlices, Pods, and then the exposure layer. -->
+
+Service debugging gets much calmer when the team follows the request path in order. The team starts with the Service object, then proves DNS, ports, EndpointSlices, Pods, and finally the exposure layer such as node networking or cloud load balancer events.
+
+For the internal ClusterIP path, the team can check the Service and its selected backends:
 
 ```bash
-$ kubectl get nodes -o wide
-NAME       INTERNAL-IP   EXTERNAL-IP
-worker-1   10.0.1.11     198.51.100.11
-worker-2   10.0.1.12     198.51.100.12
-worker-3   10.0.1.13     198.51.100.13
+kubectl -n orders get svc orders-api -o wide
+kubectl -n orders get endpointslices -l kubernetes.io/service-name=orders-api -o wide
+kubectl -n orders get pods -l app.kubernetes.io/name=orders-api
 ```
 
-If firewall rules allow `31080` to every node, all three node IPs become entry points. That may be acceptable in a lab and unacceptable in production. The fix direction is usually to place a controlled load balancer or Ingress in front, restrict firewall rules, or avoid NodePort as the public interface.
+An empty EndpointSlice usually points to a selector, label, readiness, or namespace problem. Changing the Service from ClusterIP to NodePort or LoadBalancer will still publish an empty backend. The external path may look alive while every request fails because no ready Pods sit behind the Service.
 
-```text
-Risk check before NodePort:
-- Which networks can reach the node IPs?
-- Does the cloud firewall allow the node port?
-- Is TLS terminated somewhere else?
-- Who owns DNS and health checks?
-```
-
-These questions decide whether a debugging shortcut becomes a public production path.
-
-## A Safe Exposure Progression
-
-For `devpolaris-orders-api`, a safe progression is to begin with a `ClusterIP` Service, test it from a temporary Pod, then place an HTTP routing layer in front if outside users need access. That routing layer can be Ingress today or Gateway API when the platform supports it.
-
-```text
-Deployment
-  owns Pods and readiness
-ClusterIP Service
-  owns stable backend identity
-Ingress or Gateway
-  owns hostname, path, and TLS routing
-External load balancer
-  owns public address and health checks
-```
-
-You can still use `LoadBalancer` directly for simple services, especially non-HTTP workloads. The decision is about how many routing concerns you need. A single raw TCP service may be fine as `LoadBalancer`. A set of APIs with hostnames, paths, and certificates usually deserves Ingress or Gateway API in front of ClusterIP backends.
-
-## Production Review Questions
-
-A production review for Service types should connect the exposure choice to the real request path. Ask who can call the workload, where the first outside address exists, and how a failed health check will be noticed. For `devpolaris-orders-api`, the answer should name the caller, the Service type, and any routing layer in front of it rather than saying only "Kubernetes handles it."
-
-```text
-Request path review:
-- Caller identity and namespace
-- DNS name used by the caller
-- Service type and Service port
-- Backend Pod port and readiness check
-- External routing layer if traffic leaves the cluster
-- Logs or metrics that prove the path works
-```
-
-This review is most valuable before production traffic arrives. It catches exposure mistakes while they are still a pull request, not a customer-facing symptom.
-
-## Evidence to Keep During Changes
-
-When you need to prove the design after deployment, collect one short evidence bundle. The bundle should show object state, one successful request, and the first diagnostic target if the request fails.
+The next check should come from the same kind of place as the real caller. For an in-cluster caller, a temporary Pod in the caller namespace can test DNS and HTTP:
 
 ```bash
-$ kubectl -n orders get svc devpolaris-orders-api -o wide
-$ kubectl -n orders get endpointslice -l kubernetes.io/service-name=devpolaris-orders-api
-$ kubectl -n web run netcheck --rm -it --restart=Never --image=curlimages/curl -- \
-  curl -i http://devpolaris-orders-api.orders/healthz
+kubectl -n checkout run netcheck --rm -it --restart=Never --image=busybox:1.36 -- \
+  sh -c 'nslookup orders-api.orders && wget -S -O- http://orders-api.orders/healthz'
 ```
 
-Leave enough proof that another engineer can see which network layers were healthy at the time of the check.
-
-A fuller evidence packet for Service type changes should prove both reachability and exposure. For a ClusterIP backend, the evidence stays inside the cluster.
+For NodePort, the Kubernetes object only tells part of the story. The team also needs node addresses and network reachability:
 
 ```bash
-$ kubectl -n orders get svc devpolaris-orders-api
-NAME                    TYPE        CLUSTER-IP    EXTERNAL-IP   PORT(S)   AGE
-devpolaris-orders-api   ClusterIP   10.96.42.18   <none>        80/TCP    22m
-
-$ kubectl -n web run clusterip-check --rm -it --restart=Never --image=curlimages/curl -- \
-  curl -sS http://devpolaris-orders-api.orders/healthz
-{"status":"ok","service":"orders-api"}
+kubectl -n orders get svc orders-api-nodeport -o jsonpath='{.spec.ports[*].nodePort}{"\n"}'
+kubectl get nodes -o wide
 ```
 
-For a NodePort, include node reachability and firewall ownership. The Service output alone does not tell you which networks can reach the node IPs.
+If one network can reach the node port and another network fails, the cause often sits outside the Service object. Routes, firewall rules, cloud security groups, node public IPs, private IPs, and kube-proxy node port address configuration all decide who can connect to `<node-ip>:<node-port>`.
+
+For LoadBalancer, a pending external address usually starts with Service events:
 
 ```bash
-$ kubectl -n orders get svc devpolaris-orders-api-nodeport
-NAME                             TYPE       CLUSTER-IP     EXTERNAL-IP   PORT(S)        AGE
-devpolaris-orders-api-nodeport   NodePort   10.96.84.201   <none>        80:31080/TCP   9m
-
-$ kubectl get nodes -o wide
-NAME       STATUS   ROLES    INTERNAL-IP   EXTERNAL-IP
-worker-1   Ready    <none>   10.0.1.11     198.51.100.11
-worker-2   Ready    <none>   10.0.1.12     198.51.100.12
+kubectl -n orders describe svc orders-api-public
 ```
 
-For a LoadBalancer, include the external address and the event trail. This is the fastest way to distinguish an application problem from an infrastructure provisioning problem.
+The events may show a missing cloud integration, rejected annotations, quota limits, unsupported subnet choices, address allocation failures, or controller errors. After that, the platform owner checks the cloud controller or load balancer controller logs using the namespace and deployment names for that cluster.
+
+Requests can also fail after the load balancer exists. In that case, the team should prove the backend again before editing the exposure layer:
 
 ```bash
-$ kubectl -n orders get svc devpolaris-orders-api-public
-NAME                           TYPE           CLUSTER-IP    EXTERNAL-IP    PORT(S)        AGE
-devpolaris-orders-api-public   LoadBalancer   10.96.10.44   203.0.113.42   80:31692/TCP   12m
-
-$ kubectl -n orders describe svc devpolaris-orders-api-public | sed -n '/Events:/,$p'
-Events:
-  Type    Reason                Age   From                Message
-  Normal  EnsuringLoadBalancer  12m   service-controller  Ensuring load balancer
-  Normal  EnsuredLoadBalancer   11m   service-controller  Ensured load balancer
+kubectl -n orders describe svc orders-api-public
+kubectl -n orders get endpointslices -l kubernetes.io/service-name=orders-api-public -o wide
+kubectl -n orders get pods -l app.kubernetes.io/name=orders-api -o wide
 ```
 
-If a future incident says the public endpoint is down, this old packet helps you ask the next question. Did the external address change? Did the cloud controller stop updating the Service? Did endpoint health change while the load balancer stayed the same? The Service type is only one part of the path, but it decides where the path begins.
+The common mistakes are ordinary: the Service selector misses the Pod labels, `targetPort` points to the wrong container port name, readiness probes keep Pods out of the endpoint list, NetworkPolicy blocks the caller, or the load balancer health check points at a path outside the application's served routes.
 
-One last check is to compare the intended contract with the live object. This is where many small mistakes become visible before users notice them.
+## Changing Exposure Safely
+<!-- section-summary: Exposure changes need a staged plan because they can widen reachability, create infrastructure, affect DNS and TLS, and change rollback behavior. -->
+
+Changing a Service from ClusterIP to NodePort or LoadBalancer is a production exposure change. It deserves the same care as opening a firewall rule because it changes who can reach the application.
+
+A safe pull request should include the intended caller, the Service type, the selected port, the target port, the expected external address style, the network controls, and the smoke test location. For the checkout platform, that means the reviewer can see whether the caller is `checkout-web`, a partner network, a public browser, or a platform edge controller.
+
+The manifest diff gives reviewers the first concrete evidence. It shows whether the change only adjusts labels and ports or actually widens the Service audience.
 
 ```bash
-$ kubectl -n orders get svc devpolaris-orders-api -o jsonpath='{.spec.selector}{"\n"}{.spec.ports}{"\n"}'
-{"app.kubernetes.io/name":"devpolaris-orders-api"}
-[{"name":"http","protocol":"TCP","port":80,"targetPort":"http"}]
+kubectl diff -f k8s/orders-api-service.yaml
 ```
 
-If this output does not match the story in the pull request, stop and resolve the mismatch. Kubernetes will faithfully run the object you applied, not the design you meant to apply.
+The review should answer these questions. Each answer ties the YAML field back to the real production path.
 
-A final lightweight smoke record can sit in a pull request or release note. It should use the real namespace and the real Service name so future readers can compare it with production symptoms.
+| Question | Why it matters |
+|---|---|
+| **Who is the intended caller?** | The caller audience decides whether ClusterIP, NodePort, or LoadBalancer fits. |
+| **Which Service owns the stable internal name?** | Internal clients should keep a stable ClusterIP contract during edge changes. |
+| **Which port do clients call?** | `port`, `targetPort`, and `nodePort` represent different parts of the path. |
+| **Which networks can reach the entry point?** | NodePort and LoadBalancer depend on node routing, firewalls, subnets, and provider settings. |
+| **Where do TLS and authentication happen?** | Public HTTP usually needs Gateway, Ingress, or another edge component to own these controls. |
+| **What proves the backend is ready?** | EndpointSlices, readiness, logs, metrics, and smoke tests should match the intended caller path. |
+| **What removes the exposure quickly?** | The rollback should return the live cluster and the Git source of truth to the safe design. |
 
-```text
-Smoke record:
-  namespace: orders
-  service: devpolaris-orders-api
-  caller: web/devpolaris-web
-  expected response: HTTP 200 from /healthz
-  owner for failures before Service: platform networking
-  owner for failures after Service reaches Pod: orders API team
+For many teams, the safest public rollout creates a separate edge Service instead of changing the backend Service that internal callers already use. The backend can remain `orders-api` as ClusterIP, while `public-gateway` or `ingress-nginx-controller` receives the LoadBalancer address. This keeps application-to-application calls stable during the edge rollout.
+
+After a LoadBalancer apply, the evidence should include the Service status, events, and the actual smoke test from the intended client network:
+
+```bash
+kubectl -n platform get svc public-gateway -o wide
+kubectl -n platform describe svc public-gateway
+curl -i https://checkout.devpolaris.example.com/healthz
 ```
 
-That ownership line matters during incidents. It helps the team route the next investigation without turning every networking symptom into a cluster-wide mystery.
+If the design uses a private load balancer, the smoke test should come from the private network that real clients use. If the design uses a public hostname, the smoke test should use the real DNS name and TLS path instead of stopping at the raw load balancer address.
 
+An emergency rollback can remove a direct external Service path by changing the Service type back to ClusterIP. This is a sharp tool for incidents, so the Git source of truth needs attention right after the live fix.
 
-![Kubernetes Service type summary covering ClusterIP, NodePort, LoadBalancer, audience, firewall, and evidence](/content-assets/articles/article-containers-orchestration-kubernetes-networking-clusterip-nodeport-loadbalancer/service-types-summary.png)
+```bash
+kubectl -n orders patch service orders-api-public --type=merge -p '{"spec":{"type":"ClusterIP"}}'
+```
 
-*Use this checklist to avoid exposing more of the cluster than the caller actually needs.*
+That kind of live patch can help during an incident, and the repository still needs the matching Git change afterward. In GitOps environments, the live patch is only a temporary incident action. The declared manifest remains the long-term source of truth.
+
+## Putting It All Together
+<!-- section-summary: ClusterIP, NodePort, and LoadBalancer are exposure choices, and the safest choice follows the real caller path. -->
+
+ClusterIP, NodePort, and LoadBalancer all start from the same Service idea: a stable address for changing backend Pods. ClusterIP publishes that address inside the cluster. NodePort adds a static high port on nodes. LoadBalancer asks infrastructure to publish an external address and connect that address back to the Service.
+
+The checkout platform gives the practical pattern. `checkout-web` calls `orders-api` through a ClusterIP Service. A lab may use NodePort because the node-level path is intentional and visible. A production public entry usually uses a LoadBalancer Service for the Gateway or Ingress controller, then routes to ClusterIP backends.
+
+The Service type is small YAML, and it controls audience, infrastructure, cost, and security review. A good team names the caller first, proves the backend with EndpointSlices and smoke tests, and only widens exposure for a clear reason.
+
+## What's Next
+
+LoadBalancer can publish an address. Public HTTP usually needs more than an address. The next article moves into Ingress, where hostnames, paths, TLS, and routing rules decide how web traffic reaches internal Services.
 
 ---
 
 **References**
 
-- [Service](https://kubernetes.io/docs/concepts/services-networking/service/) - The canonical Kubernetes explanation of Services, selectors, Service types, and EndpointSlices.
-- [Debug Services](https://kubernetes.io/docs/tasks/debug/debug-application/debug-service/) - The official troubleshooting path for checking Pods, Services, endpoints, DNS, and kube-proxy behavior.
-- [Cluster Networking](https://kubernetes.io/docs/concepts/cluster-administration/networking/) - The official overview of the Kubernetes networking model and IP ranges.
+- [Kubernetes Service](https://kubernetes.io/docs/concepts/services-networking/service/) - Defines Services, selectors, `port`, `targetPort`, ClusterIP, NodePort, LoadBalancer, NodePort ranges, load balancer status, and LoadBalancer implementation details.
+- [DNS for Services and Pods](https://kubernetes.io/docs/concepts/services-networking/dns-pod-service/) - Documents Service DNS names, namespace-qualified lookups, and how normal Services resolve to cluster IPs.
+- [Debug Services](https://kubernetes.io/docs/tasks/debug/debug-application/debug-service/) - Shows the official troubleshooting flow for Service existence, DNS, IP reachability, Service definitions, EndpointSlices, Pods, and kube-proxy.
+- [Ingress](https://kubernetes.io/docs/concepts/services-networking/ingress/) - Explains how Ingress exposes HTTP and HTTPS routes to Services, including load balancing, TLS termination, and name-based virtual hosting.
+- [Gateway API overview](https://gateway-api.sigs.k8s.io/concepts/api-overview/) - Describes Gateway, GatewayClass, and Route objects for translating external or infrastructure traffic to Services inside a cluster.
+- [Using source IP](https://kubernetes.io/docs/tutorials/services/source-ip/) - Demonstrates how `externalTrafficPolicy: Local` affects source IP preservation and load balancer health check behavior.

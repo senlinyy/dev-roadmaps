@@ -1,6 +1,6 @@
 ---
 title: "GCP Foundations"
-description: "Understand GCP jobs, project placement, billing, resource identity, labels, and core service families before learning individual services."
-tags: ["gcp", "projects", "billing", "resources", "services"]
+description: "Start with GCP core service families, then place workloads inside projects, billing, regions, resource names, labels, and tags."
+tags: ["gcp", "services", "projects", "billing", "resources"]
 order: 1
 ---

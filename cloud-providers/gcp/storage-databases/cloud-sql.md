@@ -1,7 +1,7 @@
 ---
 title: "Cloud SQL"
-description: "Process transactional application records in Cloud SQL by understanding relational storage engines, WAL physical guarantees, private IP routing, connection pooling, and safe zero-downtime schema evolution."
-overview: "Operational applications require relational schemas and ACID transaction guarantees to maintain strict business records. This article explores how GCP models relational engines via Cloud SQL, focusing on physical durability, private VPC peering, socket pooling, and safe migrations."
+description: "Use Cloud SQL for transactional relational data: tables, transactions, private connectivity, connection pooling, migrations, backups, HA, and point-in-time recovery."
+overview: "Cloud SQL gives Google Cloud applications a managed PostgreSQL, MySQL, or SQL Server database for records that need strict relationships and transactions. This article follows an Orders API from schema design through connections, migrations, backups, high availability, and recovery."
 tags: ["gcp", "cloud-sql", "databases", "relational", "postgres"]
 order: 3
 id: article-cloud-providers-gcp-storage-databases-cloud-sql-relational-databases
@@ -13,181 +13,532 @@ aliases:
 
 ## Table of Contents
 
-1. [Managed Relational Database Instances](#managed-relational-database-instances)
-2. [Relational Shape and ACID Transactions](#relational-shape-and-acid-transactions)
-3. [Private IP Connectivity and VPC Peering](#private-ip-connectivity-and-vpc-peering)
-4. [Connection Management and Serverless Scaling](#connection-management-and-serverless-scaling)
-5. [Schema Migrations and Zero-Downtime Releases](#schema-migrations-and-zero-downtime-releases)
-6. [Under the Hood: Write-Ahead Logging and Zonal Replication](#under-the-hood-write-ahead-logging-and-zonal-replication)
-7. [Putting It All Together](#putting-it-all-together)
-8. [What's Next](#whats-next)
+1. [Why Orders Need a Relational Database](#why-orders-need-a-relational-database)
+2. [Instances, Engines, and First Setup](#instances-engines-and-first-setup)
+3. [Tables, Keys, and Transactions](#tables-keys-and-transactions)
+4. [Private Connectivity and Authentication](#private-connectivity-and-authentication)
+5. [Connection Pooling for Cloud Run and GKE](#connection-pooling-for-cloud-run-and-gke)
+6. [Schema Migrations Without Taking Checkout Down](#schema-migrations-without-taking-checkout-down)
+7. [Backups, PITR, and High Availability](#backups-pitr-and-high-availability)
+8. [Putting It All Together](#putting-it-all-together)
+9. [What's Next](#whats-next)
 
-## Managed Relational Database Instances
+## Why Orders Need a Relational Database
+<!-- section-summary: Cloud SQL fits business records that need strict relationships, transactions, and recovery controls. -->
 
-Cloud SQL is GCP's managed relational database service for PostgreSQL, MySQL, and SQL Server. It gives an application a standard SQL engine without asking your team to install database software, patch the host OS, manage backups from scratch, or operate the database VM directly.
+Cloud SQL is Google Cloud's managed relational database service. It runs familiar database engines for you: **PostgreSQL**, **MySQL**, and **SQL Server**. Google handles much of the operational work around database VMs, maintenance, backups, network integration, monitoring hooks, and high availability options, while your team still owns the schema, queries, credentials, migrations, and recovery plan.
 
-When you build applications that handle critical business records like tracking customer checkouts, managing library catalogs, or processing bank transfers, you need a way to organize data into strict, predictable structures. Relational databases solve this by arranging data in tables. Each row in a table represents a single item, and each column defines a specific detail, such as an order number, a price, or an email address. Crucially, these tables are designed to relate to one another. For example, an order record in an orders table can point directly to a specific row in a customers table, ensuring that you can join these tables to reconstruct the full context of a purchase.
+Let's use one service for the whole article: an **Orders API** for an online shop. A checkout request has several pieces that must agree with each other. The API needs a customer, an order, line items, inventory changes, a payment attempt, and an audit trail that support teams can inspect later.
 
-The power of a relational database lies in its ability to protect transactions from partial success. In a standard checkout process, saving an order requires updating multiple related tables: you must subtract one item from the inventory table, create a new row in the orders table, and record a payment token in a payment attempts table. If your application crashes halfway through, or if a network glitch halts the database write, you cannot afford to have the inventory reduced without a matching order record. A relational database coordinates these related writes, ensuring that either all the updates succeed together or the transaction rolls back to the previous valid state.
+That shape gives us a good reason to use a relational database. A **relational database** stores data in tables, and tables can reference each other with keys. For example, one row in `orders` can point to one row in `customers`, and several rows in `order_items` can point back to that order. The database can enforce those relationships so the application does not quietly create line items for an order that no longer exists.
 
-Google Cloud SQL is a fully managed database service that provides this structured storage. Instead of requiring you to rent a virtual server, install database software, configure operating system updates, and manually manage backups, Cloud SQL delivers a fully operational database engine—such as PostgreSQL, MySQL, or SQL Server—ready to use out of the box. This managed approach is common across all major clouds. In Amazon Web Services (AWS), the equivalent service is Amazon Relational Database Service (RDS), and in Microsoft Azure, it is Azure Database for PostgreSQL or Azure SQL Database. While the physical implementation differs—such as how the cloud providers sync disks across datacenters—the architectural role is identical: giving your application a private, highly consistent ledger that preserves your structured relationships even when thousands of users complete transactions simultaneously.
+A relational database also gives the Orders API **transactions**. A transaction groups several reads and writes into one unit of work. In checkout, that means the API can reserve inventory, create the order, store the line items, and record the payment attempt as one coordinated change. If the payment insert fails, the database can roll the whole unit back instead of leaving inventory reserved with no order.
 
-## Relational Shape and ACID Transactions
+This is the first split to keep clear. Cloud SQL fits records where correctness depends on relationships, constraints, and multi-row transactions. Firestore, the next article, fits document-shaped app state where the application usually reads and writes one document or a small document group by a known path or planned query.
 
-A transaction is a grouped database write that succeeds or rolls back as one unit. A typical checkout transaction in an e-commerce Orders API showcases why we need structured relational tables. When a customer completes a purchase, the application must perform several distinct database updates that represent a single business event. The system must update the stock count in an inventory table, insert an order metadata row containing order totals and timestamps, write individual product details to a line items table, and record a payment gateway token in a payment attempts table. If any of these writes fail due to an out-of-stock item, a processing timeout, or a network disruption, the entire write sequence must revert. Without relational transactions, the system risks creating orphaned balance updates or payments that do not point to a valid order, resulting in disjointed records that are difficult to reconcile.
+Here is the simple path we will follow:
 
-To maintain absolute data integrity under a high volume of transactions, the database enforces four key guarantees, commonly referred to as the ACID principles. First, the write sequence must be atomic, meaning it behaves as a single unit—either everything succeeds or the entire sequence is rolled back. Second, it must be consistent, verifying that all schema rules, like preventing negative inventory values, are strictly followed. Third, it must run in isolation, ensuring that concurrent checkout requests do not see each other's partial, uncommitted changes. Finally, it must be durable, meaning once a commit succeeds, the data is permanently written to physical disk. To prevent race conditions where two users attempt to purchase the last physical item simultaneously, the SQL script locks the inventory row during the read phase before updating it. The following sequence demonstrates how a transactional orders ledger is updated safely in production:
+| Question | Cloud SQL answer in the Orders API |
+|---|---|
+| Which database engine should we run? | PostgreSQL for this example, with MySQL and SQL Server as Cloud SQL options |
+| How do we keep records consistent? | Tables, keys, constraints, and transactions |
+| How does the app reach the database? | Private IP or Private Service Connect, plus direct connections or Cloud SQL connectors |
+| How do we survive traffic spikes? | Small app pools, bounded Cloud Run scale, and a pooler where the workload needs one |
+| How do we change schema safely? | Expand-and-contract migrations with lock and statement timeouts |
+| How do we recover from mistakes? | Backups, point-in-time recovery, restore drills, and HA for zonal failures |
+
+So we start with the thing your team creates first: the Cloud SQL instance.
+
+## Instances, Engines, and First Setup
+<!-- section-summary: A Cloud SQL instance runs one managed database engine, and the first setup choices shape reliability, cost, and network access. -->
+
+A **Cloud SQL instance** is the managed database server boundary. In practical terms, it is the thing with a name like `orders-prod`, a region like `us-central1`, a database engine like PostgreSQL 16, CPU and memory sizing, storage settings, backup settings, and network settings. Your application connects to databases inside that instance, and Google Cloud operates the underlying infrastructure around it.
+
+For our Orders API, PostgreSQL is a strong default because it has excellent transaction behavior, mature indexing, good JSON support for small flexible fields, and a large ecosystem of migration and operational tools. A team already standardized on MySQL can use Cloud SQL for MySQL. A team moving a .NET system that depends on SQL Server features can use Cloud SQL for SQL Server. Cloud SQL gives these engines a managed Google Cloud home, but the engine choice still matters because SQL syntax, extensions, locking behavior, and operational habits differ.
+
+The first setup should answer a few boring questions before anyone writes application code. Which region keeps the database close to the app? Which tier has enough CPU and memory for the expected workload? Should the instance use high availability from day one? Should it expose only private connectivity? Which backup retention and recovery window meet the business requirement?
+
+A small production PostgreSQL instance for the Orders API might start like this:
+
+```bash
+gcloud services enable sqladmin.googleapis.com servicenetworking.googleapis.com
+
+gcloud sql instances create orders-prod \
+  --database-version=POSTGRES_16 \
+  --region=us-central1 \
+  --tier=db-custom-2-7680 \
+  --availability-type=REGIONAL \
+  --storage-type=SSD \
+  --storage-size=100GB
+
+gcloud sql databases create orders \
+  --instance=orders-prod
+
+gcloud sql users set-password postgres \
+  --instance=orders-prod \
+  --password='use-a-real-secret-from-your-secret-workflow'
+```
+
+The exact tier and storage size depend on the workload. A production team usually chooses a conservative starting point, turns on query monitoring, watches CPU, memory, disk, connection count, lock waits, and slow queries, then resizes with evidence. The database tier costs real money, so guessing too high wastes budget, and guessing too low turns checkout into the first load test.
+
+Terraform gives teams a better production path because the instance configuration goes through code review. This example keeps the important settings visible: PostgreSQL, regional availability, private networking, backups, PITR, and deletion protection.
+
+```hcl
+resource "google_compute_network" "orders" {
+  name                    = "orders-vpc"
+  auto_create_subnetworks = false
+}
+
+resource "google_compute_global_address" "private_services" {
+  name          = "orders-private-services"
+  purpose       = "VPC_PEERING"
+  address_type  = "INTERNAL"
+  prefix_length = 16
+  network       = google_compute_network.orders.id
+}
+
+resource "google_service_networking_connection" "private_services" {
+  network                 = google_compute_network.orders.id
+  service                 = "servicenetworking.googleapis.com"
+  reserved_peering_ranges = [google_compute_global_address.private_services.name]
+}
+
+resource "google_sql_database_instance" "orders" {
+  name             = "orders-prod"
+  region           = "us-central1"
+  database_version = "POSTGRES_16"
+
+  deletion_protection = true
+
+  settings {
+    tier              = "db-custom-2-7680"
+    availability_type = "REGIONAL"
+    disk_type         = "PD_SSD"
+    disk_size         = 100
+
+    backup_configuration {
+      enabled                        = true
+      start_time                     = "03:00"
+      point_in_time_recovery_enabled = true
+    }
+
+    ip_configuration {
+      ipv4_enabled    = false
+      private_network = google_compute_network.orders.id
+    }
+  }
+
+  depends_on = [google_service_networking_connection.private_services]
+}
+
+resource "google_sql_database" "orders" {
+  name     = "orders"
+  instance = google_sql_database_instance.orders.name
+}
+```
+
+Notice what Terraform does for the team. It makes the private services range, private services access connection, instance settings, and database creation part of the same reviewed change. That reduces the chance that someone creates a public database in the console because they only needed to get a demo working.
+
+Instance setup gives us a running database. The next question is what shape the Orders API should put inside it.
+
+## Tables, Keys, and Transactions
+<!-- section-summary: Tables model the business facts, keys connect those facts, and transactions protect checkout from partial writes. -->
+
+A **table** stores rows of one kind of thing. A `customers` table stores customers. An `orders` table stores orders. An `order_items` table stores the product lines inside each order. This sounds obvious, but it matters because table boundaries turn business rules into database checks that run every time code writes data.
+
+The Orders API needs a few core tables before it handles real checkout traffic:
+
+```sql
+CREATE TABLE customers (
+  customer_id uuid PRIMARY KEY,
+  email text NOT NULL UNIQUE,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE products (
+  product_id uuid PRIMARY KEY,
+  sku text NOT NULL UNIQUE,
+  name text NOT NULL,
+  stock_count integer NOT NULL CHECK (stock_count >= 0)
+);
+
+CREATE TABLE orders (
+  order_id uuid PRIMARY KEY,
+  customer_id uuid NOT NULL REFERENCES customers(customer_id),
+  status text NOT NULL CHECK (status IN ('pending', 'paid', 'cancelled')),
+  total_cents integer NOT NULL CHECK (total_cents >= 0),
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE order_items (
+  order_id uuid NOT NULL REFERENCES orders(order_id),
+  product_id uuid NOT NULL REFERENCES products(product_id),
+  quantity integer NOT NULL CHECK (quantity > 0),
+  unit_price_cents integer NOT NULL CHECK (unit_price_cents >= 0),
+  PRIMARY KEY (order_id, product_id)
+);
+
+CREATE TABLE payment_attempts (
+  payment_attempt_id uuid PRIMARY KEY,
+  order_id uuid NOT NULL REFERENCES orders(order_id),
+  provider text NOT NULL,
+  provider_reference text NOT NULL,
+  status text NOT NULL CHECK (status IN ('authorized', 'declined', 'failed')),
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+```
+
+There are three important ideas in that schema. A **primary key** uniquely identifies one row. A **foreign key** says one row must point to a real row somewhere else. A **check constraint** blocks values that violate a local rule, such as negative inventory or an unknown order status.
+
+Those constraints turn the database into a second line of defense. The application should still validate input and return friendly errors, but the database stops bad writes if a bug, a retry, or a one-off script slips through. In production, this saves teams from long cleanup projects where invalid records sit quietly for months.
+
+The checkout flow also needs a transaction. The Orders API has to read inventory, reduce stock, create the order, add line items, and record the payment attempt. A simple PostgreSQL transaction can look like this:
 
 ```sql
 BEGIN;
 
--- 1. Query stock and acquire a row-level write lock
 SELECT stock_count
-FROM inventory
-WHERE product_id = 'prod_sku_9981'
+FROM products
+WHERE product_id = '5f7f9dd4-7f67-4a1e-a99a-8a9d4f5a9c11'
 FOR UPDATE;
 
--- 2. Decrement the inventory stock count
-UPDATE inventory
-SET stock_count = stock_count - 1
-WHERE product_id = 'prod_sku_9981';
+UPDATE products
+SET stock_count = stock_count - 2
+WHERE product_id = '5f7f9dd4-7f67-4a1e-a99a-8a9d4f5a9c11'
+  AND stock_count >= 2;
 
--- 3. Insert the transactional order record
-INSERT INTO orders (order_id, user_id, amount, status)
-VALUES ('ord_checkout_77261', 'user_id_4401', 89.99, 'processing');
+INSERT INTO orders (order_id, customer_id, status, total_cents)
+VALUES (
+  '4543c620-94e6-4d58-8d24-a0dd53632e6d',
+  'f2ef2d3d-89c7-4b6e-bb8f-730881d6a752',
+  'pending',
+  4998
+);
+
+INSERT INTO order_items (order_id, product_id, quantity, unit_price_cents)
+VALUES (
+  '4543c620-94e6-4d58-8d24-a0dd53632e6d',
+  '5f7f9dd4-7f67-4a1e-a99a-8a9d4f5a9c11',
+  2,
+  2499
+);
+
+INSERT INTO payment_attempts (
+  payment_attempt_id,
+  order_id,
+  provider,
+  provider_reference,
+  status
+)
+VALUES (
+  '9bf3c8f0-c813-4e2f-86cc-bf1bd0f6d7b1',
+  '4543c620-94e6-4d58-8d24-a0dd53632e6d',
+  'stripe',
+  'pi_3QxExample',
+  'authorized'
+);
 
 COMMIT;
 ```
 
-This write appends sequentially to the database's physical Write-Ahead Log buffer in memory and forces a physical flush to disk blocks before returning success. Under the hood, the engine coordinates concurrent reads and writes by keeping multiple versions of the active records in memory, a strategy known as Multi-Version Concurrency Control, which allows read operations to proceed smoothly without waiting for active write locks to clear.
+The `FOR UPDATE` part matters. It asks PostgreSQL to lock the selected product row for the duration of the transaction. If two people try to buy the last unit at the same time, one transaction holds the row while the other waits. The application should still check that the `UPDATE` affected a row; if `stock_count >= 2` matched nothing, the app rolls back and returns an out-of-stock response.
 
-## Private IP Connectivity and VPC Peering
+In application code, the transaction boundary should sit around database work only. The Orders API should authorize the payment before the final commit or store a payment attempt that a background worker reconciles later, depending on the business flow. It should avoid charging a card inside a database transaction callback that may retry, because a database retry should never create a duplicate external side effect.
 
-Private IP connectivity gives an application a private network path to Cloud SQL instead of exposing the database on a public endpoint. Securing the communication channel between the application and the Cloud SQL instance is a primary architectural requirement. Exposing a database engine directly to the public internet using a public IP address increases the attack surface, exposing the instance to brute-force authentication attempts and potential zero-day vulnerabilities in the database daemon. To prevent this, enterprise architectures isolate the database instance within a private network boundary, using private IP addresses and VPC peering-based connectivity.
+Now the database can protect the records. The next problem is how the Orders API reaches it without putting the database on the open internet.
 
-![Private IP sends application traffic through VPC peering instead of a public database endpoint.](/content-assets/articles/article-cloud-providers-gcp-storage-databases-cloud-sql-relational-databases/private-sql-path.png)
+## Private Connectivity and Authentication
+<!-- section-summary: Cloud SQL network access and database login solve different problems, so production systems configure both deliberately. -->
 
-*Private reachability and database authentication remain separate protections.*
+**Private connectivity** means the application reaches Cloud SQL through a private path instead of connecting to a public database endpoint. For Cloud SQL, private IP uses **private services access**, which connects your VPC network to the Google-managed service producer network where Cloud SQL resources live. Google Cloud also supports **Private Service Connect** for patterns where multiple VPCs, projects, or organizations need a private endpoint style.
 
-The Cloud SQL instance resides in Google-managed service infrastructure, separate from the customer's application resources. To bridge this boundary for private IP, you configure private services access. Private services access uses VPC Network Peering between your VPC network and a Google-managed service producer network, after you allocate a private address range for the producer side. Private Service Connect is a separate Cloud SQL connectivity option that provides a private endpoint pattern.
+The Orders API runs on Cloud Run in our scenario. If Cloud SQL uses private IP, Cloud Run needs a path into the VPC, such as **Direct VPC egress** or a Serverless VPC Access connector. From there, the app can connect to the database's private address, and the database can run with no public IP.
 
-When an application service, such as a containerized Orders API running on Cloud Run, initiates a database connection to a private IP, the network path depends on how that runtime reaches the VPC. Cloud Run can use Direct VPC egress or a Serverless VPC Access connector for outbound private addresses. From the VPC side, the database private IP is reached through the private services access connection.
+This setup has three separate layers:
 
-```mermaid
-flowchart TD
-    subgraph CustomerProject["Customer VPC Project"]
-        App["Orders API<br/>(Cloud Run Container)"]
-        Egress["Direct VPC Egress or VPC Connector"]
-    end
+| Layer | What it answers | Orders API example |
+|---|---|---|
+| Network path | Can packets reach the database endpoint? | Cloud Run uses Direct VPC egress to the VPC connected to Cloud SQL private IP |
+| Cloud IAM connection permission | Can this service account connect through Cloud SQL tooling? | The service account has `roles/cloudsql.client` when it uses the Auth Proxy or a language connector |
+| Database login and privileges | Which database user can run SQL? | `orders_app` can read and write order tables, while migration users can change schema |
 
-    subgraph ProducerProject["Service Producer Project"]
-        ProducerNetwork["Service Producer Network"]
-        Engine[("Database Engine<br/>(PostgreSQL)")]
-        WAL[("Persistent Disk<br/>(Write-Ahead Log)")]
-    end
+Private IP setup with `gcloud` often starts with the one-time private services access connection:
 
-    App -->|Database connection| Egress
-    Egress -->|Private services access| ProducerNetwork
-    ProducerNetwork -->|TCP connection| Engine
-    Engine -->|WAL fsync| WAL
+```bash
+gcloud compute addresses create orders-private-services \
+  --global \
+  --purpose=VPC_PEERING \
+  --prefix-length=16 \
+  --network=orders-vpc
+
+gcloud services vpc-peerings connect \
+  --service=servicenetworking.googleapis.com \
+  --ranges=orders-private-services \
+  --network=orders-vpc
+
+gcloud sql instances patch orders-prod \
+  --network=orders-vpc \
+  --no-assign-ip
 ```
 
-Beyond network layer routing, the application must authenticate secure sessions. Cloud SQL supports the Cloud SQL Auth Proxy, language connectors, and IAM database authentication for supported engines and configurations. The Auth Proxy authorizes and encrypts the connection and uses IAM to verify whether the caller can connect to the instance. It does not automatically remove all database authentication concerns by itself; your database user model, IAM database authentication choice, and secret handling still matter.
+The private services range needs enough room for Cloud SQL and other Google-managed services that may use the same private services access design. A tiny range can create future network work at the worst time, so teams usually reserve a larger range early and document who owns it.
 
-## Connection Management and Serverless Scaling
+Cloud SQL offers two broad connection styles. A **direct connection** uses the database endpoint directly, often over private IP with SSL/TLS configured by the team. A **Cloud SQL connector** means the Cloud SQL Auth Proxy or a language connector handles secure connection setup, IAM checks, and certificate handling for the application. Google recommends private IP for improved security unless the client has a specific public access requirement, and connectors help especially when the client uses public IP, dynamic egress addresses, or IAM database authentication.
 
-Connection management controls how many database sockets application instances open and keep alive. Serverless platforms like Cloud Run scale horizontally in response to immediate request concurrency, introducing unique challenges for database connection management. When traffic surges, the container fabric can rapidly scale from a few instances to hundreds of concurrent sandboxes. If the application's configuration defaults to establishing a large, static connection pool per container instance, the cumulative number of concurrent socket connections will quickly overwhelm the database host. Relational database engines like PostgreSQL allocate a dedicated operating system process and memory buffer for each client connection, while MySQL allocates an execution thread. When the aggregate connection count hits the database engine's hard limit, the host experiences connection socket starvation, causing incoming checkouts to time out during the initial TCP handshake.
+For local troubleshooting, the Cloud SQL Auth Proxy gives an engineer a safe short path to the instance:
 
-![Serverless scaling can create too many database sessions unless pooling limits concurrency.](/content-assets/articles/article-cloud-providers-gcp-storage-databases-cloud-sql-relational-databases/connection-pool-pressure.png)
+```bash
+gcloud auth application-default login
 
-*The pool is a pressure valve between elastic compute and finite database connections.*
+cloud-sql-proxy PROJECT_ID:us-central1:orders-prod \
+  --private-ip \
+  --port=5432
 
-To shield our PostgreSQL instance from connection starvation during serverless autoscaling, use a pooling layer. Cloud SQL now offers Managed Connection Pooling for supported PostgreSQL configurations, and teams can also run PgBouncer themselves when they need direct control. PgBouncer acts as a socket multiplexer, accepting many incoming client connections while using a smaller, stable pool of server connections to the database engine. In our self-managed setup, PgBouncer is configured using `pgbouncer.ini` to enforce transaction pooling:
-
-```ini
-[databases]
-orders = host=10.128.0.5 port=5432 dbname=orders_prod
-
-[pgbouncer]
-listen_port = 6432
-listen_addr = *
-auth_type = md5
-auth_file = /etc/pgbouncer/userlist.txt
-pool_mode = transaction
-max_client_conn = 10000
-default_pool_size = 20
+psql "host=127.0.0.1 port=5432 dbname=orders user=orders_app sslmode=disable"
 ```
 
-The specific numbers must be sized for the database tier, workload, and pool mode. The principle is stable: serverless compute can scale faster than a relational database can accept new sessions, so the application needs connection limits and pooling before traffic spikes arrive.
+That local `psql` command connects to the proxy listener on the engineer's machine. The proxy then connects to Cloud SQL using the engineer's Google credentials and the instance connection name. The database still requires a database user, so the proxy removes the network and certificate burden but does not replace database privileges.
 
-## Schema Migrations and Zero-Downtime Releases
+For Cloud Run, the service account needs the right IAM role when you use Cloud SQL connectors:
 
-A schema migration is a controlled change to the shared table structure that application versions depend on. Schema migrations represent another major operational risk where database state and application code can diverge. Unlike stateless application containers, which can be deployed in a rolling blue-green fashion where old and new versions run concurrently, the database schema is a single, shared state. If a developer deploys a code update that relies on a new column before the migration has executed, the new containers will crash when attempting to write to the missing field. Conversely, if a migration drops an old column while old container revisions are still active and serving traffic, those old containers will fail immediately. Achieving zero-downtime schema migrations requires an incremental expand-and-contract engineering pattern.
+```bash
+gcloud projects add-iam-policy-binding PROJECT_ID \
+  --member="serviceAccount:orders-api@PROJECT_ID.iam.gserviceaccount.com" \
+  --role="roles/cloudsql.client"
+```
 
-Crucially, migrations must be designed to avoid catastrophic table locks. Executing an `ALTER TABLE` statement (such as adding a column or changing a constraint) requires an exclusive lock on the entire table. In PostgreSQL, this is an `AccessExclusiveLock`, which blocks all other read and write queries. Under heavy checkout traffic, if a migration script requests an exclusive lock, it must wait in the lock queue until all active transactions complete. While the migration waits, it blocks all incoming read and write transactions that attempt to access the table, quickly causing connection pool exhaustion and bringing the entire Orders API to a halt.
-
-To prevent this, rolling migrations must execute with strict lock timeouts. We apply this strict timeout boundary to our migration transaction:
+Database privileges should stay narrow. The application user should not own the schema, drop tables, create extensions, or grant privileges. A separate migration identity can hold schema-change permissions, and an operations identity can hold read-only inspection permissions.
 
 ```sql
--- Safeguard: abort if the exclusive lock cannot be acquired within 2 seconds
-SET lock_timeout = '2s';
+CREATE ROLE orders_app LOGIN PASSWORD 'store-this-in-secret-manager';
+CREATE ROLE orders_readonly LOGIN PASSWORD 'store-this-in-secret-manager-too';
 
--- Expand schema
-ALTER TABLE orders ADD COLUMN loyalty_tier VARCHAR(20) DEFAULT 'bronze';
+GRANT CONNECT ON DATABASE orders TO orders_app, orders_readonly;
+GRANT USAGE ON SCHEMA public TO orders_app, orders_readonly;
+
+GRANT SELECT, INSERT, UPDATE ON customers, products, orders, order_items, payment_attempts TO orders_app;
+GRANT SELECT ON customers, products, orders, order_items, payment_attempts TO orders_readonly;
 ```
 
-If the `orders` table is heavily loaded with active select and insert transactions (which hold `AccessShareLock`), the migration's request for an `AccessExclusiveLock` is queued. Under this configuration, two paths dictate the outcome:
+Some teams use **IAM database authentication** so Google Cloud IAM users or service accounts can log in to the database with short-lived tokens instead of normal passwords. That can centralize access for humans and automation, but the database still needs privileges granted to the resulting database identities. IAM answers who may log in through Google Cloud, and SQL grants answer what that database identity may do after login.
 
-*   **Path A: Migration Aborts Safely on Lock Timeout**: If the lock cannot be acquired within two seconds, PostgreSQL aborts the command and clears the FIFO queue instantly. Incoming checkout transactions continue processing smoothly without dropping connections or timing out, allowing the migration tool to retry during a low-traffic window.
-*   **Path B: Migration Succeeds During a Low-Traffic Window**: When the migration runner retries during a brief dip in active transactions, it immediately acquires the exclusive lock, executes the column metadata change, and returns successfully in under 50 milliseconds.
+Now the Orders API can reach the database securely. The next production issue arrives when traffic spikes and every app instance opens too many sessions.
 
-This expand-and-contract discipline prevents runaway migration locks from starving active checkout lines.
+## Connection Pooling for Cloud Run and GKE
+<!-- section-summary: Relational databases have finite connection capacity, so elastic app platforms need small pools, scale limits, and sometimes a pooler. -->
 
-## Under the Hood: Write-Ahead Logging and Zonal Replication
+A **database connection** is a live session between an application process and the database engine. Each session consumes memory, file descriptors, scheduler work, and engine-specific resources. Cloud SQL also has connection limits that the application cannot exceed, so connection count is a real production capacity number, not just a driver detail.
 
-:::expand[Under the Hood: Write-Ahead Logging and High Availability Replication Networks]{kind="design"}
-Operating a highly consistent database at scale requires understanding the low-level physical realities of disk hardware and network transport. The database guarantees Durability and High Availability through coordinated write-ahead logging and synchronous block-level replication across physical availability zones.
+Serverless and Kubernetes platforms can scale the Orders API faster than the database can accept new sessions. Imagine Cloud Run scales to 80 instances during a sale, and each instance opens a pool of 10 PostgreSQL connections. That one service can now try to hold 800 database sessions before workers, admin tools, migration jobs, and dashboards connect.
 
-#### Write-Ahead Logging and Disk Flush Guarantees
-Durability relies on a sequence of append-only operations known as the Write-Ahead Log (WAL). When an application executes a SQL insert for a checkout transaction, the database engine does not perform costly, random disk writes to modify the database's actual data tables on disk. Instead, the engine processes the change in memory and appends the transaction details sequentially to a WAL buffer in RAM. A transaction is not legally committed until this WAL buffer is physically flushed to persistent storage. This flush is executed via the `fsync` operating system system call, which bypasses kernel file caches and forces the disk controller to write the log blocks to non-volatile physical storage blocks. Once the storage controller acknowledges the physical write, the transaction is marked as committed. The database engine can then safely delay flushing the modified data pages from RAM to the permanent tables on disk, a process handled asynchronously during checkpoints. In the event of a sudden power loss, the database engine simply replays the sequential WAL blocks to reconstruct the accurate state.
+The first fix lives in the application pool. A pool should stay small, have a timeout, and match the platform's max instance count. This Node.js example uses `pg` with a bounded pool:
 
-#### Zonal High Availability and Synchronous Replication Networks
-To protect against the physical failure of an entire datacenter zone, Cloud SQL instances can be deployed in a High Availability (HA) configuration. This architecture provisions a primary database instance in a primary availability zone and a standby instance in a secondary zone. Under the hood, these instances run on separate virtual machines with independent network-attached persistent disks. When the application issues a write, the block storage layer of the primary VM intercepts the write and replicates the raw disk blocks synchronously over the high-speed regional fiber optic network to the standby VM's persistent disk. The transaction commit remains blocked, and the application's connection is held open, until the block write is physically flushed and acknowledged on both the primary and the standby storage volumes. This guarantees a Recovery Point Objective (RPO) of zero, ensuring that no data is lost during a failover. In contrast, read replicas use database-level asynchronous replication, where the primary engine returns success immediately after flushing the WAL locally, and streams the log updates asynchronously across the network. If the primary zone fails, any log packets still in transit are lost, resulting in potential data loss.
+```javascript
+import pg from "pg";
 
-Synchronous replication introduces a performance tradeoff because the write must be protected outside the primary location before the system can treat the HA copy as current. The exact latency depends on the region, instance, storage, workload, and network conditions. The beginner-safe lesson is that HA reduces recovery time and data-loss risk for zonal failures, while read replicas use asynchronous replication and can lag behind the primary.
+const pool = new pg.Pool({
+  host: process.env.DB_HOST,
+  port: Number(process.env.DB_PORT ?? "5432"),
+  database: "orders",
+  user: process.env.DB_USER,
+  password: process.env.DB_PASSWORD,
+  max: Number(process.env.DB_POOL_MAX ?? "5"),
+  idleTimeoutMillis: 30000,
+  connectionTimeoutMillis: 5000
+});
 
-#### Connection Starvation under Serverless Scaling Concurrency
-The mismatch between the scaling mechanics of stateless serverless platforms and the process-oriented architecture of relational databases is a frequent cause of production crashes. When a platform like Cloud Run detects a spike in traffic, its orchestration layer automatically launches new sandboxed container instances. Relational database engines, particularly PostgreSQL, operate on a process-per-connection model. Each new connection demands a dedicated virtual memory workspace and thread scheduling overhead on the database VM. As hundreds of serverless sandboxes scale out, they consume available file descriptors and trigger thread scheduling thrashing on the database host. When the database engine reaches its maximum allowed concurrent connection count, it rejects new TCP connection requests. PgBouncer mitigates this at the protocol level. It establishes a fixed, highly optimized pool of permanent connections to the database engine, intercepting incoming application requests, queuing and multiplexing them over the active database sockets. This decouples connection scaling from compute scaling.
+export async function createOrder(handler) {
+  const client = await pool.connect();
 
-#### Zero-Downtime Rolling Schema Migrations Systems Mechanics
-Executing schema migrations under continuous, high-concurrency traffic exposes severe lock starvation risks within the database's query planner. Under normal operation, every standard SELECT, INSERT, or UPDATE query acquires a shared metadata lock (`AccessShareLock` in PostgreSQL) on the target table, allowing many transactions to access the table concurrently. When a migration script attempts to alter a table (such as adding a column or changing a constraint), it requests an exclusive metadata lock (`AccessExclusiveLock`). This exclusive lock requires absolute isolation and cannot be granted until every active query currently holding a shared metadata lock has completed. However, the database engine maintains a strict first-in, first-out (FIFO) lock queue. Once the migration's exclusive lock request enters the queue, it blocks all subsequent incoming queries that request shared metadata locks. Even if the migration itself is waiting for a single long-running query to finish, every incoming user request is blocked in the queue, creating a massive query pile-up that exhausts the application's connection pools within seconds. To safeguard application availability, engineers must employ a lock timeout (`SET lock_timeout = '2s'`) inside the migration transaction, ensuring that the migration aborts immediately and clears the lock queue if it cannot acquire the lock, preventing a cascading system outage.
-:::
+  try {
+    await client.query("BEGIN");
+    const result = await handler(client);
+    await client.query("COMMIT");
+    return result;
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+```
+
+That `max` value means one app instance can hold up to five database sessions. If Cloud Run allows 40 instances, the service can hold up to 200 sessions before any other workload connects. This kind of math should appear in the service runbook because a future autoscaling change can break the database without changing one line of SQL.
+
+The platform should also carry an explicit scale boundary:
+
+```bash
+gcloud run services update orders-api \
+  --region=us-central1 \
+  --max-instances=40
+```
+
+The right `--max-instances` value depends on request concurrency, database tier, query duration, and pool size. If the Orders API needs more throughput, the team can tune SQL, reduce transaction duration, add read paths that do not hit the primary, increase the database tier, introduce a pooler, or split workloads. Simply raising app scale can turn a database bottleneck into a wider outage.
+
+Cloud SQL for PostgreSQL also has **Managed Connection Pooling** for supported Enterprise Plus instances. It helps workloads with many short-lived connections or connection surges by pooling at transaction or session level. Transaction pooling can improve connection scaling, but it restricts some session-level SQL behavior, so teams should test features like prepared statements, session settings, advisory locks, and temporary tables before enabling it for a production workload.
+
+Self-managed PgBouncer remains common when teams need a pooler with direct control. PgBouncer can run beside the application on GKE, as a small internal service, or in another controlled deployment pattern. The main lesson stays the same: the app should not treat Cloud SQL as an infinite socket target.
+
+Connection pooling keeps the runtime stable. The next source of outages comes from schema changes, because every version of the Orders API shares one database schema.
+
+## Schema Migrations Without Taking Checkout Down
+<!-- section-summary: Safe migrations split schema changes into small compatible steps so old and new application versions can run together. -->
+
+A **schema migration** changes the structure of the database. It can add a column, create an index, add a constraint, rename a table, or remove a field that old code still reads. Application code can roll out one container at a time, but the database schema is shared state. That shared state makes migration planning part of application deployment.
+
+Let's say the product team wants to track the checkout channel: `web`, `ios`, `android`, or `support_agent`. A risky deployment adds a required column and immediately deploys code that assumes it always exists. If old containers still run, new containers start at different times, or the migration locks a hot table, checkout can fail for real customers.
+
+The safer pattern is **expand and contract**. In the expand phase, the database accepts both old and new application versions. In the middle, the application writes both shapes or reads with a fallback. In the contract phase, the team removes the old shape only after the fleet no longer depends on it.
+
+For PostgreSQL on a busy order table, the migration runner should use timeouts so a schema change cannot wait behind active queries and block new traffic for a long time:
+
+```sql
+SET lock_timeout = '2s';
+SET statement_timeout = '30s';
+
+ALTER TABLE orders
+ADD COLUMN checkout_channel text;
+```
+
+This migration adds a nullable column. That keeps old and new code compatible. Old code ignores the column, and new code can write it. The application should use a safe fallback while old rows still have `NULL`:
+
+```sql
+SELECT
+  order_id,
+  customer_id,
+  COALESCE(checkout_channel, 'web') AS checkout_channel
+FROM orders
+WHERE order_id = $1;
+```
+
+Then a background job can backfill old rows in batches. Batches keep transactions short and reduce lock pressure, replication pressure, and undo work.
+
+```sql
+WITH batch AS (
+  SELECT order_id
+  FROM orders
+  WHERE checkout_channel IS NULL
+  ORDER BY created_at
+  LIMIT 500
+)
+UPDATE orders
+SET checkout_channel = 'web'
+WHERE order_id IN (SELECT order_id FROM batch);
+```
+
+After the backfill, the team can add and validate a constraint:
+
+```sql
+ALTER TABLE orders
+ADD CONSTRAINT orders_checkout_channel_known
+CHECK (checkout_channel IN ('web', 'ios', 'android', 'support_agent')) NOT VALID;
+
+ALTER TABLE orders
+VALIDATE CONSTRAINT orders_checkout_channel_known;
+```
+
+This sequence gives reviewers more than a SQL file. It gives them an operational plan: deploy migration one, deploy app version one, run a measured backfill, validate the constraint, then remove fallback code later. It also gives rollback room. If the first app deploy has a bug, old code can still run because the column addition did not force an immediate contract.
+
+Indexes deserve the same care. A new query for the order history page may need an index on `(customer_id, created_at DESC)`. PostgreSQL can build an index concurrently so normal reads and writes can continue during the build, although the build takes longer and has its own rules.
+
+```sql
+CREATE INDEX CONCURRENTLY orders_customer_created_at_idx
+ON orders (customer_id, created_at DESC);
+```
+
+The Orders API now has a safer way to change shape while traffic keeps flowing. But even careful teams still delete rows by mistake, ship bugs, or lose a zone. That takes us to recovery.
+
+## Backups, PITR, and High Availability
+<!-- section-summary: Backups recover from data mistakes, PITR recovers to a timestamp, and HA reduces downtime during zonal failure. -->
+
+**Backups** protect the database from data loss caused by mistakes, corruption, and operational incidents. Cloud SQL supports on-demand backups and automated backups. Backups are incremental and encrypted, and teams can use them to restore a database to a previous state, create a new instance for testing, or support disaster recovery work.
+
+The Orders API should take an on-demand backup before risky operations, such as a large migration or a manual data repair:
+
+```bash
+gcloud sql backups create \
+  --instance=orders-prod
+```
+
+Automated backups should already run on a schedule. The backup window should avoid the busiest checkout period where possible, and retention should match the business requirement. A store that needs to investigate payment disputes for weeks has a different retention need from a short-lived staging system.
+
+**Point-in-time recovery**, usually shortened to **PITR**, lets the team restore a primary Cloud SQL instance to a specific timestamp. This matters when the failure is logical instead of physical. If a bad admin script cancels every open order at 10:17 UTC, restoring yesterday's backup loses too much valid data. A PITR clone can restore to a timestamp just before the bad write.
+
+```bash
+gcloud sql instances clone orders-prod \
+  orders-prod-restore-20260614 \
+  --point-in-time="2026-06-14T10:16:30Z"
+```
+
+The recovery drill should not stop at creating the clone. The team needs to verify the data, decide whether to fail the application over to the restored instance, copy selected rows back, or rebuild affected records through an application repair job. A restore that no one has practiced is only a hope with a command attached to it.
+
+**High availability**, or **HA**, handles a different failure class. A regional Cloud SQL instance uses a primary instance and a standby in another zone. If the primary instance or zone stops responding, Cloud SQL can fail over so the standby serves data through the shared instance address. Google documents that failover usually creates a short unavailability window, so the application should retry connections with exponential backoff instead of hammering the database.
+
+```javascript
+const retryDelaysMs = [250, 500, 1000, 2000, 5000];
+
+export async function withConnectionRetry(operation) {
+  let lastError;
+
+  for (const delay of retryDelaysMs) {
+    try {
+      return await operation();
+    } catch (error) {
+      lastError = error;
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    }
+  }
+
+  throw lastError;
+}
+```
+
+HA and backups solve different problems. HA helps when an instance or zone fails and the application needs the primary database role back quickly. Backups and PITR help when the data itself is wrong and the team needs to restore or inspect an earlier state. Read replicas solve yet another problem: they can help with read scale or recovery patterns, but they use replication and can lag behind the primary.
+
+Production teams usually write a short recovery runbook for each case:
+
+| Incident | First move | Recovery path |
+|---|---|---|
+| Bad deploy writes wrong order status | Stop the writer and preserve evidence | PITR clone, compare rows, repair or fail over |
+| Large migration causes lock waits | Cancel migration and keep app serving | Retry with smaller steps, timeouts, or a lower-traffic window |
+| Primary zone fails | Let HA failover complete and watch app retries | Verify connection recovery, review logs, and open an incident review |
+| Analyst needs production-like data | Restore backup into isolated instance | Mask sensitive fields before broad access |
+
+This is where Cloud SQL stops feeling like "just a database" and starts looking like an operational system. The SQL engine protects transactions, the network keeps traffic private, the pool protects capacity, migrations protect availability, and recovery tools protect the business when humans and infrastructure have a bad day.
 
 ## Putting It All Together
+<!-- section-summary: A production Cloud SQL design connects schema, access, pooling, migrations, and recovery into one operating path. -->
 
-Securing application records requires a unified approach across multiple operational layers. By reviewing the transaction lifecycle of the Orders API, we can trace how each architectural decision contributes to system stability and consistency. Relational integrity begins with ACID-compliant transaction blocks that protect multi-table checkout states from partial commit failures. Under high query volume, these transactions rely on internal locking serialization and Multi-Version Concurrency Control to prevent race conditions without blocking concurrent reads.
+Let's walk through the Orders API one more time, end to end. A customer submits checkout to Cloud Run. The Orders API reaches Cloud SQL through a private path, authenticates through the configured connection method, checks out a small connection from the pool, starts a transaction, locks the product row, writes the order records, commits, and releases the connection.
 
-At the networking layer, the database engine is reached through a private connectivity option such as private services access or Private Service Connect, preventing direct public database exposure when configured without public IP. This transport security is paired with the Cloud SQL Auth Proxy, connectors, IAM database authentication where appropriate, and careful database user management.
+The database schema supports that flow with tables, primary keys, foreign keys, and constraints. Those rules keep records connected even when application code changes over time. Transactions keep a checkout from landing halfway, and short transactions keep the database responsive during normal traffic.
 
-To prevent high scaling events from causing connection starvation, client-side pool limits and intermediate PgBouncer multiplexing are employed to protect server threads from resource exhaustion. Finally, the schema structure changes through expand-and-contract deployments with strict lock timeouts, avoiding exclusive table locks that could trigger cascading outages. Zonal high availability and write-ahead logging complete the reliability loop, guaranteeing that block changes are synced across low-latency intra-region fiber loops to standby instances before transaction commit acknowledgements are sent, providing physical durability and failover resilience.
+The runtime design supports the same flow from the outside. Cloud Run has a max instance boundary, the app pool has a small maximum, and the team can add Managed Connection Pooling or PgBouncer when connection surges justify it. The database remains finite, so the application treats connection count as capacity planning instead of background noise.
+
+The deployment design protects releases. Schema changes expand first, application versions roll out with compatibility, background jobs backfill in small batches, constraints validate later, and contract steps wait until old code no longer needs the old shape. Migration timeouts keep one DDL statement from turning into a checkout outage.
+
+The recovery design closes the loop. Automated backups and on-demand backups protect restore points. PITR clones support timestamp recovery after bad writes. HA reduces downtime for zonal failures, while application retry logic gives failover room to complete. Together, those pieces make Cloud SQL a reliable place for the records the business cannot afford to guess about.
 
 ## What's Next
 
-Managed relational instances in Cloud SQL excel at structured, consistent transactions where relationship constraints are strict. However, modern applications also require horizontal scaling patterns for semi-structured documents that demand low-latency lookups without joint relational schemas. In the next chapter, we will shift focus from SQL relational engines to Cloud Firestore, exploring how document-oriented databases partition, index, and query application records at massive scale.
+Cloud SQL is a strong home for relational records: orders, payments, inventory, invoices, account ledgers, subscriptions, and anything else where relationships and transactions carry the business truth. The tradeoff is that relational shape asks you to plan schemas, migrations, indexes, and connection capacity with care.
 
-![A six-part summary infographic for cloud sql summary covering Relational schema, Private IP, Connection pool, Backups, HA replica, Migration safety](/content-assets/articles/article-cloud-providers-gcp-storage-databases-cloud-sql-relational-databases/cloud-sql-summary.png)
-
-*Use this summary as the quick mental checklist before designing or debugging the service.*
-
+The next article moves to Firestore. We will keep the checkout theme, but we will shift from finalized order records to document-shaped state like checkout drafts, user preferences, and app session data.
 
 ---
 
 **References**
 
-- [Google Cloud: Cloud SQL Overview](https://cloud.google.com/sql/docs/introduction) - Introduces managed database features, supported engines, and configuration paths.
-- [Google Cloud: Connect to Cloud SQL](https://cloud.google.com/sql/docs/connect-overview) - Explains networking pathways, private IP configurations, connectors, and the Cloud SQL Auth Proxy.
-- [Google Cloud: Private services access for Cloud SQL](https://cloud.google.com/sql/docs/postgres/configure-private-services-access) - Documents private IP connectivity through private services access.
-- [Google Cloud: Private Service Connect for Cloud SQL](https://cloud.google.com/sql/docs/postgres/about-private-service-connect) - Explains the separate PSC private endpoint option.
-- [Google Cloud: Managed Connection Pooling](https://cloud.google.com/sql/docs/postgres/managed-connection-pooling) - Documents the first-party pooling option for Cloud SQL PostgreSQL.
-- [Google Cloud: Cloud SQL Backups](https://cloud.google.com/sql/docs/mysql/backup-recovery/backups) - Documents backup structures, point-in-time recovery, and restore operations.
-- [Google Cloud: High Availability Overview](https://cloud.google.com/sql/docs/mysql/high-availability) - Details block-level synchronous replication, multi-zonal deployments, and failover mechanics.
+- [Cloud SQL overview](https://cloud.google.com/sql/docs/introduction) - Defines Cloud SQL as a managed relational database service for MySQL, PostgreSQL, and SQL Server, and lists managed operations such as backups, HA, connectivity, maintenance, monitoring, and logging.
+- [Choose how to connect to Cloud SQL](https://cloud.google.com/sql/docs/mysql/connection-options) - Explains private IP recommendations, direct connections, Cloud SQL connectors, public IP, authorized networks, and IAM database authentication choices.
+- [Learn about using private IP](https://cloud.google.com/sql/docs/mysql/private-ip) - Documents private services access, allocated IP ranges, Shared VPC notes, and private IP requirements for Cloud SQL.
+- [Connect from Cloud Run to Cloud SQL for PostgreSQL](https://cloud.google.com/sql/docs/postgres/connect-run) - Describes Cloud Run connection setup, region guidance, Cloud SQL Admin API setup, and private IP egress options.
+- [About the Cloud SQL Auth Proxy](https://cloud.google.com/sql/docs/mysql/sql-proxy) - Explains how the Auth Proxy establishes authorized, encrypted connections to Cloud SQL instances.
+- [Log in using IAM database authentication for PostgreSQL](https://cloud.google.com/sql/docs/postgres/iam-logins) - Documents IAM database authentication, required IAM roles, connector behavior, and database privilege requirements.
+- [Manage database connections for Cloud SQL for PostgreSQL](https://cloud.google.com/sql/docs/postgres/manage-connections) - Covers connection limits, pool sizing examples, and exponential backoff guidance.
+- [Managed Connection Pooling overview](https://cloud.google.com/sql/docs/postgres/managed-connection-pooling) - Documents Cloud SQL Managed Connection Pooling requirements, pool modes, ports, defaults, and limitations.
+- [Create Cloud SQL for PostgreSQL instances](https://cloud.google.com/sql/docs/postgres/create-instance) - Shows `gcloud` and Terraform-based instance creation patterns.
+- [Cloud SQL backups overview for PostgreSQL](https://cloud.google.com/sql/docs/postgres/backup-recovery/backups) - Documents on-demand and automated backups, incremental backups, encryption, retention, and restore use cases.
+- [Perform point-in-time recovery for PostgreSQL](https://cloud.google.com/sql/docs/postgres/backup-recovery/pitr) - Shows PITR restore options and the `gcloud sql instances clone --point-in-time` flow.
+- [About high availability in Cloud SQL for PostgreSQL](https://cloud.google.com/sql/docs/postgres/high-availability) - Explains HA failover behavior, standby instances, failover process, and application availability considerations.

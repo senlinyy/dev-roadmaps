@@ -1,6 +1,6 @@
 ---
 title: "Cloud Run"
-description: "Understand how a container image becomes a managed GCP service through Cloud Run services, revisions, traffic, scaling, identity, configuration, logs, and health."
+description: "Understand how Cloud Run wraps a container image as a managed GCP service through services, revisions, traffic, scaling, identity, configuration, logs, and health."
 overview: "Cloud Run is often the simplest first GCP home for a backend API, but a container image is not the whole service. This article follows the Orders API from image to healthy HTTPS runtime."
 tags: ["gcp", "cloud-run", "containers", "revisions"]
 order: 2
@@ -12,159 +12,341 @@ aliases:
 
 ## Table of Contents
 
-1. [Cloud Run Services](#cloud-run-services)
-2. [The Container Network Port Contract](#the-container-network-port-contract)
-3. [Revisions and Traffic Splits](#revisions-and-traffic-splits)
-4. [Scaling Boundaries and Downstream Protection](#scaling-boundaries-and-downstream-protection)
-5. [Runtime Identity and Least-Privilege IAM](#runtime-identity-and-least-privilege-iam)
-6. [Environment Configuration and Secrets Access](#environment-configuration-and-secrets-access)
-7. [Logs, Health, and Revision Verification](#logs-health-and-revision-verification)
-8. [Sample Service Shape](#sample-service-shape)
-9. [Putting It All Together](#putting-it-all-together)
-10. [What's Next](#whats-next)
+1. [What Cloud Run Runs](#what-cloud-run-runs)
+2. [Service, Image, and Revision](#service-image-and-revision)
+3. [The Container Contract](#the-container-contract)
+4. [First Deploy for the Orders API](#first-deploy-for-the-orders-api)
+5. [Revisions, Traffic Splits, and Rollback](#revisions-traffic-splits-and-rollback)
+6. [Concurrency and Downstream Protection](#concurrency-and-downstream-protection)
+7. [Max and Min Instances](#max-and-min-instances)
+8. [Runtime Identity](#runtime-identity)
+9. [Environment Variables and Secrets](#environment-variables-and-secrets)
+10. [Logs and Verification](#logs-and-verification)
+11. [Putting It All Together](#putting-it-all-together)
+12. [What's Next](#whats-next)
 
-## Cloud Run Services
+## What Cloud Run Runs
+<!-- section-summary: Cloud Run gives a containerized application a managed runtime contract, so the team can focus on the service shape instead of VM hosts. -->
 
-Cloud Run is a managed service wrapper around a container image, source deployment, job, or worker pool. For HTTP services, it gives the container a stable service URL, revision history, scaling behavior, runtime identity, logs, and traffic routing without asking your team to operate VM hosts or a Kubernetes cluster.
+**Cloud Run** is Google Cloud's managed platform for running containers that respond to requests, events, jobs, or worker-style background work. For a backend API, the common resource is a **Cloud Run service**. The service gives the container a stable endpoint, revision history, traffic routing, scaling settings, runtime identity, and logs without asking the team to operate virtual machines or a Kubernetes cluster.
 
-A common operational error is treating a container image as the complete running service. In production environments, the container image is merely the immutable package containing your application binaries and dependencies. Cloud Run wraps this package in a robust service model that governs ingress routing, revisions, traffic splits, IAM workload identities, secrets access, and auto-scaling boundaries.
+Let's keep following the same small Orders team. They have a container image for `orders-api`, and that image already works on a developer laptop. The senior engineer on the team is going to slow the conversation down a little, because a working Docker image is only one part of a production service.
 
-For teams coming from other cloud platforms, Cloud Run serves as the GCP equivalent of AWS App Runner or AWS ECS Fargate, and Azure Container Apps. Cloud Run can scale from zero and add instances quickly, but scaling is still governed by container startup time, configured maximum instances, regional capacity, concurrency, and downstream dependency limits.
+The Cloud Run service answers the production questions around the image. Which revision receives traffic? How many requests can one instance process at the same time? How many instances can start before the database gets stressed? Which service account does the running code use? Where do logs go when checkout fails at 2:00 a.m.? That is why Cloud Run is such a useful first home for stateless backend APIs: the team keeps the application contract and service configuration, while Google manages the server fleet, sandboxing, routing, and autoscaling loop around it.
 
-:::expand[Design Detail: Scale-to-Zero and Cold Starts]{kind="design"}
-The most powerful operational characteristic of Cloud Run is its ability to scale container instances to zero when no traffic is present, reducing compute charges for idle services. The documented behavior to teach is the service contract: Cloud Run starts container instances when traffic or work arrives, routes requests to healthy instances, and scales within the limits you configure.
+## Service, Image, and Revision
+<!-- section-summary: The image packages the code, the service holds the managed runtime settings, and each deployable snapshot creates an immutable revision. -->
 
-When a Cloud Run service scales to zero, there is no active container instance waiting for traffic. Cloud Run still keeps the service route and revision configuration. When traffic arrives again, the platform starts an instance for the selected revision and routes requests only after the container is ready.
+A **container image** is the sealed package that contains the application code, language runtime, dependencies, and startup command. The Orders image might be tagged with a Git SHA, such as `orders-api:a3f8c2d`, so the team can connect a deployed artifact back to a commit. Images usually live in Artifact Registry before Cloud Run deploys them.
+
+A **Cloud Run service** is the managed resource around that image. It has a regional name, a stable `run.app` URL, IAM settings for invocation, environment variables, secret mappings, CPU and memory settings, concurrency, scaling limits, and traffic rules. Google documentation also notes that Cloud Run imports the image at deployment time and keeps that copy while a serving revision uses it.
+
+A **revision** is an immutable snapshot of the service's deployable configuration. Cloud Run creates a new revision when the team deploys a new image or changes settings that affect the runtime, such as environment variables, service account, memory, or concurrency. The old revision stays available for traffic routing and rollback until Cloud Run retention limits or manual cleanup remove it.
+
+Here is the service shape the Orders team is working with. The image feeds the service, the service owns revisions, and traffic rules decide which revision receives requests.
 
 ```mermaid
-flowchart TD
-    subgraph RequestRouting["Cloud Run Request Routing"]
-        Router["Request router"]
-    end
+flowchart LR
+    Image["Container image<br/>orders-api:a3f8c2d"]
+    Service["Cloud Run service<br/>orders-api"]
+    Rev1["Revision<br/>orders-api-00041"]
+    Rev2["Revision<br/>orders-api-00042"]
+    Traffic["Traffic rules<br/>95% / 5%"]
 
-    subgraph ScalingLayer["Cloud Run Scaling"]
-        Autoscaler["Autoscaling decision"]
-        Starter["Start container instance"]
-    end
-
-    subgraph ContainerInstances["Dynamic Sandbox Allocation"]
-        Container["Cloud Run Container Instance"]
-    end
-
-    Router -->|1. Request arrives| Autoscaler
-    Autoscaler -->|2. No idle capacity| Starter
-    Starter -->|3. Start revision instance| Container
-    Container -->|4. Listen on PORT and pass startup checks| Router
+    Image --> Service
+    Service --> Rev1
+    Service --> Rev2
+    Traffic --> Rev1
+    Traffic --> Rev2
 ```
 
-As traced above, the beginner-visible lifecycle is simple:
+This separation gives the Orders team a safer release workflow. They can build one image, deploy it as a new revision, verify it with no traffic or a small percentage of traffic, and move customers back to the previous revision quickly if errors rise. Before that workflow works, the container has to satisfy Cloud Run's runtime contract.
 
-1.  **Request Arrival**: A request reaches the Cloud Run service.
-2.  **Capacity Check**: Cloud Run decides whether an existing instance can handle the request based on concurrency and current load.
-3.  **Instance Start**: If more capacity is needed, Cloud Run starts an instance of the selected revision.
-4.  **Readiness**: Your container must start, listen on the expected port, and pass startup behavior before it can serve traffic.
-5.  **Scaling Limits**: If max instances, startup time, or downstream systems become the bottleneck, scaling cannot make the service infinitely fast.
-:::
+## The Container Contract
+<!-- section-summary: A Cloud Run service needs the ingress container to listen on the provided port and on the correct network interface. -->
 
-## The Container Network Port Contract
+The **container contract** is the set of rules a container must follow so Cloud Run can start it and route traffic to it. For services, the most important rule is the network listener. Cloud Run injects a `PORT` environment variable into the ingress container, and the application must listen for HTTP requests on that port.
 
-The container port contract is the rule that tells Cloud Run which socket inside your container receives HTTP traffic. To successfully run inside Cloud Run, your application container must adhere to this strict network contract. Cloud Run injects a `PORT` environment variable into the ingress container, and your server must listen on that port.
+The interface matters too. Binding the server to `127.0.0.1` keeps the listener on the container loopback interface. Binding to `0.0.0.0` lets the Cloud Run request path reach the process inside the container environment. The default request port is `8080` unless the service config chooses another port, but production code should read `PORT` instead of hardcoding local development assumptions.
 
-![Cloud Run starts a container and expects it to listen on the assigned port.](/content-assets/articles/article-cloud-providers-gcp-compute-application-hosting-cloud-run-services-backend-apis/container-port-contract.png)
+For a small Node.js Orders API, the listener could look like this. The important parts are reading `PORT` and binding the process to `0.0.0.0`.
 
-*A healthy container still fails if it listens on the wrong port.*
+```js
+import express from "express";
 
-The port defaults to `8080` unless you configure it. Your application server code should read `PORT` and bind its listener to that exact port, rather than assuming that a hardcoded local development port is the deployed contract.
+const app = express();
+const port = Number(process.env.PORT || 8080);
 
-Furthermore, your application must listen on the network interface address **`0.0.0.0`** rather than `127.0.0.1` (localhost). Binding strictly to localhost keeps the socket inside the container loopback interface, so Cloud Run cannot route incoming requests to your process.
+app.get("/healthz", (_req, res) => {
+  res.status(200).json({ status: "ok" });
+});
 
-## Revisions and Traffic Splits
+app.post("/orders", async (_req, res) => {
+  res.status(202).json({ accepted: true });
+});
 
-A Cloud Run revision is an immutable runtime snapshot of one deployable service configuration. Every time you deploy a new container image or modify a service's configuration settings (such as environment variables, secret mappings, or memory limits), Cloud Run creates a revision. Revisions represent a precise historical record of your application state and cannot be modified.
+app.listen(port, "0.0.0.0", () => {
+  console.log(JSON.stringify({
+    severity: "INFO",
+    message: "orders api listening",
+    port
+  }));
+});
+```
 
-![Each deploy creates an immutable revision, then traffic weights decide which revision receives requests.](/content-assets/articles/article-cloud-providers-gcp-compute-application-hosting-cloud-run-services-backend-apis/revisions-traffic-split.png)
+The Dockerfile should start the server directly, with no manual shell steps after the container starts. The same pattern works in other languages as long as the final command starts the web process.
 
-*Rollback is fast because the old revision still exists as a known target.*
+```dockerfile
+FROM node:22-slim
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci --omit=dev
+COPY . .
+CMD ["node", "server.js"]
+```
 
-This immutability allows security and operations teams to decouple deployment from release:
+The same container should treat local filesystem writes as temporary. Order records, payment state, inventory reservations, and audit events belong in managed storage such as Cloud SQL, Firestore, Spanner, Pub/Sub, or Cloud Storage. Cloud Run can restart or replace instances, so durable state needs a service outside the container. Once the container follows that contract, the image is ready for a first service deployment.
 
-*   **Zero-Traffic Canary**: You can deploy a new container image to create a revision, but keep its traffic allocation set to `0%`. This allows your team to verify that the container boots and passes health checks securely in production without exposing it to live users.
-*   **Gradual Rollouts**: You can configure a traffic split, routing `90%` of requests to the stable revision and `10%` to the new canary revision.
-*   **Fast Rollbacks**: If application monitoring logs expose an elevated error rate on the new revision, you can shift `100%` of traffic back to a previous revision. The rollback is a traffic change to a known revision, but traffic movement, instance startup, and dependency behavior still need monitoring.
+## First Deploy for the Orders API
+<!-- section-summary: The first deploy creates a service, attaches runtime identity, and decides whether callers need IAM permission to invoke it. -->
 
-## Scaling Boundaries and Downstream Protection
+The first Cloud Run deploy should create a service with a clear name, region, image, and runtime service account. A **runtime service account** is the identity the running container uses when it calls Google APIs. It is separate from the human or CI/CD identity that performs the deployment.
 
-Cloud Run autoscaling is the platform loop that adds or removes container instances based on request pressure and configuration limits. It is highly responsive, dynamically adding container instances as concurrent request volume increases. However, unconstrained autoscaling is a dangerous architectural hazard that can trigger cascading failures across downstream databases and APIs.
+For a private backend service in the Orders production project, the first deploy might look like this. The command creates the service if it does not exist yet, or creates a new revision if the service already exists.
 
-If a sudden burst of public traffic arrives, Cloud Run can scale your service to hundreds of concurrent container instances within seconds. If each container instance opens a pool of 10 persistent TCP connections to a relational database like Cloud SQL, the database engine will quickly exhaust its file descriptor limit, lock active connections, and crash under the socket surge.
+```bash
+gcloud run deploy orders-api \
+  --image=us-central1-docker.pkg.dev/orders-prod/apps/orders-api:a3f8c2d \
+  --region=us-central1 \
+  --service-account=orders-api-runtime@orders-prod.iam.gserviceaccount.com \
+  --no-allow-unauthenticated
+```
 
-To defend your downstream systems, you must configure strict scaling boundaries:
+This command creates or updates the `orders-api` service in `us-central1`, points it at a specific image tag, and attaches the runtime identity. The `--no-allow-unauthenticated` flag keeps invocation behind IAM, which fits a backend called by another trusted service or by a frontend edge that handles authentication separately.
 
-*   **Concurrency limits**: Define the maximum number of concurrent requests a single container instance can handle simultaneously before a new instance is provisioned (e.g. `80` requests).
-*   **Max Instances**: Set an absolute limit on the maximum number of container instances Cloud Run is permitted to provision (e.g. `20` instances). This acts as a circuit breaker, capping the maximum database connection socket usage.
-*   **Min Instances**: Maintain a warm baseline pool of instances (e.g. `1` or `2`) to eliminate cold-start latencies for critical user paths, balancing latency requirements against minimum billing costs.
+A public API might intentionally use `--allow-unauthenticated`, but that choice grants the Cloud Run Invoker role to public callers. The Orders team should make that decision in the service design, not by accepting a CLI prompt during a late deploy. For customer-facing checkout, many teams put Cloud Load Balancing, Identity-Aware Proxy, API Gateway, or application-level authentication in front of the backend depending on the wider architecture. After the first deploy, the team needs a release process, and Cloud Run revisions plus traffic splits give them that process.
 
-## Runtime Identity and Least-Privilege IAM
+## Revisions, Traffic Splits, and Rollback
+<!-- section-summary: Revisions let the team separate deployment from release, so a new image can be verified before it receives customer traffic. -->
 
-A runtime service account is the identity a running Cloud Run service uses when it calls Google APIs. Securing your containerized applications requires strict separation between your deployment pipelines and your running workloads. In GCP, this boundary is enforced by attaching a dedicated **Runtime Service Account** to your Cloud Run service.
+A **revision** captures a deployable version of the service. The Orders team gets a new revision when they deploy image `b7c91d2` or change runtime settings such as concurrency, environment variables, secrets, or the service account. Since a revision is immutable, rollback can move traffic back to a known previous runtime snapshot.
 
-Your CI/CD deployment pipeline utilizes a highly privileged *Deploy Identity* (often federated via Workload Identity Federation) to write code, create revisions, and modify service configurations. However, when the container executes, it inherits the permissions of the attached *Runtime Identity*.
+For a safer rollout, the team can deploy a new revision with no customer traffic. This keeps the new revision reachable by its tag while the main service URL continues using the current traffic split.
 
-This runtime service account must adhere strictly to least-privilege principles. For example, the runtime account for an Orders API requires only the `roles/secretmanager.secretAccessor` role on its specific database credential secret and connect permissions on its Cloud SQL database. It must never possess project-level Editor or Owner privileges, ensuring that a compromised container filesystem cannot be leveraged by an attacker to alter network configurations or delete adjacent cloud resources.
+```bash
+gcloud run deploy orders-api \
+  --image=us-central1-docker.pkg.dev/orders-prod/apps/orders-api:b7c91d2 \
+  --region=us-central1 \
+  --service-account=orders-api-runtime@orders-prod.iam.gserviceaccount.com \
+  --no-traffic \
+  --tag=canary
+```
 
-## Environment Configuration and Secrets Access
+That creates a revision and gives it a tag URL for direct verification. The team can check startup, logs, health, and a small internal smoke test before it reaches the main service URL. This is deployment without release.
 
-Environment configuration is the runtime-specific input that changes without rebuilding the container image. To maintain environment-portable container images, you must decouple configuration values from your application binaries. A healthy container image is built once, tagged with a unique git SHA, and promoted systematically through development, staging, and production environments.
+The revision list shows the named targets available for traffic. This gives the operator the exact revision names to use in rollout and rollback commands.
 
-*   **Environment Variables**: Use Cloud Run environment variables to inject non-sensitive settings (such as database names, logging levels, or feature flags) that differ across environments.
-*   **Secret Manager Integration**: Never bake sensitive credentials, API tokens, or cryptographic private keys directly into your container image, and avoid injecting them as raw environment variables. Instead, reference the secure paths in Secret Manager. Cloud Run resolves these paths dynamically at boot time, mounting the payload either as an environment variable or as a read-only file inside a transient in-memory volume, ensuring raw keys never touch physical storage disks.
+```bash
+gcloud run revisions list \
+  --service=orders-api \
+  --region=us-central1
+```
 
-## Logs, Health, and Revision Verification
+When the canary looks healthy, a gradual traffic split might send a small percentage to the new revision. The percentages below keep most checkout traffic on the stable revision while the team watches the canary.
 
-Cloud Run logs and health signals are the operational evidence for a runtime you cannot SSH into. Because Cloud Run executes container instances within a sandboxed, serverless fabric, debugging application failures requires relying on structured logging and health metrics rather than direct host inspection.
+```bash
+gcloud run services update-traffic orders-api \
+  --region=us-central1 \
+  --to-revisions=orders-api-00041-stable=95,orders-api-00042-canary=5
+```
 
-To ensure your application's operational health is visible:
+If error rates rise, rollback is a traffic update to the previous revision. The rollback command routes all requests back to the revision that was serving before the canary.
 
-*   **Standard Output (`stdout`) Logging**: Configure your application's logging framework to write structured JSON logs directly to the standard output and standard error streams. Cloud Run automatically captures these streams, injects metadata (such as the active revision name, instance ID, and severity level), and routes them to Cloud Logging.
-*   **Startup Probes**: Configure explicit startup probes to instruct Cloud Run when the container is ready to accept traffic. If the startup probe fails to complete within the configured timeout window, the platform immediately marks the instance unhealthy and stops routing requests, preventing a broken deployment from disrupting live traffic.
+```bash
+gcloud run services update-traffic orders-api \
+  --region=us-central1 \
+  --to-revisions=orders-api-00041-stable=100
+```
 
-## Sample Service Shape
+Traffic rollback is fast because the old revision still exists as a target. The team still watches startup latency, database pressure, and logs after the rollback, because instances for the old revision may need to start again and downstream systems may still be recovering from the bad release. Traffic controls handle release safety, and scaling controls protect the rest of the system while the service is running.
 
-A sample service shape is a compact way to review the runtime contract before deployment. An idiomatic Cloud Run service shape for the Orders API unifies these parameters into a secure, predictable configuration block:
+## Concurrency and Downstream Protection
+<!-- section-summary: Concurrency decides how many requests one instance can handle, and that setting must match database pools and external dependency limits. -->
 
-| Service Parameter | Configuration Value | Operational Purpose |
-| :--- | :--- | :--- |
-| **Service Name** | `devpolaris-orders-api` | Stable regional address for the microservice. |
-| **Region** | `us-central1` | Regional datacenter placement for low latency. |
-| **Active Image** | `orders-api:git-a3f8c2d` | Immutable container snapshot tagged by git SHA. |
-| **Port Binding** | Read `PORT` dynamically, listen on `0.0.0.0` | Lets Cloud Run route traffic into the container process. |
-| **Max Instances** | `20` | Database connection scaling circuit breaker. |
-| **Runtime Identity**| `orders-api-runtime@prod-project.iam...` | Least-privilege principal for resource access. |
-| **Secret Mounts** | Mount `orders-db-url` secret as file | Secure, diskless database credential resolution. |
+**Concurrency** is the maximum number of requests one Cloud Run instance can process at the same time. If the Orders API has concurrency set to `20`, one warm instance can handle up to 20 simultaneous requests before Cloud Run needs another instance for extra load. Higher concurrency can reduce instance count and cost, but the application code and dependencies must be safe under that shared load.
+
+The Orders API does database writes, payment calls, and inventory checks. If one instance can process 80 requests at once, the app may create many simultaneous database queries inside one container. If concurrency is set too low, Cloud Run may start more instances than needed, and each instance may open its own connection pool.
+
+The team should size concurrency with downstream limits in mind. Suppose the database team gives the Orders API a budget of 180 active database connections. If each Cloud Run instance opens a pool of 5 connections, a max of 30 instances keeps the worst-case pool count near 150 connections and leaves room for migrations, admin sessions, and other services. Concurrency then decides how much user traffic those 30 instances can absorb before requests queue or fail.
+
+A practical starting update may look like this. This changes the service configuration and records the value in a new revision.
+
+```bash
+gcloud run services update orders-api \
+  --region=us-central1 \
+  --concurrency=20
+```
+
+The team should test this value with realistic checkout traffic. CPU-heavy code may need lower concurrency. Mostly I/O-bound code may tolerate higher concurrency. The important production habit is treating concurrency as a capacity control, not a random default. Concurrency shapes each instance, while max and min instances shape the whole service.
+
+## Max and Min Instances
+<!-- section-summary: Max instances cap blast radius for downstream systems, while min instances keep warm capacity for latency-sensitive paths. -->
+
+**Max instances** sets an upper limit on how many Cloud Run instances the service can run. This is one of the most important safety controls for a public backend. Autoscaling without a cap can turn a traffic spike into a database incident if every new instance opens connections or calls the same downstream API.
+
+The Orders team might set the service to at most 30 instances. That number should come from dependency budgets, load testing, and the team's chosen failure mode.
+
+```bash
+gcloud run services update orders-api \
+  --region=us-central1 \
+  --max-instances=30
+```
+
+That cap does not make the API infinitely reliable. When demand exceeds what 30 instances can handle, callers may see latency or errors. The cap gives the team a controlled failure mode instead of letting the checkout database collapse under a connection surge.
+
+**Min instances** keeps a configured number of instances warm and ready to receive requests. This can reduce cold-start latency on important paths, and it also creates predictable baseline cost. Google documents billing considerations for minimum instances, so teams usually choose small values for latency-sensitive services and keep admin or low-traffic services at zero.
+
+For the Orders API, one warm instance may be enough to protect normal checkout latency. A busier service might choose a larger baseline after measuring cold starts and cost.
+
+```bash
+gcloud run services update orders-api \
+  --region=us-central1 \
+  --min-instances=1
+```
+
+Minimum instances are useful, but they are still managed instances. The application should start cleanly, handle restarts, and expose useful health behavior. A warm instance is a latency tool, not a replacement for good startup code and safe retries. Scaling limits protect capacity, and runtime identity protects access.
+
+## Runtime Identity
+<!-- section-summary: The deployer identity manages Cloud Run, while the service identity is the account the running container uses for Google API calls. -->
+
+Cloud Run uses two identity ideas that beginners often mix together. The **deployer account** is the user or CI/CD service account that creates services, deploys revisions, and changes configuration through the Cloud Run Admin API. The **service identity** is the service account attached to the running Cloud Run service or revision.
+
+For the Orders API, the deployer might be a GitHub Actions workflow using Workload Identity Federation. That deployer needs Cloud Run deployment permissions and the ability to attach the runtime service account. Google documents this attachment permission through the Service Account User role, which contains `iam.serviceAccounts.actAs`.
+
+The running container should use a narrower account. A dedicated runtime identity might look like this, with only the roles the Orders API needs for Cloud SQL and one Secret Manager secret.
+
+```bash
+gcloud iam service-accounts create orders-api-runtime \
+  --project=orders-prod \
+  --display-name="Orders API runtime"
+
+gcloud projects add-iam-policy-binding orders-prod \
+  --member="serviceAccount:orders-api-runtime@orders-prod.iam.gserviceaccount.com" \
+  --role="roles/cloudsql.client"
+
+gcloud secrets add-iam-policy-binding orders-db-url \
+  --project=orders-prod \
+  --member="serviceAccount:orders-api-runtime@orders-prod.iam.gserviceaccount.com" \
+  --role="roles/secretmanager.secretAccessor"
+```
+
+That runtime identity can connect to Cloud SQL and read the specific database secret. It does not need project Owner, project Editor, broad Secret Manager access, or deployment permissions. If the Orders container is compromised, the attacker receives only the runtime permissions attached to this service account.
+
+The service can attach or change the identity with an update. That update also creates a new revision because the runtime configuration changed.
+
+```bash
+gcloud run services update orders-api \
+  --region=us-central1 \
+  --service-account=orders-api-runtime@orders-prod.iam.gserviceaccount.com
+```
+
+Identity answers who the service is. Environment variables and secrets answer what settings the service receives at runtime, and those settings need the same review discipline as image changes.
+
+## Environment Variables and Secrets
+<!-- section-summary: Environment variables carry non-sensitive configuration, while Secret Manager stores sensitive values and Cloud Run maps them into the container. -->
+
+**Environment variables** are runtime values available to the process, such as `ENVIRONMENT`, `LOG_LEVEL`, `ORDERS_DB_NAME`, or a feature flag. They help the team promote the same image from development to staging to production while changing only the runtime configuration. The image tag can stay tied to the code version, and the service config can hold environment-specific values.
+
+A non-sensitive configuration update might look like this. These values are safe to expose in service configuration because they do not contain credentials.
+
+```bash
+gcloud run services update orders-api \
+  --region=us-central1 \
+  --update-env-vars=ENVIRONMENT=prod,LOG_LEVEL=info,ORDERS_DB_NAME=orders
+```
+
+**Secrets** are sensitive values such as passwords, API tokens, certificates, and private keys. Google recommends storing these values in Secret Manager and making them available to Cloud Run as environment variables or mounted files. The service identity needs Secret Manager access to the specific secret.
+
+If the Orders service maps the database URL from Secret Manager, the update could look like this. The secret name is `orders-db-url`, and Cloud Run exposes it to the container as `DATABASE_URL`.
+
+```bash
+gcloud run services update orders-api \
+  --region=us-central1 \
+  --set-secrets=DATABASE_URL=orders-db-url:latest
+```
+
+The team should treat secret mappings as release-sensitive configuration. A pinned secret version gives a revision a reproducible value. A `latest` mapping can simplify rotation, especially for mounted secret files, but the team still needs to understand when running instances pick up the value and how rollback should behave.
+
+The application code should read configuration from its normal runtime environment and fail clearly when required values are missing. That failure should appear in logs during canary verification, long before customers depend on the new revision.
+
+## Logs and Verification
+<!-- section-summary: Cloud Run debugging relies on service status, revision status, request logs, container logs, and downstream metrics rather than SSH access. -->
+
+Cloud Run sends several types of logs to Cloud Logging. **Request logs** describe requests sent to Cloud Run services. **Container logs** come from the application, usually standard output and standard error. **System logs** come from the platform. Together, these logs replace the old habit of SSHing into a server and looking around manually.
+
+For the Orders API, the application should write structured logs to standard output and standard error. The log should include useful fields such as order ID, request ID, payment provider attempt, and the active code version, while avoiding card data, tokens, and customer secrets. Structured logs make Logs Explorer and alerting much more useful during a failed rollout.
+
+The verification flow after a deploy usually checks service configuration, revisions, and logs. These commands give the operator the service state, the revision list, and the latest service logs.
+
+```bash
+gcloud run services describe orders-api \
+  --region=us-central1
+
+gcloud run revisions list \
+  --service=orders-api \
+  --region=us-central1
+
+gcloud run services logs read orders-api \
+  --region=us-central1 \
+  --limit=50
+```
+
+For deeper filtering, the team can query Cloud Logging directly. The resource filter narrows the result to Cloud Run revisions for this service.
+
+```bash
+gcloud logging read \
+  'resource.type="cloud_run_revision" AND resource.labels.service_name="orders-api"' \
+  --project=orders-prod \
+  --limit=20
+```
+
+Verification should include downstream evidence too. The team checks Cloud SQL connection count, database latency, payment provider errors, Pub/Sub backlog, and error budget burn while the canary receives traffic. A Cloud Run revision can look healthy while the database is under stress, so service logs and dependency metrics need to be read together. Now the pieces can come together as one production rollout.
 
 ## Putting It All Together
+<!-- section-summary: A healthy Cloud Run rollout connects image, service config, identity, secrets, scaling, traffic, and logs in one repeatable path. -->
 
-Decoupling web API execution from virtual servers requires establishing a clean, containerized contract.
+The Orders team starts by building an immutable container image and pushing it to Artifact Registry. The application listens on the injected `PORT`, binds to `0.0.0.0`, writes structured logs, and treats durable state as an external service. That container contract lets Cloud Run start and route traffic to the service.
 
-When a user issues a checkout request, the public entry load balancer routes the HTTP request to the `devpolaris-orders-api` Cloud Run service. If the service was idle, Cloud Run starts an instance of the active revision and waits for the container to satisfy the runtime contract.
+The first production deploy creates the `orders-api` service in `us-central1` with a dedicated runtime service account. The service account can connect to Cloud SQL and read only the required database secret. Environment variables hold non-sensitive settings, and Secret Manager holds the database URL.
 
-The container boots, programmatically reads the injected `PORT` variable, and binds its server process to interface `0.0.0.0`. Once the startup probe passes, Cloud Run can route requests to the instance. The application code uses the attached least-privilege service account to retrieve its database secret and commits the transaction, routing its logs directly to `stdout` for unified operational monitoring.
+For each new release, the team deploys a new revision with no traffic and a canary tag. They verify startup logs, revision status, health behavior, and dependency access through the tag URL or another controlled test path. When the canary looks healthy, they move a small percentage of traffic to it.
+
+During the rollout, concurrency and max instances protect the database connection budget. Min instances keep one warm container ready for the checkout path. Logs, request metrics, database metrics, and payment-provider errors decide whether the rollout continues or traffic returns to the previous revision.
+
+This is the production shape Cloud Run is good at: a stateless container service with a clear port contract, a managed service wrapper, explicit identity, controlled configuration, bounded scaling, and revision-based release safety. The Orders team can repeat the same pattern for other HTTP backends once the first service works reliably.
 
 ## What's Next
+<!-- section-summary: The next runtime to understand is Compute Engine, because some workloads still need VM-level control. -->
 
-Cloud Run represents the standard runtime for stateless, containerized HTTP applications. However, some workloads do not fit managed container models, requiring direct operating system control, custom host monitoring agents, or persistent virtual disks. In the next article, we analyze Compute Engine, detailing virtual machines, custom machine types, disks, zones, and maintenance behavior.
-
-![A six-part summary infographic for cloud run summary covering Container contract, Revision, Traffic split, Autoscale, Service account, Logs](/content-assets/articles/article-cloud-providers-gcp-compute-application-hosting-cloud-run-services-backend-apis/cloud-run-summary.png)
-
-*Use this summary as the quick mental checklist before designing or debugging the service.*
-
+Cloud Run is a strong default for the Orders API, but the older invoice PDF worker still needs a server-shaped home while the team modernizes it. The next article moves into Compute Engine and looks at virtual machines, machine types, images, disks, service accounts, startup scripts, zones, and maintenance behavior.
 
 ---
 
 **References**
 
-- [Google Cloud: Cloud Run documentation](https://cloud.google.com/run/docs) - Complete architectural guidelines for serverless container deployment.
-- [Google Cloud: Cloud Run autoscaling](https://cloud.google.com/run/docs/about-instance-autoscaling) - Explains instance scaling, concurrency, and scale-to-zero behavior.
-- [Google Cloud: Maximum instance limits](https://cloud.google.com/run/docs/configuring/max-instances-limits) - Documents scaling limits and downstream protection controls.
-- [Google Cloud: Configure container ports](https://cloud.google.com/run/docs/configuring/services/containers) - Guide to PORT environment variables and interface binding contracts.
-- [Google Cloud: Service identity](https://cloud.google.com/run/docs/securing/service-identity) - Standard security protocols for attaching workload service accounts.
+- [Cloud Run documentation](https://docs.cloud.google.com/run/docs) - Official Cloud Run documentation for services, jobs, worker pools, functions, configuration, security, and operations.
+- [What is Cloud Run](https://docs.cloud.google.com/run/docs/overview/what-is-cloud-run) - Explains Cloud Run services, jobs, and worker pools as ways to run code on the same managed execution environment.
+- [Container runtime contract](https://docs.cloud.google.com/run/docs/container-contract) - Documents the `PORT` environment variable, the `0.0.0.0` listener requirement, and other container requirements.
+- [Deploying container images to Cloud Run](https://docs.cloud.google.com/run/docs/deploying) - Documents `gcloud run deploy`, service creation, image deployment, and invocation access choices.
+- [Manage Cloud Run services](https://docs.cloud.google.com/run/docs/managing/services) - Documents service URLs and service-level management behavior.
+- [Manage revisions](https://docs.cloud.google.com/run/docs/managing/revisions) - Explains immutable revisions, revision listing, tagged revisions, traffic routing, and revision retention considerations.
+- [Rollbacks, gradual rollouts, and traffic migration](https://docs.cloud.google.com/run/docs/rollouts-rollbacks-traffic-migration) - Documents traffic percentages, gradual rollout, split traffic, and rollback commands.
+- [Maximum concurrent requests for services](https://docs.cloud.google.com/run/docs/about-concurrency) - Explains per-instance request concurrency and its operational impact.
+- [Set maximum concurrent requests per instance](https://docs.cloud.google.com/run/docs/configuring/concurrency) - Documents the `--concurrency` configuration flow.
+- [Set maximum instances for services](https://docs.cloud.google.com/run/docs/configuring/max-instances) - Documents service and revision maximum instance settings.
+- [Set minimum instances for services](https://docs.cloud.google.com/run/docs/configuring/min-instances) - Documents warm minimum instances, billing considerations, and related commands.
+- [Configure service identity for services](https://docs.cloud.google.com/run/docs/configuring/services/service-identity) - Documents Cloud Run service identity, deployer permissions, and `--service-account`.
+- [Introduction to service identity](https://docs.cloud.google.com/run/docs/securing/service-identity) - Explains deployer identity and service identity for Cloud Run.
+- [Configure environment variables for services](https://docs.cloud.google.com/run/docs/configuring/services/environment-variables) - Documents environment variable deployment and update flags.
+- [Configure secrets for services](https://docs.cloud.google.com/run/docs/configuring/services/secrets) - Documents Secret Manager integration, secret environment variables, secret volumes, and required roles.
+- [Logging and viewing logs in Cloud Run](https://docs.cloud.google.com/run/docs/logging) - Documents request logs, container logs, system logs, standard output, standard error, and CLI log commands.

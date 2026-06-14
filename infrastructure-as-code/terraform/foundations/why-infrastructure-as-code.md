@@ -1,181 +1,259 @@
 ---
 title: "Why Infrastructure as Code?"
-description: "Understand the problems that Infrastructure as Code solves and why writing configuration files beats clicking through cloud consoles."
-overview: "Before learning Terraform, you need to understand the problem it solves. This article walks through the real pain of managing cloud infrastructure by hand and explains why describing your infrastructure in code is a better approach."
-tags: ["iac", "devops", "declarative", "imperative"]
+description: "Understand why teams move cloud infrastructure changes out of the console and into reviewable Terraform configuration."
+overview: "Infrastructure as Code gives a team a shared, reviewable record of what its cloud infrastructure should look like. This article follows one manual setup for devpolaris-orders-api, shows where click-ops and scripts start to hurt, and explains how Terraform turns infrastructure intent into a plan, an apply, and a verified change."
+tags: ["iac", "terraform", "devops", "infrastructure"]
 order: 1
 id: article-iac-terraform-foundations-why-iac
 ---
 
 ## Table of Contents
 
-1. [The Starting Point: Managing Servers by Hand](#the-starting-point-managing-servers-by-hand)
-2. [What Click-Ops Actually Does Behind the Scenes](#what-click-ops-actually-does-behind-the-scenes)
-3. [The Drift Problem](#the-drift-problem)
-4. [Why Shell Scripts Are Not the Answer](#why-shell-scripts-are-not-the-answer)
-5. [What Infrastructure as Code Looks Like](#what-infrastructure-as-code-looks-like)
-6. [Declarative vs Imperative: Two Different Ideas](#declarative-vs-imperative-two-different-ideas)
-7. [The Real Benefits You Get Day to Day](#the-real-benefits-you-get-day-to-day)
-8. [Putting It All Together](#putting-it-all-together)
-9. [What's Next](#whats-next)
+1. [The Manual Setup That Starts the Problem](#the-manual-setup-that-starts-the-problem)
+2. [What Infrastructure as Code Means](#what-infrastructure-as-code-means)
+3. [Why Click-Ops Gets Risky](#why-click-ops-gets-risky)
+4. [Drift: When Cloud Reality Moves](#drift-when-cloud-reality-moves)
+5. [Terraform as Shared Infrastructure Intent](#terraform-as-shared-infrastructure-intent)
+6. [Where Shell Scripts Hit Their Limit](#where-shell-scripts-hit-their-limit)
+7. [Reviewable Changes Through Git](#reviewable-changes-through-git)
+8. [Repeatable Environments](#repeatable-environments)
+9. [Change Records and Rollback Thinking](#change-records-and-rollback-thinking)
+10. [What Real Teams Do](#what-real-teams-do)
+11. [Putting It All Together](#putting-it-all-together)
+12. [What's Next](#whats-next)
 
-## The Starting Point: Managing Servers by Hand
+Before Terraform enters the story, we need to name the day-to-day problem. A team can have excellent engineers, a careful cloud provider, and a small application, then still lose track of its infrastructure because the important decisions live in console forms, chat messages, and people's memories. This article follows that ordinary path and then turns each painful part into a Terraform idea.
 
-Infrastructure as Code is the practice of treating infrastructure changes as versioned configuration that tools can plan, review, and apply repeatedly.
+The path is simple. We start with a team creating infrastructure by hand, then look at the specific problems that come from that workflow: hidden changes, missing review, drift, and rebuilds that depend on memory. After that, Terraform shows up as the shared place where the team writes what it wants, previews the change, reviews it in Git, applies it, and verifies the result.
 
-Most teams start in the same place: someone logs into a cloud console, clicks around for a while, and a server appears. It works. The application deploys. Customers can connect. Job done.
+## The Manual Setup That Starts the Problem
+<!-- section-summary: A manual cloud setup can work on day one, then leave the team without a shared record of the exact infrastructure choices. -->
 
-This approach is called click-ops, managing infrastructure by clicking through a web interface. For a single server, it is perfectly reasonable. The problems show up gradually, over weeks and months, as the system grows.
+Imagine the DevPolaris team is launching a new backend called `devpolaris-orders-api`. The service needs a network, a database, an object storage bucket for exports, and a service account that lets the application talk to the cloud APIs it needs. The team is moving quickly, so one engineer opens the cloud console and starts creating things by hand.
 
-Imagine your team needs to copy that server setup to a second cloud region. You log into the console, navigate to the new region, and repeat all the same steps from memory. Forty-five minutes later, you have a second server. But is it actually identical to the first? You probably skipped one checkbox or entered a slightly different value in one field. You will not know until something breaks.
+They create a **VPC**, which is the private network where cloud resources can live together. They choose a CIDR range, add subnets, attach route tables, and set up a few security rules so the service can reach the database. Then they create a **database** for orders, a **bucket** for invoice exports, and a **service account** named `devpolaris-orders-api` so the service can read and write only the resources it needs.
 
-Now imagine your company asks you to maintain three environments: development, where engineers test their code changes; staging, where you do final checks before releasing; and production, where real customers connect. You need each environment to look the same, the same network settings, the same server sizes, the same security rules. Every time you make a change in production, you need to remember to make the same change in development and staging. If you forget, the environments drift apart. A bug that only appears in staging because of a missing security rule. An outage in production caused by a configuration that works fine in development. Hours of debugging to find a two-character difference in a network setting.
+At this point, the setup works. The API can boot, connect to the database, write export files to the bucket, and authenticate as its service account. Everyone is happy for about ten minutes, because the next question arrives quickly: "Which exact settings did we choose?"
 
-This is the situation Infrastructure as Code is designed to fix.
+That question sounds small, but it is the beginning of the whole Infrastructure as Code story. The VPC has a CIDR range, subnet sizes, regions, routing settings, firewall rules, database flags, backup settings, bucket encryption options, lifecycle rules, and service account permissions. Some of those choices came from the engineer's memory, some came from defaults, and some came from quick fixes made after the first deployment failed.
 
-## What Click-Ops Actually Does Behind the Scenes
+The team now has working infrastructure, but the full recipe lives across the cloud console and one person's memory. If another engineer needs to review it, they have to click through the console and inspect each resource one by one. If staging needs the same setup next week, someone has to repeat the setup and hope they pick the same settings.
 
-When you click the button in the AWS console to create a virtual machine, you might think you are doing something special, using a privileged interface that has direct access to Amazon's hardware. You are not. Your browser is sending a normal web request.
+## What Infrastructure as Code Means
+<!-- section-summary: Infrastructure as Code means writing the desired cloud setup in files that a tool can plan, review, and apply. -->
 
-Every action you take in the AWS console sends an HTTP request to Amazon's servers. When you fill out the form to create an EC2 instance and click the orange button, your browser packages everything you filled in, the instance type, the region, the AMI, the security groups, into a structured request and sends it to an API endpoint. Amazon's systems receive that request, validate it, and tell the physical servers to create your virtual machine. The console is just a form on top of an API.
+**Infrastructure as Code**, usually shortened to **IaC**, means describing infrastructure in files and using a tool to make the cloud match those files. The files might describe networks, databases, buckets, service accounts, permissions, load balancers, DNS records, and many other resources. The key idea is that the important settings move from console forms into versioned configuration.
 
-This is an important thing to understand: there is nothing special about using the console. You are using an API either way. The console just makes it easier to explore what options are available. But because the console is a form, it does not save a record of what you did. When you create a security group by clicking through ten screens, the only record of what you created is the security group itself, sitting in AWS. The steps you followed exist only in your head.
+For Terraform, those files are written in HashiCorp Configuration Language, usually called **HCL**. HCL is designed to be readable enough for humans and structured enough for Terraform to understand. A Terraform file can say, in a practical way, "this service needs a VPC, this database, this bucket, and this service account."
 
-Infrastructure as code replaces the form with a text file. Instead of filling in a form, you write down the settings you want. Then a tool reads that file and makes the same API calls that the console would have made. The result in AWS is identical. But now you have a record. You can read the file next week and know exactly what you created. You can share it with a colleague. You can store it in version control.
-
-## The Drift Problem
-
-In engineering, drift means two things that are supposed to be the same have silently become different.
-
-![Console changes and scripts can change infrastructure without leaving a shared desired-state record.](/content-assets/articles/article-iac-terraform-foundations-why-iac/manual-change-drift.png)
-
-*Clicks and scripts can change infrastructure without leaving a shared desired-state record.*
-
-Infrastructure drift is one of the most common sources of production incidents in teams that manage servers by hand. Here is how it typically happens.
-
-A production server starts having connection timeouts. An engineer logs into the AWS console late on a Friday afternoon to investigate. She finds that the security group is missing an outbound rule. She adds it. The problem goes away. She makes a mental note to update the documentation, but it is Friday afternoon, so it does not happen.
-
-The documentation still says the security group looks one way. The actual security group now looks a different way. The development and staging environments still have the original security group without the new rule. Three weeks later, a different engineer is debugging a connection issue in staging. He spends two hours comparing staging to production before he notices the security group difference. He adds the same rule to staging. He means to add it to development too, but gets interrupted.
-
-Now development, staging, and production all have slightly different security group configurations. No one knows which one is correct. The documentation is wrong. The only way to know the current state of each environment is to log in and look.
-
-Infrastructure as code reduces drift by making the text file the reviewed desired record. If you need to add a security group rule, you change the file. You run the tool that reads the file and applies the changes. The same change goes to every environment that uses that file. The file in version control shows what the infrastructure is supposed to look like, while the plan step compares that intent with reality.
-
-If someone does make a manual change in the console, maybe in an emergency, the next time the tool runs, it will notice the difference between the file and reality and offer to correct it. The drift is detected and fixed, rather than silently accumulating.
-
-## Why Shell Scripts Are Not the Answer
-
-When teams realize that clicking through a console is not scalable, many try the obvious alternative: write a shell script that runs the same AWS CLI commands automatically. The script creates the VPC, the subnets, the security groups, and the servers, one command at a time.
-
-This is progress. The script is reproducible. You can run it again and get the same results. You can store it in version control.
-
-But shell scripts have a fundamental problem when used for infrastructure: they do not know what already exists.
-
-When you run a shell script to create a server, it runs the create command. If you run it a second time, it tries to run the create command again. Depending on the provider, this either fails with an error (because something with that name already exists) or creates a second server alongside the first. Neither is what you wanted.
-
-To make a shell script safe to run multiple times, you have to add checks before every command: does this security group already exist? If yes, skip the create command. If no, create it. Does the server exist with the right settings? If no, create it. If yes, does it need any updates? If yes, run the update command. These checks quickly become the majority of the code, and they are fragile, a typo in the check logic can cause a script to try to create something that already exists, or skip creating something that should have been created.
-
-Shell scripts also fail badly in the middle. If your script runs fifty commands and fails on command thirty-two, you now have an environment that is partially set up. To fix it, you need to figure out exactly which of the fifty commands succeeded and which did not, then run just the failed ones. There is no mechanism to do this automatically.
-
-Infrastructure as Code tools solve both of these problems. They track what they manage using a state file, so they can usually tell the difference between something new and something they already created. And if they fail in the middle of a large operation, you can run them again and they will compare the desired state in your files, the remembered state in the state file, and the current reality reported by the cloud API. That lets the next run continue from the actual situation rather than blindly replaying every create command.
-
-## What Infrastructure as Code Looks Like
-
-Infrastructure as Code means describing your infrastructure in a text file, then using a tool to make reality match what the file says.
-
-![Terraform configuration can produce a reviewable plan before cloud resources change.](/content-assets/articles/article-iac-terraform-foundations-why-iac/plan-review-gate.png)
-
-*Infrastructure as Code makes changes reviewable before they alter shared systems.*
-
-The text file describes what you want, the end state, without specifying the steps to get there. You do not say "first create the VPC, then create the subnet, then create the server." You say "I want a VPC with this address range, a subnet inside it, and a server inside that subnet." The tool figures out the correct order of operations.
-
-Here is a small example that describes a simple web server setup:
+Here is a small example of what a team might write around the orders service. The details stay intentionally small so we can focus on the workflow shape before provider-specific settings arrive later.
 
 ```hcl
-resource "aws_vpc" "main" {
-  cidr_block = "10.0.0.0/16"
-}
+module "orders_api" {
+  source = "./modules/service"
 
-resource "aws_subnet" "web" {
-  vpc_id     = aws_vpc.main.id
-  cidr_block = "10.0.1.0/24"
-}
+  name        = "devpolaris-orders-api"
+  environment = "dev"
 
-data "aws_ami" "amazon_linux" {
-  most_recent = true
-  owners      = ["amazon"]
-
-  filter {
-    name   = "name"
-    values = ["al2023-ami-*-x86_64"]
-  }
-}
-
-resource "aws_instance" "app" {
-  ami           = data.aws_ami.amazon_linux.id
-  instance_type = "t3.small"
-  subnet_id     = aws_subnet.web.id
+  vpc_cidr        = "10.40.0.0/16"
+  database_engine = "postgres"
+  bucket_name     = "devpolaris-orders-api-dev-exports"
 }
 ```
 
-This file says: create a network with the address range 10.0.0.0/16, create a subnet inside it, and create a server inside that subnet. It does not say how to do any of that. The tool reads the file, talks to AWS, and figures out what API calls to make and in what order. The AMI value comes from a data source rather than a hardcoded AMI ID because AMI IDs are regional and can be deprecated over time.
+This configuration gives the team a shared place to discuss intent. If someone asks which CIDR range the development VPC should use, the answer is in the file. If someone asks why the bucket name changed, the answer can be found in the Git diff and the pull request discussion.
 
-The reference `aws_vpc.main.id` on the subnet line is particularly important. It says: the `vpc_id` for this subnet should be whatever ID gets assigned to the VPC we just defined. The tool knows it has to create the VPC first to get its ID, and then use that ID when creating the subnet. The dependency is inferred automatically from the reference.
+Terraform then uses cloud provider APIs to compare the configuration with the real resources. A **plan** previews the changes Terraform would make. An **apply** performs the approved changes. Terraform also keeps **state**, which maps resources in the configuration to real cloud objects, so it can keep track of what it manages over time.
 
-This file is readable. A new team member can look at it and understand what infrastructure it describes in a few seconds. You can store it in Git. You can review changes to it in a pull request. You can see exactly what changed, who changed it, and when.
+That gives us the basic definition. The next step is understanding why this matters so much for teams that already know how to use the console.
 
-## Declarative vs Imperative: Two Different Ideas
+## Why Click-Ops Gets Risky
+<!-- section-summary: Click-ops hides important decisions inside console activity, so teams lose review, shared memory, and rebuild confidence. -->
 
-These two words come up often in Infrastructure as Code discussions, and they describe two fundamentally different ways of telling a computer what to do.
+**Click-ops** means managing infrastructure by clicking through a cloud provider's web console. It is useful for learning and investigation because the console shows available options, validation messages, and resource screens in one place. Many engineers first learn cloud services this way, and that is completely normal.
 
-Imperative means telling the computer the steps to follow. "Create a VPC. Create a subnet. Create a server." You specify the actions in order. Shell scripts are imperative. Most programming languages are imperative. You tell the computer what to do, step by step.
+The risk shows up in teams that use click-ops as the main change process for shared infrastructure. The console can create the same resources Terraform can create because both paths call provider APIs behind the scenes. The difference is that console clicks usually leave the team with the final resource, while Terraform leaves the team with the resource plus the reviewed configuration that created it.
 
-Declarative means telling the computer the desired end state. "I want a VPC, a subnet, and a server." You describe what you want to exist, not how to create it. The tool figures out the steps.
+Go back to `devpolaris-orders-api`. The first engineer manually creates the VPC, database, bucket, and service account. Later, a second engineer changes the database backup window from 01:00 to 03:00 because a nightly import job runs at 01:30. That might be the right fix, but the change happened in the console during a busy afternoon.
 
-The advantage of the declarative approach for infrastructure is that the tool can compare what you want against what currently exists, and do only the work needed to close the gap. If the VPC already exists from a previous run, the tool does not recreate it, it just moves on to the subnet. If the server already exists with the right settings, no changes are made. The declarative file describes the target, and the tool reconciles reality to match it.
+Now the team has three click-ops problems. They look small one by one, but together they explain why console-only workflows wear teams down.
 
-This compare-and-fix cycle is why declarative tools handle failures gracefully. If something goes wrong halfway through, the file still describes the same target. Running the tool again does not start over from scratch, it checks what already exists and creates only the missing pieces.
+| Problem | What it looks like for `devpolaris-orders-api` | Why it hurts |
+|---|---|---|
+| **Hidden changes** | The database backup window changes in the console. | The current setting exists in the cloud, but the reason and timing live in memory. |
+| **No review** | A firewall rule opens wider access so a test can pass. | Teammates see the result after the fact, if they notice at all. |
+| **No repeatable rebuild** | A new environment needs the same VPC, bucket, database, and service account. | The team has to reconstruct the setup from screenshots, notes, and console inspection. |
 
-It is also why the same file can be used for multiple environments. You run the tool in development, it creates the development infrastructure. You run it with different settings in production, it creates the production infrastructure. The file describes the shape of the infrastructure; the specific values change based on the environment.
+The painful part is that each individual click can be reasonable. The backup window change helps the import job. The firewall tweak helps a developer unblock a test. The bucket lifecycle rule keeps storage costs down. Trouble grows because the team lacks one shared, reviewed place where those decisions accumulate.
 
-## The Real Benefits You Get Day to Day
+Terraform gives the team that place. It moves the change from "someone clicked this" to "someone proposed this configuration change, Terraform planned the result, reviewers looked at it, and the team applied it."
 
-The pitch for Infrastructure as Code often sounds abstract. "Reproducibility." "Consistency." "Auditability." What do these actually mean for your daily work?
+## Drift: When Cloud Reality Moves
+<!-- section-summary: Drift means real cloud resources have changed outside the configuration that the team expects to represent them. -->
 
-**You stop making changes by clicking.** Every change to the infrastructure goes through the same process: update the file, review the change, apply it. The file tells the team what the infrastructure is supposed to look like, and the plan step checks that intent against state and provider reality. You still use the console or API for investigation sometimes, but the reviewed desired state lives in code.
+Once a team writes infrastructure in Terraform, a new word starts showing up in reviews and incident notes: **drift**. Drift means the real cloud resources have moved away from the configuration the team expects to represent them. In plain English, the file says one thing and the cloud now has another thing.
 
-**New environments take minutes, not days.** Want to spin up a copy of your production environment for performance testing? Change the target and run the tool. Everything gets created in the correct order with the correct settings. No manual steps, no checklists, no forgetting things.
+Drift can happen for ordinary reasons. Someone fixes an incident by editing a rule in the console. A managed service changes a default value after an upgrade. A one-time migration script changes a database flag. A teammate tests a setting in development and forgets to copy the change back into Terraform.
 
-**Changes are reviewed before they are applied.** Before the tool makes any real changes, it tells you exactly what it is going to do: create this resource, modify this attribute, destroy that resource. You can review the plan and confirm it looks right before committing. This catches mistakes that would otherwise only show up as an outage.
+For `devpolaris-orders-api`, imagine the Terraform file says the service account can read and write only the export bucket. During a production incident, someone adds broader storage permissions in the console so the service can finish a delayed export. The incident ends, but the console permission stays in place.
 
-**Recovering from disasters becomes more practical.** If you lose an entire cloud region, the configuration gives you a repeatable starting point for rebuilding in another region. You still need backups, replicated data, DNS failover, credentials, quotas, and provider-specific disaster recovery planning. But you do not need to remember every resource, every setting, and every dependency from scratch; the intended infrastructure shape is written down.
+Now the infrastructure has two stories. The Terraform configuration says the service account has narrow access. The cloud provider says the service account has broader access. The security review reads the file and thinks the permission is tight, while the running system has a wider permission than the team agreed to.
 
-**The history of your infrastructure is in Git.** Who changed the firewall rule last Tuesday? The Git log knows. What did the network look like six months ago before the big migration? Check out an old commit. Why does production have a different database size than staging? Read the pull request that changed it.
+Terraform helps because planning checks configuration, state, and provider reality together. State is Terraform's record that connects a resource block, such as a bucket or service account, to the real object in the cloud. Before Terraform decides what to change, it refreshes its view of the real resources and compares that view with the configuration.
+
+The plan may show that the service account has extra permission and propose removing it. Sometimes the team decides the emergency change should become permanent, so they update the Terraform file to include the new permission with a clear explanation. Either way, drift turns into a visible conversation instead of a quiet surprise.
+
+## Terraform as Shared Infrastructure Intent
+<!-- section-summary: Terraform configuration records what the team wants the infrastructure to be, then Terraform plans how to move real resources toward that intent. -->
+
+Terraform configuration is best understood as **shared infrastructure intent**. Intent means the team writes down what should exist and which important settings should be true. The file describes the desired VPC shape, database setup, bucket settings, and service account permissions for `devpolaris-orders-api`.
+
+That wording matters because the file carries the team conversation as well as the automation input. When an engineer changes the database instance size, they are changing the team's declared intent for the database. When another engineer reviews the change, they are reviewing a real infrastructure decision before it reaches the cloud.
+
+Terraform's plan step connects that intent to reality. A plan reads the current configuration, checks Terraform state, asks the provider about existing objects, and proposes actions that would make the remote resources match the configuration. The plan might say Terraform will create a bucket, update a database backup window, remove an extra permission, or destroy a resource that disappeared from the configuration.
+
+For a beginner, the word **desired state** will come up often. Desired state means the target shape written in the Terraform files. Terraform compares that target with the actual infrastructure and works out the operations needed to close the gap.
+
+This is why Terraform feels different from manually following a checklist. The checklist says which steps a human should remember to do. Terraform configuration says which end result the team wants, and Terraform works out the dependency order through resource references and provider data.
+
+The shared-intent idea also explains why Terraform state matters. If the configuration says `bucket exports`, Terraform state records which real provider object belongs to that resource. That mapping lets Terraform update the correct bucket next time instead of guessing based on a name that might have changed.
+
+## Where Shell Scripts Hit Their Limit
+<!-- section-summary: Shell scripts help automate steps, but long-lived infrastructure needs memory, comparison, planning, and review around the target state. -->
+
+After the click-ops pain shows up, many teams try a shell script. That is a reasonable instinct. A script can run cloud CLI commands, create resources in a consistent order, and live in Git beside application code.
+
+For a short-lived demo environment, a script may be enough. It can create a test bucket, upload a sample file, run a command, and clean up. The script has a clear beginning and end, and the resources only live for the exercise.
+
+Long-lived infrastructure creates a different problem. The `devpolaris-orders-api` VPC, database, bucket, and service account will exist for months or years. They will receive small changes over time: a new subnet, a database storage increase, a bucket lifecycle rule, a tighter permission, a new tag, a new environment, and a few incident fixes.
+
+A shell script can create resources, but it has limited built-in memory about what it created last month. To make the script safe to run repeatedly, the team has to add checks everywhere. Does the VPC already exist? Does it have the correct CIDR? Does the bucket already have encryption enabled? Does the service account have exactly the expected permissions? Each check adds more script code, and each provider edge case adds another branch.
+
+Here is the shape of the problem. Even this tiny branch hints at the work the script has to carry.
+
+```bash
+if bucket_exists "devpolaris-orders-api-dev-exports"; then
+  update_bucket_settings "devpolaris-orders-api-dev-exports"
+else
+  create_bucket "devpolaris-orders-api-dev-exports"
+fi
+```
+
+That tiny example looks fine. Now imagine writing the same create-or-update logic for networks, routes, firewalls, databases, backups, users, policies, secrets, DNS records, and load balancers. The team slowly grows the script into a custom infrastructure tool.
+
+Terraform already focuses on that job. It stores state, refreshes real resources, builds a dependency graph, creates a plan, and applies changes. Shell scripts still have a place around Terraform for glue tasks, release steps, or one-off operations, but the long-lived infrastructure record belongs in a tool built for stateful infrastructure changes.
+
+## Reviewable Changes Through Git
+<!-- section-summary: Git turns infrastructure changes into pull requests that teammates can review before the cloud changes. -->
+
+Once Terraform files live in Git, infrastructure changes can use the same collaboration habits as application code. An engineer creates a branch, edits the Terraform configuration, opens a pull request, and asks the team to review the proposed change. The PR shows exactly which lines changed and gives reviewers a place to ask questions.
+
+For `devpolaris-orders-api`, suppose an engineer wants to make the production database larger before a traffic launch. In a console workflow, they might click into the database page, choose a larger size, confirm the change, and post a chat message afterward. In a Terraform workflow, they change the database size in a file and open a PR.
+
+That PR can answer better questions before the change reaches production. Is the database size increase only for production? Does staging need a matching change for load testing? Will the change require downtime? Does the plan show an in-place update or a replacement? Did the engineer include the reason for the change in the PR description?
+
+The **Terraform plan** gives reviewers an infrastructure-specific diff. The Git diff shows the file change, while the plan shows Terraform's expected cloud actions. Those are related, but they answer different questions. The Git diff might show `instance_size = "large"`, and the plan might show whether the provider can update the existing database or needs to replace it.
+
+That review step changes the team's habits. Infrastructure decisions move into visible discussion. New engineers can read old PRs and understand why a bucket lifecycle rule exists or why a service account has a specific permission. Security and operations teammates can review sensitive changes before they land.
+
+## Repeatable Environments
+<!-- section-summary: Terraform lets teams create development, staging, and production with the same structure and controlled differences. -->
+
+The next pressure point is environments. The orders service may start in development, but soon the team needs staging and production. Each environment needs the same basic shape: a VPC, database, bucket, service account, and application settings.
+
+Repeatable environments mean the team can create the same infrastructure pattern again with controlled differences. Development might use a small database and short retention. Production might use a larger database, longer backups, stricter access, and stronger monitoring. The important part is that the differences are written down instead of remembered.
+
+A simple Terraform setup might pass environment values into the same module. The shared module holds the common shape, and each environment sends its own values.
+
+```hcl
+module "orders_api_dev" {
+  source = "./modules/orders-api"
+
+  environment       = "dev"
+  database_size     = "small"
+  backup_retention  = 3
+  export_bucket_tier = "standard"
+}
+
+module "orders_api_prod" {
+  source = "./modules/orders-api"
+
+  environment       = "prod"
+  database_size     = "large"
+  backup_retention  = 30
+  export_bucket_tier = "standard"
+}
+```
+
+The module captures the shared structure, while the inputs capture the differences. Reviewers can see that production has longer backup retention and a larger database. They can also spot accidental differences, such as a missing encryption setting or a service account permission that exists in development but never reached production.
+
+This matters during incidents and launches. If staging fails because the bucket policy differs from production, the team can compare Terraform inputs and module code. If a temporary performance environment is needed for a week, the team can create it from the same pattern and remove it cleanly afterward.
+
+Repeatability also helps disaster recovery thinking. If the team needs to rebuild the infrastructure in another region, Terraform gives them a written starting point for networks, buckets, service accounts, and compute resources. Data restore, DNS failover, provider quotas, and secrets still need careful planning, but the infrastructure shape is no longer reconstructed from memory.
+
+## Change Records and Rollback Thinking
+<!-- section-summary: Git history, plans, and apply logs create a change record, while rollback requires reading the next plan instead of blindly undoing. -->
+
+Infrastructure changes need a record because infrastructure decisions affect security, reliability, cost, and data. A good record answers simple questions later: who changed this, when did they change it, what did Terraform plan to do, who reviewed it, and what happened after apply?
+
+Git gives part of that record through commits and pull requests. Terraform gives another part through plans and apply logs. Together they create a timeline for the orders service: the VPC CIDR choice, the database backup change, the bucket lifecycle rule, the service account permission adjustment, and the production size increase.
+
+Rollback needs careful thinking because infrastructure rollback can mean several different things. For application code, rollback often means deploying the previous version. For infrastructure, a rollback might shrink a database, remove a firewall rule, recreate a bucket policy, restore from a snapshot, or move traffic back to an older environment.
+
+The safe habit is to make rollback a planned change too. If a Terraform PR increased the database size and the team needs to reverse it, they can revert the Git commit or edit the configuration back, then run a new plan. That new plan shows what Terraform would actually do in the cloud. If the plan says it will replace the database, the team should pause and choose a safer recovery path, such as restoring a snapshot or creating a new instance.
+
+This is the main lesson: Git history helps you find the previous intent, and Terraform plan tells you the current effect of returning to that intent. The team should read the rollback plan with the same care as the original change, especially around databases, storage, networking, identity, and anything that can affect production traffic.
+
+## What Real Teams Do
+<!-- section-summary: A practical Terraform workflow moves from pull request to plan, review, apply, and verification. -->
+
+A starter team workflow can stay simple. The important part is that every shared infrastructure change follows the same path. The orders service should use one visible workflow instead of a mix of console clicks, private scripts, and late-night fixes.
+
+Here is a common flow. The exact automation can change from team to team, but the review path should stay visible.
+
+| Step | What happens | What the team checks |
+|---|---|---|
+| **PR** | An engineer changes Terraform files for `devpolaris-orders-api`. | The diff explains the intended infrastructure change. |
+| **Plan** | CI or the engineer runs `terraform plan`. | The plan shows creates, updates, deletes, and possible replacements. |
+| **Review** | Teammates review the Git diff, plan output, and reason for the change. | Reviewers look for security, reliability, cost, and environment mistakes. |
+| **Apply** | An approved person or pipeline runs `terraform apply`. | The apply uses the approved configuration and reports the actual result. |
+| **Verify** | The team checks the service, metrics, logs, and important cloud settings. | The application still works, and the cloud matches the expected change. |
+
+In a small team, the first version might happen from a laptop. These commands give the team the same rhythm that later moves into CI.
+
+```bash
+terraform fmt
+terraform validate
+terraform plan
+terraform apply
+```
+
+As the team grows, CI/CD usually runs formatting, validation, and plan on pull requests. Production apply often happens through an approved pipeline with controlled credentials, state locking, and audit logs. The mechanics can mature over time, but the shape stays the same: propose the intent, preview the cloud effect, review it, apply it, then verify the real system.
+
+Verification deserves its own mention because Terraform confirms infrastructure operations while the team still checks application health. After the orders database changes, the team checks that `devpolaris-orders-api` can connect, write an order, create an export file, and emit normal logs. Terraform handles the infrastructure workflow, while the team still owns production readiness.
 
 ## Putting It All Together
+<!-- section-summary: Infrastructure as Code gives teams a shared, reviewable, repeatable way to manage infrastructure over time. -->
 
-Click-ops and shell scripts both work, up to a point. They stop working reliably when the system grows large enough that no one person can hold the entire configuration in their head. They fail when environments need to stay in sync over months and years. They break under the weight of team collaboration, where multiple people make changes and drift accumulates silently.
+Let's replay the story with Terraform in place from the beginning. The team wants `devpolaris-orders-api`, so an engineer writes Terraform configuration for the VPC, database, bucket, and service account. They open a PR with the reason for the change and include the Terraform plan.
 
-Infrastructure as Code replaces all of that with a text file that describes what you want and a tool that makes reality match it. The file is readable, versioned, reviewable, and shareable. The tool handles the ordering, the idempotency, the failure recovery, and the drift detection.
+Reviewers can see the proposed infrastructure before it exists. They can ask why the VPC CIDR is `10.40.0.0/16`, whether the database backups are long enough, whether the bucket encryption setting is correct, and whether the service account permissions match the service's real job. Those questions happen before a production resource changes.
 
-The specific tool we will use throughout this module is Terraform, the most widely used Infrastructure as Code tool in the industry. It works with AWS, Google Cloud, Azure, and dozens of other providers. It uses a clean, readable configuration language. And it is the foundation of modern infrastructure engineering.
+When someone needs staging, the team creates another environment from the same pattern with different inputs. When someone changes a cloud setting by hand during an incident, the next plan exposes the drift. When a release causes trouble, the team uses Git history and a fresh plan to reason about rollback instead of guessing which console screens changed.
+
+That is why Infrastructure as Code matters. The real win is the team habit around the files: a shared record of infrastructure intent, a review process, repeatable environments, visible drift, and a safer way to change long-lived systems.
+
+Terraform is one tool for that job, and this module uses it because it is widely used, provider-friendly, and built around planning before applying. The next articles will make those ideas practical, one Terraform command and one configuration file at a time.
 
 ## What's Next
 
-The next article introduces Terraform itself: what it is, how it is structured, and what happens when you run `terraform apply` for the first time. We will look at how Terraform communicates with cloud providers, how it keeps track of what it created, and the basic sequence of commands you will run every time you make an infrastructure change.
-
-![A six-part summary infographic for Infrastructure as Code covering desired state, reviewable plans, shared history, drift checks, repeatable changes, and team safety.](/content-assets/articles/article-iac-terraform-foundations-why-iac/iac-summary.png)
-
-*Use this summary as a quick checklist for why teams move infrastructure changes into code.*
-
+The next article introduces Terraform itself: the CLI, configuration files, providers, state, and the basic workflow behind `terraform init`, `terraform plan`, and `terraform apply`. You now have the reason for the tool, so the next step is learning the tool's moving parts.
 
 ---
 
 **References**
 
-- [What is Infrastructure as Code? (HashiCorp)](https://www.hashicorp.com/resources/what-is-infrastructure-as-code), HashiCorp's introduction to the IaC philosophy and the problems it addresses.
-- [Terraform State (HashiCorp Documentation)](https://developer.hashicorp.com/terraform/language/state), Official explanation of how Terraform remembers managed infrastructure.
-- [Amazon Machine Image Deprecation (AWS Documentation)](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ami-deprecate.html), AWS guidance on AMI deprecation and why static AMI IDs can age badly.
-- [aws_ami Data Source (AWS Provider Documentation)](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/ami), Official Terraform AWS provider reference for looking up AMIs dynamically.
-- [Infrastructure as Code (Martin Fowler)](https://martinfowler.com/bliki/InfrastructureAsCode.html), A foundational article by Martin Fowler explaining the principles of treating infrastructure configuration as software.
-- [Terraform Up & Running, 3rd Edition (Yevgeniy Brikman)](https://www.terraformupandrunning.com), The definitive practical guide to Terraform, starting from exactly the motivation covered in this article.
+- [Terraform CLI commands](https://developer.hashicorp.com/terraform/cli/commands) - Official overview of Terraform CLI commands, including `init`, `validate`, `plan`, `apply`, and `destroy`.
+- [terraform plan](https://developer.hashicorp.com/terraform/cli/commands/plan) - Official reference for creating a plan that previews proposed infrastructure changes.
+- [terraform apply](https://developer.hashicorp.com/terraform/cli/commands/apply) - Official reference for applying the operations proposed by a Terraform plan.
+- [Terraform state](https://developer.hashicorp.com/terraform/language/state) - Official explanation of how Terraform maps configuration resources to real infrastructure objects and tracks metadata.

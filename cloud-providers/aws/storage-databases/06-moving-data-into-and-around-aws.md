@@ -43,6 +43,10 @@ AWS has several data movement tools because movement comes in several shapes. Th
 | Speed up long-distance S3 uploads | S3 Transfer Acceleration where it fits |
 | Handle large physical transfer workflows | AWS Data Transfer Terminal for eligible customers, partner options, and current AWS guidance |
 
+![AWS data movement tool chooser mapping S3 bulk work to Batch Operations, file copy to DataSync, partner files to Transfer Family, hybrid access to Storage Gateway, database moves to DMS, and analytics prep to Glue](/content-assets/articles/article-cloud-providers-aws-storage-databases-moving-data-into-around-aws/data-movement-tool-chooser.png)
+
+*The movement shape decides the tool, and every tool still needs validation and cleanup.*
+
 The service choice starts with the movement shape. Maple Market should choose a file transfer tool for files, a database migration tool for databases, an object operation tool for S3 objects, and a catalog or ETL tool when the data needs transformation.
 
 ## Simple Copies and S3 Bulk Work
@@ -120,6 +124,10 @@ A controlled cutover usually looks like this. The list reads like a checklist be
 
 That sequence gives the team a clear handoff point. It also gives support, database, application, and security teams the same timeline.
 
+![Three migration paths showing file share to DataSync to EFS or S3, old database to DMS full load plus CDC to Aurora, and partner upload to Transfer Family to S3 inbound](/content-assets/articles/article-cloud-providers-aws-storage-databases-moving-data-into-around-aws/data-migration-paths.png)
+
+*File movement, database movement, and partner intake each need their own repeatable path.*
+
 ## Long-Distance and Physical Transfer Choices
 <!-- section-summary: Very large or distant data movement needs network planning, acceleration choices, and current AWS guidance for physical transfer. -->
 
@@ -176,6 +184,10 @@ The healthiest migration teams rehearse the boring parts. They run a dry copy, v
 Maple Market uses different movement paths for different data shapes. Small S3 copies use ordinary S3 tools. Large object operations use S3 Inventory and Batch Operations. New object copies can use S3 Replication when policy-driven asynchronous copy is the right fit. File share migration uses DataSync. Partner uploads use Transfer Family. Hybrid file access can use Storage Gateway. Database migration uses DMS, native tools, or a combination, with validation and cutover planning. Analytics exports land in S3 and become understandable through Glue Data Catalog.
 
 The final lesson is simple: moving data is an engineering workflow with owners and evidence. The team chooses the right tool, gives it scoped access, watches it run, validates the destination, cuts over deliberately, and removes temporary paths after the rollback window. That is how data enters AWS without turning into mystery state.
+
+![Migration runbook checklist with owner, source, destination, tool, dry run, cutover, validation, and cleanup](/content-assets/articles/article-cloud-providers-aws-storage-databases-moving-data-into-around-aws/migration-runbook-summary.png)
+
+*A migration is complete only after the destination works for real user workflows and temporary access is cleaned up.*
 
 ---
 

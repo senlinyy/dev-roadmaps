@@ -79,6 +79,10 @@ The **Application Map** gives the topology view. It shows services, clients, can
 
 Application Signals discovers services and operations from recent telemetry. AWS notes that Application Signals displays services and operations based on the selected time filter, defaults to the past three hours, may take up to 10 minutes for service topology discovery, and may take up to 15 minutes for SLI health evaluation. In production, that means a newly deployed service or a quiet operation might need real traffic before it appears in the expected places.
 
+![Application Signals service view showing a checkout service, operations, dependencies, latency, availability, and SLO health](/content-assets/articles/article-cloud-providers-aws-observability-application-signals-and-slos/application-signals-service-view.png)
+
+*The service view helps responders move from generic telemetry names into the language of services, operations, dependencies, latency, availability, and SLO health.*
+
 ## Enable It Where Your Code Runs
 <!-- section-summary: Enabling Application Signals depends on the runtime platform, but the common pattern is ADOT instrumentation plus the CloudWatch agent or Lambda layer. -->
 
@@ -138,6 +142,10 @@ AWS supports **period-based** and **request-based** SLOs.
 An **error budget** is the amount of bad behavior the service can still have while meeting the SLO. If the checkout team sets a 99.9% monthly availability SLO, the remaining 0.1% is the budget for faults. If the service burns that budget quickly after a deployment, the team has evidence to slow down releases and fix reliability instead of debating opinions.
 
 Burn rate makes the budget easier to operate. A burn rate tells you how quickly the service is consuming its budget. AWS documents burn rate configurations and burn rate alarms for SLOs, including multi-window alarm strategies. In practical terms, a fast burn means "customers are being hurt quickly, page someone." A slow burn means "the service is drifting, create work before it turns into an incident."
+
+![SLO and error budget visual showing SLI, 99.9 percent target, good events, bad events, budget left, and burn rate](/content-assets/articles/article-cloud-providers-aws-observability-application-signals-and-slos/slo-error-budget.png)
+
+*The image turns SLO language into a simple operating picture. The target defines success, bad events spend the budget, and burn rate tells the team how urgent the response should be.*
 
 ## Latency and Availability SLO Design
 <!-- section-summary: AWS recommends both latency and availability SLOs for critical applications, and real teams usually start with the user journeys that matter most. -->
@@ -265,6 +273,10 @@ The checkout team now has a cleaner operational path:
 * **SLOs** define the reliability and latency targets for critical behavior.
 * **Error budgets and burn rates** show whether the team is consuming reliability faster than planned.
 * **Investigations, traces, logs, and related metrics** help responders explain an unhealthy SLO.
+
+![SLO investigation flow from SLO alarm through unhealthy operation, slow dependency, related trace, linked logs, and fix or rollback](/content-assets/articles/article-cloud-providers-aws-observability-application-signals-and-slos/slo-investigation-flow.png)
+
+*This summary connects SLO health to the next responder action. The team starts with the failing promise, then follows operation, dependency, trace, and logs toward a fix or rollback.*
 
 The important production habit is to create SLOs for the journeys that matter most, not for every metric that exists. Checkout submission, payment authorization, login, signup, and order lookup are good candidates. Internal dashboards, admin exports, and batch jobs might need different targets or none at all.
 

@@ -58,6 +58,10 @@ The `order_items.order_id` reference protects the relationship. An item must poi
 
 AWS gives teams two main managed relational paths in this module: Amazon RDS and Amazon Aurora. Both run relational databases, but they package the infrastructure differently.
 
+![Checkout transaction map showing order, items, payment, and inventory records committing or rolling back together](/content-assets/articles/article-cloud-providers-aws-storage-databases-rds-relational-databases/checkout-transaction-map.png)
+
+*Checkout data needs all related records to succeed together or fail together.*
+
 ## RDS as Managed Relational Databases
 <!-- section-summary: RDS runs familiar relational database engines while AWS handles much of the host, backup, patching, and failover work. -->
 
@@ -130,6 +134,10 @@ DATABASE_POOL_MAX=15
 ```
 
 That small configuration names the endpoint, database, secret source, and connection pool limit. The code should fetch the secret through the AWS SDK using the runtime role, create a bounded pool, and fail startup if required configuration is missing. This is ordinary engineering work, but it prevents a lot of late-night database incidents.
+
+![Private database path showing app tasks, task role, Secrets Manager, RDS Proxy, security group, Multi-AZ, and RDS or Aurora in private subnets](/content-assets/articles/article-cloud-providers-aws-storage-databases-rds-relational-databases/private-database-path.png)
+
+*The database path combines network access, secret access, and connection control.*
 
 ## Backups, Multi-AZ, and Read Scaling
 <!-- section-summary: Availability, historical recovery, and read capacity solve different database problems and need separate design choices. -->
@@ -223,6 +231,10 @@ Maple Market uses a relational database for checkout because orders, payments, i
 The beginner mistake is thinking the service choice is the whole design. The service choice is only the first part. The real production design says which engine runs, where the endpoint lives, which role can get the secret, how many connections each app can open, how restores are tested, how schema changes roll out, and which metrics wake someone up.
 
 That is the shape of managed relational databases on AWS: AWS carries a large part of the infrastructure burden, and your team still carries the data contract. The best teams respect both halves.
+
+![Relational database review checklist covering engine version, private endpoint, secrets, connection pool, backups plus Multi-AZ, and safe migrations](/content-assets/articles/article-cloud-providers-aws-storage-databases-rds-relational-databases/relational-database-review.png)
+
+*RDS and Aurora reduce infrastructure work, while the team still owns schema, queries, access, and release safety.*
 
 ## What's Next
 <!-- section-summary: The next article explains DynamoDB for high-scale key-based access patterns that do not need relational joins. -->

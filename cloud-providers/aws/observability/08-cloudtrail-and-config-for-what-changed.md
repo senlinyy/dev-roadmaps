@@ -97,6 +97,10 @@ Management events usually answer the first "what changed?" question because reso
 
 The event type decides which CloudTrail feature you need. Event history is quick, trails are durable, Lake gives SQL for existing Lake customers, and Insights highlights unusual patterns.
 
+![CloudTrail and AWS Config timeline showing who changed what, API call timing, resource state before, and resource state after](/content-assets/articles/article-cloud-providers-aws-observability-cloudtrail-config-what-changed/who-changed-what.png)
+
+*The timeline shows why CloudTrail and Config belong together. CloudTrail explains the API action and caller, while Config shows the resource state before and after the change.*
+
 ## Event History, Trails, Lake, and Insights
 <!-- section-summary: CloudTrail has several access patterns, and each one fits a different retention, query, and investigation need. -->
 
@@ -214,6 +218,10 @@ Real production setup adds the surrounding pieces: an S3 bucket policy that allo
 Log file validation deserves special attention. It lets the team validate whether delivered log files changed, disappeared, or stayed intact after CloudTrail delivered them. For forensic work, that integrity check matters because the evidence needs to survive scrutiny.
 
 Many teams also send selected CloudTrail events to CloudWatch Logs so they can create metric filters and alarms. Examples include root account use, failed console sign-ins, CloudTrail changes, KMS key policy changes, security group changes, and IAM policy changes. GuardDuty and Security Hub can add higher-level detection and posture checks, but the raw trail still provides the audit record.
+
+![Audit baseline showing CloudTrail multi-Region trail, log validation, KMS encryption, central S3, and AWS Config recorder, rules, aggregator, and remediation](/content-assets/articles/article-cloud-providers-aws-observability-cloudtrail-config-what-changed/audit-baseline.png)
+
+*The baseline image collects the durable evidence controls in one place. CloudTrail protects the activity record, and Config records and evaluates resource state.*
 
 CloudTrail now answers who called the API. The resource-state side still needs AWS Config, because the team has to see what the security group looked like after AWS applied the change.
 
@@ -364,6 +372,10 @@ In real incidents, the order often looks like this:
 For a small account, Event history and a few Config lookups may solve the investigation. For a production organization, teams usually centralize CloudTrail through organization trails, protect logs in a log archive account, enable targeted data events, record important AWS Config resource types in every active Region, aggregate Config data, and package baseline rules as conformance packs.
 
 The last piece is discipline. CloudTrail and Config help most when teams turn them on deliberately, protect the records, and practice using them before a serious incident. A normal deployment review gives the team a much calmer place to learn these queries than a security incident with executives asking for a timeline.
+
+![Change investigation path from alarm to API call, resource state, before and after comparison, rule evaluation, safe remediation, and guardrail improvement](/content-assets/articles/article-cloud-providers-aws-observability-cloudtrail-config-what-changed/change-investigation-path.png)
+
+*The final summary turns the audit tools into an operating path. The team starts from the alarm, finds the API call, compares resource state, remediates safely, and improves the guardrail.*
 
 ---
 

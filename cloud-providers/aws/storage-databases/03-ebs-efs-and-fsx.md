@@ -36,6 +36,10 @@ Maple Market has three workloads like this. Its admin search service keeps a loc
 
 The useful question is: **does the application need a disk, a shared Linux filesystem, or a specialist managed filesystem?** Once that question is clear, the service choice gets much easier. The remaining design work is placement, permissions, backup, and performance.
 
+![AWS filesystem choice map comparing EBS for one EC2 disk, EFS for shared Linux NFS, and FSx for managed SMB, Lustre, and ONTAP use cases](/content-assets/articles/article-cloud-providers-aws-storage-databases-ebs-efs-storage-attached-compute/filesystem-choice-map.png)
+
+*EBS, EFS, and FSx solve different operating-system storage expectations.*
+
 ## EBS for Block Storage Attached to One Placement
 <!-- section-summary: EBS gives one compute placement a durable block device that behaves like a local disk to the operating system. -->
 
@@ -131,6 +135,10 @@ For **FSx**, the access model depends on the filesystem type. Windows File Serve
 
 This is why a production design should name both AWS access and OS access. A good design note says: "the warehouse ECS tasks mount EFS through an access point at `/supplier-imports`, the task security group can reach EFS mount targets on NFS, and the application runs as UID 10001 with write permission only under its directory." That statement is much clearer than "we use EFS."
 
+![Mount and network access map showing EBS in the same Availability Zone, EFS mount targets on NFS 2049, FSx SMB share on 445, and security group controls](/content-assets/articles/article-cloud-providers-aws-storage-databases-ebs-efs-storage-attached-compute/mount-network-access.png)
+
+*Mounted storage needs placement, network access, and filesystem permissions in the same review.*
+
 ## Backups, Snapshots, and Performance Signals
 <!-- section-summary: Disk and filesystem services need recovery copies and performance monitoring because they sit directly on application request paths. -->
 
@@ -172,6 +180,10 @@ Maple Market now has a clean split. The search index uses EBS because it needs o
 The operating plan is part of the decision. EBS needs volume type, Availability Zone placement, snapshots, mount persistence, and instance replacement steps. EFS needs mount targets, access points, security groups, throughput monitoring, and backup tests. FSx needs the right filesystem family, network access, native permissions, backups, and service-specific metrics.
 
 The storage service should match the interface the application expects. Object API points to S3. SQL points to RDS or Aurora. Key-based item access points to DynamoDB. Disk and filesystem behavior points to EBS, EFS, and FSx.
+
+![Attached storage review checklist covering interface, placement, mount path, security group, backup, and performance signals](/content-assets/articles/article-cloud-providers-aws-storage-databases-ebs-efs-storage-attached-compute/attached-storage-review.png)
+
+*A mounted filesystem still needs a written operating plan before production traffic uses it.*
 
 ## What's Next
 <!-- section-summary: The next article moves from filesystems to relational databases for structured business records. -->

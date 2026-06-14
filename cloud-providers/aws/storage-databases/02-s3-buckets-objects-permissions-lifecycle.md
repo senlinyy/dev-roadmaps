@@ -46,6 +46,10 @@ The main pieces are easy to name. These names show up in IAM policies, logs, lif
 
 Those pieces lead naturally into bucket and key design. A good bucket and key structure makes every later S3 feature easier to operate.
 
+![S3 object path infographic showing bucket policy boundary, prefix operating lane, object bytes and metadata, and object key](/content-assets/articles/article-cloud-providers-aws-storage-databases-s3-object-storage-buckets/s3-object-path.png)
+
+*A bucket is the policy boundary. The key is the object's address inside that boundary.*
+
 ## Buckets and Object Keys
 <!-- section-summary: Buckets hold administrative policy, while keys give every object a stable address inside the bucket. -->
 
@@ -148,6 +152,10 @@ The important production work happens around this small function. The API should
 
 After upload, S3 can trigger an event notification. Maple Market might send an object-created event to EventBridge, SQS, or Lambda so an image worker can resize the photo, write the processed image to `uploads/processed/`, and update the product record in the database.
 
+![Presigned URL upload path showing browser, app authorization, short URL generation, S3 upload, processing worker, and saved record](/content-assets/articles/article-cloud-providers-aws-storage-databases-s3-object-storage-buckets/presigned-url-upload-path.png)
+
+*The browser receives one temporary upload path, while the application keeps control of authorization and object naming.*
+
 Now the object path exists. The next question is how long it should stay in each state.
 
 ## Versioning, Lifecycle, and Retention
@@ -248,6 +256,10 @@ One useful test is a full upload drill in a development account. Upload a file, 
 Maple Market uses S3 for object-shaped data: product photos, invoice PDFs, exports, logs, and archives. The team creates separate buckets when ownership or access rules differ. It names objects with prefixes that support operations. It gives applications scoped IAM policies. It keeps Block Public Access on for private buckets. It uses presigned URLs so browsers can upload directly without AWS credentials. It enables versioning where recovery matters and lifecycle rules where temporary and older objects need cleanup.
 
 That is the S3 pattern. The bucket is not just a folder. It is a policy boundary, lifecycle boundary, event source, recovery surface, and cost surface. Once those pieces are designed together, S3 gives the application a durable object API that can grow far beyond one server's disk.
+
+![S3 operating loop with Block Public Access, scoped IAM, KMS, versioning, lifecycle rules, and events plus inventory](/content-assets/articles/article-cloud-providers-aws-storage-databases-s3-object-storage-buckets/s3-operating-loop.png)
+
+*A production bucket needs policy, recovery, cost, and workflow controls around the objects.*
 
 ## What's Next
 <!-- section-summary: The next article moves from object APIs to storage that appears as disks and filesystems inside compute. -->

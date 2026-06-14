@@ -1,8 +1,8 @@
 ---
-title: "Secret Manager"
-description: "Store sensitive runtime values in Secret Manager, grant narrow access, rotate versions, and gather evidence without exposing payloads."
-overview: "After service accounts explain how software becomes the caller, the next question is where dangerous values live. This article follows one database secret through Secret Manager, versions, IAM access, rotation, audit evidence, encryption, and KMS."
-tags: ["gcp", "secret-manager", "secrets", "rotation"]
+title: "Secret Manager and Runtime Secrets"
+description: "Store runtime secrets in Google Cloud Secret Manager, grant narrow access, rotate versions safely, and prove access without exposing payloads."
+overview: "Runtime secrets are the values an application needs after it starts, such as database passwords, API tokens, and private keys. This article follows the orders-db-password secret for the Cloud Run service devpolaris-orders-api through versions, IAM, runtime access, aliases, rotation, destruction safety, CMEK, VPC Service Controls, and runtime evidence."
+tags: ["gcp", "secret-manager", "runtime-secrets", "rotation"]
 order: 3
 id: article-cloud-providers-gcp-identity-security-secret-manager-encryption-basics
 aliases:
@@ -12,145 +12,269 @@ aliases:
 
 ## Table of Contents
 
-1. [Secret Manager](#secret-manager)
-2. [Secrets and Versions Logical Separation](#secrets-and-versions-logical-separation)
-3. [Rotation Notifications and Pub/Sub Hooks](#rotation-notifications-and-pub-sub-hooks)
-4. [VPC Service Controls and Perimeter Security](#vpc-service-controls-and-perimeter-security)
-5. [Cross-Cloud Mapping Reference](#cross-cloud-mapping-reference)
-6. [Putting It All Together](#putting-it-all-together)
+1. [Runtime Secrets](#runtime-secrets)
+2. [Secrets and Secret Versions](#secrets-and-secret-versions)
+3. [Runtime Access From Cloud Run, GKE, and Compute Engine](#runtime-access-from-cloud-run-gke-and-compute-engine)
+4. [IAM for Secret Access](#iam-for-secret-access)
+5. [Version Aliases and Safe Rollouts](#version-aliases-and-safe-rollouts)
+6. [Rotation Schedules and Pub/Sub Notifications](#rotation-schedules-and-pubsub-notifications)
+7. [Delayed Destruction and Restore](#delayed-destruction-and-restore)
+8. [CMEK and Cloud KMS](#cmek-and-cloud-kms)
+9. [VPC Service Controls](#vpc-service-controls)
+10. [Runtime Evidence Without Printing Payloads](#runtime-evidence-without-printing-payloads)
+11. [Putting It All Together](#putting-it-all-together)
 
-## Secret Manager
+## Runtime Secrets
+<!-- section-summary: Runtime secrets are sensitive values used by running workloads, so they need a managed home away from code, images, and logs. -->
 
-Secret Manager is a managed API-backed credential store for sensitive runtime values such as database connection strings, third-party API tokens, cryptographic private keys, and certificates. Rather than storing dangerous plain-text values inside version control repositories, dynamic application filesystems, or environment variables, Secret Manager provides a dedicated security control point.
+A **runtime secret** is a sensitive value that an application needs while it is running. The common examples are database passwords, API tokens, webhook signing keys, OAuth client secrets, TLS private keys, and service credentials for systems outside Google Cloud.
 
-By housing secrets inside a managed API service, you decouple sensitive data from runtime execution code. Applications retrieve credentials programmatically at startup or during execution, ensuring that dangerous payloads remain completely isolated from operators and unauthorized systems.
+For this article, we will follow one real production story. The Cloud Run service `devpolaris-orders-api` connects to the orders database, and the database password lives in Secret Manager as a secret named `orders-db-password`. The service needs the password at runtime, the platform team needs to rotate it, and the security team needs evidence that the service used the right secret without copying the password into a ticket.
 
-Secret Manager unifies secret storage under a managed service boundary. It manages version transitions, enforces granular IAM access controls, generates auditable access logs, encrypts data at rest by default, and can integrate with customer-managed encryption keys when your compliance model requires them.
+Secret Manager gives that password a managed home. It stores the secret value as versioned data, applies IAM to the secret resource, encrypts data by default, writes audit logs, sends rotation notifications through Pub/Sub, supports optional customer-managed encryption keys, and can sit inside a VPC Service Controls perimeter for higher-risk environments.
 
-## Secrets and Versions Logical Separation
+The flow in this article stays close to how a team would run this in production. First we separate the stable secret from the actual payload versions, then we connect Cloud Run, GKE, and Compute Engine workloads, then we narrow IAM, move an alias from version `7` to version `8`, rotate through Pub/Sub, protect old versions from accidental destruction, and collect evidence without printing the secret value.
 
-A Secret is the stable resource name and policy boundary, while a Secret Version is the immutable stored payload at a point in time. This split solves a major operational gotcha in credentials management: rotating secrets without causing application downtime. If a password is bound to a single configuration variable, rotating that credential forces a redeployment or container restart. Secret Manager solves this by establishing a strict logical separation between a **Secret** and its **Versions**.
+## Secrets and Secret Versions
+<!-- section-summary: The secret is the stable container and policy boundary, while each secret version is an immutable stored payload. -->
 
-![The secret name is the container. Each version is an immutable stored value with its own state.](/content-assets/articles/article-cloud-providers-gcp-identity-security-secret-manager-encryption-basics/secret-version-boundary.png)
+A **secret** is the named resource that holds metadata, IAM policy, labels, replication settings, rotation settings, optional aliases, and one or more versions. In our example, `orders-db-password` is the secret, and application code can refer to that stable name for months or years.
 
-*Rotation changes which version is used without changing the resource identity.*
+A **secret version** is the actual stored payload at one point in time. Version `7` might contain the current database password used by `devpolaris-orders-api`, and version `8` might contain the new password created during the next rotation. Secret versions are immutable, so changing a password means adding a new version rather than editing the old one.
 
-The **Secret** is the named logical container (e.g. `projects/dev-project/secrets/orders-db-url`). It defines the metadata, IAM access policies, replication locations, and rotation schedules. The secret container itself does not store sensitive payloads; it acts as the stable resource address that your application references.
+That split matters during a database password rotation. The release manager can create version `8`, test it, point the `current` alias to it, and keep version `7` available during the rollout window. The service name and secret name stay stable while the payload moves forward through a controlled release.
 
-A **Secret Version** represents the actual encrypted payload (e.g. version `1`, `2`, or `3`) stored within that container. Versions are immutable; once a payload is written to a version, it cannot be modified. If the database password changes, you add a new version to the container.
+The small vocabulary below keeps the rest of the article clear. We will use these exact words in the rollout story so version changes, aliases, and rollback choices stay easy to follow.
 
-This split enables seamless credential rotations:
+| Term | Example | What the team uses it for |
+|---|---|---|
+| **Secret** | `orders-db-password` | Stable resource name, IAM policy boundary, rotation schedule, alias map, and audit target. |
+| **Version** | `7`, `8` | Immutable payload snapshots. Version `7` can remain enabled while version `8` is tested. |
+| **Alias** | `current` | Human-friendly pointer to a version. Moving `current` from `7` to `8` is a release action. |
+| **Special latest version** | `latest` | Secret Manager's newest version selector. It is convenient, but production rollouts usually need a more explicit release record. |
 
-*   **Stable References**: Application code can request the latest active payload dynamically by querying the virtual path suffix `/versions/latest`, eliminating the need to update container environment variables when credentials change.
-*   **Version Lifecycles**: Old versions can be disabled (temporarily blocking access) or destroyed (permanently shredding the payload) systematically, allowing you to transition workloads to new credentials with minimal operational risk.
+For a beginner, the useful way to think about this is simple. The secret name is the stable place your workload asks for, and the version is the exact value it receives. The release process decides which version the workload should use.
 
-:::expand[Design Detail: Default Encryption, CMEK, and HSM Choices]{kind="design"}
-Understanding encryption options prevents a common compliance mistake. Secret Manager encrypts secret data at rest by default with Google-managed encryption. You can optionally configure customer-managed encryption keys (CMEK) so your organization controls the Cloud KMS key used for a secret.
+## Runtime Access From Cloud Run, GKE, and Compute Engine
+<!-- section-summary: Google Cloud workloads use their runtime identity to retrieve secrets through Secret Manager integrations or the Secret Manager API. -->
 
-The beginner-safe way to explain the encryption model is to separate what Google Cloud does by default from the extra controls your team can choose:
+Now that the password has a home, the next question is how a running service gets it. In Google Cloud, the clean answer is usually **service identity plus Secret Manager access**, which means the workload runs as a service account and Secret Manager checks whether that service account can access the requested secret version.
 
-```mermaid
-flowchart TD
-    subgraph SecretManagerEngine["GCP Secret Manager Data Plane"]
-        Payload["Plaintext Payload"]
-        EncryptedPayload[("Encrypted Secret Version")]
-    end
+For **Cloud Run**, the service identity for `devpolaris-orders-api` should have access to `orders-db-password`. Cloud Run can expose a secret as an environment variable or mount it as a file. Environment variables are read when the instance starts, while mounted secret files fit workloads that read from the filesystem and need a rotation-friendly path.
 
-    subgraph KMSEngine["Optional Cloud KMS CMEK"]
-        Key["Customer-managed key"]
-    end
+```bash
+gcloud secrets add-iam-policy-binding orders-db-password \
+  --member="serviceAccount:devpolaris-orders-runtime@PROJECT_ID.iam.gserviceaccount.com" \
+  --role="roles/secretmanager.secretAccessor"
 
-    Payload -->|Encrypted at rest by default| EncryptedPayload
-    Key -.->|Optional key control| EncryptedPayload
+gcloud run services update devpolaris-orders-api \
+  --region=europe-west2 \
+  --service-account=devpolaris-orders-runtime@PROJECT_ID.iam.gserviceaccount.com \
+  --update-secrets=ORDERS_DB_PASSWORD=orders-db-password:current
 ```
 
-1.  **Default Protection**: Secret Manager encrypts secret data at rest using Google-managed encryption.
-2.  **CMEK Option**: With CMEK, Secret Manager uses Cloud KMS so your team controls the key lifecycle and can disable or rotate that key according to policy.
-3.  **HSM Option**: HSM-backed protection applies only when the Cloud KMS key itself uses the HSM protection level. Do not describe every Secret Manager secret as HSM-backed by default.
+That example uses the alias `current` as the version selector. Since Cloud Run environment variables are resolved when an instance starts, the rollout should create a new revision or restart instances after the alias moves. For services that mount secrets as files, the application should read the file at the point it opens a new database connection rather than caching the value forever.
 
-When an application authorized by IAM requests a version, Secret Manager returns the secret payload through the API. The operational controls you manage are IAM scope, version state, rotation workflow, replication, audit logs, and optional CMEK configuration.
-:::
+For **GKE**, there are two common patterns. A pod can call the Secret Manager API through a client library while authenticated with Workload Identity Federation for GKE, or it can use the Secret Manager add-on to mount secrets as volumes in pods. The important distinction for beginners is that a Secret Manager secret and a Kubernetes `Secret` object are separate things, even though the names sound similar.
 
-## Rotation Notifications and Pub/Sub Hooks
+For **Compute Engine**, the VM runs as a service account and application code can use a Secret Manager client library or call the API directly. Compute Engine and GKE workloads also need the `cloud-platform` OAuth scope on the underlying instance or node path, because the access token has to be allowed to call Google Cloud APIs. IAM grants the permission, and the OAuth scope has to leave enough room for the token to use that permission.
 
-Rotation notifications are event hooks that tell automation when a credential should be replaced and verified. To maintain a secure posture, production credentials must be rotated on a deliberate schedule. Secret Manager can integrate with **Cloud Pub/Sub** to notify automation when a secret reaches its configured rotation time:
+The runtime rule is the same across all three platforms. The workload should use its attached identity, Secret Manager should hold the sensitive value, and code should avoid storing the payload in container images, startup scripts, logs, Terraform state outputs, or copied environment files.
 
-![A rotation schedule should create a new version, notify automation, and leave audit evidence.](/content-assets/articles/article-cloud-providers-gcp-identity-security-secret-manager-encryption-basics/rotation-pubsub-flow.png)
+## IAM for Secret Access
+<!-- section-summary: Secret IAM should be granted at the narrowest practical level, with separate roles for reading payloads and managing versions. -->
 
-*Rotation is safest when the version change is visible and repeatable.*
+Once a workload can technically reach Secret Manager, IAM decides whether it can read the payload. The key role for runtime access is **Secret Manager Secret Accessor**, written as `roles/secretmanager.secretAccessor`. This role includes `secretmanager.versions.access`, which is the permission that returns the actual secret payload.
 
-1.  **Rotation Schedule Configuration**: You define a rotation schedule and a target Pub/Sub topic on the secret.
-2.  **Rotation Notification**: At the configured time, Secret Manager publishes a `SECRET_ROTATE` event to the Pub/Sub topic.
-3.  **Automation Handler**: A subscriber, such as a Cloud Run service or Cloud Run function, performs the real credential work. It might connect to the backing database, generate a new password, test it, and add a new Secret Manager version.
-4.  **Graceful Rollout**: Application code reads a specific version, alias, or `latest` through the Secret Manager API. Once the new credential is verified across the fleet, automation can disable or destroy the old version after a grace window.
+The role should be granted on the single secret whenever the workload needs only one secret. In our example, the `devpolaris-orders-runtime` service account should get accessor access on `orders-db-password` rather than broad project-level access. A project-level grant would let the orders API read unrelated secrets, such as payment provider tokens or internal admin credentials.
 
-Secret Manager does not rotate the database password or third-party token by itself. It gives you the versioned storage and the notification point so your automation can perform the rotation safely and leave audit evidence.
+Different automation needs different roles. The Cloud Run service reads the payload, so it needs accessor. The rotation worker creates version `8`, so it may need **Secret Version Adder** or **Secret Version Manager** on `orders-db-password`. The release automation that moves the `current` alias needs permission to update the secret metadata, which teams often handle with a narrow custom role or a tightly scoped secret admin grant on this one secret.
 
-## VPC Service Controls and Perimeter Security
+The access split below keeps runtime access separate from rotation access. The service account serving traffic receives the ability to read the password, while the automation identities receive the smaller management powers needed for their jobs.
 
-VPC Service Controls is an API perimeter layer that can restrict where supported Google-managed service requests are allowed to come from and go to. In highly secure environments, standard IAM policies may be insufficient to protect against insider data exfiltration. If a malicious insider or a compromised container possesses the correct IAM `Secret Manager Secret Accessor` role, they can extract payloads from an untrusted path unless an additional perimeter blocks that request.
+| Principal | Role scope | Why it has that access |
+|---|---|---|
+| `devpolaris-orders-runtime@PROJECT_ID.iam.gserviceaccount.com` | `roles/secretmanager.secretAccessor` on `orders-db-password` | The running API needs to retrieve the password. |
+| `orders-secret-rotator@PROJECT_ID.iam.gserviceaccount.com` | `roles/secretmanager.secretVersionAdder` or a narrow custom role on `orders-db-password` | Rotation automation needs to add version `8`. |
+| `orders-release-bot@PROJECT_ID.iam.gserviceaccount.com` | Permission to update aliases on `orders-db-password` | Release automation needs to move `current` after verification. |
+| Security reviewers | Metadata viewer access, plus audit log access | Reviewers need evidence and policy visibility while the password payload stays hidden. |
 
-VPC Service Controls allows you to draw a logical security perimeter around supported Google-managed services, including Secret Manager:
+This separation gives you a cleaner incident story. If the orders API service account is compromised, the attacker gets the one database password it already needed rather than every secret in the project. If the rotation worker fails, it can add or manage versions without becoming the same identity that serves customer traffic.
 
-```mermaid
-flowchart LR
-    subgraph ExternalDevice["Public Device / External Network"]
-        Attacker["Operator with IAM Accessor Role"]
-    end
+## Version Aliases and Safe Rollouts
+<!-- section-summary: A version alias turns secret rotation into a release step that can be verified and rolled back. -->
 
-    subgraph VPCSCPerimeter["VPC Service Controls (VPC-SC) Perimeter"]
-        subgraph CustomerVPC["Customer VPC Subnet"]
-            AppVM["App VM Instance"]
-        end
-        SecretManager["Secret Manager Resource"]
-    end
+A **secret version alias** is a readable name that points to a secret version. Secret Manager lets you access an assigned alias the same way you access a version number, so `orders-db-password` version `8` can be reached through the alias `current` after the release team moves the pointer.
 
-    AppVM -->|1. Request from VPC| SecretManager
-    SecretManager -->|Allowed| AppVM
+Aliases help because database password rotation is a production change with storage, database, and rollout pieces. The team needs to answer basic release questions: which version was active before, which version is active now, what step moved the service, how did we verify it, and what can we do if the new value fails.
 
-    Attacker -->|1. Request from Internet| SecretManager
-    SecretManager -->|Blocked by API Gateway<br/>(403 VPC Service Controls)| Attacker
+The release record below shows the shape of a safe rotation for `devpolaris-orders-api` from version `7` to version `8`. It gives the on-call engineer enough information to verify the change or roll it back without asking anyone to reveal the password.
+
+| Release field | Value |
+|---|---|
+| Secret | `orders-db-password` |
+| Runtime service | `devpolaris-orders-api` on Cloud Run |
+| Old version | Version `7`, enabled, alias `current` before the change |
+| New version | Version `8`, enabled, alias `current` after verification |
+| Rollout step | Add version `8`, make the database accept the new credential, move `current=8`, deploy a new Cloud Run revision, shift traffic gradually |
+| Verification query | `select usename, application_name, state, count(*) from pg_stat_activity where application_name = 'devpolaris-orders-api' group by 1, 2, 3;` |
+| Rollback option | Move `current` back to `7`, route traffic to the previous Cloud Run revision, and make the database accept the version `7` value again if the database password was replaced |
+
+The database side deserves a careful word. The smoothest rotation pattern gives the application an overlap window where both old and new credentials can work, often by using two database users such as `orders_app_a` and `orders_app_b`, or by using database support for multiple valid passwords. If the database account supports only one password at a time, the rollback process must reset the database account to the version `7` value before sending traffic back.
+
+The alias update itself is small, but the release record around it is what makes the change safe. The commands are short by design, and the surrounding checklist carries the operational safety.
+
+```bash
+gcloud secrets versions add orders-db-password \
+  --data-file=/secure-input/orders-db-password-v8.txt
+
+gcloud secrets update orders-db-password \
+  --update-version-aliases=current=8
+
+gcloud run services update devpolaris-orders-api \
+  --region=europe-west2 \
+  --update-secrets=ORDERS_DB_PASSWORD=orders-db-password:current
 ```
 
-VPC Service Controls is independent of IAM. IAM still decides whether the principal has permission to access the secret. VPC-SC adds a perimeter check that can restrict data movement across perimeter boundaries using ingress and egress rules and optional access levels.
+The file path in that example is deliberately boring and local to the secure rotation worker. The password value should come from a controlled password generator or database rotation workflow, and the value should stay out of shell history, build logs, pull requests, Slack messages, and incident notes.
 
-If an operator with correct IAM roles attempts to access a protected secret from outside the allowed perimeter path, the request can still be rejected by VPC Service Controls. This makes VPC-SC a defense-in-depth control for exfiltration risk, not a replacement for narrow secret-level IAM.
+## Rotation Schedules and Pub/Sub Notifications
+<!-- section-summary: Secret Manager can send rotation events, while your automation performs the real credential change and verification. -->
 
-## Cross-Cloud Mapping Reference
+A **rotation schedule** tells Secret Manager when a secret is due for rotation. Secret Manager sends a `SECRET_ROTATE` message to configured Pub/Sub topics at the scheduled time, and a subscriber handles the actual work. The schedule provides the signal, and the rotation worker performs the database password change, validation, and version update.
 
-This table maps core GCP Secret Manager components to their direct AWS and Azure equivalents:
+For `orders-db-password`, the subscriber might be a small Cloud Run service named `orders-secret-rotator`. It receives the Pub/Sub event, checks that the event is for `orders-db-password`, creates a new database password, stores it as version `8`, validates a database connection, writes a release record, and waits for the rollout automation to move `current`.
 
-| GCP Component | AWS Equivalent | Azure Equivalent | Operational Behavior |
-| :--- | :--- | :--- | :--- |
-| **Secret** | Secret Container | Secret | Logical container hosting metadata, IAM policies, and rotation schedules. |
-| **Secret Version** | Secret Version (with Labels) | Secret Version | Immutable physical payload stored within the secret container. |
-| **Pub/Sub Rotation Hook**| Rotation Lambda Integration| Event Grid Integration | Asynchronous trigger hooks to automate credentials generation and rotation. |
-| **VPC-SC Perimeter** | VPC Endpoint Policy | Private Endpoint + NSG | Network-level perimeter security that blocks cross-boundary exfiltration. |
+```bash
+gcloud pubsub topics create secret-rotation-events
+
+gcloud secrets update orders-db-password \
+  --topics=projects/PROJECT_ID/topics/secret-rotation-events \
+  --next-rotation-time="2026-07-01T09:00:00Z" \
+  --rotation-period="2592000s"
+```
+
+Pub/Sub also helps with normal lifecycle evidence. Secret Manager can publish events when versions are added, enabled, disabled, destroyed, or scheduled for destruction, and rotation events arrive as `SECRET_ROTATE`. A security team can use those events to start verification jobs, alert on unexpected version changes, or create change tickets automatically.
+
+Rotation automation should be **idempotent** and **reentrant**. Idempotent means the same event can run twice without creating a confusing second outcome, and reentrant means the worker can resume after a crash. A common pattern is to store rotation state as labels or in a small state table, such as "created version 8", "database accepted version 8", "alias moved", and "old version disabled after soak".
+
+## Delayed Destruction and Restore
+<!-- section-summary: Delayed destruction gives teams a recovery window before old secret material is permanently destroyed. -->
+
+Secret versions have a lifecycle. A version can be enabled, disabled, or destroyed, and destruction is the point where the payload is permanently removed. That makes old-version cleanup important, because deleting the only working rollback value during a rollout can turn a normal incident into a long outage.
+
+**Delayed destruction** adds a safety window before permanent destruction. When delayed destruction is configured on a secret and someone destroys a version, Secret Manager disables that version, schedules permanent destruction for the end of the delay period, and keeps the version recoverable during that window. Google Cloud supports a configurable duration in days, with a documented range from 1 day to 1000 days.
+
+For the orders password, version `7` should stay enabled during rollout, then move to disabled after the service has proven stable on version `8`. After a longer soak period, the team can schedule version `7` for destruction with delayed destruction enabled. That gives security the cleanup they want and gives operations a recovery path during the final cleanup period.
+
+```bash
+gcloud secrets versions disable 7 \
+  --secret=orders-db-password
+
+gcloud secrets versions destroy 7 \
+  --secret=orders-db-password
+```
+
+The restore path is simple while destruction is still scheduled. Enabling or disabling a scheduled version cancels the scheduled destruction and restores the version to that chosen state. In a real incident, the important part is the release record: the team should know that version `7` is the rollback value and that it remains inside the recovery window.
+
+## CMEK and Cloud KMS
+<!-- section-summary: Secret Manager encrypts secrets by default, and CMEK lets organizations control the key used for that encryption. -->
+
+Secret Manager encrypts secret data by default at rest and uses secure transport for API access. For many teams, that default encryption is enough, and the most important controls are IAM, version lifecycle, audit logging, and clean rollout practice.
+
+**CMEK** means customer-managed encryption key. With CMEK, Secret Manager uses a Cloud KMS key that your organization manages, which gives you control over the key location, rotation schedule, protection level, usage permissions, audit logs, and lifecycle. This matters for teams with compliance requirements around key ownership or separation of duties.
+
+Cloud KMS and Secret Manager solve different problems. Secret Manager stores runtime values such as `orders-db-password`, and Cloud KMS manages cryptographic keys used to encrypt data. In production, the database password belongs in Secret Manager, and Cloud KMS can provide the optional encryption-key control behind Secret Manager when policy requires that extra control.
+
+There are two operational details to remember. First, the KMS key has to align with the secret replica location it protects, and automatically replicated secrets use the documented `global` Cloud KMS multi-region for CMEK. Second, disabling or destroying the KMS key can make encrypted secret data inaccessible, so KMS key lifecycle changes need the same release discipline as secret rotation.
+
+For `orders-db-password`, a regulated production setup might use a Cloud KMS key named `secret-manager-prod-runtime` and grant the Secret Manager service agent the Cloud KMS Encrypter/Decrypter role on that key. The runtime service account still needs Secret Manager accessor on the secret, because the KMS key grant lets Secret Manager use the key on behalf of the service rather than making the application decrypt secrets directly.
+
+## VPC Service Controls
+<!-- section-summary: VPC Service Controls adds a perimeter check around supported Google-managed services, including high-value Secret Manager access paths. -->
+
+IAM answers who can access the secret. **VPC Service Controls** adds a perimeter around supported Google-managed services so access can be limited to trusted projects, networks, and paths. This is a defense-in-depth control for environments where a leaked credential or overpowered identity could be used from an untrusted location.
+
+For example, imagine `devpolaris-orders-runtime` has the right IAM role on `orders-db-password`. IAM alone checks the principal and the resource. A VPC Service Controls perimeter can add a boundary so supported Google API requests to protected resources stay inside the trusted service perimeter unless an explicit ingress or egress rule allows the path.
+
+Secret Manager payload access is a data-exfiltration risk, so perimeter design sits close to runtime secret design. A person or workload with `roles/secretmanager.secretAccessor` can retrieve sensitive values, so high-risk production projects often combine narrow IAM with perimeter controls, private connectivity patterns, and alerting on access from unusual places.
+
+VPC Service Controls works alongside careful IAM. The orders API service account should still have access only to `orders-db-password`, and the rotation worker should still have only the lifecycle permissions it needs. The perimeter reduces where supported API access can happen, while IAM reduces what each identity can do.
+
+## Runtime Evidence Without Printing Payloads
+<!-- section-summary: Good evidence proves which version the service used through metadata, audit logs, health checks, and database behavior rather than secret values. -->
+
+The last piece is evidence. During a rotation, people often feel tempted to prove the new value by running `gcloud secrets versions access` and pasting the result somewhere. That creates a new leak, and the leak often lands in the exact places auditors review later: terminals, logs, screenshots, tickets, and chat messages.
+
+A better evidence trail proves the secret version and runtime behavior through metadata. The team can show that alias `current` points to version `8`, that Cloud Run deployed a new revision for `devpolaris-orders-api`, that the service account accessed the right secret version, that the database saw healthy connections from the app, and that customer-facing error rates stayed normal.
+
+Useful evidence for the release record should be boring and repeatable. The commands below show the alias target and Cloud Run revision state while keeping the payload out of the terminal output.
+
+```bash
+gcloud secrets describe orders-db-password \
+  --format="value(versionAliases.current)"
+
+gcloud run revisions list \
+  --service=devpolaris-orders-api \
+  --region=europe-west2 \
+  --format="table(metadata.name,status.conditions[0].status,traffic.percent)"
+```
+
+The audit log evidence should focus on `AccessSecretVersion` entries for the runtime service account and the expected version. Secret Manager audit logs use the service name `secretmanager.googleapis.com`, and `AccessSecretVersion` is the method that reads the payload. The log entry gives the caller, resource, method, timestamp, and request context without needing the password value in the release ticket.
+
+```bash
+gcloud logging read '
+protoPayload.serviceName="secretmanager.googleapis.com"
+protoPayload.methodName="google.cloud.secretmanager.v1.SecretManagerService.AccessSecretVersion"
+protoPayload.resourceName:"secrets/orders-db-password/versions/8"
+protoPayload.authenticationInfo.principalEmail="devpolaris-orders-runtime@PROJECT_ID.iam.gserviceaccount.com"
+' \
+  --limit=20 \
+  --format=json
+```
+
+The database verification should also avoid payloads. For a PostgreSQL-style database, the release record can include a query that proves the application connected as the expected database user and stayed healthy after the traffic shift. The result should show connection metadata and counts only.
+
+```sql
+select
+  usename,
+  application_name,
+  state,
+  count(*) as connection_count
+from pg_stat_activity
+where application_name = 'devpolaris-orders-api'
+group by usename, application_name, state;
+```
+
+That is strong runtime evidence. It shows the service connected after the alias moved to version `8`, it gives operations a concrete query to repeat, and it leaves the secret payload out of every human-readable artifact.
 
 ## Putting It All Together
+<!-- section-summary: Safe runtime secret handling combines versioned storage, narrow IAM, controlled rollout, lifecycle recovery, encryption choices, perimeter controls, and payload-free evidence. -->
 
-Protecting runtime credentials requires a multi-layered security architecture.
+The `devpolaris-orders-api` database password rotation works because every layer has a clear job. Secret Manager stores `orders-db-password`, versions `7` and `8` hold immutable payloads, IAM grants the Cloud Run runtime service account accessor access on only that secret, and the `current` alias turns the version change into an explicit release step.
 
-By separating secrets from versions, you decouple connection strings from application code, allowing your microservices to query the latest credential payload dynamically.
+The rotation workflow also has recovery space. Pub/Sub sends the rotation signal, automation creates and verifies the new version, Cloud Run rolls a new revision, the database verification query proves the service is connected, and version `7` stays available until the rollout has soaked. Delayed destruction gives the final cleanup a recovery window before old material disappears permanently.
 
-Secret Manager encrypts secret data at rest by default, and CMEK lets you bring a Cloud KMS key when your organization needs key-level control. HSM-backed keys are an optional Cloud KMS protection choice, not the default behavior of every secret.
+Security controls then wrap the workflow. CMEK gives key ownership when compliance requires it, VPC Service Controls can add a perimeter around supported Google API access paths, and audit logs show who accessed which secret version. The team can prove the runtime used version `8` without printing, copying, or screenshotting the password.
 
-Pub/Sub integration gives your rotation automation a reliable signal, and VPC Service Controls perimeters add a second boundary around supported Google APIs when insider or compromised-credential exfiltration is a concern.
-
-This completes the Identity & Security architecture: your workloads can use keyless identities, and sensitive application configuration can live in Secret Manager with IAM, audit logs, encryption, rotation workflows, and optional perimeter controls.
-
-![A six-part summary infographic for secret manager summary covering Secret resource, Versions, IAM access, KMS layer, Rotation event, Audit evidence](/content-assets/articles/article-cloud-providers-gcp-identity-security-secret-manager-encryption-basics/secret-manager-summary.png)
-
-*Use this summary as the quick mental checklist before designing or debugging the service.*
-
+That is the practical goal for runtime secrets. The application gets the value it needs, operators get a repeatable release and rollback path, and security gets evidence that protects the secret instead of spreading it.
 
 ---
 
 **References**
 
-- [Google Cloud: Secret Manager overview](https://cloud.google.com/secret-manager/docs/overview) - Core specification for managed secrets and versions.
-- [Google Cloud: Secret Manager CMEK](https://cloud.google.com/secret-manager/docs/cmek) - Explains customer-managed encryption key behavior for Secret Manager.
-- [Google Cloud: Secret rotation](https://cloud.google.com/secret-manager/docs/secret-rotation) - Documents rotation schedules and `SECRET_ROTATE` Pub/Sub notifications.
-- [Google Cloud: Access a secret version](https://cloud.google.com/secret-manager/docs/access-secret-version) - Describes version numbers, aliases, and `latest` access.
-- [Google Cloud: Secret Manager access control](https://cloud.google.com/secret-manager/docs/access-control) - Guide to enforcing least-privilege IAM roles on secret resources.
-- [Google Cloud: VPC Service Controls overview](https://cloud.google.com/vpc-service-controls/docs/overview) - Technical reference for building logical network perimeters around APIs.
+- [Google Cloud: Secret Manager overview](https://docs.cloud.google.com/secret-manager/docs/overview) - Defines secrets, secret versions, default encryption, IAM access, replication, and rotation capabilities.
+- [Google Cloud: Access a secret version](https://docs.cloud.google.com/secret-manager/docs/access-secret-version) - Documents accessing versions by version ID, assigned alias, or `latest`, and the Secret Accessor role.
+- [Google Cloud: Assign an alias to a secret version](https://docs.cloud.google.com/secret-manager/docs/assign-alias-to-secret-version) - Documents custom version aliases and alias naming rules.
+- [Google Cloud: Configure secrets for Cloud Run services](https://docs.cloud.google.com/run/docs/configuring/services/secrets) - Documents Cloud Run secret environment variables, file mounts, service identity access, and runtime behavior.
+- [Google Cloud: Use Secret Manager with other products](https://docs.cloud.google.com/secret-manager/docs/using-other-products) - Summarizes Cloud Run, Compute Engine, and GKE integration paths.
+- [Google Cloud: Access the Secret Manager API](https://docs.cloud.google.com/secret-manager/docs/accessing-the-api) - Documents Compute Engine and GKE OAuth scope requirements for Secret Manager API access.
+- [Google Cloud: Use Secret Manager add-on with GKE](https://docs.cloud.google.com/secret-manager/docs/secret-manager-managed-csi-component) - Documents the GKE add-on for mounting Secret Manager secrets as pod volumes.
+- [Google Cloud: Access control with IAM](https://docs.cloud.google.com/secret-manager/docs/access-control) - Lists Secret Manager roles, lowest-level grant scopes, and least-privilege guidance.
+- [Google Cloud: Set up notifications on a secret](https://docs.cloud.google.com/secret-manager/docs/event-notifications) - Documents Pub/Sub event notifications, event types, and the `SECRET_ROTATE` event.
+- [Google Cloud: Create rotation schedules in Secret Manager](https://docs.cloud.google.com/secret-manager/docs/secret-rotation) - Documents `next_rotation_time`, `rotation_period`, Pub/Sub topics, and rotation schedule setup.
+- [Google Cloud: About rotation schedules](https://docs.cloud.google.com/secret-manager/docs/rotation-recommendations) - Gives rotation recommendations for binding versions, rolling out new versions, retries, and cleanup.
+- [Google Cloud: Delay destruction of secret versions](https://docs.cloud.google.com/secret-manager/docs/delay-destruction-of-secret-versions) - Documents delayed destruction, recovery during the delay window, and restore behavior.
+- [Google Cloud: Enable CMEK for Secret Manager](https://docs.cloud.google.com/secret-manager/docs/cmek) - Explains customer-managed encryption keys, Cloud KMS location requirements, and service agent permissions.
+- [Google Cloud: VPC Service Controls overview](https://docs.cloud.google.com/vpc-service-controls/docs/overview) - Explains service perimeters, trusted boundaries, and data exfiltration controls for supported Google-managed services.
+- [Google Cloud: Secret Manager audit logging](https://docs.cloud.google.com/secret-manager/docs/audit-logging) - Documents audit log service names, method names, and `AccessSecretVersion` logging.

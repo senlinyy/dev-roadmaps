@@ -1,217 +1,330 @@
 ---
 title: "What Is Terraform?"
-description: "Learn what Terraform is, how it is structured, and what happens step by step when you run your first terraform apply."
-overview: "Terraform is a tool that reads configuration files describing cloud resources and makes those resources exist. This article explains how Terraform is built, what the core commands do, how it talks to AWS and other cloud providers, and why the same tool works across dozens of different platforms."
-tags: ["terraform", "providers", "cli", "plan", "apply"]
+description: "Understand how Terraform reads configuration, talks to providers, tracks state, builds a dependency graph, and runs the init, plan, apply, and destroy workflow."
+overview: "Terraform lets a team describe infrastructure in configuration files and then use a repeatable loop to preview and apply changes. This article follows a small devpolaris-orders-api stack so the basic Terraform pieces feel connected: configuration, Terraform Core, providers, resources, state, the dependency graph, and the CLI workflow."
+tags: ["terraform", "infrastructure-as-code", "providers", "state", "workflow"]
 order: 2
 id: article-iac-terraform-foundations-what-is-terraform
 ---
 
 ## Table of Contents
 
-1. [What Terraform Actually Is](#what-terraform-actually-is)
-2. [The Two Parts: Core and Providers](#the-two-parts-core-and-providers)
-3. [The Three Commands You Use Every Time](#the-three-commands-you-use-every-time)
-4. [What Happens During terraform init](#what-happens-during-terraform-init)
-5. [What Happens During terraform plan](#what-happens-during-terraform-plan)
-6. [What Happens During terraform apply](#what-happens-during-terraform-apply)
-7. [Reading the Plan Output](#reading-the-plan-output)
-8. [How Terraform Knows What Already Exists](#how-terraform-knows-what-already-exists)
-9. [Terraform Supports Many Cloud Providers](#terraform-supports-many-cloud-providers)
-10. [Putting It All Together](#putting-it-all-together)
-11. [What's Next](#whats-next)
+1. [The Basic Terraform Loop](#the-basic-terraform-loop)
+2. [The Example Stack](#the-example-stack)
+3. [Configuration Files](#configuration-files)
+4. [Terraform Core, Providers, and Resources](#terraform-core-providers-and-resources)
+5. [State](#state)
+6. [The Dependency Graph](#the-dependency-graph)
+7. [terraform init](#terraform-init)
+8. [terraform plan](#terraform-plan)
+9. [Reading a Plan Safely](#reading-a-plan-safely)
+10. [terraform apply](#terraform-apply)
+11. [terraform destroy](#terraform-destroy)
+12. [Putting It All Together](#putting-it-all-together)
+13. [What's Next](#whats-next)
 
-## What Terraform Actually Is
+## The Basic Terraform Loop
+<!-- section-summary: Terraform reads desired infrastructure from files, compares that desire with existing infrastructure, and applies the reviewed change through a repeatable loop. -->
 
-Terraform is a command-line tool that reads infrastructure files, compares them with what already exists, and then asks cloud APIs to create, update, or delete resources.
+Terraform is an **infrastructure as code** tool. Infrastructure as code means the important parts of your environment live in files: networks, databases, buckets, queues, service permissions, DNS records, and the other pieces an application needs before it can serve real users.
 
-Terraform is a command-line tool that reads configuration files and creates, updates, or deletes cloud resources to match what those files describe. You write a file that says "I want an EC2 instance, a VPC, and a security group." You run Terraform. It talks to AWS and makes those things exist.
+The basic Terraform loop has four everyday steps. A team writes configuration files, runs `terraform init` to prepare the working directory, runs `terraform plan` to preview the change, and runs `terraform apply` to make the reviewed change real. `terraform destroy` belongs to the same family of commands, usually for temporary environments that need to be cleaned up.
 
-![Terraform compares configuration, state, and provider reality before proposing a plan.](/content-assets/articles/article-iac-terraform-foundations-what-is-terraform/desired-state-loop.png)
+The useful idea is that Terraform always tries to answer one practical question: **what must change so the real infrastructure matches the configuration files?** It answers by comparing three things: the files you wrote, Terraform's state record, and the infrastructure that currently exists in the provider. That comparison is the heart of the tool.
 
-*Terraform compares desired configuration, remembered state, and provider reality before changing infrastructure.*
+We will follow one small service through the whole article: `devpolaris-orders-api`. It gives us a concrete stack to talk about, so `init`, `plan`, `apply`, state, providers, and the dependency graph stay connected to the same story.
 
-That is the core of it. The rest of this article fills in the details: how Terraform is structured internally, what each command does, and why understanding the sequence matters for using it correctly.
+## The Example Stack
+<!-- section-summary: A small API stack gives Terraform something concrete to create, update, track, and eventually clean up. -->
 
-Terraform was created by HashiCorp and released in 2014. The Terraform CLI is free to download and use, and its current releases are published under HashiCorp's Business Source License. HashiCorp also offers managed and enterprise platforms around the workflow. For a beginner, the practical point is simple: you download the CLI as a single binary, put it somewhere on your PATH, and it is ready to use.
+Imagine the DevPolaris team wants a small orders API for a development environment. The service receives order requests, stores each order in DynamoDB, writes logs to CloudWatch, and exposes an HTTPS endpoint through API Gateway. DynamoDB is AWS's managed key-value and document database. CloudWatch collects logs and metrics. API Gateway exposes HTTP endpoints that can call a backend like Lambda.
 
-The configuration language it uses is called HCL, which stands for HashiCorp Configuration Language. It is designed specifically to be readable by humans. The syntax looks like a cross between JSON and a simplified programming language, with blocks for defining resources, variables, and outputs. You will get comfortable with it quickly because it is intentionally straightforward.
+The first version of `devpolaris-orders-api` needs a DynamoDB table, a Lambda function, an IAM role for that function, a log group, and an API Gateway route. Lambda runs code without the team managing servers. IAM controls what the Lambda function can do. The IAM role matters because the Lambda function needs permission to write logs and read or write order records.
 
-## The Two Parts: Core and Providers
+This is a good beginner Terraform example because the pieces depend on each other. The Lambda function needs the IAM role before it can be created. The API route needs the Lambda function before traffic can reach the app. The table can usually be created at the same time as the role because neither resource depends on the other.
 
-Terraform Core is the planner and graph engine; providers are plugin processes that translate resource types into provider-specific API operations.
+If the team created this by clicking around in the AWS Console, a future engineer would need to remember every setting and repeat the same clicks for staging or production. With Terraform, the team writes the desired shape once, reviews the plan, and repeats the same workflow every time the stack changes.
 
-When you install Terraform, you get one program. But Terraform's architecture is divided into two logically separate pieces that work together: Core and Providers.
+## Configuration Files
+<!-- section-summary: Terraform configuration files describe the desired infrastructure with provider blocks, resource blocks, variables, and outputs. -->
 
-**Core** is the program you download and run. It reads your configuration files, builds a picture of what you want, compares it to what currently exists, generates a plan of what needs to change, and then executes that plan. Core is the same regardless of whether you are working with AWS, Google Cloud, Azure, or any other service.
+Terraform configuration usually lives in files ending with `.tf`. The language is HCL, HashiCorp Configuration Language. HCL uses blocks and arguments, so the files look structured like code while staying readable for people who are still new to infrastructure automation.
 
-**Providers** are separate programs, also called plugins, that Core downloads and manages automatically. Each provider knows how to talk to a specific service. The AWS provider knows how to make API calls to create EC2 instances, S3 buckets, VPCs, and hundreds of other AWS resources. The Google Cloud provider knows how to create Compute Engine instances, Cloud Storage buckets, and GKE clusters. The GitHub provider knows how to manage repositories and teams.
+All `.tf` files in the same directory are loaded together as one **root module**. Teams often split them by purpose, such as `providers.tf`, `variables.tf`, `main.tf`, and `outputs.tf`, but Terraform treats them as one configuration after it reads the directory. The file names help humans navigate the project.
 
-When you need to use AWS, you declare the AWS provider in your configuration. When you run `terraform init`, Core downloads the AWS provider plugin automatically. From that point on, whenever Terraform needs to create or update an AWS resource, Core sends instructions to the AWS provider plugin, which translates those instructions into actual AWS API calls.
+Here is a small starting point for the orders API. It shows the provider declaration, provider configuration, one DynamoDB table, and one output:
 
-This separation is why Terraform can support so many different platforms. HashiCorp builds and maintains Core. Individual teams, HashiCorp themselves, cloud providers like AWS and Google, and the open-source community, build and maintain providers. There are providers for hundreds of services. If you need to manage a resource type that does not have a provider, you can write your own.
-
-![Terraform Core builds the plan and graph, while provider plugins translate work into each platform's API calls.](/content-assets/articles/article-iac-terraform-foundations-what-is-terraform/core-provider-architecture.png)
-
-*Terraform Core stays provider-neutral, while provider plugins know how to call AWS, GCP, GitHub, and other platform APIs.*
-
-## The Three Commands You Use Every Time
-
-There are many Terraform commands, but three form the core workflow you use for every infrastructure change.
-
-![Plan is the safe proposed change list, while apply is the step that changes real infrastructure.](/content-assets/articles/article-iac-terraform-foundations-what-is-terraform/plan-apply-boundary.png)
-
-*Plan explains what Terraform intends to do; apply is the point where infrastructure changes.*
-
-`terraform init` prepares the working directory for use. It reads your configuration files, figures out which providers you need, and downloads those provider plugins. You run this once when setting up a new project or when adding a new provider to an existing project.
-
-`terraform plan` shows you exactly what Terraform would do if you ran apply, without actually doing anything. It reads your configuration, reads the current state of your infrastructure (from the state file and from the cloud provider's API), and produces a human-readable diff. Green lines with a `+` are resources that would be created. Red lines with a `-` are resources that would be deleted. Lines with `~` are resources that would be modified in place.
-
-`terraform apply` runs the plan for real. By default, it generates a fresh plan and asks you to confirm before proceeding. You type `yes` and it starts making the changes. When it finishes, it prints a summary of what was created, modified, and destroyed.
-
-The typical flow for any change is:
-
-```
-1. Edit your .tf files
-2. terraform plan   # review what will change
-3. terraform apply  # make the changes
-```
-
-You repeat this cycle for every change: edit, plan, apply. The plan step is where you catch mistakes. If the plan shows you something unexpected, a resource being destroyed that you did not mean to destroy, an attribute being modified that should have stayed the same, you stop, fix the configuration, and plan again.
-
-## What Happens During terraform init
-
-When you run `terraform init`, Terraform does three things.
-
-First, it reads all the `.tf` files in the current directory and looks for `terraform` blocks that declare which providers are needed and which backend should be used for storing state. If you have declared `provider "aws"`, Terraform knows it needs the AWS provider.
-
-Second, it contacts the Terraform Registry (at `registry.terraform.io`) to find a provider version that satisfies your version constraints. On the first init, that is usually the newest matching version. After a `.terraform.lock.hcl` file exists, Terraform reuses the locked provider version unless you intentionally run init with upgrade behavior. It downloads the provider plugin binary and stores it in a hidden directory called `.terraform/providers/` inside your working directory.
-
-Third, it initializes the backend, the place where the state file will be stored. If you have not configured a remote backend, Terraform uses the local backend by default, which stores the state file on disk in the same directory.
-
-After `init` finishes, the `.terraform/` directory contains everything Terraform needs to run. The `.terraform.lock.hcl` file records the exact provider versions that were downloaded. Committing this lock file to version control ensures every member of your team uses the same provider versions.
-
-You do not need to run `terraform init` again unless you add a new provider, change the backend configuration, or delete the `.terraform/` directory. It is not part of the regular plan/apply cycle.
-
-## What Happens During terraform plan
-
-`terraform plan` is where Terraform figures out what it needs to do. The process has three steps.
-
-**Step one: Read configuration.** Terraform reads all the `.tf` files in the working directory. It parses the resource blocks, variable definitions, local values, and outputs. It builds an in-memory graph of all the resources and the dependencies between them.
-
-**Step two: Read current state.** Terraform reads the state file to see what resources it has created before. It then contacts the cloud provider's API to check whether those resources still exist and what their current attributes are. If a resource in the state file no longer exists in the cloud (because someone deleted it manually), Terraform notes the discrepancy.
-
-**Step three: Compute the diff.** Terraform compares what the configuration says should exist against what the state and the cloud provider say currently exists. For each resource in the configuration, it determines whether to create it (does not exist yet), update it (exists but attributes differ), replace it (exists but a required attribute changed that cannot be modified in place), or leave it alone (exists and matches the configuration exactly). It then prints this diff as the plan.
-
-The plan also shows the values of computed attributes, things that will only be assigned when the resource is actually created, like an EC2 instance's IP address or a security group's ID. These appear as `(known after apply)` in the plan output.
-
-## What Happens During terraform apply
-
-When you run `terraform apply`, one of two things happens depending on how you invoke it.
-
-If you run `terraform apply` with no arguments, Terraform generates a fresh plan and shows it to you. You type `yes` to confirm, and Terraform executes the plan.
-
-If you run `terraform plan -out=myplan.tfplan` first and save the plan to a file, then run `terraform apply myplan.tfplan`, Terraform executes the saved plan without generating a new one. This is important in automated pipelines because the approved operations are the operations Terraform attempts to apply. The apply can still fail if credentials expire, the provider API rejects a change, or the outside world changes in a way that makes the saved plan no longer valid.
-
-During apply, Terraform walks the dependency graph and creates, updates, or deletes resources in the correct order. Resources that do not depend on each other can be created in parallel, which speeds up large deployments. Resources that depend on each other are created in sequence, the VPC first, then the subnet (which needs the VPC's ID), then the server (which needs the subnet's ID).
-
-As each resource is created, updated, or deleted, Terraform writes the result to the state file. If the apply is interrupted, a network timeout, a provider API error, a crash, the state file reflects what completed successfully. When you run apply again, Terraform reads the state file and knows which resources were already created, picking up from where it left off.
-
-## Reading the Plan Output
-
-Understanding the plan output is essential for using Terraform safely. Here is what to look for.
-
-At the top, Terraform shows any data sources it refreshed and any resources it will change. Each resource change begins with the resource type and name:
-
-```
-# aws_instance.app will be created
-+ resource "aws_instance" "app" {
-    + ami           = "ami-0c55b159cbfafe1f0"
-    + instance_type = "t3.small"
-    + id            = (known after apply)
-    + private_ip    = (known after apply)
-    + public_ip     = (known after apply)
+```hcl
+terraform {
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~> 5.0"
+    }
   }
-```
+}
 
-The `+` at the start of each line means the attribute will be set when the resource is created. `(known after apply)` means the value will be assigned by AWS after creation, you cannot know it in advance.
+provider "aws" {
+  region = var.aws_region
+}
 
-For an update, you see a `~`:
+variable "aws_region" {
+  type    = string
+  default = "us-east-1"
+}
 
-```
-# aws_instance.app will be updated in-place
-~ resource "aws_instance" "app" {
-      id            = "i-0a1b2c3d4e5f6789"
-    ~ instance_type = "t3.small" -> "t3.medium"
+resource "aws_dynamodb_table" "orders" {
+  name         = "devpolaris-orders-api-orders-dev"
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "order_id"
+
+  attribute {
+    name = "order_id"
+    type = "S"
   }
-```
 
-The `~` shows the attribute is changing. The `->` shows the old value on the left and the new value on the right.
-
-For a replacement (destroy the old resource and create a new one), you see both `-/+`:
-
-```
-# aws_instance.app must be replaced
--/+ resource "aws_instance" "app" {
-    ~ ami = "ami-0c55b159cbfafe1f0" -> "ami-0987654321abcdef0" # forces replacement
+  tags = {
+    Application = "devpolaris-orders-api"
+    Environment = "dev"
   }
+}
+
+output "orders_table_name" {
+  value = aws_dynamodb_table.orders.name
+}
 ```
 
-The phrase `# forces replacement` tells you which attribute change triggered the replacement. Replacements are the most impactful changes because they cause brief downtime for the old resource. Pay careful attention to any `-/+` lines in the plan.
+The `terraform` block says which provider package the configuration needs. In this example, the source address `hashicorp/aws` tells Terraform where the AWS provider comes from, and the version constraint controls which provider releases are acceptable for this project.
 
-At the bottom, the plan summarizes the total number of changes:
+The `provider "aws"` block configures the AWS provider. A provider block tells Terraform how to talk to a platform or API. For AWS, that usually includes a region, and credentials usually come from the environment, an AWS profile, or the runtime where Terraform is running. Keeping credentials outside the `.tf` files avoids putting secrets in version control.
 
+The `resource` block declares one managed object. The resource type is `aws_dynamodb_table`, and the local name is `orders`, so the full Terraform address is `aws_dynamodb_table.orders`. That address is how other resources refer to this table inside the configuration, and it is also how Terraform tracks this object in state.
+
+The output exposes a value after apply finishes. In a real project, outputs often show endpoint URLs, bucket names, table names, or IDs that another system needs. For the orders API, the table name is useful for app configuration and for quick verification after the first apply.
+
+## Terraform Core, Providers, and Resources
+<!-- section-summary: Terraform Core plans and coordinates the run, while provider plugins know how to manage each platform's real resources. -->
+
+When someone says "Terraform" in daily conversation, they usually mean the `terraform` CLI. Under the hood, it helps to separate **Terraform Core** from **providers**. Terraform Core is the main program that reads configuration, evaluates expressions, tracks state, builds the dependency graph, creates the plan, and coordinates apply.
+
+A **provider** is a plugin that knows how to talk to a specific API. The AWS provider knows the AWS API shapes for DynamoDB tables, Lambda functions, IAM roles, API Gateway routes, and many other AWS resources. A GitHub provider knows GitHub repositories and teams. A Cloudflare provider knows DNS records and zones.
+
+Terraform Core does the provider-neutral work. It can understand that `aws_lambda_function.orders_api` references `aws_iam_role.orders_lambda.arn`, so the role must exist first. The AWS provider does the AWS-specific work. It takes Terraform's request and calls the correct AWS APIs with the correct fields.
+
+A **resource** is one object Terraform manages through a provider. In the orders API stack, the DynamoDB table is a resource, the Lambda function is a resource, the IAM role is a resource, and the API Gateway route is a resource. Each resource has a Terraform address in the configuration and a real identity in the provider after creation.
+
+This split is why the same Terraform workflow works across many systems. The CLI commands stay the same, while providers bring the platform-specific resource types and arguments. The beginner habit to build early is simple: when a resource type starts with `aws_`, the AWS provider owns the API details for that resource.
+
+## State
+<!-- section-summary: State records the link between Terraform resource addresses and real provider objects, which lets future plans update existing infrastructure instead of guessing. -->
+
+Terraform **state** is Terraform's record of the resources it manages. At a beginner level, the most important thing state stores is the binding between a Terraform address and a real object. For example, state records that `aws_dynamodb_table.orders` maps to the DynamoDB table named `devpolaris-orders-api-orders-dev`.
+
+That binding matters during the next plan. The configuration says the table should exist. The state says which real table belongs to this resource address. The AWS API says what the table currently looks like. Terraform compares those three sources of information before proposing a change.
+
+Here is the comparison in plain terms. Each row gives Terraform one part of the decision:
+
+| Source | What it answers for `devpolaris-orders-api` |
+|---|---|
+| **Configuration** | What the team wants now, such as table name, billing mode, Lambda memory, and API route |
+| **State** | Which real AWS objects Terraform already manages for each resource address |
+| **Real infrastructure** | What AWS currently reports through its APIs during refresh and planning |
+
+Terraform compares all three because each one tells a different part of the truth. If the configuration changed, Terraform needs a plan that updates real infrastructure. If someone changed the Lambda memory in the AWS Console, Terraform can notice that the real object drifted away from the last known state. If state is missing, Terraform may no longer know that an existing table belongs to `aws_dynamodb_table.orders`.
+
+By default, Terraform stores local state in a file named `terraform.tfstate`. That is fine for a small solo experiment. A team normally uses a remote backend with access control, backups, and locking, because state is shared project memory and can contain sensitive values.
+
+State should be treated carefully. Terraform provides CLI commands for state inspection and state changes, and direct editing of the state file can break the one-to-one relationship between a resource address and the real object it represents. For a beginner, the safe starting rule is that normal work happens through configuration changes, `plan`, and `apply`.
+
+## The Dependency Graph
+<!-- section-summary: Terraform builds a dependency graph so resources are created, updated, and destroyed in an order that respects references between them. -->
+
+Terraform uses a **dependency graph** to decide operation order. A graph is a set of nodes and links. In Terraform, many of the nodes are resources, and the links come from references between resources.
+
+Here is a simplified Lambda example from the orders API. The important detail is the reference from the function to the role:
+
+```hcl
+resource "aws_iam_role" "orders_lambda" {
+  name = "devpolaris-orders-api-lambda-role-dev"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Principal = {
+          Service = "lambda.amazonaws.com"
+        }
+        Action = "sts:AssumeRole"
+      }
+    ]
+  })
+}
+
+resource "aws_lambda_function" "orders_api" {
+  function_name = "devpolaris-orders-api-dev"
+  role          = aws_iam_role.orders_lambda.arn
+  handler       = "index.handler"
+  runtime       = "nodejs20.x"
+  filename      = "build/orders-api.zip"
+}
 ```
-Plan: 3 to add, 1 to change, 0 to destroy.
+
+The Lambda function references `aws_iam_role.orders_lambda.arn`. That reference tells Terraform that the role must be available before the function can be created. Terraform can infer that dependency from the expression, so the configuration already carries the ordering instruction for this common case.
+
+The graph also helps Terraform work efficiently. The DynamoDB table and the IAM role can usually be created in parallel because neither one references the other. The Lambda function waits for the role. The API Gateway integration waits for the Lambda function. The graph gives Terraform a safe order without the team writing a long step-by-step script.
+
+There is also an explicit `depends_on` argument for unusual cases where the dependency exists in the real platform and normal expressions hide it. Beginners should reach for references first, because references both pass values and teach Terraform the ordering relationship. Explicit dependencies are useful, but they are clearer when reserved for cases Terraform cannot infer from the configuration.
+
+## terraform init
+<!-- section-summary: terraform init prepares a working directory by installing providers, setting up modules, and initializing the configured backend. -->
+
+`terraform init` prepares a directory so the other Terraform commands can run. It is the first command after writing a new configuration or cloning an existing Terraform project. It is also safe to run multiple times, which is helpful when a teammate changes provider requirements or backend settings.
+
+For the orders API, `init` reads the `required_providers` block and sees that the configuration needs the AWS provider. Terraform then downloads a provider version that matches the version constraint and records the exact selected version in `.terraform.lock.hcl`. That lock file helps the team use the same provider version across laptops and CI runs.
+
+`init` also prepares the backend. A backend is the place Terraform stores state for the current workspace. A local backend stores `terraform.tfstate` on disk. A remote backend stores the state somewhere shared, such as a managed Terraform service or a cloud storage backend configured by the team.
+
+The practical result is that `terraform init` makes the working directory ready. The `.terraform/` directory holds downloaded provider plugins and working data. The lock file records provider selections. The backend is ready for state reads and writes during plan and apply.
+
+```bash
+terraform init
 ```
 
-## How Terraform Knows What Already Exists
+After `init`, the project has the tools it needs to ask AWS about DynamoDB, Lambda, IAM, CloudWatch, and API Gateway. The next step is a plan, because the team needs to see what Terraform intends to change before any real infrastructure is touched.
 
-Terraform uses a state file to track what it has created. After every successful apply, the state file is updated to record every resource that exists and its current attributes.
+## terraform plan
+<!-- section-summary: terraform plan previews the actions Terraform proposes after refreshing real infrastructure and comparing it with configuration and state. -->
 
-When you run `terraform plan`, Terraform reads the state file to find the list of resources it previously created. It then contacts the cloud provider's API to verify those resources still exist and to get their current attributes. If you changed a setting in the console without going through Terraform, this API check will catch the discrepancy.
+`terraform plan` creates an execution plan. The plan is Terraform's preview of the changes it proposes for the current configuration. A normal plan stays in preview mode, so real infrastructure remains unchanged during plan review.
 
-Without the state file, Terraform would have no memory of what it created. Every `terraform plan` would think all resources are new and propose to create them all over again. The state file is what makes Terraform idempotent, running it multiple times without any configuration changes produces no further changes, because Terraform can see that reality already matches the configuration.
+For the orders API, Terraform starts by reading the `.tf` files. It sees the DynamoDB table, IAM role, Lambda function, API route, variables, outputs, provider configuration, and references between resources. Terraform Core then builds the graph and prepares to compare the desired stack with what already exists.
 
-This is why the state file is so important. Losing it means Terraform loses all memory of what it created. Getting it back requires manually telling Terraform about each existing resource using `terraform import`. Protecting the state file, by storing it in a remote backend with backups, is a critical practice for any team using Terraform.
+By default, Terraform refreshes state information by reading the current remote objects from the provider. If the table already exists in state, Terraform asks AWS what that table looks like now. Then Terraform compares the current configuration to the prior state and the refreshed provider data, and it proposes actions that would make the remote objects match the configuration.
 
-## Terraform Supports Many Cloud Providers
+The plan may say Terraform will create a new table, update Lambda memory, replace a resource, or destroy something that disappeared from the configuration. It may also say there are no changes, which means the current infrastructure already matches the desired configuration from Terraform's point of view.
 
-One of Terraform's major strengths is that it works the same way regardless of which cloud provider you are using. The commands are the same. The workflow is the same. The language is the same. Only the resource types in your configuration files differ.
+```bash
+terraform plan
+```
 
-For AWS, you write `resource "aws_instance"` and `resource "aws_s3_bucket"`. For Google Cloud, you write `resource "google_compute_instance"` and `resource "google_storage_bucket"`. For Azure, you commonly write resources such as `azurerm_linux_virtual_machine`, `azurerm_resource_group`, and `azurerm_storage_account`.
+Automation often saves a plan file. That gives review workflows a specific plan artifact to approve:
 
-This consistency means skills transfer. An engineer who knows how to use Terraform with AWS can pick up Terraform for Google Cloud very quickly, the concepts, commands, and workflow are identical. Only the specific resource types and attribute names are different.
+```bash
+terraform plan -out=orders-api.tfplan
+```
 
-It also means Terraform can manage resources across multiple cloud providers in the same configuration. A configuration might create an AWS VPC and RDS database, a Cloudflare DNS record pointing at the load balancer, and a GitHub repository with the infrastructure code, all in one `terraform apply`.
+A saved plan is useful in review-heavy workflows because the approved plan can be passed to `terraform apply`. A normal unsaved plan is still valuable for local development because it shows the proposed effect before the team commits to the change.
 
-There are over 3,000 providers available in the Terraform Registry. HashiCorp maintains several widely used providers such as AWS, AzureRM, Google Cloud, and Kubernetes. Other providers are maintained by cloud vendors, software companies, or community organizations. For example, the GitHub provider is published under the `integrations/github` namespace. If you need to manage a resource type that exists somewhere in the digital world, there is a good chance a provider exists for it.
+## Reading a Plan Safely
+<!-- section-summary: A safe plan review focuses on action symbols, resource addresses, replacements, destroys, unknown values, and the final summary line. -->
+
+Plan output can feel noisy the first few times. A helpful reading style treats it as a proposed change list for real infrastructure. Every resource address names the object Terraform wants to touch, and every symbol tells you the kind of action Terraform plans.
+
+Here is a small plan-shaped example for the orders API. The names come from the same service we have followed through the article:
+
+```terraform
+Terraform will perform the following actions:
+
+  # aws_dynamodb_table.orders will be created
+  + resource "aws_dynamodb_table" "orders" {
+      + name         = "devpolaris-orders-api-orders-dev"
+      + billing_mode = "PAY_PER_REQUEST"
+      + arn          = (known after apply)
+    }
+
+  # aws_lambda_function.orders_api will be updated in-place
+  ~ resource "aws_lambda_function" "orders_api" {
+      ~ memory_size = 256 -> 512
+    }
+
+Plan: 1 to add, 1 to change, 0 to destroy.
+```
+
+The `+` symbol means Terraform proposes to create something. The `~` symbol means Terraform proposes to update an existing resource in place. The `-` symbol means Terraform proposes to destroy something. A `-/+` or `+/-` style replacement means Terraform will destroy and recreate a resource as part of the change.
+
+The resource address deserves careful attention. `aws_lambda_function.orders_api` points to the Terraform resource named `orders_api`, which maps through state to one Lambda function in AWS. The address connects the plan back to the exact resource block in the configuration and the exact object binding in state.
+
+The phrase `(known after apply)` means the provider will return the value only after the operation happens. For example, AWS can assign an ARN, ID, or generated endpoint after creating a resource. Unknown values are normal, but they deserve context. A new table ARN being unknown is expected. A security group rule becoming unknown during a broad replacement deserves a closer look.
+
+Replacement and destroy lines carry the most risk. A Lambda memory update usually affects runtime behavior without replacing the function. A table replacement can mean data loss unless the table is temporary or protected by a migration plan. A safe review always explains why each destroy or replacement appears before apply runs.
+
+The final summary line gives the quick count. It appears near the bottom of the plan after Terraform lists the resource-level changes:
+
+```terraform
+Plan: 1 to add, 1 to change, 0 to destroy.
+```
+
+That line is useful, and the resource changes above it still matter. `0 to destroy` is comforting. `1 to destroy` needs the reviewer to know exactly which resource is being destroyed and why that is acceptable for the environment.
+
+## terraform apply
+<!-- section-summary: terraform apply executes the reviewed plan, calls provider APIs in graph order, and updates state with the results. -->
+
+`terraform apply` executes the operations proposed in a Terraform plan. In an interactive terminal, running `terraform apply` with no saved plan file makes Terraform create a fresh plan, show it, ask for approval, and then perform the indicated operations after approval.
+
+For the orders API, apply might create the DynamoDB table and IAM role first. Then it can create the Lambda function after the role exists. Then it can create the API integration after the Lambda function is available. Terraform uses the dependency graph to keep this order straight while still running independent work in parallel where it can.
+
+```bash
+terraform apply
+```
+
+With a saved plan, apply uses that file:
+
+```bash
+terraform apply orders-api.tfplan
+```
+
+This two-step flow is common in CI/CD. A pipeline can create a plan, let reviewers inspect it, and then apply that approved plan. The apply can still fail if AWS rejects a request, credentials expire, quotas are reached, or real infrastructure changes in a way that makes the approved plan stale.
+
+After each successful operation, Terraform updates state. If the DynamoDB table is created, state records the table identity and attributes. If Lambda memory changes from `256` to `512`, state records the new value after AWS confirms the update. Terraform uses this updated state in the next plan's comparison.
+
+Apply is the point where Terraform changes real infrastructure. That is why the plan review matters so much. The workflow has a built-in pause so the team can catch accidental destroys, surprising replacements, wrong regions, wrong names, or changes aimed at the wrong environment.
+
+## terraform destroy
+<!-- section-summary: terraform destroy deprovisions the objects managed by the current configuration and is most useful for temporary environments. -->
+
+`terraform destroy` deprovisions the objects managed by a Terraform configuration. It belongs in the core workflow because development and test environments often need clean teardown. A short-lived `devpolaris-orders-api` sandbox might exist for a workshop, a pull request environment, or a training exercise, and destroy removes the managed resources when that environment is finished.
+
+Destroy uses Terraform's state and graph just like apply. Terraform knows which objects belong to the current configuration because state records the managed resource bindings. It then proposes destroy actions and, after approval, deletes resources in an order that respects dependencies.
+
+```bash
+terraform destroy
+```
+
+The safer review version is a destroy plan. It gives the team the same preview habit before teardown:
+
+```bash
+terraform plan -destroy
+```
+
+That plan shows the proposed deletions without executing them. For the orders API, a destroy plan might include the API route, Lambda function, IAM role, log group, and DynamoDB table. A temporary environment can tolerate that. A production orders table usually needs a backup, retention policy, migration path, or a different lifecycle strategy before any destroy operation is acceptable.
+
+Terraform destroy is powerful because it uses the same managed inventory that apply uses. The same state that helps Terraform avoid duplicate creation also tells Terraform what it would remove during teardown. That is another reason state protection matters in team environments.
 
 ## Putting It All Together
+<!-- section-summary: Terraform's operating loop connects configuration, providers, state, graph ordering, plan review, apply execution, and optional teardown. -->
 
-Terraform is a command-line tool split into two parts: Core, which handles the planning and state logic, and Providers, which handle the API communication with each specific service. You write configuration files that describe what you want to exist. Terraform compares those files against what currently exists and proposes a plan. You review the plan, confirm it, and Terraform makes the changes.
+The orders API started as a set of desired resources in `.tf` files. The configuration declared the AWS provider, configured the provider region, defined resources like `aws_dynamodb_table.orders`, and used references so Terraform could understand how the stack fits together.
 
-The workflow is always the same: `terraform init` to set up the providers, `terraform plan` to see what will change, `terraform apply` to make the changes. The state file records what Terraform created, which is what allows Terraform to detect changes and avoid creating duplicates.
+Terraform Core read those files, loaded the provider plugin, evaluated expressions, built the dependency graph, and compared configuration with state and real AWS infrastructure. The provider handled AWS-specific API calls. State recorded the link between Terraform addresses and real AWS objects.
 
-The consistency of this workflow across hundreds of cloud providers is why Terraform has become the standard tool for infrastructure management. Learn it once with AWS, and the knowledge transfers directly to every other platform it supports.
+The daily loop is steady. `terraform init` prepares the directory. `terraform plan` previews the proposed change. The plan review checks symbols, addresses, replacements, destroys, unknown values, and the final count. `terraform apply` makes the reviewed change real and updates state. `terraform destroy` cleans up managed resources when the environment is meant to disappear.
+
+That loop is the foundation of Terraform. The tool is useful because the team can repeat the same process for every infrastructure change, from a single DynamoDB table to a larger service with networking, compute, storage, IAM, observability, and DNS.
 
 ## What's Next
 
-Now that you understand what Terraform is and how it works, the next article goes deeper into providers: how to configure them, how to use multiple providers in the same configuration, and what happens when you need to deploy to multiple regions or accounts simultaneously.
-
-![A six-part summary infographic for Terraform covering configuration, providers, state, plan, apply, and drift.](/content-assets/articles/article-iac-terraform-foundations-what-is-terraform/terraform-summary.png)
-
-*Use this summary as the quick Terraform mental checklist before reading a plan or running apply.*
-
+Now that the basic loop is clear, the next article turns it into a small safe project. You will create a Terraform folder, write `versions.tf`, `main.tf`, and `outputs.tf`, run `fmt`, `init`, `validate`, `plan`, and `apply`, then clean up with `destroy`.
 
 ---
 
 **References**
 
-- [Terraform Introduction (HashiCorp Documentation)](https://developer.hashicorp.com/terraform/intro), Official introduction to Terraform, its use cases, and the core workflow.
-- [How Terraform Works with Plugins (HashiCorp Documentation)](https://developer.hashicorp.com/terraform/plugin/how-terraform-works), A more detailed explanation of the Core/Provider architecture.
-- [Provider Requirements (HashiCorp Documentation)](https://developer.hashicorp.com/terraform/language/providers/requirements), Official reference for provider source addresses and namespaces.
-- [GitHub Provider (Terraform Registry)](https://registry.terraform.io/providers/integrations/github/latest), Current Terraform Registry page for the GitHub provider namespace.
-- [Terraform CLI Commands (HashiCorp Documentation)](https://developer.hashicorp.com/terraform/cli/commands), Complete reference for all Terraform CLI commands, including init, plan, apply, and destroy.
-- [Terraform on Azure Overview (Microsoft Learn)](https://learn.microsoft.com/en-us/azure/developer/terraform/overview), Microsoft's overview of using Terraform with Azure.
-- [Create an Azure Resource Group with Terraform (Microsoft Learn)](https://learn.microsoft.com/en-us/azure/developer/terraform/azurerm/create-resource-group), Beginner AzureRM example using Terraform.
+- [Terraform CLI commands](https://developer.hashicorp.com/terraform/cli/commands) - Official overview of Terraform CLI subcommands, including the main workflow commands.
+- [Terraform state](https://developer.hashicorp.com/terraform/language/state) - Explains how Terraform stores state, maps resource instances to remote objects, refreshes state, and handles state files.
+- [Provider block](https://developer.hashicorp.com/terraform/language/block/provider) - Documents provider blocks, provider plugins, provider-specific arguments, aliases, and provider configuration behavior.
+- [terraform init](https://developer.hashicorp.com/terraform/cli/commands/init) - Documents initializing a working directory, provider installation, and repeated safe use of init.
+- [terraform plan](https://developer.hashicorp.com/terraform/cli/commands/plan) - Documents execution plans, refresh behavior, comparison with state, proposed actions, speculative plans, and saved plans.
+- [terraform apply](https://developer.hashicorp.com/terraform/cli/commands/apply) - Documents applying plans, automatic plan mode, saved plan mode, approval behavior, and apply options.
+- [terraform destroy](https://developer.hashicorp.com/terraform/cli/commands/destroy) - Documents deprovisioning managed objects, destroy mode, and speculative destroy plans.
+- [Terraform dependency graph](https://developer.hashicorp.com/terraform/internals/graph) - Explains how Terraform builds and uses a dependency graph for planning, refreshing, and applying infrastructure changes.
